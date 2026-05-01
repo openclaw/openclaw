@@ -51,6 +51,10 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   "channels.*.*.*.requireMention",
   "channels.*.*.*.*.requireMention",
   "channels.*.*.*.*.*.requireMention",
+  // Visible reply delivery mode is a bounded message UX setting, not a secret
+  // or privilege boundary. Let agents repair silent group/channel rooms.
+  "messages.visibleReplies",
+  "messages.groupChat.visibleReplies",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
@@ -87,6 +91,17 @@ function getSnapshotConfig(snapshot: unknown): Record<string, unknown> {
     throw new Error("config.get response is missing a config object.");
   }
   return config as Record<string, unknown>;
+}
+
+// Direct RPC callers need the validated config echoed after writes; the
+// agent-facing gateway tool does not, and replaying it bloats transcripts.
+function stripConfigWriteResultPayload(result: unknown): unknown {
+  if (!isPlainObject(result) || !Object.hasOwn(result, "config")) {
+    return result;
+  }
+  const stripped = { ...result };
+  delete stripped.config;
+  return stripped;
 }
 
 function parseGatewayConfigMutationRaw(
@@ -481,7 +496,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "config.patch") {
         const { raw, baseHash, snapshotConfig, sessionKey, note, restartDelayMs } =
@@ -498,7 +513,7 @@ export function createGatewayTool(opts?: {
           note,
           restartDelayMs,
         });
-        return jsonResult({ ok: true, result });
+        return jsonResult({ ok: true, result: stripConfigWriteResultPayload(result) });
       }
       if (action === "update.run") {
         const { sessionKey, note, restartDelayMs } = resolveGatewayWriteMeta();

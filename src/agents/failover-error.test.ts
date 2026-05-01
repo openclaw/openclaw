@@ -602,6 +602,33 @@ describe("failover-error", () => {
     ).toBe("rate_limit");
   });
 
+  it("treats Chinese provider network/server errors as timeout for failover", () => {
+    // ZhipuAI/GLM error code 1234: "网络错误" — real production error
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
+      }),
+    ).toBe("timeout");
+    // JSON payload variant
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          '{"error":{"code":"1234","message":"网络错误，错误id：abc123，请联系客服。"},"request_id":"abc123"}',
+      }),
+    ).toBe("timeout");
+    // Generic Chinese server errors
+    expect(resolveFailoverReasonFromError({ message: "系统错误，请稍后重试" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "服务器内部错误" })).toBe("timeout");
+  });
+
+  it("treats Chinese provider auth errors as auth for failover", () => {
+    // ZhipuAI/GLM 403: "您无权访问glm-5.1" — real production error
+    expect(resolveFailoverReasonFromError({ message: "403 您无权访问glm-5.1。" })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ message: "认证失败" })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ message: "鉴权失败，请检查API Key" })).toBe("auth");
+  });
+
   it("treats overloaded provider payloads as overloaded", () => {
     expect(
       resolveFailoverReasonFromError({
@@ -944,5 +971,41 @@ describe("failover-error", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
+  });
+
+  it("propagates sessionId/lane/provider attribution through FailoverError (#42713)", () => {
+    const err = new FailoverError("all fallbacks exhausted", {
+      reason: "rate_limit",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "profile-2",
+      sessionId: "session:browser-abcd",
+      lane: "answer",
+      status: 429,
+    });
+    expect(err.sessionId).toBe("session:browser-abcd");
+    expect(err.lane).toBe("answer");
+    expect(describeFailoverError(err)).toMatchObject({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "profile-2",
+      sessionId: "session:browser-abcd",
+      lane: "answer",
+      reason: "rate_limit",
+      status: 429,
+    });
+  });
+
+  it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
+    const err = coerceToFailoverError("rate limit exceeded", {
+      provider: "openai",
+      model: "gpt-5",
+      profileId: "p1",
+      sessionId: "session:browser-1234",
+      lane: "draft",
+    });
+    expect(err?.sessionId).toBe("session:browser-1234");
+    expect(err?.lane).toBe("draft");
+    expect(err?.provider).toBe("openai");
   });
 });

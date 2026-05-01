@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -44,8 +45,18 @@ export type EmbeddedPiSubscribeState = {
 
   deltaBuffer: string;
   blockBuffer: string;
-  blockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
-  partialBlockState: { thinking: boolean; final: boolean; inlineCode: InlineCodeState };
+  blockState: {
+    thinking: boolean;
+    final: boolean;
+    inlineCode: InlineCodeState;
+    pendingTagFragment?: string;
+  };
+  partialBlockState: {
+    thinking: boolean;
+    final: boolean;
+    inlineCode: InlineCodeState;
+    pendingTagFragment?: string;
+  };
   lastStreamedAssistant?: string;
   lastStreamedAssistantCleaned?: string;
   emittedAssistantUpdate: boolean;
@@ -72,11 +83,14 @@ export type EmbeddedPiSubscribeState = {
   unsubscribed: boolean;
   replayState: EmbeddedRunReplayState;
   livenessState?: EmbeddedRunLivenessState;
+  terminalStopReason?: string;
+  yielded?: boolean;
   hadDeterministicSideEffect?: boolean;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
@@ -110,10 +124,22 @@ export type EmbeddedPiSubscribeContext = {
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   stripBlockTags: (
     text: string,
-    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+    state: {
+      thinking: boolean;
+      final: boolean;
+      inlineCode?: InlineCodeState;
+      pendingTagFragment?: string;
+    },
+    options?: { final?: boolean },
   ) => string;
-  emitBlockChunk: (text: string, options?: { assistantMessageIndex?: number }) => void;
-  flushBlockReplyBuffer: (options?: { assistantMessageIndex?: number }) => void | Promise<void>;
+  emitBlockChunk: (
+    text: string,
+    options?: { assistantMessageIndex?: number; final?: boolean },
+  ) => void;
+  flushBlockReplyBuffer: (options?: {
+    assistantMessageIndex?: number;
+    final?: boolean;
+  }) => void | Promise<void>;
   emitReasoningStream: (text: string) => void;
   consumeReplyDirectives: (
     text: string,
@@ -183,6 +209,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
+  | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
 >;

@@ -11,9 +11,9 @@ const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
 
-export type SearchSource = string;
+type SearchSource = string;
 
-export type SearchRowResult = {
+type SearchRowResult = {
   id: string;
   path: string;
   startLine: number;
@@ -215,7 +215,7 @@ export async function searchVector(params: {
   });
 }
 
-export function searchChunksByEmbedding(params: {
+function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
   sourceFilter: { sql: string; params: SearchSource[] };
@@ -304,28 +304,8 @@ export async function searchKeyword(params: {
   const modelParams = params.providerModel ? [params.providerModel] : [];
   const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
-  const whereClause = plan.matchQuery
-    ? `${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}`
-    : `1=1${substringClause}${modelClause}${params.sourceFilter.sql}`;
-  const queryParams = [
-    ...(plan.matchQuery ? [plan.matchQuery] : []),
-    ...substringParams,
-    ...modelParams,
-    ...params.sourceFilter.params,
-    params.limit,
-  ];
-  const rankExpression = plan.matchQuery ? `bm25(${params.ftsTable})` : "0";
 
-  const rows = params.db
-    .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
-        `       ${rankExpression} AS rank\n` +
-        `  FROM ${params.ftsTable}\n` +
-        ` WHERE ${whereClause}\n` +
-        ` ORDER BY rank ASC\n` +
-        ` LIMIT ?`,
-    )
-    .all(...queryParams) as Array<{
+  let rows: Array<{
     id: string;
     path: string;
     source: SearchSource;
@@ -334,9 +314,75 @@ export async function searchKeyword(params: {
     text: string;
     rank: number;
   }>;
+  let usedMatch = false;
+
+  if (plan.matchQuery) {
+    try {
+      rows = params.db
+        .prepare(
+          `SELECT id, path, source, start_line, end_line, text,\n` +
+            `       bm25(${params.ftsTable}) AS rank\n` +
+            `  FROM ${params.ftsTable}\n` +
+            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` ORDER BY rank ASC\n` +
+            ` LIMIT ?`,
+        )
+        .all(
+          plan.matchQuery,
+          ...substringParams,
+          ...modelParams,
+          ...params.sourceFilter.params,
+          params.limit,
+        ) as typeof rows;
+      usedMatch = true;
+    } catch (matchErr) {
+      // FTS5 MATCH can fail on certain token patterns depending on the
+      // Node.js sqlite runtime and tokenizer (e.g. unicode61 vs trigram).
+      // Log the root cause, then fall back to per-token LIKE-based substring
+      // search so results are still returned instead of being silently dropped.
+      console.warn(`memory search: FTS5 MATCH failed, falling back to LIKE: ${String(matchErr)}`);
+      const queryTokens =
+        params.query
+          .match(FTS_QUERY_TOKEN_RE)
+          ?.map((t) => t.trim())
+          .filter(Boolean) ?? [];
+      const allTerms = [...new Set([...queryTokens, ...plan.substringTerms])];
+      const fallbackLikeClause = allTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
+      const fallbackLikeParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
+      rows = params.db
+        .prepare(
+          `SELECT id, path, source, start_line, end_line, text,\n` +
+            `       0 AS rank\n` +
+            `  FROM ${params.ftsTable}\n` +
+            ` WHERE 1=1${fallbackLikeClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` LIMIT ?`,
+        )
+        .all(
+          ...fallbackLikeParams,
+          ...modelParams,
+          ...params.sourceFilter.params,
+          params.limit,
+        ) as typeof rows;
+    }
+  } else {
+    rows = params.db
+      .prepare(
+        `SELECT id, path, source, start_line, end_line, text,\n` +
+          `       0 AS rank\n` +
+          `  FROM ${params.ftsTable}\n` +
+          ` WHERE 1=1${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+          ` LIMIT ?`,
+      )
+      .all(
+        ...substringParams,
+        ...modelParams,
+        ...params.sourceFilter.params,
+        params.limit,
+      ) as typeof rows;
+  }
 
   return rows.map((row) => {
-    const textScore = plan.matchQuery ? params.bm25RankToScore(row.rank) : 1;
+    const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
           query: params.query,

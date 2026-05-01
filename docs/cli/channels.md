@@ -51,6 +51,8 @@ openclaw channels remove --channel telegram --delete
 `openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
 </Tip>
 
+`channels remove` only operates on installed/configured channel plugins. Use `channels add` first for installable catalog channels.
+
 Common non-interactive add surfaces include:
 
 - bot-token channels: `--token`, `--bot-token`, `--app-token`, `--token-file`
@@ -92,6 +94,7 @@ openclaw channels logout --channel whatsapp
 
 - `channels login` supports `--verbose`.
 - `channels login` and `logout` can infer the channel when only one supported login target is configured.
+- Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
 
 ## Troubleshooting
 
@@ -131,6 +134,7 @@ Notes:
 - Use `--kind user|group|auto` to force the target type.
 - Resolution prefers active matches when multiple entries share the same name.
 - `channels resolve` is read-only. If a selected account is configured via SecretRef but that credential is unavailable in the current command path, the command returns degraded unresolved results with notes instead of aborting the entire run.
+- `channels resolve` does not install channel plugins. Use `channels add --channel <name>` before resolving names for an installable catalog channel.
 
 ## Related
 

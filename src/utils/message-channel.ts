@@ -12,18 +12,16 @@ export {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   listDeliverableMessageChannels,
-  listGatewayAgentChannelAliases,
-  listGatewayAgentChannelValues,
-  listGatewayMessageChannels,
   normalizeMessageChannel,
   resolveGatewayMessageChannel,
   resolveMessageChannel,
   type DeliverableMessageChannel,
-  type GatewayAgentChannelHint,
   type GatewayMessageChannel,
 } from "./message-channel-normalize.js";
 export {
   INTERNAL_MESSAGE_CHANNEL,
+  INTERNAL_NON_DELIVERY_CHANNELS,
+  isInternalNonDeliveryChannel,
   type InternalMessageChannel,
 } from "./message-channel-constants.js";
 import {

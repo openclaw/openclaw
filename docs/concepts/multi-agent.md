@@ -29,7 +29,12 @@ Auth profiles are **per-agent**. Each agent reads from its own:
 </Note>
 
 <Warning>
-Main agent credentials are **not** shared automatically. Never reuse `agentDir` across agents (it causes auth/session collisions). If you want to share creds, copy `auth-profiles.json` into the other agent's `agentDir`.
+Never reuse `agentDir` across agents (it causes auth/session collisions). Agents
+can read through to the default/main agent's auth profiles when they do not have
+a local profile, but OpenClaw does not clone OAuth refresh tokens into the
+secondary agent store. If you want an independent OAuth account, sign in from
+that agent; if you copy credentials manually, copy only portable static
+`api_key` or `token` profiles.
 </Warning>
 
 Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent skill allowlists](/tools/skills#agent-skill-allowlists).
@@ -237,11 +242,13 @@ Bindings are **deterministic** and **most-specific wins**:
   <Accordion title="Tie-breaking and AND semantics">
     - If multiple bindings match in the same tier, the first one in config order wins.
     - If a binding sets multiple match fields (for example `peer` + `guildId`), all specified fields are required (`AND` semantics).
+
   </Accordion>
   <Accordion title="Account-scope detail">
     - A binding that omits `accountId` matches the default account only.
     - Use `accountId: "*"` for a channel-wide fallback across all accounts.
     - If you later add the same binding for the same agent with an explicit account id, OpenClaw upgrades the existing channel-only binding to account-scoped instead of duplicating it.
+
   </Accordion>
 </AccordionGroup>
 

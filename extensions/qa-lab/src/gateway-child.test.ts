@@ -87,6 +87,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.OPENCLAW_TEST_FAST).toBe("1");
     expect(env.OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER).toBe("1");
     expect(env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
+    expect(env.OPENCLAW_SKIP_STARTUP_MODEL_PREWARM).toBe("1");
     expect(env.OPENCLAW_BUNDLED_PLUGINS_DIR).toBe("/tmp/openclaw-qa/bundled-plugins");
     expect(env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.4.8");
   });
@@ -339,6 +340,23 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     logs += "signal SIGUSR1 received\nrestart mode: in-process restart\n";
+
+    await expect(wait).resolves.toBeUndefined();
+  });
+
+  it("keeps restart offsets stable after stderr output", async () => {
+    const output = __testing.createQaGatewayChildLogCollector();
+    output.push(Buffer.from("gateway ready\n"));
+    output.push(Buffer.from("stderr warning\n"));
+    const offset = output.text().length;
+    const wait = __testing.waitForQaGatewayRestartBoundary({
+      logs: () => output.text(),
+      offset,
+      pollMs: 1,
+      timeoutMs: 100,
+    });
+
+    output.push(Buffer.from("signal SIGUSR1 received\nrestart mode: in-process restart\n"));
 
     await expect(wait).resolves.toBeUndefined();
   });

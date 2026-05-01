@@ -11,6 +11,7 @@ const ROOT_SECTIONS = [
   "logging",
   "cli",
   "update",
+  "commitments",
   "browser",
   "ui",
   "auth",
@@ -60,6 +61,8 @@ const TARGET_KEYS = [
   "memory.qmd.update.interval",
   "memory.qmd.update.debounceMs",
   "memory.qmd.update.onBoot",
+  "memory.qmd.update.startup",
+  "memory.qmd.update.startupDelayMs",
   "memory.qmd.update.waitForBootSync",
   "memory.qmd.update.embedInterval",
   "memory.qmd.update.commandTimeoutMs",
@@ -242,10 +245,12 @@ const TARGET_KEYS = [
   "hooks.internal.load.extraDirs",
   "messages",
   "messages.messagePrefix",
+  "messages.visibleReplies",
   "messages.responsePrefix",
   "messages.groupChat",
   "messages.groupChat.mentionPatterns",
   "messages.groupChat.historyLimit",
+  "messages.groupChat.visibleReplies",
   "messages.queue",
   "messages.queue.mode",
   "messages.queue.byChannel",
@@ -307,6 +312,10 @@ const TARGET_KEYS = [
   "web.reconnect.factor",
   "web.reconnect.jitter",
   "web.reconnect.maxAttempts",
+  "web.whatsapp",
+  "web.whatsapp.keepAliveIntervalMs",
+  "web.whatsapp.connectTimeoutMs",
+  "web.whatsapp.defaultQueryTimeoutMs",
   "discovery",
   "discovery.wideArea.domain",
   "discovery.wideArea.enabled",
@@ -392,6 +401,8 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.qualityGuard",
   "agents.defaults.compaction.qualityGuard.enabled",
   "agents.defaults.compaction.qualityGuard.maxRetries",
+  "agents.defaults.compaction.midTurnPrecheck",
+  "agents.defaults.compaction.midTurnPrecheck.enabled",
   "agents.defaults.compaction.postCompactionSections",
   "agents.defaults.compaction.timeoutSeconds",
   "agents.defaults.compaction.model",
@@ -399,6 +410,7 @@ const TARGET_KEYS = [
   "agents.defaults.compaction.maxActiveTranscriptBytes",
   "agents.defaults.compaction.memoryFlush",
   "agents.defaults.compaction.memoryFlush.enabled",
+  "agents.defaults.compaction.memoryFlush.model",
   "agents.defaults.compaction.memoryFlush.softThresholdTokens",
   "agents.defaults.compaction.memoryFlush.prompt",
   "agents.defaults.compaction.memoryFlush.systemPrompt",
@@ -681,8 +693,8 @@ describe("config help copy quality", () => {
     expect(pruneAfter.includes("12h")).toBe(true);
 
     const rotate = FIELD_HELP["session.maintenance.rotateBytes"];
-    expect(rotate.includes("10mb")).toBe(true);
-    expect(rotate.includes("1gb")).toBe(true);
+    expect(/deprecated/i.test(rotate)).toBe(true);
+    expect(rotate.includes("doctor --fix")).toBe(true);
 
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);
@@ -810,6 +822,9 @@ describe("config help copy quality", () => {
     const recentTurnsPreserve = FIELD_HELP["agents.defaults.compaction.recentTurnsPreserve"];
     expect(/recent.*turn|verbatim/i.test(recentTurnsPreserve)).toBe(true);
     expect(/default:\s*3/i.test(recentTurnsPreserve)).toBe(true);
+
+    const midTurnPrecheck = FIELD_HELP["agents.defaults.compaction.midTurnPrecheck.enabled"];
+    expect(/mid-turn|tool loop|default:\s*false/i.test(midTurnPrecheck)).toBe(true);
 
     const postCompactionSections = FIELD_HELP["agents.defaults.compaction.postCompactionSections"];
     expect(/Session Startup|Red Lines/i.test(postCompactionSections)).toBe(true);

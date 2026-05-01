@@ -77,6 +77,9 @@ export const pluginSdkDocMetadata = {
   "command-auth": {
     category: "channel",
   },
+  zalouser: {
+    category: "channel",
+  },
   "command-status": {
     category: "channel",
   },
@@ -93,9 +96,6 @@ export const pluginSdkDocMetadata = {
     category: "provider",
   },
   "provider-selection-runtime": {
-    category: "provider",
-  },
-  opencode: {
     category: "provider",
   },
   "runtime-store": {

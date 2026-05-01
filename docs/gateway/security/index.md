@@ -144,7 +144,7 @@ a real boundary bypass is demonstrated:
   explicit CIDR/IP entries, only applies to first-time `role: node` pairing with
   no requested scopes, and does not auto-approve operator/browser/Control UI,
   WebChat, role upgrades, scope upgrades, metadata changes, public-key changes,
-  or same-host loopback trusted-proxy header paths.
+  or same-host loopback trusted-proxy header paths unless loopback trusted-proxy auth was explicitly enabled.
 - "Missing per-user authorization" findings that treat `sessionKey` as an
   auth token.
 
@@ -236,6 +236,7 @@ Use this when auditing access or deciding what to back up:
   - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
   - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- **Codex runtime state**: `~/.openclaw/agents/<agentId>/agent/codex-home/`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
@@ -303,6 +304,7 @@ production.
     - `hooks.mappings[<index>].allowUnsafeExternalContent=true`
     - `tools.exec.applyPatch.workspaceOnly=false`
     - `plugins.entries.acpx.config.permissionMode=approve-all`
+
   </Accordion>
 
   <Accordion title="All `dangerous*` / `dangerously*` keys in the config schema">
@@ -347,9 +349,9 @@ When the Gateway detects proxy headers from an address that is **not** in `trust
 
 `gateway.trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, but that auth mode is stricter:
 
-- trusted-proxy auth **fails closed on loopback-source proxies**
-- same-host loopback reverse proxies can still use `gateway.trustedProxies` for local-client detection and forwarded IP handling
-- for same-host loopback reverse proxies, use token/password auth instead of `gateway.auth.mode: "trusted-proxy"`
+- trusted-proxy auth **fails closed on loopback-source proxies by default**
+- same-host loopback reverse proxies can use `gateway.trustedProxies` for local-client detection and forwarded IP handling
+- same-host loopback reverse proxies can satisfy `gateway.auth.mode: "trusted-proxy"` only when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth
 
 ```yaml
 gateway:
@@ -369,7 +371,7 @@ Trusted proxy headers do not make node device pairing automatically trusted.
 `gateway.nodes.pairing.autoApproveCidrs` is a separate, disabled-by-default
 operator policy. Even when enabled, loopback-source trusted-proxy header paths
 are excluded from node auto-approval because local callers can forge those
-headers.
+headers, including when loopback trusted-proxy auth is explicitly enabled.
 
 Good reverse proxy behavior (overwrite incoming forwarding headers):
 
@@ -607,7 +609,7 @@ Why:
 
 - OpenAI-compatible backends that front self-hosted models sometimes preserve special tokens that appear in user text, instead of masking them. An attacker who can write into inbound external content (a fetched page, an email body, a file contents tool output) could otherwise inject a synthetic `assistant` or `system` role boundary and escape the wrapped-content guardrails.
 - Sanitization happens at the external-content wrapping layer, so it applies uniformly across fetch/read tools and inbound channel content rather than being per-provider.
-- Outbound model responses already have a separate sanitizer that strips leaked `<tool_call>`, `<function_calls>`, and similar scaffolding from user-visible replies. The external-content sanitizer is the inbound counterpart.
+- Outbound model responses already have a separate sanitizer that strips leaked `<tool_call>`, `<function_calls>`, `<system-reminder>`, `<previous_response>`, and similar internal runtime scaffolding from user-visible replies at the final channel delivery boundary. The external-content sanitizer is the inbound counterpart.
 
 This does not replace the other hardening on this page — `dmPolicy`, allowlists, exec approvals, sandboxing, and `contextVisibility` still do the primary work. It closes one specific tokenizer-layer bypass against self-hosted stacks that forward user text with special tokens intact.
 
@@ -733,7 +735,7 @@ If you load canvas content in a normal browser, treat it like any other untruste
 Bind mode controls where the Gateway listens:
 
 - `gateway.bind: "loopback"` (default): only local clients can connect.
-- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with gateway auth (shared token/password or a correctly configured non-loopback trusted proxy) and a real firewall.
+- Non-loopback binds (`"lan"`, `"tailnet"`, `"custom"`) expand the attack surface. Only use them with gateway auth (shared token/password or a correctly configured trusted proxy) and a real firewall.
 
 Rules of thumb:
 
@@ -964,6 +966,7 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `openclaw.json`: config may include tokens (gateway, remote gateway), provider settings, and allowlists.
 - `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
 - `agents/<agentId>/agent/auth-profiles.json`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
+- `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
 - `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
