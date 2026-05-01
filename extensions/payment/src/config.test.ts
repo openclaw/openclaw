@@ -111,3 +111,14 @@ describe("parsePaymentConfig — maxAmountCents enforcement", () => {
     expect(() => parsePaymentConfig({ provider: "mock", unknownKey: true })).toThrow();
   });
 });
+
+describe("parsePaymentConfig — nested provider defaults (M9)", () => {
+  it("nested provider defaults fire when providers key is omitted entirely", () => {
+    const parsed = parsePaymentConfig({ provider: "stripe-link" });
+    expect(parsed.providers["stripe-link"].command).toBe("link-cli");
+    expect(parsed.providers["stripe-link"].clientName).toBe("OpenClaw");
+    expect(parsed.providers["stripe-link"].testMode).toBe(false);
+    expect(parsed.providers["stripe-link"].maxAmountCents).toBe(50000);
+    expect(parsed.providers.mock).toEqual({});
+  });
+});

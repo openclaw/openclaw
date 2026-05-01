@@ -48,6 +48,11 @@ function luhnCheck(digits: string): boolean {
   return sum % 10 === 0;
 }
 
+// TODO(payment-plugin): I4 — extend PAN detection to scan-and-replace embedded
+// matches with separator tolerance (dashes, parens, dots, embedded in free text).
+// Currently `isPanShape` only matches strings that are entirely a PAN with
+// optional spaces. Real-world leak vectors include error messages and merchant
+// names containing the PAN inline. Tracked in feature-plan U2 follow-up.
 /**
  * Returns true if the string (stripped of spaces) looks like a PAN:
  * 13-19 digits and passes Luhn check.
@@ -77,10 +82,10 @@ const CVV_KEY_PATTERN = /^(cvv2?|cvc2?|card_?security_?code|security_?code)$/i;
  * redaction is not applicable.
  */
 export function redactSensitiveValue(input: unknown): unknown {
-  return redact(input, null);
+  return redact(input, null, new WeakSet<object>());
 }
 
-function redact(value: unknown, parentKey: string | null): unknown {
+function redact(value: unknown, parentKey: string | null, seen: WeakSet<object>): unknown {
   try {
     if (value === null || value === undefined) {
       return value;
@@ -108,19 +113,27 @@ function redact(value: unknown, parentKey: string | null): unknown {
       return value;
     }
     if (Array.isArray(value)) {
-      return value.map((item) => redact(item, null));
+      if (seen.has(value)) {
+        return "[Circular]";
+      }
+      seen.add(value);
+      return value.map((item) => redact(item, parentKey, seen));
     }
     if (typeof value === "object") {
+      if (seen.has(value as object)) {
+        return "[Circular]";
+      }
+      seen.add(value as object);
       const result: Record<string, unknown> = {};
       for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-        result[key] = redact(child, key);
+        result[key] = redact(child, key, seen);
       }
       return result;
     }
     return value;
   } catch {
-    // Defensive: never throw
-    return value;
+    // Fail-closed: any unexpected error in redaction must not pass sensitive data through.
+    return "[REDACTED]";
   }
 }
 
@@ -140,6 +153,23 @@ export function expandStorePath(rawPath: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Per-path write queue (I3: concurrency safety for JSONL appends)
+// ---------------------------------------------------------------------------
+
+const writeQueues = new Map<string, Promise<void>>();
+
+async function withWriteQueue(filePath: string, fn: () => Promise<void>): Promise<void> {
+  const prev = writeQueues.get(filePath) ?? Promise.resolve();
+  const next = prev.then(fn, fn); // run fn whether or not prev rejected
+  writeQueues.set(filePath, next);
+  try {
+    await next;
+  } finally {
+    if (writeQueues.get(filePath) === next) writeQueues.delete(filePath);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // appendAuditRecord / readAuditRecords
 // ---------------------------------------------------------------------------
 
@@ -147,12 +177,16 @@ export function expandStorePath(rawPath: string): string {
  * Appends a JSON line to the JSONL audit store at `storePath`.
  * Redacts sensitive values before writing (last-line-of-defense per R10).
  * Creates the directory if it doesn't exist.
+ * Uses a per-path write queue to prevent byte interleaving under concurrency.
  */
 export async function appendAuditRecord(storePath: string, record: AuditRecord): Promise<void> {
-  const redacted = redactSensitiveValue(record) as AuditRecord;
-  const line = `${JSON.stringify(redacted)}\n`;
-  await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.appendFile(storePath, line, "utf8");
+  const absPath = path.resolve(storePath);
+  await withWriteQueue(absPath, async () => {
+    const redacted = redactSensitiveValue(record) as AuditRecord;
+    const line = `${JSON.stringify(redacted)}\n`;
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.appendFile(absPath, line, "utf8");
+  });
 }
 
 /**
@@ -200,6 +234,14 @@ export type HandleMetadata = {
   validUntil?: string;
 };
 
+const ALLOWED_HANDLE_METADATA_KEYS = new Set([
+  "spendRequestId",
+  "last4",
+  "targetMerchantName",
+  "issuedAt",
+  "validUntil",
+] as const);
+
 /**
  * In-memory only. Cleared on process restart. Stores no sensitive card values
  * — see store.ts redaction discipline.
@@ -208,6 +250,13 @@ export const handleMap = {
   _map: new Map<string, HandleMetadata>(),
 
   set(handleId: string, meta: HandleMetadata): void {
+    for (const key of Object.keys(meta)) {
+      if (!ALLOWED_HANDLE_METADATA_KEYS.has(key as never)) {
+        throw new Error(
+          `handleMap: disallowed key "${key}". Allowed: ${[...ALLOWED_HANDLE_METADATA_KEYS].join(", ")}`,
+        );
+      }
+    }
     this._map.set(handleId, meta);
   },
 

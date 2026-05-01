@@ -77,6 +77,17 @@ describe("redactSensitiveValue — CVV redaction", () => {
     const result = redactSensitiveValue({ amount: "123" }) as Record<string, unknown>;
     expect(result["amount"]).toBe("123");
   });
+
+  it("redacts CVV values inside arrays when parentKey is a CVV key (I2)", () => {
+    const result = redactSensitiveValue({ cvv: ["123", "456"] }) as Record<string, unknown>;
+    expect((result["cvv"] as unknown[])[0]).toBe("[REDACTED]");
+    expect((result["cvv"] as unknown[])[1]).toBe("[REDACTED]");
+  });
+
+  it("does NOT redact non-CVV-key array values (I2 positive case)", () => {
+    const result = redactSensitiveValue({ portNumbers: ["123"] }) as Record<string, unknown>;
+    expect((result["portNumbers"] as unknown[])[0]).toBe("123");
+  });
 });
 
 describe("redactSensitiveValue — Authorization header redaction", () => {
@@ -132,6 +143,41 @@ describe("redactSensitiveValue — primitive/non-object inputs", () => {
 
   it("returns boolean unchanged", () => {
     expect(redactSensitiveValue(true)).toBe(true);
+  });
+});
+
+describe("redactSensitiveValue — circular reference guard (I1)", () => {
+  it("handles a self-referential object without throwing and produces [Circular]", () => {
+    const a: any = {};
+    a.self = a;
+    let result: unknown;
+    expect(() => {
+      result = redactSensitiveValue(a);
+    }).not.toThrow();
+    expect(JSON.stringify(result)).toContain("[Circular]");
+  });
+
+  it("still redacts a PAN even when the object also has a circular reference (I1)", () => {
+    const a: any = { pan: "4242424242424242" };
+    a.self = a;
+    const result = redactSensitiveValue(a) as Record<string, unknown>;
+    expect(result["pan"]).toBe("[REDACTED]");
+    expect(result["self"]).toBe("[Circular]");
+  });
+});
+
+describe("redactSensitiveValue — fail-closed on unexpected error (M3)", () => {
+  it("returns [REDACTED] when a property getter throws", () => {
+    const obj: Record<string, unknown> = {};
+    Object.defineProperty(obj, "key", {
+      get: () => {
+        throw new Error("boom");
+      },
+      enumerable: true,
+    });
+    const result = redactSensitiveValue(obj);
+    // The object-level redact catches the thrown error and returns "[REDACTED]"
+    expect(result).toBe("[REDACTED]");
   });
 });
 
@@ -224,6 +270,21 @@ describe("appendAuditRecord / readAuditRecords", () => {
     await appendAuditRecord(nestedPath, makeRecord());
     const records = await readAuditRecords(nestedPath);
     expect(records).toHaveLength(1);
+  });
+
+  it("concurrent appendAuditRecord calls produce all records without interleaving (I3)", async () => {
+    const count = 20;
+    const records = Array.from({ length: count }, (_, i) =>
+      makeRecord({ openclawPaymentId: `pay_concurrent_${i}` }),
+    );
+    await Promise.all(records.map((r) => appendAuditRecord(storePath, r)));
+    const written = await readAuditRecords(storePath);
+    expect(written).toHaveLength(count);
+    // Every id must be present and parseable (order doesn't matter)
+    const ids = new Set(written.map((r) => r.openclawPaymentId));
+    for (let i = 0; i < count; i++) {
+      expect(ids.has(`pay_concurrent_${i}`)).toBe(true);
+    }
   });
 });
 
@@ -322,5 +383,10 @@ describe("handleMap", () => {
     expect((stored as Record<string, unknown>)["pan"]).toBeUndefined();
     // @ts-expect-error — cvv is not a valid HandleMetadata key
     expect((stored as Record<string, unknown>)["cvv"]).toBeUndefined();
+  });
+
+  it("throws when a disallowed key is smuggled in (I8 — runtime privacy invariant)", () => {
+    const smuggled = { spendRequestId: "x", issuedAt: "y", pan: "4242424242424242" } as any;
+    expect(() => handleMap.set("h1", smuggled)).toThrowError(/pan/);
   });
 });
