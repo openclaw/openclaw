@@ -52,6 +52,20 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
   musicGenerationProviders: "musicGenerationProviders",
 };
 
+function shouldResolveWhenPluginsAreGloballyDisabled(key: CapabilityProviderRegistryKey): boolean {
+  return key === "speechProviders";
+}
+
+function shouldSkipCapabilityResolution(params: {
+  key: CapabilityProviderRegistryKey;
+  cfg?: OpenClawConfig;
+}): boolean {
+  return (
+    params.cfg?.plugins?.enabled === false &&
+    !shouldResolveWhenPluginsAreGloballyDisabled(params.key)
+  );
+}
+
 function resolveBundledCapabilityCompatPluginIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
@@ -274,6 +288,10 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K> | undefined {
+  if (shouldSkipCapabilityResolution(params)) {
+    return undefined;
+  }
+
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProvider = findProviderById(activeRegistry?.[params.key] ?? [], params.providerId);
   if (activeProvider) {
@@ -317,6 +335,10 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K>[] {
+  if (shouldSkipCapabilityResolution(params)) {
+    return [];
+  }
+
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
   if (

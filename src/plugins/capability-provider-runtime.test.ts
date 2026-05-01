@@ -691,7 +691,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("uses active capability providers when plugins are globally disabled", () => {
+  it("does not resolve non-speech capability providers when plugins are globally disabled", () => {
     const cfg = { plugins: { enabled: false, allow: ["custom-plugin"] } } as OpenClawConfig;
     const active = createEmptyPluginRegistry();
     active.mediaUnderstandingProviders.push({
@@ -710,12 +710,12 @@ describe("resolvePluginCapabilityProviders", () => {
       cfg,
     });
 
-    expectResolvedCapabilityProviderIds(providers, ["openai"]);
+    expectNoResolvedCapabilityProviders(providers);
     expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginAllowlistCompat).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
     expect(mocks.withBundledPluginVitestCompat).not.toHaveBeenCalled();
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
 
   it("loads bundled speech providers through compat when plugins are globally disabled", () => {
@@ -958,21 +958,8 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("loads targeted bundled capability providers through compat when plugins are globally disabled", () => {
+  it("does not load targeted non-speech capability providers when plugins are globally disabled", () => {
     const cfg = { plugins: { enabled: false, allow: ["custom-plugin"] } } as OpenClawConfig;
-    const allowlistCompat = {
-      plugins: {
-        enabled: false,
-        allow: ["custom-plugin", "google"],
-      },
-    } as OpenClawConfig;
-    const enablementCompat = {
-      plugins: {
-        enabled: true,
-        allow: ["custom-plugin", "google"],
-        entries: { google: { enabled: true } },
-      },
-    };
     const loaded = createEmptyPluginRegistry();
     loaded.memoryEmbeddingProviders.push({
       pluginId: "google",
@@ -998,8 +985,6 @@ describe("resolvePluginCapabilityProviders", () => {
       ] as never,
       diagnostics: [],
     });
-    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
-    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
     mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
       params === undefined ? undefined : loaded,
     );
@@ -1010,19 +995,87 @@ describe("resolvePluginCapabilityProviders", () => {
       cfg,
     });
 
-    expect(provider?.id).toBe("gemini");
+    expect(provider).toBeUndefined();
+    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(mocks.withBundledPluginAllowlistCompat).not.toHaveBeenCalled();
+    expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
+    expect(mocks.withBundledPluginVitestCompat).not.toHaveBeenCalled();
+    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+  });
+
+  it("loads targeted bundled speech providers through compat when plugins are globally disabled", () => {
+    const cfg = { plugins: { enabled: false, allow: ["custom-plugin"] } } as OpenClawConfig;
+    const allowlistCompat = {
+      plugins: {
+        enabled: false,
+        allow: ["custom-plugin", "microsoft"],
+      },
+    } as OpenClawConfig;
+    const enablementCompat = {
+      plugins: {
+        enabled: true,
+        allow: ["custom-plugin", "microsoft"],
+        entries: { microsoft: { enabled: true } },
+      },
+    };
+    const loaded = createEmptyPluginRegistry();
+    loaded.speechProviders.push({
+      pluginId: "microsoft",
+      pluginName: "microsoft",
+      source: "test",
+      provider: {
+        id: "microsoft",
+        label: "microsoft",
+        aliases: ["edge"],
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "microsoft",
+          origin: "bundled",
+          contracts: { speechProviders: ["microsoft"] },
+        },
+        {
+          id: "openai",
+          origin: "bundled",
+          contracts: { speechProviders: ["openai"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+    mocks.withBundledPluginVitestCompat.mockReturnValue(enablementCompat);
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? undefined : loaded,
+    );
+
+    const provider = resolvePluginCapabilityProvider({
+      key: "speechProviders",
+      providerId: "microsoft",
+      cfg,
+    });
+
+    expect(provider?.id).toBe("microsoft");
     expect(mocks.withBundledPluginAllowlistCompat).toHaveBeenCalledWith({
       config: cfg,
-      pluginIds: ["google"],
+      pluginIds: ["microsoft"],
     });
     expect(mocks.withBundledPluginEnablementCompat).toHaveBeenCalledWith({
       config: allowlistCompat,
-      pluginIds: ["google"],
+      pluginIds: ["microsoft"],
     });
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: enablementCompat,
-      onlyPluginIds: ["google"],
+      onlyPluginIds: ["microsoft"],
       activate: false,
     });
   });
