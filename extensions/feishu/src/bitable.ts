@@ -476,6 +476,25 @@ async function updateRecord(
   };
 }
 
+
+
+async function deleteRecord(
+  client: Lark.Client,
+  appToken: string,
+  tableId: string,
+  recordId: string,
+) {
+  const res = await client.bitable.appTableRecord.delete({
+    path: { app_token: appToken, table_id: tableId, record_id: recordId },
+  });
+  ensureLarkSuccess(res, "bitable.appTableRecord.delete", { appToken, tableId, recordId });
+
+  return {
+    deleted: true,
+    record_id: recordId,
+  };
+}
+
 // ============ Schemas ============
 
 const GetMetaSchema = Type.Object({
@@ -566,6 +585,16 @@ const UpdateRecordSchema = Type.Object({
   fields: Type.Record(Type.String(), Type.Any(), {
     description: "Field values to update (same format as create_record)",
   }),
+});
+
+
+
+const DeleteRecordSchema = Type.Object({
+  app_token: Type.String({
+    description: "Bitable app token (use feishu_bitable_get_meta to get from URL)",
+  }),
+  table_id: Type.String({ description: "Table ID (from URL: ?table=YYY)" }),
+  record_id: Type.String({ description: "Record ID to delete" }),
 });
 
 // ============ Tool Registration ============
@@ -719,6 +748,28 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
         params.table_id,
         params.record_id,
         params.fields,
+      );
+    },
+  });
+
+
+  registerBitableTool<{
+    app_token: string;
+    table_id: string;
+    record_id: string;
+    accountId?: string;
+  }>({
+    name: "feishu_bitable_delete_record",
+    label: "Feishu Bitable Delete Record",
+    description:
+      "Delete a record (row) from a Bitable table. This action is irreversible.",
+    parameters: DeleteRecordSchema,
+    async execute({ params, defaultAccountId }) {
+      return deleteRecord(
+        getClient(params, defaultAccountId),
+        params.app_token,
+        params.table_id,
+        params.record_id,
       );
     },
   });
