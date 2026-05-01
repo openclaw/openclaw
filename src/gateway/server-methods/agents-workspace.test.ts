@@ -81,6 +81,14 @@ vi.mock("../../routing/session-key.js", () => ({
 const { agentsWorkspaceHandlers } = await import("./agents-workspace.js");
 const { ErrorCodes } = await import("../protocol/index.js");
 
+// Restore default mock implementations after clearAllMocks
+beforeEach(() => {
+  mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/test-workspace/main");
+  mocks.listAgentIds.mockReturnValue(["main"]);
+  mocks.fsRealpath.mockImplementation((p: string) => Promise.resolve(p));
+  mocks.fsAccess.mockResolvedValue(undefined);
+});
+
 type RespondFn = (ok: boolean, result?: unknown, error?: unknown) => void;
 
 function createRespondFn(): {
