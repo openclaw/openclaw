@@ -9,9 +9,18 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.18.0",
+    "@codemirror/commands": "^6.8.0",
+    "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/lint": "^6.8.0",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.5",
     "@create-markdown/preview": "^2.0.0",
     "@noble/ed25519": "3.0.1",
+    "codemirror-json5": "^1.0.3",
     "dompurify": "^3.3.3",
+    "json5": "^2.2.3",
+    "lezer-json5": "^2.0.2",
     "lit": "^3.3.2",
     "marked": "^17.0.5"
   },

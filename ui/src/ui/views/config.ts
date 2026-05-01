@@ -2,6 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../icons.ts";
 import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
+import { prefersLightScheme } from "../theme.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
@@ -14,6 +15,7 @@ import {
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+import "./config-editor.ts";
 
 const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   0: "None",
@@ -1104,13 +1106,13 @@ export function renderConfig(props: ConfigProps) {
                             </div>
                           `
                         : html`
-                            <textarea
-                              placeholder="Raw config (JSON/JSON5)"
+                            <config-editor
                               .value=${props.raw}
-                              @input=${(e: Event) => {
-                                props.onRawChange((e.target as HTMLTextAreaElement).value);
-                              }}
-                            ></textarea>
+                              ?readonly=${blurred}
+                              ?dark=${props.themeMode === "dark" ||
+                              (props.themeMode === "system" && !prefersLightScheme())}
+                              @change=${(e: CustomEvent) => props.onRawChange(e.detail.value)}
+                            ></config-editor>
                           `}
                     </div>
                   `;
