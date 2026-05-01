@@ -17,9 +17,14 @@ vi.mock("../config/config.js", async () => {
     resolveGatewayPort: () => 18789,
   };
 });
-function getSessionsHistoryTool(options?: { sandboxed?: boolean }) {
+function getSessionsHistoryTool(options?: {
+  agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
+  sandboxed?: boolean;
+}) {
   return createSessionsHistoryTool({
-    agentSessionKey: "main",
+    agentSessionKey: options?.agentSessionKey ?? "main",
+    requesterAgentIdOverride: options?.requesterAgentIdOverride,
     sandboxed: options?.sandboxed,
     config: mockConfig as never,
     callGateway: (opts: unknown) => callGatewayMock(opts),
@@ -112,5 +117,30 @@ describe("sessions tools visibility", () => {
       sessionKey: "agent:other:main",
     });
     expect(denied.details).toMatchObject({ status: "forbidden" });
+  });
+
+  it("uses requesterAgentIdOverride for sandbox clamp in sessions_history", async () => {
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true, allow: ["*"] } },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    };
+    mockGatewayWithHistory();
+
+    const tool = getSessionsHistoryTool({
+      agentSessionKey: "global",
+      requesterAgentIdOverride: "tony",
+      sandboxed: true,
+    });
+
+    const result = await tool.execute("call5", {
+      sessionKey: "agent:other:main",
+    });
+    expect(result.details).toMatchObject({
+      sessionKey: "agent:other:main",
+    });
   });
 });

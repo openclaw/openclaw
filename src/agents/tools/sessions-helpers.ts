@@ -80,6 +80,7 @@ export type SessionListRow = {
 
 export function resolveSessionToolContext(opts?: {
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
@@ -89,6 +90,7 @@ export function resolveSessionToolContext(opts?: {
     ...resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: opts?.agentSessionKey,
+      agentId: opts?.requesterAgentIdOverride,
       sandboxed: opts?.sandboxed,
     }),
   };

@@ -377,9 +377,13 @@ function expectSpawnedSessionLookupCalls(spawnedBy: string) {
   expect(callGatewayMock).toHaveBeenNthCalledWith(2, expectedCall);
 }
 
-function getSessionStatusTool(agentSessionKey = "main", options?: { sandboxed?: boolean }) {
+function getSessionStatusTool(
+  agentSessionKey = "main",
+  options?: { requesterAgentIdOverride?: string; sandboxed?: boolean },
+) {
   const tool = createSessionStatusTool({
     agentSessionKey,
+    requesterAgentIdOverride: options?.requesterAgentIdOverride,
     sandboxed: options?.sandboxed,
     config: mockConfig as never,
   });
@@ -1278,6 +1282,46 @@ describe("session_status tool", () => {
     await expect(tool.execute("call5", { sessionKey: "agent:other:main" })).rejects.toThrow(
       "Agent-to-agent status is disabled",
     );
+  });
+
+  it("uses requesterAgentIdOverride when enforcing sandboxed session_status visibility", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+      },
+      "agent:tony:main": {
+        sessionId: "s-tony",
+        updatedAt: 20,
+      },
+    });
+    mockConfig = {
+      session: { mainKey: "main", scope: "per-sender" },
+      tools: {
+        sessions: { visibility: "all" },
+        agentToAgent: { enabled: false },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {},
+          sandbox: { sessionToolsVisibility: "spawned" },
+        },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "all" } }],
+      },
+    };
+
+    const tool = getSessionStatusTool("global", {
+      requesterAgentIdOverride: "tony",
+      sandboxed: true,
+    });
+
+    await expect(
+      tool.execute("call-status-override", { sessionKey: "agent:main:main" }),
+    ).rejects.toThrow("Agent-to-agent status is disabled");
+
+    expect(loadSessionStoreMock).not.toHaveBeenCalled();
+    expect(updateSessionStoreMock).not.toHaveBeenCalled();
   });
 
   it("blocks unsandboxed same-agent session_status outside self visibility", async () => {
