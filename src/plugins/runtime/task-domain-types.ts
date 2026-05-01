@@ -26,6 +26,7 @@ export type TaskRunAggregateSummary = {
 export type TaskRunView = {
   id: string;
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   sessionKey: string;
   ownerKey: string;
