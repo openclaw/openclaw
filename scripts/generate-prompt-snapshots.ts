@@ -24,6 +24,10 @@ function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function hasErrorCode(error: unknown, code: string): boolean {
+  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
+}
+
 async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   await Promise.all(
     files.map(async (file) => {
@@ -71,6 +75,7 @@ async function writeSnapshots() {
 
 async function checkSnapshots() {
   const files = await createFormattedPromptSnapshotFiles();
+  const expectedPaths = new Set(files.map((file) => file.path));
   const mismatches: string[] = [];
   for (const file of files) {
     const filePath = path.resolve(repoRoot, file.path);
@@ -83,6 +88,24 @@ async function checkSnapshots() {
     }
     if (actual !== file.content) {
       mismatches.push(`${file.path}: differs from generated output`);
+    }
+  }
+  let committedEntries: string[];
+  try {
+    committedEntries = await fs.readdir(path.resolve(repoRoot, HAPPY_PATH_PROMPT_SNAPSHOT_DIR));
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+    committedEntries = [];
+  }
+  for (const entry of committedEntries) {
+    if (!entry.endsWith(".md") && !entry.endsWith(".json")) {
+      continue;
+    }
+    const snapshotPath = path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry);
+    if (!expectedPaths.has(snapshotPath)) {
+      mismatches.push(`${snapshotPath}: stale file (not generated)`);
     }
   }
   if (mismatches.length > 0) {
