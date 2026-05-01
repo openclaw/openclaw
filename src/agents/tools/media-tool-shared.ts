@@ -9,6 +9,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { normalizeModelRef } from "../model-selection.js";
 import { normalizeProviderId } from "../provider-id.js";
 import {
@@ -155,6 +156,7 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
   providerId?: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
 }): boolean {
   const provider =
     params.provider ??
@@ -164,7 +166,11 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
     });
   if (!provider) {
     return params.providerId
-      ? hasAuthForProvider({ provider: params.providerId, agentDir: params.agentDir })
+      ? hasAuthForProvider({
+          provider: params.providerId,
+          agentDir: params.agentDir,
+          authStore: params.authStore,
+        })
       : false;
   }
   if (provider.isConfigured) {
@@ -173,7 +179,11 @@ export function isCapabilityProviderConfigured<T extends CapabilityProvider>(par
       agentDir: params.agentDir,
     });
   }
-  return hasAuthForProvider({ provider: provider.id, agentDir: params.agentDir });
+  return hasAuthForProvider({
+    provider: provider.id,
+    agentDir: params.agentDir,
+    authStore: params.authStore,
+  });
 }
 
 export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(params: {
@@ -196,6 +206,7 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
 export function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   providers: CapabilityProvider[];
 }): string[] {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
@@ -211,6 +222,7 @@ export function resolveCapabilityModelCandidatesForTool(params: {
         provider,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        authStore: params.authStore,
       })
     ) {
       continue;
@@ -252,6 +264,7 @@ export function resolveCapabilityModelCandidatesForTool(params: {
 export function resolveCapabilityModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
   providers: CapabilityProvider[];
 }): ToolModelConfig | null {
@@ -262,9 +275,11 @@ export function resolveCapabilityModelConfigForTool(params: {
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     candidates: resolveCapabilityModelCandidatesForTool({
       cfg: params.cfg,
       agentDir: params.agentDir,
+      authStore: params.authStore,
       providers: params.providers,
     }),
     isProviderConfigured: (providerId) =>
@@ -273,6 +288,7 @@ export function resolveCapabilityModelConfigForTool(params: {
         providerId,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        authStore: params.authStore,
       }),
   });
 }
@@ -280,6 +296,7 @@ export function resolveCapabilityModelConfigForTool(params: {
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
   providerKey: GenerationCapabilityProviderKey;
@@ -295,13 +312,20 @@ export function hasGenerationToolAvailability(params: {
         provider,
         cfg: params.cfg,
         agentDir: params.agentDir,
+        authStore: params.authStore,
       }),
     );
   }
   return resolveBundledCapabilityProviderIds({
     key: params.providerKey,
     cfg: params.cfg,
-  }).some((providerId) => hasAuthForProvider({ provider: providerId, agentDir: params.agentDir }));
+  }).some((providerId) =>
+    hasAuthForProvider({
+      provider: providerId,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+    }),
+  );
 }
 
 function formatQuotedList(values: readonly string[]): string {

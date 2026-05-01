@@ -918,6 +918,7 @@ export async function runEmbeddedAttempt(
                 params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
               disableMessageTool: params.disableMessageTool,
               forceMessageTool: params.forceMessageTool,
+              authProfileStore: params.authProfileStore,
               recordToolPrepStage: (name) => corePluginToolStages.mark(name),
               onYield: (message) => {
                 yieldDetected = true;

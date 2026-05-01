@@ -23,6 +23,7 @@ import {
   type MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import { resolveUserPath } from "../../utils.js";
+import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   coerceImageAssistantText,
@@ -117,6 +118,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
 export function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  authStore?: AuthProfileStore;
 }): ImageModelConfig | null {
   // Note: We intentionally do NOT gate based on primarySupportsImages here.
   // Even when the primary model supports images, we keep the tool available
@@ -171,6 +173,7 @@ export function resolveImageModelConfigForTool(params: {
   return buildToolModelConfigFromCandidates({
     explicit,
     agentDir: params.agentDir,
+    authStore: params.authStore,
     candidates: [...primaryCandidates, ...autoCandidates],
   });
 }
@@ -366,6 +369,7 @@ async function runImagePrompt(params: {
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentDir?: string;
+  authProfileStore?: AuthProfileStore;
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
   fsPolicy?: ToolFsPolicy;
@@ -383,6 +387,7 @@ export function createImageTool(options?: {
   const imageModelConfig = resolveImageModelConfigForTool({
     cfg: options?.config,
     agentDir,
+    authStore: options?.authProfileStore,
   });
   if (!imageModelConfig) {
     return null;

@@ -5,6 +5,7 @@ import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
 import {
@@ -104,6 +105,8 @@ export function createOpenClawTools(
     recordToolPrepStage?: (name: string) => void;
     /** Trusted sender id from inbound context (not tool args). */
     requesterSenderId?: string | null;
+    /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
+    authProfileStore?: AuthProfileStore;
     /** Whether the requesting sender is an owner. */
     senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
@@ -153,6 +156,7 @@ export function createOpenClawTools(
     ? createImageTool({
         config: options?.config,
         agentDir: options.agentDir,
+        authProfileStore: options?.authProfileStore,
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
@@ -163,6 +167,7 @@ export function createOpenClawTools(
   const imageGenerateTool = createImageGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
+    authProfileStore: options?.authProfileStore,
     workspaceDir,
     sandbox,
     fsPolicy: options?.fsPolicy,
@@ -171,6 +176,7 @@ export function createOpenClawTools(
   const videoGenerateTool = createVideoGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
+    authProfileStore: options?.authProfileStore,
     agentSessionKey: options?.agentSessionKey,
     requesterOrigin: deliveryContext ?? undefined,
     workspaceDir,
@@ -181,6 +187,7 @@ export function createOpenClawTools(
   const musicGenerateTool = createMusicGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
+    authProfileStore: options?.authProfileStore,
     agentSessionKey: options?.agentSessionKey,
     requesterOrigin: deliveryContext ?? undefined,
     workspaceDir,
@@ -192,6 +199,7 @@ export function createOpenClawTools(
     ? createPdfTool({
         config: options?.config,
         agentDir: options.agentDir,
+        authProfileStore: options?.authProfileStore,
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
