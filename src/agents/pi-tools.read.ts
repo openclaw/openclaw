@@ -847,7 +847,7 @@ export function wrapToolWriteWithAppend(
       // Delegate validation of required params to the underlying tool when append is missing/invalid.
       const filePath = typeof record?.path === "string" ? record.path : undefined;
       const content = typeof record?.content === "string" ? record.content : undefined;
-      if (!filePath || content === undefined) {
+      if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {
         return tool.execute(toolCallId, args, signal, onUpdate);
       }
       // Strip @ workspace-alias prefix and expand ~ before resolving; mirrors resolveToCwd semantics.
