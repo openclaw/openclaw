@@ -338,6 +338,21 @@ export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
 
+export function buildTelegramMessageSid(params: {
+  accountId?: string | null;
+  chatId: number | string;
+  messageThreadId?: number | string | null;
+  messageId: number | string;
+  namespace?: string | null;
+}) {
+  const accountId = params.accountId?.trim() || "default";
+  const threadId = params.messageThreadId == null ? "" : String(params.messageThreadId);
+  const namespace = params.namespace?.trim();
+  const messageId = String(params.messageId);
+  const scopedMessageId = namespace ? `${namespace}:${messageId}` : messageId;
+  return `telegram:${accountId}:${params.chatId}:${threadId}:${scopedMessageId}`;
+}
+
 /**
  * Build parentPeer for forum topic binding inheritance.
  * When a message comes from a forum topic, the peer ID includes the topic suffix

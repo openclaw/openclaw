@@ -77,3 +77,51 @@ describe("resolveTelegramDraftStreamingChunking", () => {
     });
   });
 });
+
+describe("buildTelegramMessageSid", () => {
+  it("scopes Telegram message ids by account, chat, and thread", async () => {
+    const { buildTelegramMessageSid } = await import("./bot/helpers.js");
+
+    expect(
+      buildTelegramMessageSid({
+        accountId: "bot-a",
+        chatId: -1001234567890,
+        messageThreadId: 42,
+        messageId: 1001,
+      }),
+    ).toBe("telegram:bot-a:-1001234567890:42:1001");
+  });
+
+  it("keeps chat-level and thread-level Telegram messages distinct", async () => {
+    const { buildTelegramMessageSid } = await import("./bot/helpers.js");
+
+    const chatLevel = buildTelegramMessageSid({
+      accountId: "default",
+      chatId: -1001234567890,
+      messageId: 1001,
+    });
+    const topicLevel = buildTelegramMessageSid({
+      accountId: "default",
+      chatId: -1001234567890,
+      messageThreadId: 42,
+      messageId: 1001,
+    });
+
+    expect(chatLevel).toBe("telegram:default:-1001234567890::1001");
+    expect(topicLevel).toBe("telegram:default:-1001234567890:42:1001");
+    expect(chatLevel).not.toBe(topicLevel);
+  });
+
+  it("allows native command turns to avoid colliding with message turns", async () => {
+    const { buildTelegramMessageSid } = await import("./bot/helpers.js");
+
+    expect(
+      buildTelegramMessageSid({
+        accountId: "default",
+        chatId: 1234,
+        messageId: 7,
+        namespace: "slash",
+      }),
+    ).toBe("telegram:default:1234::slash:7");
+  });
+});
