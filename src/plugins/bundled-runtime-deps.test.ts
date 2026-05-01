@@ -455,6 +455,30 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("reruns async repair when the generated manifest was missing from an existing tree", async () => {
+    const installRoot = makeTempDir();
+    writeInstalledPackage(installRoot, "acpx", "0.5.3");
+    spawnMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "acpx", "0.5.3");
+      const child = new EventEmitter() as ReturnType<typeof spawn>;
+      Object.assign(child, {
+        stdout: new EventEmitter(),
+        stderr: new EventEmitter(),
+      });
+      queueMicrotask(() => child.emit("close", 0, null));
+      return child;
+    });
+
+    await repairBundledRuntimeDepsInstallRootAsync({
+      installRoot,
+      missingSpecs: ["acpx@0.5.3"],
+      installSpecs: ["acpx@0.5.3"],
+      env: {},
+    });
+
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
   it("reports async package-manager output as install progress", async () => {
     const installRoot = makeTempDir();
     const progress: string[] = [];
@@ -1361,6 +1385,7 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     const env = { OPENCLAW_PLUGIN_STAGE_DIR: makeTempDir() };
     const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
     writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
 
     const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
@@ -1415,6 +1440,28 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"])).toThrow(
       /alpha-runtime@1\.0\.0/,
     );
+  });
+
+  it("reports a previous incomplete package-level install as missing", () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: makeTempDir() };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "alpha-runtime", version: "1.0.0" }),
+      "utf8",
+    );
+
+    const result = createBundledRuntimeDepsPackagePlan({
+      packageRoot,
+      config: {},
+      env,
+    });
+
+    expect(result.installSpecs).toEqual(["alpha-runtime@1.0.0"]);
+    expect(result.missingSpecs).toEqual(["alpha-runtime@1.0.0"]);
   });
 
   it("reports staged package-level runtime deps as missing when the version is stale", () => {
@@ -2412,6 +2459,44 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         path.join(installRoot, "node_modules", "@larksuiteoapi", "node-sdk", "package.json"),
       ),
     ).toBe(false);
+  });
+
+  it("reruns lazy package-level repair when node_modules exists without a generated manifest", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.27" }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "alpha-runtime", "1.0.0");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "alpha",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({ installedSpecs: ["alpha-runtime@1.0.0"] });
+    expect(spawnSyncMock).toHaveBeenCalledOnce();
   });
 
   it("uses the generated manifest for the complete package-level fast path", () => {

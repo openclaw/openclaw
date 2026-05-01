@@ -659,6 +659,40 @@ describe("doctor bundled plugin runtime deps", () => {
     expectNoLegacyRuntimeDepsManifest(installRoot);
   });
 
+  it("repairs a previous incomplete runtime deps install during non-interactive doctor", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
+    writeJson(path.join(root, "package.json"), { name: "openclaw" });
+    writeBundledChannelPlugin(root, "telegram", { grammy: "1.37.0" });
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(root);
+    writeJson(path.join(installRoot, "node_modules", "grammy", "package.json"), {
+      name: "grammy",
+      version: "1.37.0",
+    });
+    const installed = createInstalledRuntimeDeps();
+
+    await maybeRepairBundledPluginRuntimeDeps({
+      runtime: createRuntime(),
+      prompter: createNonInteractivePrompter(),
+      packageRoot: root,
+      config: {
+        plugins: { enabled: true },
+        channels: { telegram: { enabled: true } },
+      },
+      installDeps: (params) => {
+        installed.push(params);
+        materializeRuntimeDeps(params);
+      },
+    });
+
+    expect(installed).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["grammy@1.37.0"],
+        installSpecs: ["grammy@1.37.0"],
+      },
+    ]);
+  });
+
   it("logs runtime dependency repair progress before and after install", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-bundled-"));
     writeJson(path.join(root, "package.json"), { name: "openclaw" });

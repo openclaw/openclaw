@@ -188,6 +188,16 @@ function createBundledRuntimeDepsPlan(params: {
   };
 }
 
+function hasPreviousIncompleteInstall(
+  installRoot: string,
+  installSpecs: readonly string[],
+): boolean {
+  return (
+    fs.existsSync(path.join(installRoot, "node_modules")) &&
+    !isRuntimeDepsPlanMaterialized(installRoot, installSpecs)
+  );
+}
+
 export function createBundledRuntimeDepsPackagePlan(
   params: BundledRuntimeDepsPackagePlanParams,
 ): BundledRuntimeDepsPackagePlan {
@@ -244,10 +254,14 @@ export function createBundledRuntimeDepsPackagePlan(
     conflicts,
     installRootPlan,
   });
+  const missing = hasPreviousIncompleteInstall(installRootPlan.installRoot, plan.installSpecs)
+    ? plan.deps
+    : plan.missing;
   return {
     ...plan,
+    missing,
     packageRoot: params.packageRoot,
-    missingSpecs: createBundledRuntimeDepsInstallSpecs({ deps: plan.missing }),
+    missingSpecs: createBundledRuntimeDepsInstallSpecs({ deps: missing }),
   };
 }
 
@@ -426,6 +440,7 @@ export function ensureBundledPluginRuntimeDeps(params: {
           missingSpecs: installParams.installSpecs ?? installParams.missingSpecs,
           installSpecs: installParams.installSpecs,
           env: params.env,
+          force: true,
         });
       });
     const finishActivity = beginBundledRuntimeDepsInstall({

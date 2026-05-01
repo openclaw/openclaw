@@ -280,12 +280,13 @@ export function installBundledRuntimeDeps(params: {
   installSpecs?: string[];
   env: NodeJS.ProcessEnv;
   warn?: (message: string) => void;
+  force?: boolean;
 }): void {
   const installSpecs = normalizeRuntimeDepSpecs(params.installSpecs ?? params.missingSpecs);
   if (installSpecs.length === 0) {
     return;
   }
-  if (isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
+  if (!params.force && isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
     removeLegacyRuntimeDepsManifest(params.installRoot);
     return;
   }
@@ -321,12 +322,13 @@ export async function installBundledRuntimeDepsAsync(params: {
   env: NodeJS.ProcessEnv;
   warn?: (message: string) => void;
   onProgress?: (message: string) => void;
+  force?: boolean;
 }): Promise<void> {
   const installSpecs = normalizeRuntimeDepSpecs(params.installSpecs ?? params.missingSpecs);
   if (installSpecs.length === 0) {
     return;
   }
-  if (isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
+  if (!params.force && isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs)) {
     removeLegacyRuntimeDepsManifest(params.installRoot);
     return;
   }
@@ -376,6 +378,7 @@ export async function repairBundledRuntimeDepsInstallRootAsync(params: {
           env: params.env,
           warn: params.warn,
           onProgress: params.onProgress,
+          force: true,
         }));
     const finishActivity = beginBundledRuntimeDepsInstall({
       installRoot: params.installRoot,
