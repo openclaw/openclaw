@@ -4498,4 +4498,48 @@ describe("normalizeStructuredContentDelta", () => {
       ]),
     ).toEqual([{ kind: "text", text: "kept" }]);
   });
+
+  // Round-2 regression for #75268: a `type:"thinking"` block can carry its
+  // payload as a nested array of typed text sub-blocks instead of a flat
+  // string. Recursively flatten and re-tag as thinking.
+  it("flattens a nested thinking block whose `thinking` value is an array of text parts", () => {
+    expect(
+      normalizeStructuredContentDelta({
+        type: "thinking",
+        thinking: [
+          { type: "text", text: "step one " },
+          { type: "text", text: "step two" },
+        ],
+      }),
+    ).toEqual([
+      { kind: "thinking", signature: "thinking", text: "step one " },
+      { kind: "thinking", signature: "thinking", text: "step two" },
+    ]);
+  });
+
+  it("flattens a nested reasoning block whose `text` value is an array of text parts", () => {
+    expect(
+      normalizeStructuredContentDelta({
+        type: "reasoning",
+        text: [{ type: "text", text: "internal thought" }],
+      }),
+    ).toEqual([{ kind: "thinking", signature: "reasoning", text: "internal thought" }]);
+  });
+
+  it("flattens a nested untyped block whose `content` value is an array of text parts as text", () => {
+    expect(
+      normalizeStructuredContentDelta({
+        content: [{ type: "text", text: "visible reply" }],
+      }),
+    ).toEqual([{ kind: "text", text: "visible reply" }]);
+  });
+
+  it("returns no parts when a nested thinking block contains only empty sub-blocks", () => {
+    expect(
+      normalizeStructuredContentDelta({
+        type: "thinking",
+        thinking: [{ type: "text", text: "" }, { type: "text" }],
+      }),
+    ).toEqual([]);
+  });
 });

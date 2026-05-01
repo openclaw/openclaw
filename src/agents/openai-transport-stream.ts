@@ -1630,6 +1630,37 @@ function normalizeStructuredContentDelta(value: unknown): StructuredContentDelta
   if (typeof value === "object") {
     const record = value as Record<string, unknown>;
     const type = typeof record.type === "string" ? record.type : undefined;
+    const isThinkingType = type === "thinking" || type === "reasoning" || type === "reasoning.text";
+    // Mistral's typed-block reasoning shape can nest sub-blocks: a `type:"thinking"`
+    // block may carry `thinking: [{type:"text", text:"..."}, ...]` rather than a
+    // flat string. Recurse into nested arrays/objects, then re-tag the resulting
+    // text parts as thinking when the outer block declared a thinking-style type.
+    const nestedSource =
+      record.text !== undefined && record.text !== null && typeof record.text !== "string"
+        ? record.text
+        : record.thinking !== undefined &&
+            record.thinking !== null &&
+            typeof record.thinking !== "string"
+          ? record.thinking
+          : record.content !== undefined &&
+              record.content !== null &&
+              typeof record.content !== "string"
+            ? record.content
+            : undefined;
+    if (nestedSource !== undefined) {
+      const nested = normalizeStructuredContentDelta(nestedSource);
+      if (nested.length === 0) {
+        return [];
+      }
+      if (isThinkingType) {
+        return nested.map((part) => ({
+          kind: "thinking",
+          signature: type ?? "thinking",
+          text: part.text,
+        }));
+      }
+      return nested;
+    }
     const candidateText =
       typeof record.text === "string"
         ? record.text
@@ -1641,7 +1672,7 @@ function normalizeStructuredContentDelta(value: unknown): StructuredContentDelta
     if (!candidateText || candidateText.length === 0) {
       return [];
     }
-    if (type === "thinking" || type === "reasoning" || type === "reasoning.text") {
+    if (isThinkingType) {
       return [{ kind: "thinking", signature: type, text: candidateText }];
     }
     return [{ kind: "text", text: candidateText }];
