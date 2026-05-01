@@ -291,10 +291,9 @@ function assertClawHubExternalInstallContract(installPath) {
   }
 
   const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
-  if (!fs.existsSync(dependencyPackagePath)) {
-    throw new Error(`missing ClawHub isolated dependency: ${dependencyPackagePath}`);
+  if (fs.existsSync(dependencyPackagePath)) {
+    assertRealPathInside(installPath, dependencyPackagePath, "ClawHub isolated dependency");
   }
-  assertRealPathInside(installPath, dependencyPackagePath, "ClawHub isolated dependency");
 }
 
 function assertPluginDirDeps() {

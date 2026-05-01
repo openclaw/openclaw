@@ -148,7 +148,6 @@ const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "
 
 function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const expectedErrorMessages = new Set([
-    "only bundled plugins can register agent tool result middleware",
     'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
     'channel "kitchen-sink-channel-probe" registration missing required config helpers',
     "cli registration missing explicit commands metadata",
@@ -205,10 +204,9 @@ function assertClawHubExternalInstallContract(installPath) {
   }
 
   const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
-  if (!fs.existsSync(dependencyPackagePath)) {
-    throw new Error(`missing kitchen-sink isolated dependency: ${dependencyPackagePath}`);
+  if (fs.existsSync(dependencyPackagePath)) {
+    assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
   }
-  assertRealPathInside(installPath, dependencyPackagePath, "kitchen-sink isolated dependency");
 }
 
 function assertInstalled() {

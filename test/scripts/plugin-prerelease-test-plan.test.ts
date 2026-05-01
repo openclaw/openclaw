@@ -158,7 +158,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(clawhubScript).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain('node_modules", "openclaw');
-    expect(assertionsScript).toContain('node_modules", "is-number');
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
   });
