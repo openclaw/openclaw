@@ -9,8 +9,14 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.8.0",
+    "@codemirror/language": "^6.10.0",
+    "@codemirror/lint": "^6.8.0",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.5",
     "@create-markdown/preview": "^2.0.3",
     "@noble/ed25519": "3.1.0",
+    "codemirror-json5": "^1.0.3",
     "dompurify": "^3.4.1",
     "json5": "^2.2.3",
     "lit": "^3.3.2",
