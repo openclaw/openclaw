@@ -130,6 +130,8 @@ function redactProxyUrl(value: string | undefined): string | undefined {
       url.username = "redacted";
       url.password = "redacted";
     }
+    url.search = "";
+    url.hash = "";
     return url.toString();
   } catch {
     return "<invalid proxy URL>";

@@ -140,7 +140,7 @@ describe("proxy cli runtime", () => {
       ok: true,
       config: {
         enabled: true,
-        proxyUrl: "http://user:secret@proxy.example:3128",
+        proxyUrl: "http://user:secret@proxy.example:3128?token=secret#fragment",
         source: "config",
         errors: [],
       },
@@ -163,7 +163,7 @@ describe("proxy cli runtime", () => {
       ok: true,
       config: {
         enabled: true,
-        proxyUrl: "http://user:secret@proxy.example:3128",
+        proxyUrl: "http://user:secret@proxy.example:3128?token=secret#fragment",
         source: "config",
         errors: [],
       },
