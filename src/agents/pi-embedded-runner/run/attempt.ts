@@ -2357,6 +2357,7 @@ export async function runEmbeddedAttempt(
           if (truncationResult.truncated) {
             preflightRecovery = {
               route: "truncate_tool_results_only",
+              source: "mid-turn",
               handled: true,
               truncatedCount: truncationResult.truncatedCount,
             };
@@ -2367,7 +2368,7 @@ export async function runEmbeddedAttempt(
               `handled=true truncatedCount=${truncationResult.truncatedCount}`,
             );
           } else {
-            preflightRecovery = { route: "compact_only" };
+            preflightRecovery = { route: "compact_only", source: "mid-turn" };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             logMidTurnPrecheck(
@@ -2376,7 +2377,7 @@ export async function runEmbeddedAttempt(
             );
           }
         } else {
-          preflightRecovery = { route: request.route };
+          preflightRecovery = { route: request.route, source: "mid-turn" };
           promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
           promptErrorSource = "precheck";
           logMidTurnPrecheck(request.route);

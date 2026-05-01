@@ -903,7 +903,7 @@ describe("runEmbeddedAttempt context engine mid-turn precheck integration", () =
     });
 
     expect(result.promptErrorSource).toBe("precheck");
-    expect(result.preflightRecovery).toEqual({ route: "compact_only" });
+    expect(result.preflightRecovery).toEqual({ route: "compact_only", source: "mid-turn" });
     expect(result.messagesSnapshot).toEqual([seedMessage]);
   });
 });
