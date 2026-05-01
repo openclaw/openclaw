@@ -4,7 +4,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { resolveManifestCapabilityProviderIds } from "../../plugins/capability-provider-runtime.js";
+import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
+import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -321,12 +322,16 @@ export function hasGenerationToolAvailability(params: {
       }),
     );
   }
-  const snapshot = getCurrentCapabilityMetadataSnapshot({
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
+  const snapshot =
+    getCurrentCapabilityMetadataSnapshot({
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    }) ??
+    loadCapabilityManifestSnapshot({
+      cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
+    });
   if (
-    snapshot &&
     hasSnapshotCapabilityAvailability({
       snapshot,
       key: params.providerKey,
@@ -336,10 +341,10 @@ export function hasGenerationToolAvailability(params: {
   ) {
     return true;
   }
-  return resolveManifestCapabilityProviderIds({
-    key: params.providerKey,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
+  return listAvailableManifestContractValues({
+    snapshot,
+    contract: params.providerKey,
+    config: params.cfg,
   }).some((providerId) =>
     hasAuthForProvider({
       provider: providerId,

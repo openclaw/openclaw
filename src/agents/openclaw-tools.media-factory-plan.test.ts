@@ -1,5 +1,7 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import {
   clearCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
@@ -103,6 +105,7 @@ function installSnapshot(
 describe("optional media tool factory planning", () => {
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
+    setBundledPluginsDirOverrideForTest(undefined);
     vi.unstubAllEnvs();
   });
 
@@ -389,6 +392,69 @@ describe("optional media tool factory planning", () => {
       musicGenerate: true,
     });
   });
+
+  it.each([
+    {
+      name: "legacy local provider config",
+      config: {
+        models: {
+          providers: {
+            comfy: {
+              workflow: { "1": { inputs: {} } },
+              promptNodeId: "1",
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+    {
+      name: "plugin cloud API key config",
+      config: {
+        plugins: {
+          entries: {
+            comfy: {
+              config: {
+                mode: "cloud",
+                apiKey: "cloud-key",
+                workflow: { "1": { inputs: {} } },
+                promptNodeId: "1",
+              },
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+    {
+      name: "legacy cloud API key config",
+      config: {
+        models: {
+          providers: {
+            comfy: {
+              mode: "cloud",
+              apiKey: "cloud-key",
+              workflow: { "1": { inputs: {} } },
+              promptNodeId: "1",
+            },
+          },
+        },
+      } satisfies OpenClawConfig,
+    },
+  ])(
+    "registers generation tools from Comfy $name without a current metadata snapshot",
+    ({ config }) => {
+      setBundledPluginsDirOverrideForTest(path.join(process.cwd(), "extensions"));
+
+      const toolNames = createOpenClawTools({
+        config,
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
+      }).map((tool) => tool.name);
+
+      expect(toolNames).toContain("image_generate");
+      expect(toolNames).toContain("video_generate");
+      expect(toolNames).toContain("music_generate");
+    },
+  );
 
   it("honors manifest-declared image provider auth alias base-url guards", () => {
     const config: OpenClawConfig = {

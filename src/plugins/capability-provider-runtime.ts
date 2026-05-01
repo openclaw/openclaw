@@ -85,7 +85,7 @@ function uniqueSorted(values: Iterable<string>): string[] {
   return [...new Set(values)].toSorted((left, right) => left.localeCompare(right));
 }
 
-function loadCapabilityManifestSnapshot(params: {
+export function loadCapabilityManifestSnapshot(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
 }): Pick<PluginMetadataSnapshot, "index" | "plugins"> {
