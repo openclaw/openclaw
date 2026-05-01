@@ -15,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/config: cap oversized plugin-owned schemas in the full `config.schema` response so large installed plugin sets cannot balloon Gateway RSS or crash schema clients. Thanks @vincentkoc.
 - Gateway/sessions: use bounded tail reads for sessions-list transcript usage fallbacks, keeping large session stores responsive when rows request derived previews. Thanks @vincentkoc.
 - Gateway/chat: bound chat-history transcript reads to the requested display window so large session logs no longer OOM the Gateway when clients ask for a small history page. Thanks @vincentkoc.
 - Voice Call/Twilio: honor stored pre-connect TwiML before realtime webhook shortcuts and reject DTMF sequences outside conversation mode, so Meet PIN entry cannot be skipped or silently dropped. Thanks @donkeykong91 and @PfanP.
