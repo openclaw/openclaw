@@ -1607,6 +1607,20 @@ export async function maybeApplyTtsToPayload(params: {
   if (autoMode === "off") {
     return params.payload;
   }
+  const reply = resolveSendableOutboundReplyParts(params.payload);
+  const text = reply.text;
+  const replyMetadata = getReplyPayloadMetadata(params.payload);
+  const ttsSourceText = replyMetadata?.ttsSourceText;
+  const ttsPlainText = replyMetadata?.ttsPlainText;
+  const rawSpeechCandidates = [text, ttsSourceText, ttsPlainText].filter(
+    (candidate): candidate is string => typeof candidate === "string",
+  );
+  if (
+    rawSpeechCandidates.length > 0 &&
+    rawSpeechCandidates.every((candidate) => candidate.trim().length < MIN_TTS_TEXT_LENGTH)
+  ) {
+    return params.payload;
+  }
   const config = resolveTtsConfig(cfg, {
     agentId: params.agentId,
     channelId: params.channel,
@@ -1614,11 +1628,6 @@ export async function maybeApplyTtsToPayload(params: {
   });
   const activeProvider = getTtsProvider(config, prefsPath);
 
-  const reply = resolveSendableOutboundReplyParts(params.payload);
-  const text = reply.text;
-  const replyMetadata = getReplyPayloadMetadata(params.payload);
-  const ttsSourceText = replyMetadata?.ttsSourceText;
-  const ttsPlainText = replyMetadata?.ttsPlainText;
   const hasTtsSourceText = typeof ttsSourceText === "string";
   const hasTtsPlainText = typeof ttsPlainText === "string";
   // Directive parsing — routing/gating decisions (provider override, [[tts]]
@@ -1742,7 +1751,7 @@ export async function maybeApplyTtsToPayload(params: {
   const resolveFirstRoutableText = (
     expressiveText: string,
     plainText: string,
-  ): { provider: TtsProvider; text: string } | undefined => {
+  ): { provider: TtsProvider; providerConfig: SpeechProviderConfig; text: string } | undefined => {
     const providers = [
       effectiveProvider,
       ...providerOrder.filter((provider) => provider !== effectiveProvider),
@@ -1770,14 +1779,19 @@ export async function maybeApplyTtsToPayload(params: {
       if (resolvedProvider.kind === "skip") {
         continue;
       }
+      const providerConfig = resolveProviderConfigForTextRouting(
+        provider,
+        resolvedProvider.providerConfig,
+      );
       let candidate: string;
       try {
-        candidate = resolveRoutedSpeechText(
+        candidate = resolveSpeechTextForProvider({
           provider,
+          cfg,
+          providerConfig,
           expressiveText,
           plainText,
-          resolvedProvider.providerConfig,
-        ).trim();
+        }).trim();
       } catch (err) {
         if (isVerbose()) {
           logVerbose(`tts preflight: ${provider} text routing failed: ${formatErrorMessage(err)}`);
@@ -1785,7 +1799,7 @@ export async function maybeApplyTtsToPayload(params: {
         continue;
       }
       if (candidate.length >= MIN_TTS_TEXT_LENGTH) {
-        return { provider, text: candidate };
+        return { provider, providerConfig, text: candidate };
       }
     }
     return undefined;
@@ -1823,11 +1837,17 @@ export async function maybeApplyTtsToPayload(params: {
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
+  if (
+    plainSpeechText.trim().length < MIN_TTS_TEXT_LENGTH &&
+    expressiveSpeechText.trim().length < MIN_TTS_TEXT_LENGTH
+  ) {
+    return nextPayload;
+  }
   const initialRoute = resolveFirstRoutableText(expressiveSpeechText, plainSpeechText);
   if (!initialRoute) {
     return nextPayload;
   }
-  const initialProviderConfig = resolveProviderConfigForTextRouting(effectiveProvider);
+  const initialProviderConfig = initialRoute.providerConfig;
 
   const maxLength = getTtsMaxLength(prefsPath);
   let textForAudio = initialRoute.text;
@@ -1890,7 +1910,13 @@ export async function maybeApplyTtsToPayload(params: {
   };
   const preparedPrimaryText = stripMarkdown(textForAudio).trim();
   const initialRouteUsesExpressiveText = Boolean(
-    resolveRoutedSpeechText(initialRoute.provider, expressiveSpeechText, "").trim(),
+    resolveSpeechTextForProvider({
+      provider: initialRoute.provider,
+      cfg,
+      providerConfig: initialProviderConfig,
+      expressiveText: expressiveSpeechText,
+      plainText: "",
+    }).trim(),
   );
   const preparedPlainText = wasSummarized
     ? initialRouteUsesExpressiveText
@@ -1903,7 +1929,7 @@ export async function maybeApplyTtsToPayload(params: {
       : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText
     : enforceMaxLength(stripMarkdown(expressiveSpeechText).trim()) || preparedPlainText;
   const effectiveTextForAudio = resolveSpeechTextForProvider({
-    provider: effectiveProvider,
+    provider: initialRoute.provider,
     cfg,
     providerConfig: initialProviderConfig,
     expressiveText: preparedExpressiveText,
