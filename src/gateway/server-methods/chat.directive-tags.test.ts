@@ -415,7 +415,9 @@ function createChatContext(): Pick<
       ],
     registerToolEventRecipient: vi.fn(),
     logGateway: {
+      info: vi.fn(),
       warn: vi.fn(),
+      error: vi.fn(),
       debug: vi.fn(),
     } as unknown as GatewayRequestContext["logGateway"],
   };
