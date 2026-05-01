@@ -218,6 +218,36 @@ describe("voice-call outbound helpers", () => {
     });
   });
 
+  it("rejects DTMF sequences outside conversation mode", async () => {
+    const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-1" }));
+    const ctx = {
+      activeCalls: new Map(),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", initiateCall: initiateProviderCall },
+      config: {
+        maxConcurrentCalls: 3,
+        outbound: { defaultMode: "notify" },
+        fromNumber: "+14155550100",
+      },
+      storePath: "/tmp/voice-call.json",
+      webhookUrl: "https://example.com/webhook",
+    };
+
+    await expect(
+      initiateCall(ctx as never, "+14155550123", "session-1", {
+        message: "hello",
+        dtmfSequence: "123456#",
+      }),
+    ).resolves.toEqual({
+      callId: "",
+      success: false,
+      error: "dtmfSequence requires conversation mode",
+    });
+
+    expect(initiateProviderCall).not.toHaveBeenCalled();
+    expect(ctx.activeCalls.size).toBe(0);
+  });
+
   it("fails initiateCall cleanly when provider initiation throws", async () => {
     const ctx = {
       activeCalls: new Map(),

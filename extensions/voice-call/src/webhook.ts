@@ -672,6 +672,15 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
+      const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);
+      if (initialTwiML !== undefined && initialTwiML !== null) {
+        return {
+          statusCode: 200,
+          headers: { "Content-Type": "application/xml" },
+          body: initialTwiML,
+        };
+      }
+
       const realtimeParams = this.getRealtimeTwimlParams(ctx);
       if (realtimeParams) {
         const direction = realtimeParams.get("Direction");

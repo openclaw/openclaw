@@ -124,6 +124,13 @@ export async function initiateCall(
     if (validationError) {
       return { callId: "", success: false, error: validationError };
     }
+    if (mode !== "conversation") {
+      return {
+        callId: "",
+        success: false,
+        error: "dtmfSequence requires conversation mode",
+      };
+    }
   }
 
   if (!ctx.provider) {

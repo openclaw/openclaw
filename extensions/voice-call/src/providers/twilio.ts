@@ -443,6 +443,19 @@ export class TwilioProvider implements VoiceCallProvider {
     }
   }
 
+  consumeInitialTwiML(ctx: WebhookContext): string | null {
+    const view = readTwimlRequestView(ctx);
+    if (!view.callIdFromQuery || view.isStatusCallback) {
+      return null;
+    }
+    const storedTwiml = this.twimlStorage.get(view.callIdFromQuery);
+    if (!storedTwiml) {
+      return null;
+    }
+    this.deleteStoredTwiml(view.callIdFromQuery);
+    return storedTwiml;
+  }
+
   /**
    * Get the WebSocket URL for media streaming.
    * Derives from the public URL origin + stream path.
