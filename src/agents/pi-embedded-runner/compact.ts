@@ -842,6 +842,10 @@ export async function compactEmbeddedPiSessionDirect(
         provider,
         modelId,
         model,
+        thinkingLevel: thinkLevel,
+        agentId: sessionAgentId,
+        workspaceDir: effectiveWorkspace,
+        agentDir,
       });
       const resourceLoader = new DefaultResourceLoader({
         cwd: resolvedWorkspace,

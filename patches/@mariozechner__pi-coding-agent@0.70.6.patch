@@ -1,0 +1,47 @@
+diff --git a/dist/core/compaction/compaction.d.ts b/dist/core/compaction/compaction.d.ts
+index 1c73f386d0e5a0a699fa2311ea95f8ee29381f43..807b7593b94035f764f71b55e36a4652986fad57 100644
+--- a/dist/core/compaction/compaction.d.ts
++++ b/dist/core/compaction/compaction.d.ts
+@@ -5,7 +5,7 @@
+  * and after compaction the session is reloaded.
+  */
+ import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
+-import type { Model, Usage } from "@mariozechner/pi-ai";
++import type { Model, SimpleStreamOptions, Usage } from "@mariozechner/pi-ai";
+ import { type SessionEntry } from "../session-manager.js";
+ import { type FileOperations } from "./utils.js";
+ /** Details stored in CompactionEntry.details for file tracking */
+@@ -91,7 +91,7 @@ export declare function findCutPoint(entries: SessionEntry[], startIndex: number
+  * Generate a summary of the conversation using the LLM.
+  * If previousSummary is provided, uses the update prompt to merge.
+  */
+-export declare function generateSummary(currentMessages: AgentMessage[], model: Model<any>, reserveTokens: number, apiKey: string, headers?: Record<string, string>, signal?: AbortSignal, customInstructions?: string, previousSummary?: string, thinkingLevel?: ThinkingLevel): Promise<string>;
++export declare function generateSummary(currentMessages: AgentMessage[], model: Model<any>, reserveTokens: number, apiKey: string, headers?: Record<string, string>, signal?: AbortSignal, customInstructions?: string, previousSummary?: string, thinkingLevel?: ThinkingLevel, summaryOptions?: Pick<SimpleStreamOptions, "onPayload">): Promise<string>;
+ export interface CompactionPreparation {
+     /** UUID of first entry to keep */
+     firstKeptEntryId: string;
+diff --git a/dist/core/compaction/compaction.js b/dist/core/compaction/compaction.js
+index 0658cb737dd13f5606ea9b5ebb98443c547a922d..c301c6ef7fa5d9dce74b564069a2117e68dabbbc 100644
+--- a/dist/core/compaction/compaction.js
++++ b/dist/core/compaction/compaction.js
+@@ -429,7 +429,7 @@ Keep each section concise. Preserve exact file paths, function names, and error
+  * Generate a summary of the conversation using the LLM.
+  * If previousSummary is provided, uses the update prompt to merge.
+  */
+-export async function generateSummary(currentMessages, model, reserveTokens, apiKey, headers, signal, customInstructions, previousSummary, thinkingLevel) {
++export async function generateSummary(currentMessages, model, reserveTokens, apiKey, headers, signal, customInstructions, previousSummary, thinkingLevel, summaryOptions) {
+     const maxTokens = Math.floor(0.8 * reserveTokens);
+     // Use update prompt if we have a previous summary, otherwise initial prompt
+     let basePrompt = previousSummary ? UPDATE_SUMMARIZATION_PROMPT : SUMMARIZATION_PROMPT;
+@@ -456,7 +456,10 @@ export async function generateSummary(currentMessages, model, reserveTokens, api
+     const completionOptions = model.reasoning && thinkingLevel && thinkingLevel !== "off"
+         ? { maxTokens, signal, apiKey, headers, reasoning: thinkingLevel }
+         : { maxTokens, signal, apiKey, headers };
+-    const response = await completeSimple(model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages }, completionOptions);
++    const response = await completeSimple(model, { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages }, {
++        ...completionOptions,
++        ...(summaryOptions?.onPayload ? { onPayload: summaryOptions.onPayload } : {}),
++    });
+     if (response.stopReason === "error") {
+         throw new Error(`Summarization failed: ${response.errorMessage || "Unknown error"}`);
+     }

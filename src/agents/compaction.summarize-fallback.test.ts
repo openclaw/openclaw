@@ -100,4 +100,51 @@ describe("summarizeWithFallback", () => {
     // Full attempt plus distinct partial transcript; timeout-classed failures do not retry.
     expect(piCodingAgentMocks.generateSummary.mock.calls.length).toBe(2);
   });
+
+  it("passes completion payload hooks to summary generation", async () => {
+    piCodingAgentMocks.generateSummary.mockResolvedValue("summary");
+    const onPayload = vi.fn((payload: unknown) => {
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        (payload as Record<string, unknown>).chat_template_kwargs = {
+          enable_thinking: false,
+          preserve_thinking: true,
+        };
+      }
+    });
+    const messages: AgentMessage[] = [
+      {
+        role: "user",
+        content: "hello",
+        timestamp: 1,
+      } satisfies UserMessage,
+    ];
+
+    await summarizeWithFallback({
+      messages,
+      model: testModel,
+      apiKey: "test-key", // pragma: allowlist secret
+      signal: new AbortController().signal,
+      reserveTokens: 1000,
+      maxChunkTokens: 50_000,
+      contextWindow: 200_000,
+      thinkingLevel: "off",
+      completionOptions: { onPayload },
+    });
+
+    expect(piCodingAgentMocks.generateSummary.mock.calls[0]?.[8]).toBe("off");
+
+    const completionOptions = piCodingAgentMocks.generateSummary.mock.calls[0]?.[9] as
+      | { onPayload?: typeof onPayload }
+      | undefined;
+    expect(completionOptions?.onPayload).toBe(onPayload);
+
+    const payload: Record<string, unknown> = {};
+    completionOptions?.onPayload?.(payload);
+    expect(payload).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: false,
+        preserve_thinking: true,
+      },
+    });
+  });
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext, FileOperations } from "@mariozechner/pi-coding-agent";
 import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
 import { openBoundaryFile } from "../../infra/boundary-file-read.js";
@@ -20,6 +20,7 @@ import {
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
   SUMMARIZATION_OVERHEAD_TOKENS,
+  type CompactionSummaryCompletionOptions,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
@@ -31,6 +32,7 @@ import { collectTextContentBlocks } from "../content-blocks.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "../copilot-dynamic-headers.js";
 import { isTimeoutError } from "../failover-error.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
+import { createOpenAICompletionsExtraParamsPayloadPatch } from "../openai-completions-extra-params.js";
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
@@ -74,6 +76,29 @@ const PREVIOUS_SUMMARY_REDISTILL_PREFIX =
 const compactionSafeguardDeps = {
   summarizeInStages,
 };
+
+function buildSummaryCompletionOptions(
+  extraParams: Record<string, unknown> | undefined,
+): CompactionSummaryCompletionOptions | undefined {
+  const payloadPatch = createOpenAICompletionsExtraParamsPayloadPatch({
+    sources: [extraParams],
+    logger: log,
+  });
+  if (!payloadPatch) {
+    return undefined;
+  }
+  return {
+    onPayload: (payload, model) => {
+      if (model.api !== "openai-completions") {
+        return undefined;
+      }
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        payloadPatch(payload as Record<string, unknown>);
+      }
+      return undefined;
+    },
+  };
+}
 
 function buildPreviousSummaryMessage(previousSummary: string): AgentMessage {
   return {
@@ -152,6 +177,8 @@ async function summarizeViaLLM(params: {
   customInstructions?: string;
   summarizationInstructions?: Parameters<typeof summarizeInStages>[0]["summarizationInstructions"];
   previousSummary?: string;
+  thinkingLevel?: ThinkingLevel;
+  completionOptions?: CompactionSummaryCompletionOptions;
 }): Promise<string> {
   const messages = prependPreviousSummaryForRedistill({
     messages: params.messages,
@@ -169,6 +196,8 @@ async function summarizeViaLLM(params: {
     customInstructions: params.customInstructions,
     summarizationInstructions: params.summarizationInstructions,
     previousSummary: undefined,
+    thinkingLevel: params.thinkingLevel,
+    completionOptions: params.completionOptions,
   });
 }
 
@@ -835,6 +864,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
     };
     const identifierPolicy = runtime?.identifierPolicy ?? "strict";
     const providerId = runtime?.provider;
+    const completionOptions = buildSummaryCompletionOptions(runtime?.extraParams);
+    const thinkingLevel = runtime?.thinkingLevel;
     const turnPrefixMessages = baseTurnPrefixMessages;
     const recentTurnsPreserve = resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve);
     const { preservedMessages: providerPreservedMessages } = splitPreservedRecentTurns({
@@ -1006,6 +1037,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: structuredInstructions,
                   summarizationInstructions,
                   previousSummary: preparation.previousSummary,
+                  thinkingLevel,
+                  completionOptions,
                 });
               } catch (droppedError) {
                 log.warn(
@@ -1078,6 +1111,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   customInstructions: currentInstructions,
                   summarizationInstructions,
                   previousSummary: effectivePreviousSummary,
+                  thinkingLevel,
+                  completionOptions,
                 })
               : buildStructuredFallbackSummary(effectivePreviousSummary, summarizationInstructions);
 
@@ -1098,6 +1133,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               ),
               summarizationInstructions,
               previousSummary: undefined,
+              thinkingLevel,
+              completionOptions,
             });
             splitTurnSection = `**Turn Context (split turn):**\n\n${prefixSummary}`;
             summaryWithoutPreservedTurns = historySummary.trim()

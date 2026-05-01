@@ -13,7 +13,10 @@ vi.mock("../../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
+  prepareProviderExtraParams: () => undefined,
+  resolveProviderExtraParamsForTransport: () => undefined,
   resolveProviderRuntimePlugin: () => undefined,
+  wrapProviderStreamFn: () => undefined,
 }));
 
 function buildSafeguardFactories(cfg: OpenClawConfig) {

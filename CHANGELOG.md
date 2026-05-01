@@ -406,6 +406,7 @@ Docs: https://docs.openclaw.ai
 - Installer/Linux: warn before switching an unwritable npm global prefix to `~/.npm-global`, then tell users to run future global updates with `npm i -g openclaw@latest` without `sudo` so npm keeps using the redirected user prefix. Fixes #44365; carries forward #50479. Thanks @Sayeem3051.
 - Gateway/plugins: enable the native `require()` fast path on Windows for bundled plugin modules so plugin loading uses `require()` instead of Jiti's transform pipeline, reducing startup from ~39s to ~2s on typical 6-plugin setups. Fixes #68656. (#74173) Thanks @galiniliev.
 - macOS app: detect stale Gateway TLS certificate pins, automatically repair trusted Tailscale Serve rotations, and surface paired-but-disconnected Mac companion nodes so partial Gateway connections no longer look healthy. Thanks @guti.
+- Agents/compaction: preserve configured OpenAI-compatible extra payload params such as `chat_template_kwargs` during safeguard summary generation, so vLLM Qwen compaction can keep thinking disabled. Thanks @jax-yu.
 
 ## 2026.4.27
 

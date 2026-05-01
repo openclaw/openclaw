@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
@@ -15,6 +16,8 @@ import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js"
 import { ensurePiCompactionReserveTokens } from "../pi-settings.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
+import { resolvePreparedExtraParams } from "./extra-params.js";
+import { mapThinkingLevel } from "./utils.js";
 
 type PiToolResultEvent = {
   threadId?: string;
@@ -138,6 +141,10 @@ export function buildEmbeddedExtensionFactories(params: {
   provider: string;
   modelId: string;
   model: ProviderRuntimeModel | undefined;
+  thinkingLevel?: ThinkLevel;
+  agentId?: string;
+  workspaceDir?: string;
+  agentDir?: string;
 }): ExtensionFactory[] {
   const factories: ExtensionFactory[] = [];
   if (resolveCompactionMode(params.cfg) === "safeguard") {
@@ -160,6 +167,17 @@ export function buildEmbeddedExtensionFactories(params: {
       qualityGuardEnabled: qualityGuardCfg?.enabled ?? true,
       qualityGuardMaxRetries: qualityGuardCfg?.maxRetries,
       model: params.model,
+      thinkingLevel: mapThinkingLevel(params.thinkingLevel),
+      extraParams: resolvePreparedExtraParams({
+        cfg: params.cfg,
+        provider: params.provider,
+        modelId: params.modelId,
+        agentId: params.agentId,
+        thinkingLevel: params.thinkingLevel,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        model: params.model,
+      }),
       recentTurnsPreserve: compactionCfg?.recentTurnsPreserve,
       provider: compactionCfg?.provider,
     });

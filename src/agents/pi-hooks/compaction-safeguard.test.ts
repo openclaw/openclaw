@@ -612,6 +612,123 @@ describe("compaction-safeguard runtime registry", () => {
     expect(resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries)).toBe(3);
     expect(resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve)).toBe(12);
   });
+
+  it("wires resolved provider params into compaction safeguard runtime", () => {
+    const sessionManager = {} as unknown as Parameters<
+      typeof buildEmbeddedExtensionFactories
+    >[0]["sessionManager"];
+    const cfg = {
+      agents: {
+        defaults: {
+          params: {
+            chat_template_kwargs: {
+              enable_thinking: true,
+              source: "default",
+            },
+            extra_body: {
+              top_k: 10,
+            },
+          },
+          models: {
+            "vllm/Qwen/Qwen3-8B": {
+              params: {
+                chat_template_kwargs: {
+                  enable_thinking: true,
+                  source: "model",
+                },
+                extra_body: {
+                  top_k: 20,
+                },
+              },
+            },
+          },
+          compaction: {
+            mode: "safeguard",
+          },
+        },
+        list: [
+          {
+            id: "research",
+            params: {
+              chat_template_kwargs: {
+                enable_thinking: false,
+                preserve_thinking: true,
+                source: "agent",
+              },
+              extra_body: {
+                top_k: 30,
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    buildEmbeddedExtensionFactories({
+      cfg,
+      sessionManager,
+      provider: "vllm",
+      modelId: "Qwen/Qwen3-8B",
+      agentId: "research",
+      model: {
+        api: "openai-completions",
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        contextWindow: 200_000,
+      } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],
+    });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager) as
+      | (NonNullable<ReturnType<typeof getCompactionSafeguardRuntime>> & {
+          extraParams?: Record<string, unknown>;
+        })
+      | null;
+    expect(runtime?.extraParams).toMatchObject({
+      chat_template_kwargs: {
+        enable_thinking: false,
+        preserve_thinking: true,
+        source: "agent",
+      },
+      extra_body: {
+        top_k: 30,
+      },
+    });
+  });
+
+  it("maps OpenClaw thinking levels before storing compaction summary runtime", () => {
+    for (const [thinkingLevel, expected] of [
+      ["max", "xhigh"],
+      ["adaptive", "medium"],
+    ] as const) {
+      const sessionManager = {} as unknown as Parameters<
+        typeof buildEmbeddedExtensionFactories
+      >[0]["sessionManager"];
+
+      buildEmbeddedExtensionFactories({
+        cfg: {
+          agents: {
+            defaults: {
+              compaction: {
+                mode: "safeguard",
+              },
+            },
+          },
+        } as OpenClawConfig,
+        sessionManager,
+        provider: "vllm",
+        modelId: "Qwen/Qwen3-8B",
+        thinkingLevel,
+        model: {
+          api: "openai-completions",
+          provider: "vllm",
+          id: "Qwen/Qwen3-8B",
+          contextWindow: 200_000,
+        } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],
+      });
+
+      expect(getCompactionSafeguardRuntime(sessionManager)?.thinkingLevel).toBe(expected);
+    }
+  });
 });
 
 describe("compaction-safeguard recent-turn preservation", () => {
@@ -1344,6 +1461,64 @@ describe("compaction-safeguard recent-turn preservation", () => {
       "User-Agent": "GitHubCopilotChat/0.26.7",
       "X-Test": "1",
       "x-initiator": "user",
+    });
+  });
+
+  it("passes vLLM extra payload params to built-in compaction summarization", async () => {
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("mock summary");
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture({
+      id: "Qwen/Qwen3-8B",
+      name: "Qwen3 8B",
+      provider: "vllm",
+      api: "openai-completions" as const,
+      baseUrl: "http://127.0.0.1:8000/v1",
+      reasoning: true,
+    });
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: false,
+      thinkingLevel: "off",
+      extraParams: {
+        chat_template_kwargs: {
+          enable_thinking: false,
+          preserve_thinking: true,
+        },
+      },
+    });
+
+    const getApiKeyAndHeadersMock = vi.fn().mockResolvedValue({
+      ok: true,
+      apiKey: "vllm-token",
+    });
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyAndHeadersMock,
+    });
+    const compactionHandler = createCompactionHandler();
+    const event = createCompactionEvent({
+      messageText: "summarize me",
+      tokensBefore: 1000,
+    });
+    (event.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as { cancel?: boolean };
+
+    expect(result.cancel).not.toBe(true);
+    const summaryCall = mockSummarizeInStages.mock.calls.at(-1)?.[0];
+    expect(summaryCall?.thinkingLevel).toBe("off");
+    const payload: Record<string, unknown> = {};
+    summaryCall?.completionOptions?.onPayload?.(payload, model);
+    expect(payload).toEqual({
+      chat_template_kwargs: {
+        enable_thinking: false,
+        preserve_thinking: true,
+      },
     });
   });
 
