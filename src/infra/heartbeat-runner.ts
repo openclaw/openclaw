@@ -1164,6 +1164,7 @@ export async function runHeartbeatOnce(opts: {
       isolatedBaseSessionKey,
     });
     const removedSessionFiles = new Map<string, string | undefined>();
+    const rotatedSessionFiles = new Map<string, string | undefined>();
     if (staleIsolatedSessionKey) {
       const staleEntry = cronSession.store[staleIsolatedSessionKey];
       if (staleEntry?.sessionId) {
@@ -1171,28 +1172,52 @@ export async function runHeartbeatOnce(opts: {
       }
       delete cronSession.store[staleIsolatedSessionKey];
     }
+    if (cronSession.previousSessionId) {
+      const previousEntry = cronSession.store[isolatedSessionKey];
+      if (previousEntry?.sessionId === cronSession.previousSessionId) {
+        rotatedSessionFiles.set(previousEntry.sessionId, previousEntry.sessionFile);
+      }
+    }
     cronSession.sessionEntry.heartbeatIsolatedBaseSessionKey = isolatedBaseSessionKey;
     cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
-    if (removedSessionFiles.size > 0) {
-      try {
-        const referencedSessionIds = new Set(
-          Object.values(cronSession.store)
-            .map((sessionEntry) => sessionEntry?.sessionId)
-            .filter((sessionId): sessionId is string => Boolean(sessionId)),
-        );
-        await archiveRemovedSessionTranscripts({
-          removedSessionFiles,
-          referencedSessionIds,
-          storePath: cronSession.storePath,
-          reason: "deleted",
-          restrictToStoreDir: true,
-        });
-      } catch (err) {
-        log.warn("heartbeat: failed to archive stale isolated session transcript", {
-          err: String(err),
-          sessionKey: staleIsolatedSessionKey,
-        });
+    if (removedSessionFiles.size > 0 || rotatedSessionFiles.size > 0) {
+      const referencedSessionIds = new Set(
+        Object.values(cronSession.store)
+          .map((sessionEntry) => sessionEntry?.sessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      );
+      if (removedSessionFiles.size > 0) {
+        try {
+          await archiveRemovedSessionTranscripts({
+            removedSessionFiles,
+            referencedSessionIds,
+            storePath: cronSession.storePath,
+            reason: "deleted",
+            restrictToStoreDir: true,
+          });
+        } catch (err) {
+          log.warn("heartbeat: failed to archive stale isolated session transcript", {
+            err: String(err),
+            sessionKey: staleIsolatedSessionKey,
+          });
+        }
+      }
+      if (rotatedSessionFiles.size > 0) {
+        try {
+          await archiveRemovedSessionTranscripts({
+            removedSessionFiles: rotatedSessionFiles,
+            referencedSessionIds,
+            storePath: cronSession.storePath,
+            reason: "reset",
+            restrictToStoreDir: true,
+          });
+        } catch (err) {
+          log.warn("heartbeat: failed to archive rotated isolated session transcript", {
+            err: String(err),
+            sessionKey: isolatedSessionKey,
+          });
+        }
       }
     }
     runSessionKey = isolatedSessionKey;
