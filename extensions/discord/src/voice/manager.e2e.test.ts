@@ -213,7 +213,7 @@ describe("DiscordVoiceManager", () => {
   const createManager = (
     discordConfig: ConstructorParameters<
       typeof managerModule.DiscordVoiceManager
-    >[0]["discordConfig"] = {},
+    >[0]["discordConfig"] = { voice: { enabled: true } },
     clientOverride?: ReturnType<typeof createClient>,
     cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
   ) =>
@@ -249,6 +249,17 @@ describe("DiscordVoiceManager", () => {
       new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
     );
   };
+
+  it("rejects joins when Discord voice config is absent", async () => {
+    const manager = createManager({});
+
+    await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject({
+      ok: false,
+      message: "Discord voice is disabled (channels.discord.voice.enabled).",
+    });
+
+    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+  });
 
   type ProcessSegmentInvoker = {
     processSegment: (params: {

@@ -32,6 +32,7 @@ import { GatewayCloseCodes } from "../internal/gateway.js";
 import { fetchDiscordApplicationId, parseApplicationIdFromToken } from "../probe.js";
 import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
 import { normalizeDiscordToken } from "../token.js";
+import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
 import { resolveDiscordSlashCommandConfig } from "./commands.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
@@ -282,7 +283,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
-  const voiceEnabled = discordCfg.voice?.enabled !== false;
+  const voiceEnabled = resolveDiscordVoiceEnabled(discordCfg.voice);
 
   const allowlistResolved = await resolveDiscordAllowlistConfig({
     token,

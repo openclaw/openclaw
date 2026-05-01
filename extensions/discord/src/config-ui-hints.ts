@@ -135,7 +135,7 @@ export const discordChannelConfigUiHints = {
   },
   "intents.voiceStates": {
     label: "Discord Voice States Intent",
-    help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set false for text-only gateway sessions even when voice config is present.",
+    help: "Enable the Guild Voice States intent. Defaults to the effective Discord voice setting; set true only for Discord voice channel conversations.",
   },
   gatewayInfoTimeoutMs: {
     label: "Discord Gateway Metadata Timeout (ms)",
@@ -143,7 +143,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.enabled": {
     label: "Discord Voice Enabled",
-    help: "Enable Discord voice channel conversations (default: true). Set false for text-only gateway sessions.",
+    help: "Enable Discord voice channel conversations. Text-only Discord configs leave voice off by default; set true to enable /vc commands and the Guild Voice States intent.",
   },
   "voice.model": {
     label: "Discord Voice Model",

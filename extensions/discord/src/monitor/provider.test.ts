@@ -391,6 +391,25 @@ describe("monitorDiscordProvider", () => {
     expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
   });
 
+  it("does not load the Discord voice runtime for text-only default config", async () => {
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
   it("loads the Discord voice runtime only when voice is enabled", async () => {
     resolveDiscordAccountMock.mockReturnValue({
       accountId: "default",
@@ -398,6 +417,26 @@ describe("monitorDiscordProvider", () => {
       config: {
         commands: { native: true, nativeSkills: false },
         voice: { enabled: true },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the Discord voice runtime for existing voice config blocks", async () => {
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: {},
         agentComponents: { enabled: false },
         execApprovals: { enabled: false },
       },
