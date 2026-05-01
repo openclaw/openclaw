@@ -6,6 +6,7 @@ vi.mock("openclaw/plugin-sdk/web-media", () => discordWebMediaMockFactory());
 
 let deleteMessageDiscord: typeof import("./send.js").deleteMessageDiscord;
 let editMessageDiscord: typeof import("./send.js").editMessageDiscord;
+let canViewDiscordGuildChannel: typeof import("./send.js").canViewDiscordGuildChannel;
 let fetchChannelPermissionsDiscord: typeof import("./send.js").fetchChannelPermissionsDiscord;
 let fetchReactionsDiscord: typeof import("./send.js").fetchReactionsDiscord;
 let pinMessageDiscord: typeof import("./send.js").pinMessageDiscord;
@@ -29,6 +30,7 @@ beforeAll(async () => {
   ({
     deleteMessageDiscord,
     editMessageDiscord,
+    canViewDiscordGuildChannel,
     fetchChannelPermissionsDiscord,
     fetchReactionsDiscord,
     pinMessageDiscord,
@@ -694,6 +696,60 @@ describe("fetchChannelPermissionsDiscord", () => {
     });
     expect(res.permissions).toContain("Administrator");
     expect(res.permissions).toContain("ViewChannel");
+  });
+
+  it("checks whether an arbitrary member can view a guild channel", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "chan1",
+        guild_id: "guild1",
+        permission_overwrites: [
+          {
+            id: "guild1",
+            deny: PermissionFlagsBits.ViewChannel.toString(),
+            allow: "0",
+          },
+          {
+            id: "role2",
+            deny: "0",
+            allow: PermissionFlagsBits.ViewChannel.toString(),
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [
+          { id: "guild1", permissions: "0" },
+          { id: "role2", permissions: "0" },
+        ],
+      })
+      .mockResolvedValueOnce({ roles: ["role2"] });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "chan1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(true);
+  });
+
+  it("fails closed when the channel belongs to a different guild", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      id: "chan1",
+      guild_id: "guild2",
+      permission_overwrites: [],
+    });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "chan1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(false);
   });
 });
 

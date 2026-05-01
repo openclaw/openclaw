@@ -1279,6 +1279,40 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
         description:
           "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
       },
+      accessGroups: {
+        type: "object",
+        propertyNames: {
+          type: "string",
+          minLength: 1,
+        },
+        additionalProperties: {
+          oneOf: [
+            {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "discord.channelAudience",
+                },
+                guildId: {
+                  type: "string",
+                  minLength: 1,
+                },
+                channelId: {
+                  type: "string",
+                  minLength: 1,
+                },
+                membership: {
+                  type: "string",
+                  const: "canViewChannel",
+                },
+              },
+              required: ["type", "guildId", "channelId"],
+              additionalProperties: false,
+            },
+          ],
+        },
+      },
       acp: {
         type: "object",
         properties: {
