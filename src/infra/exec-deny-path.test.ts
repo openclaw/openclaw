@@ -102,6 +102,27 @@ describe("evaluateExecDenyPathMatch", () => {
     expect(match?.pattern).toBe("**/.openclaw/secrets/**");
   });
 
+  it("resolves bare cwd-relative sensitive filenames against the cwd before matching", () => {
+    const match = evaluateExecDenyPathMatch({
+      patterns: ["**/.env"],
+      argv: ["cat", ".env"],
+      cwd: "/work/project",
+      homeDir: fakeHome,
+    });
+    expect(match?.pattern).toBe("**/.env");
+    expect(match?.resolved).toBe("/work/project/.env");
+  });
+
+  it("does not resolve bare relative args against the gateway cwd when cwd is absent", () => {
+    expect(
+      evaluateExecDenyPathMatch({
+        patterns: ["**/.env"],
+        argv: ["cat", ".env"],
+        homeDir: fakeHome,
+      }),
+    ).toBeNull();
+  });
+
   it("does not match unrelated files in the same workspace", () => {
     expect(
       evaluateExecDenyPathMatch({
@@ -189,6 +210,12 @@ describe("tokenizeShellPayload", () => {
 
   it("handles backslash escapes outside single quotes", () => {
     expect(tokenizeShellPayload("cat foo\\ bar.env")).toEqual(["cat", "foo bar.env"]);
+  });
+
+  it("splits unquoted shell operators away from adjacent path tokens", () => {
+    expect(
+      tokenizeShellPayload("cat ~/.openclaw/secrets/foo.env; echo ok && cat .env>/tmp/leak"),
+    ).toEqual(["cat", "~/.openclaw/secrets/foo.env", "echo", "ok", "cat", ".env", "/tmp/leak"]);
   });
 
   it("returns [] for empty payload", () => {

@@ -160,6 +160,47 @@ describe("Agent-specific exec tool defaults", () => {
     ).rejects.toThrow(/requires a sandbox runtime/);
   });
 
+  it("unions global and agent exec denyPathPatterns into the created exec tool", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          host: "gateway",
+          security: "full",
+          ask: "off",
+          denyPathPatterns: ["~/.openclaw/secrets/**"],
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                denyPathPatterns: ["**/.env"],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-exec-deny-path-patterns",
+      agentDir: "/tmp/agent-main-exec-deny-path-patterns",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+
+    await expect(
+      execTool!.execute("call-main-deny-path", {
+        command: "cat .env",
+        yieldMs: 1000,
+      }),
+    ).rejects.toThrow(/SYSTEM_RUN_DENIED: argument matches tools\.exec\.denyPathPatterns/);
+  });
+
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
     const cfg = createExecHostDefaultsConfig([{ id: "main", execHost: "gateway" }]);
 

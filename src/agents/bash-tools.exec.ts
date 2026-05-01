@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
+import { unwrapDispatchWrappersForResolution } from "../infra/dispatch-wrapper-resolution.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
   type ExecAsk,
@@ -1412,11 +1413,27 @@ export function createExecTool(
       // See tools.exec.denyPathPatterns in docs/tools/exec-approvals-advanced.md.
       const denyPathPatterns = defaults?.denyPathPatterns ?? [];
       if (denyPathPatterns.length > 0) {
+        const rawArgv = splitShellArgs(params.command.trim());
+        const denyArgv = rawArgv
+          ? unwrapDispatchWrappersForResolution(stripPreflightEnvPrefix(rawArgv))
+          : [];
+        let denyShellPayload: string | null = null;
+        if (denyArgv.length > 0) {
+          let commandIdx = 0;
+          while (commandIdx < denyArgv.length && isShellEnvAssignmentToken(denyArgv[commandIdx])) {
+            commandIdx += 1;
+          }
+          const executable = normalizeOptionalLowercaseString(denyArgv[commandIdx]);
+          denyShellPayload = extractShellWrappedCommandPayload(
+            executable,
+            denyArgv.slice(commandIdx + 1),
+          );
+        }
         const denyMatch = evaluateExecDenyPathMatch({
           patterns: denyPathPatterns,
-          argv: [],
-          shellPayload: params.command,
-          cwd: workdir,
+          argv: denyArgv,
+          shellPayload: denyShellPayload ?? (rawArgv ? null : params.command),
+          cwd: host === "node" && !explicitWorkdir ? undefined : workdir,
         });
         if (denyMatch) {
           throw new Error(formatExecDenyPathMessage(denyMatch));
