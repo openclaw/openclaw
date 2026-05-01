@@ -327,8 +327,10 @@ console.log(JSON.stringify(result));
 
       expect(script, scriptPath).toContain("AgentWorkspaceScript");
       expect(script, scriptPath).toContain("parallels-");
-      expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
-      expect(script, scriptPath).toContain("tools.profile");
+      if (scriptPath !== TS_PATHS.windows) {
+        expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
+        expect(script, scriptPath).toContain("tools.profile");
+      }
       expect(script, scriptPath).toContain("--thinking");
       expect(script, scriptPath).toContain("minimal");
       expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
@@ -337,8 +339,11 @@ console.log(JSON.stringify(result));
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("config set --batch-file");
     expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("modelProviderConfigBatchJson");
     expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("config set --batch-file");
-    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsModelProviderTimeoutScript");
-    expect(readFileSync(TS_PATHS.powershell, "utf8")).toContain("config set --batch-file");
+    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsAgentTurnConfigPatchScript");
+    const powershell = readFileSync(TS_PATHS.powershell, "utf8");
+    expect(powershell).toContain("config set --batch-file");
+    expect(powershell).toContain("agents.defaults.skipBootstrap");
+    expect(powershell).toContain("tools.profile");
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
@@ -347,7 +352,7 @@ console.log(JSON.stringify(result));
     expect(npmUpdateScripts).toContain("--thinking minimal");
     expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
-    expect(npmUpdateScripts).toContain("windowsModelProviderTimeoutScript");
+    expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");
     expect(npmUpdateScripts).toContain("modelProviderConfigBatchJson");
     expect(npmUpdateScripts).toContain("config set --batch-file");
   });
@@ -476,7 +481,9 @@ console.log(JSON.stringify(result));
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 1500");
-    expect(script).toContain("windowsModelProviderTimeoutScript(this.auth.modelId)");
+    expect(script).toContain("windowsAgentTurnConfigPatchScript(this.auth.modelId)");
+    expect(script).toContain("--model");
+    expect(script).toContain('resolveParallelsModelTimeoutSeconds("windows")');
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
     expect(script).toContain("parallels-windows-smoke-retry-$attempt");
     expect(script).toContain("agent turn attempt $attempt failed or finished without OK response");

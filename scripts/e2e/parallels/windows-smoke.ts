@@ -14,6 +14,7 @@ import {
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
+  resolveParallelsModelTimeoutSeconds,
   resolveWindowsProviderAuth,
   resolveSnapshot,
   run,
@@ -36,7 +37,7 @@ import { PhaseRunner } from "./phase-runner.ts";
 import {
   encodePowerShell,
   psSingleQuote,
-  windowsModelProviderTimeoutScript,
+  windowsAgentTurnConfigPatchScript,
   windowsOpenClawResolver,
 } from "./powershell.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
@@ -891,13 +892,7 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
 ${windowsPortableGitPathScript}
-Invoke-OpenClaw models set ${psSingleQuote(this.auth.modelId)}
-if ($LASTEXITCODE -ne 0) { throw "models set failed" }
-${windowsModelProviderTimeoutScript(this.auth.modelId)}
-Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
-if ($LASTEXITCODE -ne 0) { throw "config set failed" }
-Invoke-OpenClaw config set tools.profile minimal
-if ($LASTEXITCODE -ne 0) { throw "tools profile config set failed" }
+${windowsAgentTurnConfigPatchScript(this.auth.modelId)}
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $agentOk = $false
@@ -913,10 +908,14 @@ for ($attempt = 1; $attempt -le 2; $attempt++) {
     'main',
     '--session-id',
     $sessionId,
+    '--model',
+    ${psSingleQuote(this.auth.modelId)},
     '--message',
     'Reply with exact ASCII text OK only.',
     '--thinking',
     'minimal',
+    '--timeout',
+    '${resolveParallelsModelTimeoutSeconds("windows")}',
     '--json'
   )
   $output = Invoke-OpenClaw @args 2>&1
