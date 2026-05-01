@@ -42,7 +42,7 @@ export function resolveProviderAuth(input: {
       apiKeyEnv: input.apiKeyEnv || "OPENAI_API_KEY",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.4",
+      modelId: input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.5",
     },
   };
   const resolved = providerDefaults[input.provider];

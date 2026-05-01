@@ -87,7 +87,7 @@ describe("Parallels smoke model selection", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
-    expect(providerAuth).toContain("openai/gpt-5.4");
+    expect(providerAuth).toContain("openai/gpt-5.5");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
@@ -213,13 +213,19 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     }
   });
 
+  it("waits for apt locks during Linux snapshot bootstrap", () => {
+    const script = readFileSync(TS_PATHS.linux, "utf8");
+
+    expect(script).toContain("DPkg::Lock::Timeout=300");
+  });
+
   it("resolves provider defaults and explicit model overrides", () => {
     expect(resolveProviderAuth("openai", { env: { OPENAI_API_KEY: "sk-openai" } })).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.4",
+      modelId: "openai/gpt-5.5",
     });
 
     expect(
@@ -283,13 +289,16 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       expect(script, scriptPath).toContain("AgentWorkspaceScript");
       expect(script, scriptPath).toContain("parallels-");
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
-      expect(script, scriptPath).toContain("--timeout");
+      expect(script, scriptPath).toContain("tools.profile");
+      expect(script, scriptPath).toContain("--thinking");
+      expect(script, scriptPath).toContain("minimal");
     }
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
-    expect(npmUpdateScripts).toContain("--timeout 0");
+    expect(npmUpdateScripts).toContain("tools.profile");
+    expect(npmUpdateScripts).toContain("--thinking minimal");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {
@@ -323,6 +332,14 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(combined).toContain("where.exe git.exe");
   });
 
+  it("preseeds dev update channel before stable-to-dev update lanes", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(macos).toContain('channel: "dev"');
+    expect(windows).toContain("Name channel -Value 'dev'");
+  });
+
   it("passes aggregate model overrides into each OS fresh lane", () => {
     const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
 
@@ -354,6 +371,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(macos).not.toContain("Authorization: Bot");
     expect(discord).toContain("Authorization: Bot");
     expect(discord).toContain('"--silent"');
+    expect(discord).toContain("plugins deps --repair");
     expect(discord).toContain("channels status --probe --json");
     expect(discord).toContain("Stop ${this.input.vmName} after successful Discord smoke");
   });
@@ -404,6 +422,8 @@ console.log(JSON.stringify(result));
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
+    expect(script).toContain("$config.models.providers");
+    expect(script).toContain("timeoutSeconds = 300");
   });
 
   it("waits through transient Windows restoring state before VM operations", () => {
