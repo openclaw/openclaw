@@ -10,7 +10,6 @@ const DEFAULT_MAX_TOKENS = 8192;
 const DEFAULT_MODEL_IDS = [
   "claude-haiku-4.5",
   "claude-opus-4.5",
-  "claude-opus-4.6",
   "claude-opus-4.7",
   "claude-sonnet-4",
   "claude-sonnet-4.6",
