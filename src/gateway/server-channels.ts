@@ -649,7 +649,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             accountId: id,
             account,
             runtime: channelRuntimeEnvs[channelId],
-            abortSignal: abort?.signal ?? new AbortController().signal,
+            abortSignal: abort?.signal ?? AbortSignal.abort(),
             log: channelLogs[channelId],
             getStatus: () => getRuntime(channelId, id),
             setStatus: (next) => setRuntime(channelId, id, next),
