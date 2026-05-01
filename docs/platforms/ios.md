@@ -114,6 +114,17 @@ Expected operator flow:
 4. The app publishes `push.apns.register` automatically after it has an APNs token, the operator session is connected, and relay registration succeeds.
 5. After that, `push.test`, reconnect wakes, and wake nudges can use the stored relay-backed registration.
 
+## Background alive beacons
+
+When iOS wakes the app for a silent push, background refresh, or significant-location event, the app
+attempts a short node reconnect and then calls `node.event` with `event: "node.presence.alive"`.
+The gateway records this as `lastSeenAtMs`/`lastSeenReason` on the paired node/device metadata only
+after the authenticated node device identity is known.
+
+The app treats a background wake as successfully recorded only when the gateway response includes
+`handled: true`. Older gateways may acknowledge `node.event` with `{ "ok": true }`; that response is
+compatible but does not count as a durable last-seen update.
+
 Compatibility note:
 
 - `OPENCLAW_APNS_RELAY_BASE_URL` still works as a temporary env override for the gateway.

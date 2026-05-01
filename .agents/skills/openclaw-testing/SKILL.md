@@ -36,6 +36,14 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
+- For Blacksmith Testbox proof, reuse only an id warmed and claimed in this
+  operator session. `blacksmith testbox list` is diagnostics only; a listed id
+  can have a local key and still carry stale rsync state from another lane.
+  After warmup, run `pnpm testbox:claim --id <id>`, then prefer
+  `pnpm testbox:run --id <id> -- "<command>"` for OpenClaw gates so stale
+  org-visible ids fail fast before syncing. Claims older than 12 hours are
+  stale unless `OPENCLAW_TESTBOX_CLAIM_TTL_MINUTES` is explicitly set for long
+  work.
 
 ## Local Test Shortcuts
 
@@ -76,6 +84,9 @@ Use targeted file paths whenever possible. Avoid raw `vitest`; use the repo
 - Direct test edits run themselves. Source edits prefer explicit mappings,
   sibling `*.test.ts`, then import-graph dependents. Shared harness/config/root
   edits are skipped by default unless they have precise mapped tests.
+- Shared group-room delivery config and source-reply prompt edits are precise
+  mapped tests: they run the core auto-reply regressions plus Discord and Slack
+  delivery tests so cross-channel default changes fail before a PR push.
 - Public SDK or contract edits do not automatically run every plugin test.
   `check:changed` proves extension type contracts; the agent chooses the
   smallest plugin/contract Vitest proof that matches the actual risk.
@@ -108,7 +119,10 @@ rerun after a focused patch.
 the manual "everything before release" umbrella. It resolves a target ref, then
 dispatches:
 
-- manual `CI` for the full normal CI graph
+- manual `CI` for the full normal CI graph, with Android enabled via
+  `include_android=true`
+- `Plugin Prerelease` for release-only plugin static checks, extension shards,
+  the release-only `agentic-plugins` shard, and plugin product Docker lanes
 - `OpenClaw Release Checks` for install smoke, cross-OS release checks, live and
   E2E checks, Docker release-path suites, OpenWebUI, QA Lab, fast Matrix, and
   Telegram release lanes
@@ -134,12 +148,20 @@ workflow ref input; choose the trusted harness by choosing the workflow run ref.
 Use `release_profile=minimum|stable|full` to control live/provider breadth:
 `minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
 stable provider/backend set, and `full` adds the broad advisory provider/media
-matrix. The parent verifier job appends slowest-job tables for child runs; rerun
-only that verifier after a child rerun turns green.
+matrix. Do not make `full` faster by silently dropping suites; optimize setup,
+artifact reuse, and sharding instead. The parent verifier job appends a child
+overview plus slowest-job tables for child runs; rerun only that verifier after
+a child rerun turns green.
+
+Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
+extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
+lanes are intentionally reserved for the separate `Plugin Prerelease` child so
+PRs, main pushes, and ad hoc broad CI checks do not spend Docker/package time or
+all-plugin runtime time on release-only product coverage.
 
 If a full run is already active on a newer `origin/main`, prefer watching that
-run over dispatching a duplicate. If you accidentally dispatch a stale duplicate,
-cancel it and monitor the current run.
+run over dispatching a duplicate. Do not cancel release, release-check, or child
+workflow runs unless Peter explicitly asks for cancellation.
 
 The child-dispatch jobs record the child run ids. The final
 `Verify full validation` job re-queries those child runs and is the canonical
@@ -148,9 +170,15 @@ only the failed parent verifier job; do not dispatch a new full umbrella unless
 the release evidence is stale.
 
 For bounded recovery after a focused fix, pass `-f rerun_group=<group>`.
-Supported umbrella groups are `all`, `ci`, `release-checks`, `install-smoke`,
-`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
-`npm-telegram`. Use the narrowest group that covers the failed box.
+Supported umbrella groups are `all`, `ci`, `plugin-prerelease`,
+`release-checks`, `install-smoke`, `cross-os`, `live-e2e`, `package`, `qa`,
+`qa-parity`, `qa-live`, and `npm-telegram`. Use the narrowest group that covers
+the failed box. After a targeted release-check fix, do not restart the full
+umbrella by habit: dispatch the matching `rerun_group` and rerun only the parent
+verifier/evidence step after the child is green unless the release evidence is
+stale. For a single failed live/E2E shard, use
+`-f rerun_group=live-e2e -f live_suite_filter=<suite_id>` so the Blacksmith
+workflow only spends setup and queue time on that suite.
 
 ### Release Evidence
 
@@ -211,8 +239,31 @@ gh workflow run openclaw-release-checks.yml \
 Release-check rerun groups are `all`, `install-smoke`, `cross-os`, `live-e2e`,
 `package`, `qa`, `qa-parity`, and `qa-live`.
 `OpenClaw Release Checks` uses the trusted workflow ref to resolve the selected
-ref once as `release-package-under-test` and passes that artifact into both
-release-path Docker live/E2E checks and Package Acceptance.
+ref once as `release-package-under-test` and passes that artifact into cross-OS
+release checks, release-path Docker live/E2E checks, and Package Acceptance.
+When `Full Release Validation` dispatches release checks, it passes the requested
+branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
+remote-ref path while the package and QA jobs still validate the exact SHA.
+
+The full install-smoke child is split on purpose: one job prepares or reuses the
+target-SHA GHCR root Dockerfile smoke image, QR package install runs in its own
+job, root Dockerfile/gateway smokes pull the prepared image, and installer/Bun
+smokes pull the same image while building only their small installer images.
+If install-smoke gets slow again, first check whether the root image was reused
+or rebuilt before adding/removing coverage.
+
+The full-profile native live media shards use the prebuilt
+`ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04` container so
+`ffmpeg`/`ffprobe` are already present. If those jobs suddenly spend minutes in
+dependency setup again, first check the `Live Media Runner Image` workflow and
+the `Verify preinstalled live media dependencies` step before assuming the media
+tests themselves slowed down.
+
+The release Docker path intentionally shards the plugin/runtime tail. The
+workflow uses `plugins-runtime-plugins`, `plugins-runtime-services`, and
+`plugins-runtime-install-a` through `plugins-runtime-install-d`; aggregate
+aliases such as `plugins-runtime-core`, `plugins-runtime`, and
+`plugins-integrations` remain for manual reruns.
 
 The release QA parity box is internally split into candidate and baseline lane
 jobs, followed by a report job that downloads both artifacts and runs
@@ -272,12 +323,15 @@ Useful knobs:
 - blank `live_model_providers`: run the full live-model provider matrix.
 
 Release-path Docker chunks are currently `core`, `package-update-openai`,
-`package-update-anthropic`, `package-update-core`, `plugins-runtime-core`,
+`package-update-anthropic`, `package-update-core`,
+`plugins-runtime-plugins`, `plugins-runtime-services`,
 `plugins-runtime-install-a`, `plugins-runtime-install-b`,
+`plugins-runtime-install-c`, `plugins-runtime-install-d`,
 `bundled-channels-core`, `bundled-channels-update-a`,
 `bundled-channels-update-b`, and `bundled-channels-contracts`. The aggregate
-`bundled-channels` chunk remains valid for manual one-shot reruns, but release
-checks use the split chunks.
+`bundled-channels`, `plugins-runtime-core`, `plugins-runtime`, and
+`plugins-integrations` chunks remain valid for manual one-shot reruns, but
+release checks use the split chunks.
 
 When live suites are enabled, the workflow shards broad native `pnpm test:live`
 coverage through `scripts/test-live-shard.mjs` instead of one serial `live-all`
@@ -360,18 +414,22 @@ image. Release-path normal mode fans out into smaller Docker chunk jobs:
 - `package-update-openai`
 - `package-update-anthropic`
 - `package-update-core`
-- `plugins-runtime-core`
+- `plugins-runtime-plugins`
+- `plugins-runtime-services`
 - `plugins-runtime-install-a`
 - `plugins-runtime-install-b`
+- `plugins-runtime-install-c`
+- `plugins-runtime-install-d`
 - `bundled-channels`
 
-OpenWebUI is folded into `plugins-runtime-core` for full release-path coverage
-and keeps a standalone `openwebui` chunk only for OpenWebUI-only dispatches.
-The legacy `package-update`, `plugins-runtime`, and `plugins-integrations`
-chunks still work as aggregate aliases for manual reruns, but the release
-workflow uses the split chunks so provider installer checks, plugin runtime
-checks, bundled plugin install/uninstall shards, and bundled-channel checks can
-run on separate machines. The bundled-channel runtime-dependency coverage
+OpenWebUI is folded into `plugins-runtime-services` for full release-path
+coverage and keeps a standalone `openwebui` chunk only for OpenWebUI-only
+dispatches. The legacy `package-update`, `plugins-runtime-core`,
+`plugins-runtime`, and `plugins-integrations` chunks still work as aggregate
+aliases for manual reruns, but the release workflow uses the split chunks so
+provider installer checks, plugin runtime checks, bundled plugin
+install/uninstall shards, and bundled-channel checks can run on separate
+machines. The bundled-channel runtime-dependency coverage
 inside `bundled-channels`
 uses the split `bundled-channel-*` and `bundled-channel-update-*` lanes rather
 than the serial `bundled-channel-deps` lane, so failures produce cheap targeted

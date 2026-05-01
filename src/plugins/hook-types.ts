@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type {
   ReplyDispatchKind,
@@ -98,6 +99,7 @@ export type PluginHookName =
   | "gateway_start"
   | "gateway_stop"
   | "heartbeat_prompt_contribution"
+  | "cron_changed"
   | "before_dispatch"
   | "reply_dispatch"
   | "before_install";
@@ -134,6 +136,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_start",
   "gateway_stop",
   "heartbeat_prompt_contribution",
+  "cron_changed",
   "before_dispatch",
   "reply_dispatch",
   "before_install",
@@ -356,6 +359,8 @@ export type PluginHookReplyDispatchEvent = {
   sessionTtsAuto?: TtsAutoMode;
   ttsChannel?: string;
   suppressUserDelivery?: boolean;
+  suppressReplyLifecycle?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
@@ -594,23 +599,72 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
+export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
+
+export type PluginHookGatewayCronDeliveryStatus =
+  | "not-requested"
+  | "delivered"
+  | "not-delivered"
+  | "unknown";
+
+export type PluginHookGatewayCronJobState = {
+  nextRunAtMs?: number;
+  runningAtMs?: number;
+  lastRunAtMs?: number;
+  lastRunStatus?: PluginHookGatewayCronRunStatus;
+  lastError?: string;
+  lastDurationMs?: number;
+};
+
 export type PluginHookGatewayCronJob = {
   id: string;
   name?: string;
   description?: string;
   enabled?: boolean;
-  schedule?: {
-    kind?: string;
-    expr?: string;
-    tz?: string;
-  };
+  schedule?:
+    | {
+        kind: "cron";
+        expr?: string;
+        tz?: string;
+        staggerMs?: number;
+      }
+    | {
+        kind: "at";
+        at?: string;
+      }
+    | {
+        kind: "every";
+        everyMs?: number;
+        anchorMs?: number;
+      };
   sessionTarget?: string;
   wakeMode?: string;
   payload?: {
     kind?: string;
     text?: string;
   };
+  state?: PluginHookGatewayCronJobState;
   createdAtMs?: number;
+  updatedAtMs?: number;
+};
+
+export type PluginHookCronChangedEvent = {
+  action: "added" | "updated" | "removed" | "started" | "finished";
+  jobId: string;
+  job?: PluginHookGatewayCronJob;
+  runAtMs?: number;
+  durationMs?: number;
+  status?: PluginHookGatewayCronRunStatus;
+  error?: string;
+  summary?: string;
+  delivered?: boolean;
+  deliveryStatus?: PluginHookGatewayCronDeliveryStatus;
+  deliveryError?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  nextRunAtMs?: number;
+  model?: string;
+  provider?: string;
 };
 
 export type PluginHookGatewayCronCreateInput = {
@@ -649,7 +703,8 @@ export type PluginInstallRequestKind =
   | "plugin-dir"
   | "plugin-archive"
   | "plugin-file"
-  | "plugin-npm";
+  | "plugin-npm"
+  | "plugin-git";
 export type PluginInstallSourcePathKind = "file" | "directory";
 
 export type PluginInstallFinding = {
@@ -746,6 +801,7 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforePromptBuildResult | void> | PluginHookBeforePromptBuildResult | void;
+  /** @deprecated Use before_model_resolve and before_prompt_build. */
   before_agent_start: (
     event: PluginHookBeforeAgentStartEvent,
     ctx: PluginHookAgentContext,
@@ -869,6 +925,10 @@ export type PluginHookHandlerMap = {
     | Promise<PluginHeartbeatPromptContributionResult | void>
     | PluginHeartbeatPromptContributionResult
     | void;
+  cron_changed: (
+    event: PluginHookCronChangedEvent,
+    ctx: PluginHookGatewayContext,
+  ) => Promise<void> | void;
   before_install: (
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,
@@ -880,5 +940,6 @@ export type PluginHookRegistration<K extends PluginHookName = PluginHookName> = 
   hookName: K;
   handler: PluginHookHandlerMap[K];
   priority?: number;
+  timeoutMs?: number;
   source: string;
 };

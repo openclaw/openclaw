@@ -11,7 +11,7 @@ export const readConfigFileSnapshotMock: Mock<(...args: unknown[]) => Promise<un
 export const writeConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi
   .fn()
   .mockResolvedValue(undefined);
-export const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn(
+const replaceConfigFileMock: Mock<(...args: unknown[]) => Promise<unknown>> = vi.fn(
   async (params: { nextConfig: OpenClawConfig }): Promise<ReplaceConfigFileResult> => {
     await writeConfigFileMock(params.nextConfig);
     return {
@@ -44,13 +44,7 @@ vi.mock("./agents.command-shared.js", () => ({
 
 export const runtime = createTestRuntime();
 
-let agentsCommandModulePromise: Promise<typeof import("./agents.js")> | undefined;
 let agentsBindCommandModulePromise: Promise<typeof import("./agents.commands.bind.js")> | undefined;
-
-export async function loadFreshAgentsCommandModuleForTest() {
-  agentsCommandModulePromise ??= import("./agents.js");
-  return await agentsCommandModulePromise;
-}
 
 export async function loadFreshAgentsBindCommandModuleForTest() {
   agentsBindCommandModulePromise ??= import("./agents.commands.bind.js");

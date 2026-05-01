@@ -296,6 +296,54 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("keeps unsent final media after block pipeline streamed the text", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: (payload) => payload.text === "response" && !payload.mediaUrl,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => [],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "response", mediaUrl: "/tmp/generated.png" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      mediaUrl: "/tmp/generated.png",
+      text: undefined,
+    });
+  });
+
+  it("drops already-sent final media after block pipeline streamed successfully", async () => {
+    const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
+      didStream: () => true,
+      isAborted: () => false,
+      hasSentPayload: (payload) => payload.text === "response" && !payload.mediaUrl,
+      enqueue: () => {},
+      flush: async () => {},
+      stop: () => {},
+      hasBuffered: () => false,
+      getSentMediaUrls: () => ["/tmp/generated.png"],
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "response", mediaUrl: "/tmp/generated.png" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("preserves post-stream error payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
@@ -323,11 +371,36 @@ describe("buildReplyPayloads media filter integration", () => {
     });
   });
 
-  it("drops all final payloads during silent turns, including media-only payloads", async () => {
+  it("drops non-voice final payloads during silent turns, including media-only payloads", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,
       silentExpected: true,
       payloads: [{ text: "NO_REPLY", mediaUrl: "file:///tmp/photo.jpg" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("keeps voice media payloads during silent turns", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      silentExpected: true,
+      payloads: [{ text: "NO_REPLY", mediaUrl: "file:///tmp/voice.opus", audioAsVoice: true }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({
+      text: undefined,
+      mediaUrl: "file:///tmp/voice.opus",
+      audioAsVoice: true,
+    });
+  });
+
+  it("drops empty voice markers during silent turns", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      silentExpected: true,
+      payloads: [{ audioAsVoice: true }],
     });
 
     expect(replyPayloads).toHaveLength(0);

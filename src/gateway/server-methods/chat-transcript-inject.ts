@@ -1,8 +1,13 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
+
+const SESSION_MANAGER_APPEND_MAX_BYTES = 8 * 1024 * 1024;
 
 export type GatewayInjectedAbortMeta = {
   aborted: true;
@@ -39,6 +44,77 @@ function resolveInjectedAssistantContent(params: {
     return [{ type: "text", text: labelPrefix.trim() }, ...params.content];
   }
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
+}
+
+function transcriptHasParentLinkedEntries(transcriptPath: string): boolean {
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(transcriptPath, "r");
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let carry = "";
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
+      const lines = text.split(/\r?\n/);
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        if (lineHasParentLinkedEntry(line)) {
+          return true;
+        }
+      }
+    }
+    return lineHasParentLinkedEntry(carry + decoder.end());
+  } catch {
+    return true;
+  } finally {
+    if (fd !== null) {
+      fs.closeSync(fd);
+    }
+  }
+}
+
+function lineHasParentLinkedEntry(line: string): boolean {
+  if (!line.trim()) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
+    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
+  } catch {
+    return false;
+  }
+}
+
+function shouldUseRawAppend(transcriptPath: string): boolean {
+  try {
+    const stat = fs.statSync(transcriptPath);
+    return (
+      stat.size > SESSION_MANAGER_APPEND_MAX_BYTES &&
+      !transcriptHasParentLinkedEntries(transcriptPath)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function appendRawAssistantMessageToTranscript(params: {
+  transcriptPath: string;
+  message: AppendMessageArg & Record<string, unknown>;
+  now: number;
+}): { messageId: string } {
+  const messageId = randomUUID();
+  const entry = {
+    type: "message",
+    id: messageId,
+    timestamp: new Date(params.now).toISOString(),
+    message: params.message,
+  };
+  fs.appendFileSync(params.transcriptPath, `${JSON.stringify(entry)}\n`, "utf-8");
+  return { messageId };
 }
 
 export function appendInjectedAssistantMessageToTranscript(params: {
@@ -100,6 +176,20 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
+    if (shouldUseRawAppend(params.transcriptPath)) {
+      const { messageId } = appendRawAssistantMessageToTranscript({
+        transcriptPath: params.transcriptPath,
+        message: messageBody,
+        now,
+      });
+      emitSessionTranscriptUpdate({
+        sessionFile: params.transcriptPath,
+        message: messageBody,
+        messageId,
+      });
+      return { ok: true, messageId, message: messageBody };
+    }
+
     // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
     // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
     const sessionManager = SessionManager.open(params.transcriptPath);

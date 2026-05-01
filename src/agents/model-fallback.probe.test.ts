@@ -306,8 +306,15 @@ describe("runWithModelFallback – probe logic", () => {
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
       .mockResolvedValueOnce("fallback-ok");
+    const onFallbackStep = vi.fn();
 
-    const fallbackResult = await runPrimaryCandidate(fallbackCfg, fallbackRun);
+    const fallbackResult = await runWithModelFallback({
+      cfg: fallbackCfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run: fallbackRun,
+      onFallbackStep,
+    });
     await logCapture.flush();
 
     expect(fallbackResult.result).toBe("fallback-ok");
@@ -368,6 +375,26 @@ describe("runWithModelFallback – probe logic", () => {
           fallbackStepFinalOutcome: "succeeded",
         }),
       ]),
+    );
+    expect(onFallbackStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "openai/gpt-4.1-mini",
+        fallbackStepToModel: "anthropic/claude-haiku-3-5",
+        fallbackStepFromFailureReason: "rate_limit",
+        fallbackStepChainPosition: 1,
+        fallbackStepFinalOutcome: "next_fallback",
+      }),
+    );
+    expect(onFallbackStep).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fallbackStepType: "fallback_step",
+        fallbackStepFromModel: "openai/gpt-4.1-mini",
+        fallbackStepToModel: "anthropic/claude-haiku-3-5",
+        fallbackStepFromFailureReason: "rate_limit",
+        fallbackStepChainPosition: 2,
+        fallbackStepFinalOutcome: "succeeded",
+      }),
     );
   });
 

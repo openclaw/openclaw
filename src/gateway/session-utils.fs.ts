@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { StringDecoder } from "node:string_decoder";
 import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -104,17 +105,7 @@ export function readSessionMessages(
   }
 
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
-  const hasTreeEntries = lines.some((line) => {
-    if (!line.trim()) {
-      return false;
-    }
-    try {
-      const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
-      return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
-    } catch {
-      return false;
-    }
-  });
+  const hasTreeEntries = lines.some(hasSessionTreeEntry);
   let branchEntries: SessionEntry[] | null = null;
   if (hasTreeEntries) {
     try {
@@ -166,39 +157,326 @@ export function readSessionMessages(
     }
     try {
       const parsed = JSON.parse(line);
-      if (parsed?.message) {
+      const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
+      if (message) {
         messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(parsed.message, {
-            ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-            seq: messageSeq,
-          }),
-        );
-        continue;
-      }
-
-      // Compaction entries are not "message" records, but they're useful context for debugging.
-      // Emit a lightweight synthetic message that the Web UI can render as a divider.
-      if (parsed?.type === "compaction") {
-        const ts = typeof parsed.timestamp === "string" ? Date.parse(parsed.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof parsed.id === "string" ? parsed.id : undefined,
-            seq: messageSeq,
-          },
-        });
+        messages.push(message);
       }
     } catch {
       // ignore bad lines
     }
   }
   return messages;
+}
+
+export type ReadRecentSessionMessagesOptions = {
+  maxMessages: number;
+  maxBytes?: number;
+  maxLines?: number;
+};
+
+export type ReadRecentSessionMessagesResult = {
+  messages: unknown[];
+  totalMessages: number;
+};
+
+const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
+
+export function readRecentSessionMessages(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  opts?: ReadRecentSessionMessagesOptions,
+): unknown[] {
+  const maxMessages = Math.max(0, Math.floor(opts?.maxMessages ?? 0));
+  if (maxMessages === 0) {
+    return [];
+  }
+
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return [];
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(filePath);
+  } catch {
+    return [];
+  }
+  if (stat.size === 0) {
+    return [];
+  }
+
+  const maxBytes = Math.max(
+    1024,
+    Math.floor(opts?.maxBytes ?? RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES),
+  );
+  const readLen = Math.min(stat.size, maxBytes);
+  const readStart = Math.max(0, stat.size - readLen);
+  const maxLines = Math.max(maxMessages, Math.floor(opts?.maxLines ?? maxMessages * 20 + 20));
+
+  return (
+    withOpenTranscriptFd(filePath, (fd) => {
+      const buf = Buffer.alloc(readLen);
+      const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
+      if (bytesRead <= 0) {
+        return [];
+      }
+      const chunk = buf.toString("utf-8", 0, bytesRead);
+      const lines = chunk
+        .split(/\r?\n/)
+        .slice(readStart > 0 ? 1 : 0)
+        .filter((line) => line.trim().length > 0)
+        .slice(-maxLines);
+
+      if (lines.some(hasSessionTreeEntry)) {
+        return readSessionMessages(sessionId, storePath, sessionFile).slice(-maxMessages);
+      }
+
+      const messages: unknown[] = [];
+      let messageSeq = 0;
+      for (const line of lines) {
+        try {
+          const parsed = JSON.parse(line);
+          const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
+          if (message) {
+            messageSeq += 1;
+            messages.push(message);
+          }
+        } catch {
+          // ignore bad tail lines
+        }
+      }
+      return messages.slice(-maxMessages);
+    }) ?? []
+  );
+}
+
+function visitTranscriptLines(filePath: string, visit: (line: string) => void): void {
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const decoder = new StringDecoder("utf8");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let carry = "";
+    while (true) {
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+      const text = carry + decoder.write(buffer.subarray(0, bytesRead));
+      const lines = text.split(/\r?\n/);
+      carry = lines.pop() ?? "";
+      for (const line of lines) {
+        visit(line);
+      }
+    }
+    const tail = carry + decoder.end();
+    if (tail) {
+      visit(tail);
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function transcriptHasTreeEntries(filePath: string): boolean {
+  let hasTreeEntries = false;
+  try {
+    visitTranscriptLines(filePath, (line) => {
+      if (!hasTreeEntries && hasSessionTreeEntry(line)) {
+        hasTreeEntries = true;
+      }
+    });
+  } catch {
+    return false;
+  }
+  return hasTreeEntries;
+}
+
+function visitSessionManagerBranchMessages(
+  filePath: string,
+  visit: (message: unknown, seq: number) => void,
+): number {
+  const branchEntries = SessionManager.open(filePath).getBranch();
+  let messageSeq = 0;
+  for (const entry of branchEntries) {
+    if (entry.type === "message" && entry.message) {
+      messageSeq += 1;
+      visit(
+        attachOpenClawTranscriptMeta(entry.message, {
+          ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+          seq: messageSeq,
+        }),
+        messageSeq,
+      );
+      continue;
+    }
+
+    if (entry.type === "compaction") {
+      const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+      const timestamp = Number.isFinite(ts) ? ts : Date.now();
+      messageSeq += 1;
+      visit(
+        {
+          role: "system",
+          content: [{ type: "text", text: "Compaction" }],
+          timestamp,
+          __openclaw: {
+            kind: "compaction",
+            id: typeof entry.id === "string" ? entry.id : undefined,
+            seq: messageSeq,
+          },
+        },
+        messageSeq,
+      );
+    }
+  }
+  return messageSeq;
+}
+
+export function visitSessionMessages(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  visit: (message: unknown, seq: number) => void,
+): number {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  if (!filePath) {
+    return 0;
+  }
+
+  if (transcriptHasTreeEntries(filePath)) {
+    try {
+      return visitSessionManagerBranchMessages(filePath, visit);
+    } catch {
+      return 0;
+    }
+  }
+
+  let messageSeq = 0;
+  try {
+    visitTranscriptLines(filePath, (line) => {
+      if (!line.trim()) {
+        return;
+      }
+      try {
+        const parsed = JSON.parse(line);
+        const message = parsedSessionEntryToMessage(parsed, messageSeq + 1);
+        if (message) {
+          messageSeq += 1;
+          visit(message, messageSeq);
+        }
+      } catch {
+        // ignore bad lines
+      }
+    });
+  } catch {
+    return 0;
+  }
+  return messageSeq;
+}
+
+export function readSessionMessageCount(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+): number {
+  return visitSessionMessages(sessionId, storePath, sessionFile, () => undefined);
+}
+
+export function readRecentSessionMessagesWithStats(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadRecentSessionMessagesOptions,
+): ReadRecentSessionMessagesResult {
+  const totalMessages = readSessionMessageCount(sessionId, storePath, sessionFile);
+  const messages = readRecentSessionMessages(sessionId, storePath, sessionFile, opts);
+  const firstSeq = Math.max(1, totalMessages - messages.length + 1);
+  const messagesWithSeq = messages.map((message, index) =>
+    attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
+  );
+  return { messages: messagesWithSeq, totalMessages };
+}
+
+export function readRecentSessionTranscriptLines(params: {
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  maxLines: number;
+}): { lines: string[]; totalLines: number } | null {
+  const filePath = findExistingTranscriptPath(
+    params.sessionId,
+    params.storePath,
+    params.sessionFile,
+    params.agentId,
+  );
+  if (!filePath) {
+    return null;
+  }
+  const maxLines = Math.max(1, Math.floor(params.maxLines));
+  const lines: string[] = [];
+  let totalLines = 0;
+  try {
+    visitTranscriptLines(filePath, (line) => {
+      if (!line.trim()) {
+        return;
+      }
+      totalLines += 1;
+      lines.push(line);
+      if (lines.length > maxLines) {
+        lines.shift();
+      }
+    });
+  } catch {
+    return null;
+  }
+  return { lines, totalLines };
+}
+
+function hasSessionTreeEntry(line: string): boolean {
+  if (!line.trim()) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
+    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
+  } catch {
+    return false;
+  }
+}
+
+function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const entry = parsed as Record<string, unknown>;
+  if (entry.message) {
+    return attachOpenClawTranscriptMeta(entry.message, {
+      ...(typeof entry.id === "string" ? { id: entry.id } : {}),
+      seq,
+    });
+  }
+
+  // Compaction entries are not "message" records, but they're useful context for debugging.
+  // Emit a lightweight synthetic message that the Web UI can render as a divider.
+  if (entry.type === "compaction") {
+    const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
+    const timestamp = Number.isFinite(ts) ? ts : Date.now();
+    return {
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      timestamp,
+      __openclaw: {
+        kind: "compaction",
+        id: typeof entry.id === "string" ? entry.id : undefined,
+        seq,
+      },
+    };
+  }
+  return null;
 }
 
 export {
@@ -637,6 +915,39 @@ export function readLatestSessionUsageFromTranscript(
       return null;
     }
     const chunk = fs.readFileSync(fd, "utf-8");
+    return extractLatestUsageFromTranscriptChunk(chunk);
+  });
+}
+
+export function readRecentSessionUsageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxBytes: number,
+): SessionTranscriptUsageSnapshot | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const stat = fs.fstatSync(fd);
+    if (stat.size === 0) {
+      return null;
+    }
+    const readLen = Math.min(stat.size, Math.max(1024, Math.floor(maxBytes)));
+    const readStart = Math.max(0, stat.size - readLen);
+    const buf = Buffer.alloc(readLen);
+    const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
+    if (bytesRead <= 0) {
+      return null;
+    }
+    const chunk = buf
+      .toString("utf-8", 0, bytesRead)
+      .split(/\r?\n/)
+      .slice(readStart > 0 ? 1 : 0)
+      .join("\n");
     return extractLatestUsageFromTranscriptChunk(chunk);
   });
 }

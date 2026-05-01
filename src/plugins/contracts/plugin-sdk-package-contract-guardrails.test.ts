@@ -3,8 +3,6 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
-  dormantReservedBundledPluginSdkEntrypoints,
-  dormantReservedBundledPluginSdkEntrypointRecords,
   pluginSdkEntrypoints,
   publicPluginOwnedSdkEntrypoints,
   reservedBundledPluginSdkEntrypoints,
@@ -515,42 +513,6 @@ function collectReservedSdkSubpathImports(): string[] {
   return [...imports].toSorted();
 }
 
-function collectDormantReservedMetadataDrift(): string[] {
-  const failures: string[] = [];
-  const recordsBySubpath = new Map<
-    string,
-    (typeof dormantReservedBundledPluginSdkEntrypointRecords)[number]
-  >();
-  for (const record of dormantReservedBundledPluginSdkEntrypointRecords) {
-    if (recordsBySubpath.has(record.subpath)) {
-      failures.push(`${record.subpath}: duplicate dormant metadata record`);
-      continue;
-    }
-    recordsBySubpath.set(record.subpath, record);
-    if (record.replacement.trim().length === 0) {
-      failures.push(`${record.subpath}: missing replacement`);
-    }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(record.removeAfter)) {
-      failures.push(`${record.subpath}: invalid removeAfter ${record.removeAfter}`);
-    }
-    if (record.owner.trim().length === 0) {
-      failures.push(`${record.subpath}: missing owner`);
-    }
-    const resolvedOwner = resolvePluginOwnerFromEntrypoint(record.subpath);
-    if (resolvedOwner && resolvedOwner !== record.owner) {
-      failures.push(`${record.subpath}: owner ${record.owner} should be ${resolvedOwner}`);
-    }
-  }
-
-  const recordSubpaths = [...recordsBySubpath.keys()].toSorted();
-  const derivedSubpaths = [...dormantReservedBundledPluginSdkEntrypoints].toSorted();
-  if (JSON.stringify(recordSubpaths) !== JSON.stringify(derivedSubpaths)) {
-    failures.push("dormant subpath list must be derived from dormant metadata records");
-  }
-
-  return failures.toSorted();
-}
-
 describe("plugin-sdk package contract guardrails", () => {
   it("keeps plugin-sdk entrypoint metadata unique", () => {
     const counts = new Map<string, number>();
@@ -572,12 +534,8 @@ describe("plugin-sdk package contract guardrails", () => {
   it("keeps bundled plugin SDK compatibility subpaths explicitly classified", () => {
     const entrypoints = new Set(pluginSdkEntrypoints);
     const reserved = new Set<string>(reservedBundledPluginSdkEntrypoints);
-    const dormantReserved = new Set<string>(dormantReservedBundledPluginSdkEntrypoints);
     const supported = new Set<string>(supportedBundledFacadeSdkEntrypoints);
     const unknownReserved = [...reserved].filter((entrypoint) => !entrypoints.has(entrypoint));
-    const unknownDormantReserved = [...dormantReserved].filter(
-      (entrypoint) => !reserved.has(entrypoint),
-    );
     const unknownSupported = [...supported].filter((entrypoint) => !entrypoints.has(entrypoint));
     const unclassifiedBundledFacades = collectBundledFacadeSdkEntrypoints().filter(
       (entrypoint) => !reserved.has(entrypoint) && !supported.has(entrypoint),
@@ -588,21 +546,15 @@ describe("plugin-sdk package contract guardrails", () => {
 
     expect({
       unknownReserved,
-      unknownDormantReserved,
       unknownSupported,
       unclassifiedBundledFacades,
       unreservedPrivateSurfaces,
     }).toEqual({
       unknownReserved: [],
-      unknownDormantReserved: [],
       unknownSupported: [],
       unclassifiedBundledFacades: [],
       unreservedPrivateSurfaces: [],
     });
-  });
-
-  it("keeps dormant reserved SDK compatibility subpaths annotated for retirement", () => {
-    expect(collectDormantReservedMetadataDrift()).toEqual([]);
   });
 
   it("keeps plugin-owned SDK subpaths explicitly classified and documented", () => {
@@ -711,20 +663,13 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(collectCrossOwnerReservedSdkImports()).toEqual([]);
   });
 
-  it("keeps unused reserved SDK compatibility subpaths classified as dormant", () => {
+  it("keeps reserved SDK compatibility subpaths actively used", () => {
     const usedReserved = new Set(collectReservedSdkSubpathImports());
-    const dormantReserved = new Set<string>(dormantReservedBundledPluginSdkEntrypoints);
-    const usedButDormant = [...usedReserved].filter((entrypoint) =>
-      dormantReserved.has(entrypoint),
-    );
-    const unusedUnclassified = reservedBundledPluginSdkEntrypoints.filter(
-      (entrypoint) => !usedReserved.has(entrypoint) && !dormantReserved.has(entrypoint),
+    const unusedReserved = reservedBundledPluginSdkEntrypoints.filter(
+      (entrypoint) => !usedReserved.has(entrypoint),
     );
 
-    expect({ usedButDormant, unusedUnclassified }).toEqual({
-      usedButDormant: [],
-      unusedUnclassified: [],
-    });
+    expect(unusedReserved).toEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {

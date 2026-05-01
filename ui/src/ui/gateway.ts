@@ -11,6 +11,10 @@ import {
   readConnectErrorRecoveryAdvice,
   readConnectErrorDetailCode,
 } from "../../../src/gateway/protocol/connect-error-details.js";
+import {
+  isRetryableGatewayStartupUnavailableError,
+  resolveGatewayStartupRetryAfterMs,
+} from "../../../src/gateway/protocol/startup-unavailable.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -86,6 +90,7 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING ||
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
+    code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
     code === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
     code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
     code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
@@ -227,6 +232,7 @@ export type GatewayEventListener = (evt: GatewayEventFrame) => void;
 
 // 4008 = application-defined code (browser rejects 1008 "Policy Violation")
 const CONNECT_FAILED_CLOSE_CODE = 4008;
+const STARTUP_RETRY_CLOSE_CODE = 4013;
 
 function buildGatewayConnectAuth(
   selectedAuth: SelectedConnectAuth,
@@ -301,6 +307,7 @@ export class GatewayBrowserClient {
   private pendingConnectError: GatewayErrorInfo | undefined;
   private pendingDeviceTokenRetry = false;
   private deviceTokenRetryBudgetUsed = false;
+  private pendingStartupReconnectDelayMs: number | null = null;
   private eventListeners = new Set<GatewayEventListener>();
 
   constructor(private opts: GatewayBrowserClientOptions) {}
@@ -318,6 +325,7 @@ export class GatewayBrowserClient {
     this.pendingConnectError = undefined;
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.pendingStartupReconnectDelayMs = null;
     this.flushPending(new Error("gateway client stopped"));
   }
 
@@ -347,6 +355,11 @@ export class GatewayBrowserClient {
       const connectError = this.pendingConnectError;
       this.pendingConnectError = undefined;
       this.ws = null;
+      if (this.pendingStartupReconnectDelayMs !== null) {
+        this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
+        this.scheduleReconnect();
+        return;
+      }
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
@@ -370,8 +383,12 @@ export class GatewayBrowserClient {
     if (this.closed) {
       return;
     }
-    const delay = this.backoffMs;
-    this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
+    const startupDelay = this.pendingStartupReconnectDelayMs;
+    this.pendingStartupReconnectDelayMs = null;
+    const delay = startupDelay ?? this.backoffMs;
+    if (startupDelay === null) {
+      this.backoffMs = Math.min(this.backoffMs * 1.7, 15_000);
+    }
     this.clearConnectTimer();
     this.connectTimer = window.setTimeout(() => {
       this.connectTimer = null;
@@ -467,6 +484,7 @@ export class GatewayBrowserClient {
     }
     this.pendingDeviceTokenRetry = false;
     this.deviceTokenRetryBudgetUsed = false;
+    this.pendingStartupReconnectDelayMs = null;
     if (hello?.auth?.deviceToken && plan.deviceIdentity) {
       storeDeviceAuthToken({
         deviceId: plan.deviceIdentity.deviceId,
@@ -519,12 +537,24 @@ export class GatewayBrowserClient {
     } else {
       this.pendingConnectError = undefined;
     }
+    const usedStoredDeviceToken =
+      Boolean(plan.selectedAuth.storedToken) &&
+      (plan.selectedAuth.resolvedDeviceToken === plan.selectedAuth.storedToken ||
+        plan.selectedAuth.authDeviceToken === plan.selectedAuth.storedToken);
     if (
-      plan.selectedAuth.canFallbackToShared &&
+      usedStoredDeviceToken &&
       plan.deviceIdentity &&
       connectErrorCode === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH
     ) {
       clearDeviceAuthToken({ deviceId: plan.deviceIdentity.deviceId, role: plan.role });
+    }
+    const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
+    if (startupRetryAfterMs !== null) {
+      this.pendingStartupReconnectDelayMs = startupRetryAfterMs;
+    }
+    if (isRetryableGatewayStartupUnavailableError(err)) {
+      ws.close(STARTUP_RETRY_CLOSE_CODE, "gateway starting");
+      return;
     }
     ws.close(CONNECT_FAILED_CLOSE_CODE, "connect failed");
   }

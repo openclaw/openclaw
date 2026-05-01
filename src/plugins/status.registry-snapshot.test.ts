@@ -1,7 +1,5 @@
 import fs from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
-import { clearPluginDiscoveryCache } from "./discovery.js";
-import { clearPluginManifestRegistryCache } from "./manifest-registry.js";
 import { refreshPluginRegistry } from "./plugin-registry.js";
 import { buildPluginRegistrySnapshotReport, buildPluginSnapshotReport } from "./status.js";
 import {
@@ -19,8 +17,6 @@ function makeTempDir() {
 }
 
 afterEach(() => {
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -37,6 +33,11 @@ describe("buildPluginRegistrySnapshotReport", () => {
         description: "Manifest-backed list metadata",
         version: "1.2.3",
         providers: ["indexed-provider"],
+        contracts: {
+          speechProviders: ["indexed-speech-provider"],
+          realtimeTranscriptionProviders: ["indexed-transcription-provider"],
+          realtimeVoiceProviders: ["indexed-voice-provider"],
+        },
         commandAliases: [{ name: "indexed-demo" }],
         configSchema: {
           type: "object",
@@ -62,6 +63,9 @@ describe("buildPluginRegistrySnapshotReport", () => {
       version: "9.8.7",
       format: "openclaw",
       providerIds: ["indexed-provider"],
+      speechProviderIds: ["indexed-speech-provider"],
+      realtimeTranscriptionProviderIds: ["indexed-transcription-provider"],
+      realtimeVoiceProviderIds: ["indexed-voice-provider"],
       commands: ["indexed-demo"],
       source: fs.realpathSync(fixture.runtimeSource),
       status: "loaded",

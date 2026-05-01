@@ -16,6 +16,7 @@ export type {
   AgentHarnessAttemptResult,
   AgentHarnessCompactParams,
   AgentHarnessCompactResult,
+  AgentHarnessDeliveryDefaults,
   AgentHarnessResultClassification,
   AgentHarnessResetParams,
   AgentHarnessSupport,
@@ -30,6 +31,7 @@ export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runne
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
 export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
+export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 export type { NormalizedUsage } from "../agents/usage.js";
@@ -60,13 +62,24 @@ export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
 export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
 export { classifyEmbeddedPiRunResultForModelFallback } from "../agents/pi-embedded-runner/result-fallback-classifier.js";
 export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
+export type { NodeListNode } from "../agents/tools/nodes-utils.js";
+export {
+  listNodes,
+  resolveNodeIdFromList,
+  selectDefaultNodeFromList,
+} from "../agents/tools/nodes-utils.js";
 export { formatToolAggregate } from "../auto-reply/tool-meta.js";
+export {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  normalizeHeartbeatToolResponse,
+} from "../auto-reply/heartbeat-tool-response.js";
 export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
 export {
   extractToolResultMediaArtifact,

@@ -20,10 +20,14 @@ import {
   shouldSkipPackedTarballValidation,
   utcCalendarDayDistance,
 } from "../scripts/openclaw-npm-release-check.ts";
-import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "../src/infra/package-dist-inventory.ts";
+import {
+  LOCAL_BUILD_METADATA_DIST_PATHS,
+  PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+} from "../src/infra/package-dist-inventory.ts";
 
 const REQUIRED_PACKED_PATHS = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
+  "scripts/lib/bundled-runtime-deps-install.mjs",
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;
 
@@ -323,6 +327,15 @@ describe("collectForbiddenPackedPathErrors", () => {
     ).toEqual([
       'npm package must not include generated docs artifact "docs/.generated/config-baseline.json".',
       'npm package must not include generated docs artifact "docs/.generated/config-baseline.plugin.json".',
+    ]);
+  });
+
+  it("rejects local build metadata in npm pack output", () => {
+    expect(
+      collectForbiddenPackedPathErrors(["dist/index.js", ...LOCAL_BUILD_METADATA_DIST_PATHS]),
+    ).toEqual([
+      'npm package must not include local build metadata "dist/.buildstamp".',
+      'npm package must not include local build metadata "dist/.runtime-postbuildstamp".',
     ]);
   });
 

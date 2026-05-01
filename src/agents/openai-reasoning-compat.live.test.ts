@@ -263,7 +263,7 @@ describeLive("openai reasoning compat live", () => {
       ]);
       expect(
         sanitized.slice(2, 5).map((message) => (message as { toolCallId?: string }).toolCallId),
-      ).toEqual(["call_keep", "call_missing_a", "call_missing_b"]);
+      ).toEqual(["callkeep", "callmissinga", "callmissingb"]);
       expect(
         sanitized
           .slice(3, 5)

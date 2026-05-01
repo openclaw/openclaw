@@ -585,7 +585,7 @@ function isEventForDifferentActiveRun(
   payload: ChatEventPayload | undefined,
   activeRunId: string | null,
 ): boolean {
-  return Boolean(activeRunId && payload?.runId && payload.runId !== activeRunId);
+  return Boolean(activeRunId && payload && payload.runId !== activeRunId);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {

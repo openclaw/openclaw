@@ -3,7 +3,7 @@ import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import type { SafeValue } from "./command-rpc.js";
 
-export type CodexStatusProbes = {
+type CodexStatusProbes = {
   models: SafeValue<CodexAppServerModelListResult>;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
@@ -148,6 +148,7 @@ export function buildHelp(): string {
     "- /codex detach",
     "- /codex compact",
     "- /codex review",
+    "- /codex diagnostics [note]",
     "- /codex computer-use [status|install]",
     "- /codex account",
     "- /codex mcp",

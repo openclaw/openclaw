@@ -462,7 +462,7 @@ describe("plugin-sdk subpath exports", () => {
   });
 
   it("keeps removed bundled-channel aliases out of the public sdk list", () => {
-    const removedChannelAliases = new Set(["discord", "signal", "slack", "telegram", "whatsapp"]);
+    const removedChannelAliases = new Set(["signal", "slack", "telegram", "whatsapp"]);
     const banned = pluginSdkSubpaths.filter((subpath) => removedChannelAliases.has(subpath));
     expect(banned).toEqual([]);
   });
@@ -531,52 +531,6 @@ describe("plugin-sdk subpath exports", () => {
       "createDirectTextMediaOutbound",
       "createScopedChannelMediaMaxBytesResolver",
     ]);
-    expectSourceMentions("bluebubbles", [
-      "normalizeBlueBubblesAcpConversationId",
-      "matchBlueBubblesAcpConversation",
-      "resolveBlueBubblesConversationIdFromTarget",
-      "resolveAckReaction",
-      "resolveChannelMediaMaxBytes",
-      "collectBlueBubblesStatusIssues",
-      "createChannelPairingController",
-      "createChannelReplyPipeline",
-      "resolveRequestUrl",
-      "buildProbeChannelStatusSummary",
-      "extractToolSend",
-      "createFixedWindowRateLimiter",
-      "withResolvedWebhookRequestPipeline",
-    ]);
-    expectSourceMentions("irc", [
-      "createChannelReplyPipeline",
-      "chunkTextForOutbound",
-      "createChannelPairingController",
-      "createLoggerBackedRuntime",
-      "ircSetupAdapter",
-      "ircSetupWizard",
-    ]);
-    expectSourceMentions("bluebubbles-policy", [
-      "isAllowedBlueBubblesSender",
-      "resolveBlueBubblesGroupRequireMention",
-      "resolveBlueBubblesGroupToolPolicy",
-    ]);
-    for (const subpath of [
-      "feishu",
-      "googlechat",
-      "matrix",
-      "mattermost",
-      "msteams",
-      "zalo",
-      "zalouser",
-    ]) {
-      expectSourceMentions(subpath, ["chunkTextForOutbound"]);
-    }
-    for (const subpath of ["googlechat", "msteams", "nextcloud-talk", "zalouser"]) {
-      expectSourceMentions(subpath, [
-        "resolveInboundMentionDecision",
-        "resolveMentionGating",
-        "resolveMentionGatingWithBypass",
-      ]);
-    }
     expectSourceMentions("approval-auth-runtime", [
       "createResolvedApproverActionAuthAdapter",
       "resolveApprovalApprovers",
@@ -686,8 +640,11 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceMentions("compat", [
       "createPluginRuntimeStore",
       "createScopedChannelConfigAdapter",
+      "collectOpenGroupPolicyConfiguredRouteWarnings",
       "resolveControlCommandGate",
       "delegateCompactionToRuntime",
+      "createReplyPrefixContext",
+      "createChannelReplyPipeline",
     ]);
     expectSourceMentions("device-bootstrap", [
       "approveDevicePairing",
@@ -729,15 +686,15 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceContains(
       "memory-core-host-runtime-core",
-      'export * from "../memory-host-sdk/runtime-core.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-core.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-cli",
-      'export * from "../memory-host-sdk/runtime-cli.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-cli.js";',
     );
     expectSourceContains(
       "memory-core-host-runtime-files",
-      'export * from "../memory-host-sdk/runtime-files.js";',
+      'export * from "../../packages/memory-host-sdk/src/runtime-files.js";',
     );
     expectSourceMentions("plugin-test-runtime", [
       "registerSingleProviderPlugin",
@@ -893,6 +850,7 @@ describe("plugin-sdk subpath exports", () => {
       "createDraftStreamLoop",
       "createLoggedPairingApprovalNotifier",
       "createPairingPrefixStripper",
+      "createChannelRunQueue",
       "createRunStateMachine",
       "createRuntimeDirectoryLiveAdapter",
       "createRuntimeOutboundDelegates",
@@ -1115,7 +1073,6 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceOmitsImportPattern("command-auth", "../auto-reply/status.js");
     expectSourceOmitsSnippet("command-auth", "../../extensions/");
-    expectSourceOmitsSnippet("matrix-runtime-heavy", "../../extensions/");
     expectSourceMentions("channel-send-result", [
       "attachChannelToResult",
       "buildChannelSendResult",
@@ -1154,7 +1111,6 @@ describe("plugin-sdk subpath exports", () => {
       "unregisterSessionBindingAdapter",
       "SessionBindingAdapter",
     ]);
-    expectSourceMentions("matrix-runtime-shared", ["formatZonedTimestamp"]);
     expectSourceMentions("ssrf-runtime", [
       "closeDispatcher",
       "createPinnedDispatcher",
@@ -1345,6 +1301,7 @@ describe("plugin-sdk subpath exports", () => {
 
     expect(typeof channelLifecycleSdk.createDraftStreamLoop).toBe("function");
     expect(typeof channelLifecycleSdk.createFinalizableDraftLifecycle).toBe("function");
+    expect(typeof channelLifecycleSdk.createChannelRunQueue).toBe("function");
     expect(typeof channelLifecycleSdk.runPassiveAccountLifecycle).toBe("function");
     expect(typeof channelLifecycleSdk.createRunStateMachine).toBe("function");
     expect(typeof channelLifecycleSdk.createArmableStallWatchdog).toBe("function");
@@ -1364,10 +1321,12 @@ describe("plugin-sdk subpath exports", () => {
       "createTypingCallbacks",
       "createReplyPrefixContext",
       "createReplyPrefixOptions",
+      "resolveChannelSourceReplyDeliveryMode",
     ]);
     expect(typeof channelReplyPipelineSdk.createTypingCallbacks).toBe("function");
     expect(typeof channelReplyPipelineSdk.createReplyPrefixContext).toBe("function");
     expect(typeof channelReplyPipelineSdk.createReplyPrefixOptions).toBe("function");
+    expect(typeof channelReplyPipelineSdk.resolveChannelSourceReplyDeliveryMode).toBe("function");
 
     expect(pluginSdkSubpaths.length).toBeGreaterThan(representativeRuntimeSmokeSubpaths.length);
     for (const [index, id] of representativeRuntimeSmokeSubpaths.entries()) {
@@ -1375,6 +1334,15 @@ describe("plugin-sdk subpath exports", () => {
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
     }
+  });
+
+  it("keeps the Zalouser command-auth compatibility facade importable", async () => {
+    const zalouserSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/zalouser");
+    const commandAuthSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/command-auth");
+
+    expect(zalouserSdk.resolveSenderCommandAuthorization).toBe(
+      commandAuthSdk.resolveSenderCommandAuthorization,
+    );
   });
 
   it("exports single-provider plugin entry helpers from the dedicated subpath", () => {

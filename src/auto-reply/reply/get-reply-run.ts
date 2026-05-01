@@ -45,6 +45,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { applySessionHints } from "./body.js";
 import type { buildCommandContext } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
+import { isSystemEventProvider } from "./effective-reply-route.js";
 import { shouldUseReplyFastTestRuntime } from "./get-reply-fast-path.js";
 import { resolvePreparedReplyQueueState } from "./get-reply-run-queue.js";
 import {
@@ -60,6 +61,7 @@ import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { buildReplyPromptBodies } from "./prompt-prelude.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
+import { isSteeringQueueMode } from "./queue/steering.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { resolveBareSessionResetPromptState } from "./session-reset-prompt.js";
 import { resolveBareResetBootstrapFileAccess } from "./session-reset-prompt.js";
@@ -92,6 +94,111 @@ export function resolvePromptSilentReplyConversationType(params: {
     return "group";
   }
   return undefined;
+}
+
+function normalizePromptRouteChannel(raw?: string | null): string | undefined {
+  const normalized = normalizeOptionalString(raw);
+  return normalized && normalized !== "none" ? normalized : undefined;
+}
+
+function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
+  return (
+    normalizePromptRouteChannel(entry?.origin?.provider) ??
+    normalizePromptRouteChannel(entry?.channel) ??
+    normalizePromptRouteChannel(entry?.lastChannel) ??
+    normalizePromptRouteChannel(entry?.deliveryContext?.channel)
+  );
+}
+
+function resolvePersistedPromptSurface(entry?: SessionEntry): string | undefined {
+  return (
+    normalizePromptRouteChannel(entry?.origin?.surface) ?? resolvePersistedPromptProvider(entry)
+  );
+}
+
+export function resolvePromptSessionContextForSystemEvent(params: {
+  sessionCtx: TemplateContext;
+  sessionEntry?: SessionEntry;
+  ctx?: Pick<MsgContext, "Provider">;
+  isHeartbeat?: boolean;
+}): TemplateContext {
+  const { sessionCtx, sessionEntry } = params;
+  const isSystemEvent =
+    params.isHeartbeat === true ||
+    isSystemEventProvider(params.ctx?.Provider) ||
+    isSystemEventProvider(sessionCtx.Provider);
+  if (!isSystemEvent || !sessionEntry) {
+    return sessionCtx;
+  }
+
+  const persistedChatType =
+    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(sessionEntry.origin?.chatType);
+  const liveChatType = normalizeChatType(sessionCtx.ChatType);
+  const effectiveChatType = liveChatType ?? persistedChatType;
+  const persistedProvider = resolvePersistedPromptProvider(sessionEntry);
+  const persistedSurface = resolvePersistedPromptSurface(sessionEntry);
+  const liveProvider = normalizeOptionalString(sessionCtx.Provider);
+  const liveSurface = normalizeOptionalString(sessionCtx.Surface);
+  const nextProvider =
+    liveProvider && !isSystemEventProvider(liveProvider)
+      ? liveProvider
+      : (persistedProvider ?? liveProvider);
+  const nextSurface =
+    liveSurface && !isSystemEventProvider(liveSurface)
+      ? liveSurface
+      : (persistedSurface ?? liveSurface);
+
+  const next: TemplateContext = { ...sessionCtx };
+  let changed = false;
+  const setIfMissing = <K extends keyof TemplateContext>(key: K, value: TemplateContext[K]) => {
+    if (next[key] != null && next[key] !== "") {
+      return;
+    }
+    if (value == null || value === "") {
+      return;
+    }
+    next[key] = value;
+    changed = true;
+  };
+  const setIfChanged = <K extends keyof TemplateContext>(key: K, value: TemplateContext[K]) => {
+    if (value == null || value === "" || next[key] === value) {
+      return;
+    }
+    next[key] = value;
+    changed = true;
+  };
+
+  setIfChanged("Provider", nextProvider);
+  setIfChanged("Surface", nextSurface);
+  setIfMissing("ChatType", persistedChatType);
+  if (effectiveChatType === "group" || effectiveChatType === "channel") {
+    setIfMissing("GroupSubject", normalizeOptionalString(sessionEntry.subject));
+    setIfMissing("GroupChannel", normalizeOptionalString(sessionEntry.groupChannel));
+    setIfMissing("GroupSpace", normalizeOptionalString(sessionEntry.space));
+  }
+  setIfMissing("OriginatingChannel", persistedProvider);
+  setIfMissing(
+    "OriginatingTo",
+    normalizeOptionalString(
+      sessionEntry.lastTo ?? sessionEntry.deliveryContext?.to ?? sessionEntry.origin?.to,
+    ),
+  );
+  setIfMissing(
+    "AccountId",
+    normalizeOptionalString(
+      sessionEntry.lastAccountId ??
+        sessionEntry.deliveryContext?.accountId ??
+        sessionEntry.origin?.accountId,
+    ),
+  );
+  setIfMissing(
+    "MessageThreadId",
+    sessionEntry.lastThreadId ??
+      sessionEntry.deliveryContext?.threadId ??
+      sessionEntry.origin?.threadId,
+  );
+
+  return changed ? next : sessionCtx;
 }
 
 export function buildExecOverridePromptHint(params: {
@@ -278,15 +385,6 @@ export async function runPreparedReply(
     ctx,
     sessionKey,
   });
-  const silentReplySettings = resolveSilentReplySettings({
-    cfg,
-    sessionKey: runtimePolicySessionKey,
-    surface: sessionCtx.Surface ?? sessionCtx.Provider,
-    conversationType: resolvePromptSilentReplyConversationType({
-      ctx: sessionCtx,
-      inboundSessionKey: ctx.SessionKey,
-    }),
-  });
   let {
     sessionEntry,
     resolvedThinkLevel,
@@ -296,6 +394,23 @@ export async function runPreparedReply(
     execOverrides,
     abortedLastRun,
   } = params;
+  const isHeartbeat = opts?.isHeartbeat === true;
+  const promptSessionCtx = resolvePromptSessionContextForSystemEvent({
+    sessionCtx,
+    sessionEntry,
+    ctx,
+    isHeartbeat,
+  });
+  const silentReplyConversationType = resolvePromptSilentReplyConversationType({
+    ctx: promptSessionCtx,
+    inboundSessionKey: ctx.SessionKey,
+  });
+  const silentReplySettings = resolveSilentReplySettings({
+    cfg,
+    sessionKey: runtimePolicySessionKey,
+    surface: promptSessionCtx.Surface ?? promptSessionCtx.Provider,
+    conversationType: silentReplyConversationType,
+  });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
     isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",
@@ -310,9 +425,10 @@ export async function runPreparedReply(
   let currentSystemSent = systemSent;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
-  const isGroupChat = sessionCtx.ChatType === "group";
+  const isGroupChat =
+    promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
+  const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
   const wasMentioned = ctx.WasMentioned === true;
-  const isHeartbeat = opts?.isHeartbeat === true;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -326,23 +442,24 @@ export async function runPreparedReply(
     isHeartbeat,
     typingPolicy,
     suppressTyping,
+    sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
   });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
   );
-  const directChatContext =
-    sessionCtx.ChatType === "direct" || sessionCtx.ChatType === "dm"
-      ? buildDirectChatContext({
-          sessionCtx,
-          silentReplyPolicy: silentReplySettings.policy,
-          silentReplyRewrite: silentReplySettings.rewrite,
-          silentToken: SILENT_REPLY_TOKEN,
-        })
-      : "";
+  const directChatContext = isDirectChat
+    ? buildDirectChatContext({
+        sessionCtx: promptSessionCtx,
+        silentReplyPolicy: silentReplySettings.policy,
+        silentReplyRewrite: silentReplySettings.rewrite,
+        silentToken: SILENT_REPLY_TOKEN,
+      })
+    : "";
   // Always include persistent group chat context (provider + reply guidance).
   const groupChatContext = isGroupChat
     ? buildGroupChatContext({
-        sessionCtx,
+        sessionCtx: promptSessionCtx,
+        sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
         silentReplyPolicy: silentReplySettings.policy,
         silentReplyRewrite: silentReplySettings.rewrite,
         silentToken: SILENT_REPLY_TOKEN,
@@ -352,7 +469,7 @@ export async function runPreparedReply(
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
         cfg,
-        sessionCtx,
+        sessionCtx: promptSessionCtx,
         sessionEntry,
         defaultActivation,
         silentToken: SILENT_REPLY_TOKEN,
@@ -361,14 +478,17 @@ export async function runPreparedReply(
       })
     : "";
   const allowEmptyAssistantReplyAsSilent =
-    isGroupChat &&
-    resolveGroupSilentReplyBehavior({
-      sessionEntry,
-      defaultActivation,
-      silentReplyPolicy: silentReplySettings.policy,
-      silentReplyRewrite: silentReplySettings.rewrite,
-    }).allowEmptyAssistantReplyAsSilent;
-  const groupSystemPrompt = normalizeOptionalString(sessionCtx.GroupSystemPrompt) ?? "";
+    (isDirectChat &&
+      silentReplyConversationType === "direct" &&
+      silentReplySettings.policy === "allow") ||
+    (isGroupChat &&
+      resolveGroupSilentReplyBehavior({
+        sessionEntry,
+        defaultActivation,
+        silentReplyPolicy: silentReplySettings.policy,
+        silentReplyRewrite: silentReplySettings.rewrite,
+      }).allowEmptyAssistantReplyAsSilent);
+  const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
     { includeFormattingHints: !useFastReplyRuntime },
@@ -400,7 +520,9 @@ export async function runPreparedReply(
     }),
   ].filter(Boolean);
   const silentReplyPromptMode: SilentReplyPromptMode =
-    directChatContext || groupChatContext ? "none" : "generic";
+    directChatContext || groupChatContext || opts?.sourceReplyDeliveryMode === "message_tool_only"
+      ? "none"
+      : "generic";
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
   const rawBodyTrimmed = (ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "").trim();
@@ -533,7 +655,11 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel && prefixedBodyBase) {
     const parts = prefixedBodyBase.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel && isThinkingLevelSupported({ provider, model, level: maybeLevel })) {
+    const thinkingCatalog = maybeLevel ? await modelState.resolveThinkingCatalog() : undefined;
+    if (
+      maybeLevel &&
+      isThinkingLevelSupported({ provider, model, level: maybeLevel, catalog: thinkingCatalog })
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedBodyBase = parts.slice(1).join(" ").trim();
     }
@@ -605,18 +731,27 @@ export async function runPreparedReply(
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
-  if (!isThinkingLevelSupported({ provider, model, level: resolvedThinkLevel })) {
+  const thinkingCatalog = await modelState.resolveThinkingCatalog();
+  if (
+    !isThinkingLevelSupported({
+      provider,
+      model,
+      level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
+    })
+  ) {
     const explicitThink = directives.hasThinkDirective && directives.thinkLevel !== undefined;
     if (explicitThink) {
       typing.cleanup();
       return {
-        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model)}.`,
+        text: `Thinking level "${resolvedThinkLevel}" is not supported for ${provider}/${model}. Use one of: ${formatThinkingLevels(provider, model, ", ", thinkingCatalog)}.`,
       };
     }
     const fallbackThinkLevel = resolveSupportedThinkingLevel({
       provider,
       model,
       level: resolvedThinkLevel,
+      catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== resolvedThinkLevel) {
       const previousThinkLevel = resolvedThinkLevel;
@@ -721,7 +856,7 @@ export async function runPreparedReply(
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
+  const shouldSteer = isSteeringQueueMode(resolvedQueue.mode);
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
     resolvedQueue.mode === "collect" ||
@@ -854,6 +989,7 @@ export async function runPreparedReply(
       ownerNumbers: command.ownerList.length > 0 ? command.ownerList : undefined,
       inputProvenance: ctx.InputProvenance ?? sessionCtx.InputProvenance,
       extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+      sourceReplyDeliveryMode: opts?.sourceReplyDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic: extraSystemPromptStaticParts.join("\n\n"),
       skipProviderRuntimeHints: useFastReplyRuntime,
