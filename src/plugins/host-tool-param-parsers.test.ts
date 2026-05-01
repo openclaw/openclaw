@@ -2,6 +2,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { deriveToolParams } from "./host-tool-param-parsers.js";
 
+const defaultCwd = process.cwd();
+const cwdPath = (...segments: string[]) => path.join(defaultCwd, ...segments);
+
 describe("deriveToolParams", () => {
   it("returns an empty object for tools that have no registered parser", () => {
     expect(deriveToolParams("exec", { command: "ls" })).toEqual({});
@@ -21,7 +24,12 @@ describe("deriveToolParams", () => {
       "*** End Patch",
     ].join("\n");
     expect(deriveToolParams("apply_patch", { input: patch })).toEqual({
-      derivedPaths: ["src/new.ts", "src/old.ts", "src/renamed.ts", "src/dead.ts"],
+      derivedPaths: [
+        cwdPath("src/new.ts"),
+        cwdPath("src/old.ts"),
+        cwdPath("src/renamed.ts"),
+        cwdPath("src/dead.ts"),
+      ],
     });
   });
 
