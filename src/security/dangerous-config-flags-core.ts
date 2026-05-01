@@ -1,5 +1,6 @@
 import { DANGEROUS_SANDBOX_DOCKER_BOOLEAN_KEYS } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import { collectCoreInsecureOrDangerousFlags } from "./core-dangerous-config-flags.js";
 
@@ -57,6 +58,20 @@ function collectExactPluginConfigContractMatches({
   return Object.hasOwn(root, pathPattern) ? [{ path: pathPattern, value: root[pathPattern] }] : [];
 }
 
+function hasEffectiveAllowedSessionKeyPrefixes(raw: string[] | undefined): boolean {
+  if (!Array.isArray(raw)) {
+    return false;
+  }
+  const prefixes = new Set<string>();
+  for (const prefix of raw) {
+    const normalized = normalizeLowercaseStringOrEmpty(prefix);
+    if (normalized) {
+      prefixes.add(normalized);
+    }
+  }
+  return prefixes.size > 0;
+}
+
 export function collectEnabledInsecureOrDangerousFlagsFromContracts(
   cfg: OpenClawConfig,
   inputs: DangerousConfigFlagContractInputs = {},
@@ -77,7 +92,10 @@ export function collectEnabledInsecureOrDangerousFlagsFromContracts(
     }
   };
 
-  if (cfg.hooks?.allowRequestSessionKey === true) {
+  if (
+    cfg.hooks?.allowRequestSessionKey === true &&
+    !hasEffectiveAllowedSessionKeyPrefixes(cfg.hooks.allowedSessionKeyPrefixes)
+  ) {
     enabledFlags.push("hooks.allowRequestSessionKey=true");
   }
   if (cfg.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork === true) {
