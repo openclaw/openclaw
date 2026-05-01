@@ -218,7 +218,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     runStartupSessionMigration.mockClear();
   });
 
-  it("loads startup plugins in verify mode after failed pre-start staging", async () => {
+  it("falls back to loader-level runtime-deps staging after failed pre-start staging", async () => {
     repairBundledRuntimeDepsPackagePlanAsync.mockRejectedValueOnce(new Error("offline registry"));
     const log = createLog();
     const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
@@ -245,7 +245,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
         pluginLookUpTable: expect.objectContaining({
           manifestRegistry: pluginManifestRegistry,
         }),
-        installBundledRuntimeDeps: false,
+        installBundledRuntimeDeps: true,
       }),
     );
     expect(repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledOnce();
@@ -296,11 +296,11 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       }),
     );
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ installBundledRuntimeDeps: false }),
+      expect.objectContaining({ installBundledRuntimeDeps: true }),
     );
   });
 
-  it("keeps warm gateway starts on verify-only plugin loading when deps are already staged", async () => {
+  it("allows the loader to verify already staged deps during warm gateway starts", async () => {
     repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValueOnce({
       repairedSpecs: [],
     });
@@ -321,7 +321,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       }),
     );
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ installBundledRuntimeDeps: false }),
+      expect.objectContaining({ installBundledRuntimeDeps: true }),
     );
   });
 
@@ -491,7 +491,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
   });
 
-  it("loads startup plugins in verify mode after failed pre-start scan", async () => {
+  it("falls back to loader-level runtime-deps staging after failed pre-start scan", async () => {
     repairBundledRuntimeDepsPackagePlanAsync.mockRejectedValueOnce(
       new Error("unsupported runtime dependency spec"),
     );
@@ -518,7 +518,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       expect.stringContaining("unsupported runtime dependency spec"),
     );
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ installBundledRuntimeDeps: false }),
+      expect.objectContaining({ installBundledRuntimeDeps: true }),
     );
     expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledRuntimeDepsInstaller",
