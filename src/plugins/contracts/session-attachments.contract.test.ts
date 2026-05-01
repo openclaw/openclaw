@@ -59,9 +59,9 @@ describe("plugin session attachments", () => {
       resolveAttachmentDelivery({
         channel: "telegram",
         captionFormat: "html",
-        channelHints: { telegram: { parseMode: "MarkdownV2" } },
+        channelHints: { telegram: { parseMode: "HTML" } },
       }),
-    ).toEqual({ parseMode: "MarkdownV2" });
+    ).toEqual({ parseMode: "HTML" });
     expect(resolveAttachmentDelivery({ channel: "telegram", captionFormat: "html" })).toEqual({
       parseMode: "HTML",
     });
@@ -86,9 +86,9 @@ describe("plugin session attachments", () => {
         channelHints: { slack: { threadTs: "1700000000.000100" } },
       }),
     ).toEqual({ threadTs: "1700000000.000100" });
-    expect(resolveAttachmentDelivery({ channel: "discord", captionFormat: "markdownv2" })).toEqual({
-      parseMode: "MarkdownV2",
-    });
+    expect(resolveAttachmentDelivery({ channel: "discord", captionFormat: "markdown" })).toEqual(
+      {},
+    );
     expect(
       resolveAttachmentDelivery({
         channel: "unknown",

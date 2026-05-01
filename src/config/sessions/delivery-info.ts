@@ -83,6 +83,18 @@ function findSessionEntryInStore(
   keys: readonly string[],
 ) {
   let normalizedIndex: Map<string, SessionEntry> | undefined;
+  let bestEntry: SessionEntry | undefined;
+  let bestUpdatedAt = 0;
+  const acceptCandidate = (candidate: SessionEntry | undefined) => {
+    if (!candidate) {
+      return;
+    }
+    const candidateUpdatedAt = candidate.updatedAt ?? 0;
+    if (!bestEntry || candidateUpdatedAt > bestUpdatedAt) {
+      bestEntry = candidate;
+      bestUpdatedAt = candidateUpdatedAt;
+    }
+  };
   for (const key of keys) {
     const trimmed = key.trim();
     const normalized = normalizeLowercaseStringOrEmpty(key);
@@ -91,19 +103,12 @@ function findSessionEntryInStore(
       : Object.prototype.hasOwnProperty.call(store, trimmed)
         ? trimmed
         : undefined;
-    let bestEntry = directKey ? store[directKey] : undefined;
-    let bestUpdatedAt = bestEntry?.updatedAt ?? 0;
+    acceptCandidate(directKey ? store[directKey] : undefined);
     normalizedIndex ??= buildFreshestSessionEntryIndex(store);
     const freshest = normalizedIndex.get(normalized);
-    if (freshest && (!bestEntry || (freshest.updatedAt ?? 0) > bestUpdatedAt)) {
-      bestEntry = freshest;
-      bestUpdatedAt = freshest.updatedAt ?? 0;
-    }
-    if (bestEntry) {
-      return bestEntry;
-    }
+    acceptCandidate(freshest);
   }
-  return undefined;
+  return bestEntry;
 }
 
 function buildFreshestSessionEntryIndex(

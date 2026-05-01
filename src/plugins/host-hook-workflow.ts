@@ -25,7 +25,7 @@ async function loadSendMessage(): Promise<SendMessage> {
 }
 
 type ResolvedAttachmentDelivery = {
-  parseMode?: "HTML" | "MarkdownV2";
+  parseMode?: "HTML";
   escapePlainHtmlCaption?: boolean;
   disableNotification?: boolean;
   forceDocumentMime?: string;
@@ -34,12 +34,9 @@ type ResolvedAttachmentDelivery = {
 
 function captionFormatToParseMode(
   captionFormat: PluginSessionAttachmentCaptionFormat | undefined,
-): "HTML" | "MarkdownV2" | undefined {
+): "HTML" | undefined {
   if (captionFormat === "html") {
     return "HTML";
-  }
-  if (captionFormat === "markdownv2") {
-    return "MarkdownV2";
   }
   return undefined;
 }
@@ -147,7 +144,7 @@ export async function sendPluginSessionAttachment(
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }
   const rawText = normalizeOptionalString(params.text) ?? "";
-  const explicitThreadId = normalizeOptionalString(params.threadId);
+  const explicitThreadId = normalizeOptionalThreadId(params.threadId);
   const deliveryThreadId = normalizeOptionalThreadId(deliveryContext.threadId);
   const fallbackThreadId = normalizeOptionalThreadId(threadId);
   const resolvedDelivery = resolveAttachmentDelivery({

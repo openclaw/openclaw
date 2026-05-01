@@ -157,7 +157,7 @@ export type PluginSessionAttachmentFile = {
 
 export type PluginAttachmentChannelHints = {
   telegram?: {
-    parseMode?: "HTML" | "MarkdownV2";
+    parseMode?: "HTML";
     disableNotification?: boolean;
     forceDocumentMime?: string;
   };
@@ -166,13 +166,13 @@ export type PluginAttachmentChannelHints = {
   };
 };
 
-export type PluginSessionAttachmentCaptionFormat = "plain" | "html" | "markdownv2";
+export type PluginSessionAttachmentCaptionFormat = "plain" | "html" | "markdown";
 
 export type PluginSessionAttachmentParams = {
   sessionKey: string;
   files: PluginSessionAttachmentFile[];
   text?: string;
-  threadId?: string;
+  threadId?: string | number;
   forceDocument?: boolean;
   maxBytes?: number;
   captionFormat?: PluginSessionAttachmentCaptionFormat;

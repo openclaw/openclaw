@@ -172,7 +172,7 @@ function buildTelegramSendOptions(params: {
   threadId?: string | number | null;
   silent?: boolean | null;
   forceDocument?: boolean | null;
-  parseMode?: "HTML" | "MarkdownV2" | null;
+  parseMode?: "HTML" | null;
   gatewayClientScopes?: readonly string[] | null;
 }): TelegramSendOptions {
   return {
@@ -185,9 +185,7 @@ function buildTelegramSendOptions(params: {
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
     forceDocument: params.forceDocument ?? undefined,
-    ...(params.parseMode
-      ? { textMode: params.parseMode === "MarkdownV2" ? "markdown" : "html" }
-      : {}),
+    ...(params.parseMode ? { textMode: "html" as const } : {}),
     ...(Array.isArray(params.gatewayClientScopes)
       ? { gatewayClientScopes: [...params.gatewayClientScopes] }
       : {}),
@@ -205,7 +203,7 @@ async function sendTelegramOutbound(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
-  parseMode?: "HTML" | "MarkdownV2" | null;
+  parseMode?: "HTML" | null;
   gatewayClientScopes?: readonly string[] | null;
 }) {
   const send = await resolveTelegramSend(params.deps);

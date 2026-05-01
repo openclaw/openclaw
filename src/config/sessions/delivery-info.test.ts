@@ -248,6 +248,35 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("continues candidate session keys until it finds the freshest routable entry", () => {
+    const sessionKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[sessionKey] = {
+      sessionId: "stale-session",
+      updatedAt: Date.now() - 1000,
+      origin: {
+        provider: "matrix",
+      },
+    };
+    storeState.store[canonicalKey] = {
+      sessionId: "fresh-session",
+      updatedAt: Date.now(),
+      lastChannel: "matrix",
+      lastTo: "room:!MixedCase:Example.Org",
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: undefined,
+      },
+      threadId: undefined,
+    });
+  });
+
   it("falls back to the base session when a thread entry only has partial route metadata", () => {
     const baseKey = "agent:main:matrix:channel:!MixedCase:example.org";
     const threadKey = `${baseKey}:thread:$thread-event`;

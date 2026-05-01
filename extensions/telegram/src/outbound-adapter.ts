@@ -174,7 +174,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       });
       return await send(to, text, {
         ...baseOpts,
-        textMode: formatting?.parseMode === "MarkdownV2" ? "markdown" : "html",
+        ...(formatting?.parseMode ? { textMode: "html" as const } : {}),
       });
     },
     sendMedia: async ({
@@ -202,7 +202,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       });
       return await send(to, text, {
         ...baseOpts,
-        textMode: formatting?.parseMode === "MarkdownV2" ? "markdown" : "html",
+        ...(formatting?.parseMode ? { textMode: "html" as const } : {}),
         mediaUrl,
         mediaLocalRoots,
         mediaReadFile,

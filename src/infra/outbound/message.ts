@@ -82,7 +82,7 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
-  parseMode?: "HTML" | "MarkdownV2";
+  parseMode?: "HTML";
 };
 
 export type MessageSendResult = {
