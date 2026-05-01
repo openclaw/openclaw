@@ -931,6 +931,55 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("leaves contextTokens unset when entry has prior model but no contextTokens (heartbeat bleed guard)", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-no-context-tokens";
+      const sessionId = "test-heartbeat-no-context-tokens-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "anthropic",
+          model: "claude-opus-4-6",
+          // contextTokens intentionally missing — older session without cached context
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Heartbeat turn uses a different, smaller model
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Runtime model should be preserved
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(sessionStore[sessionKey]?.modelProvider).toBe("anthropic");
+      // contextTokens should NOT bleed from the heartbeat run's smaller window
+      expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+    });
+  });
+
   it("falls back to run model when preserveRuntimeModel is true but entry has no prior runtime model", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
