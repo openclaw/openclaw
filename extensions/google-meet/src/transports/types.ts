@@ -28,6 +28,19 @@ export type GoogleMeetSpeechBlockedReason =
 export type GoogleMeetChromeHealth = {
   inCall?: boolean;
   micMuted?: boolean;
+  lobbyWaiting?: boolean;
+  leaveReason?: string;
+  captioning?: boolean;
+  captionsEnabledAttempted?: boolean;
+  transcriptLines?: number;
+  lastCaptionAt?: string;
+  lastCaptionSpeaker?: string;
+  lastCaptionText?: string;
+  recentTranscript?: Array<{
+    at?: string;
+    speaker?: string;
+    text: string;
+  }>;
   manualActionRequired?: boolean;
   manualActionReason?: GoogleMeetManualActionReason;
   manualActionMessage?: string;
@@ -40,9 +53,11 @@ export type GoogleMeetChromeHealth = {
   audioOutputActive?: boolean;
   lastInputAt?: string;
   lastOutputAt?: string;
+  lastSuppressedInputAt?: string;
   lastClearAt?: string;
   lastInputBytes?: number;
   lastOutputBytes?: number;
+  suppressedInputBytes?: number;
   consecutiveInputErrors?: number;
   lastInputError?: string;
   clearCount?: number;
@@ -86,6 +101,7 @@ export type GoogleMeetSession = {
     dtmfSequence?: string;
     voiceCallId?: string;
     dtmfSent?: boolean;
+    introSent?: boolean;
   };
   notes: string[];
 };

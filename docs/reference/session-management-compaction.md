@@ -79,7 +79,7 @@ Session persistence has automatic maintenance controls (`session.maintenance`) f
 - `maxDiskBytes`: optional sessions-directory budget
 - `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
 
-Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
+Normal Gateway writes batch `maxEntries` cleanup for production-sized caps, so a store may briefly exceed the configured cap before the next high-water cleanup rewrites it back down. Session store reads do not prune or cap entries during Gateway startup; use writes or `openclaw sessions cleanup --enforce` for cleanup. `openclaw sessions cleanup --enforce` still applies the configured cap immediately.
 
 OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups during Gateway writes. The legacy `session.maintenance.rotateBytes` key is ignored and `openclaw doctor --fix` removes it from older configs.
 
@@ -272,6 +272,20 @@ reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
 and it requires `truncateAfterCompaction` so the compacted summary can become a
 new successor transcript.
 
+For embedded Pi runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
+adds an opt-in tool-loop guard. After a tool result is appended and before the
+next model call, OpenClaw estimates the prompt pressure using the same preflight
+budget logic used at turn start. If the context no longer fits, the guard does
+not compact inside Pi's `transformContext` hook. It raises a structured
+mid-turn precheck signal, stops the current prompt submission, and lets the
+outer run loop use the existing recovery path: truncate oversized tool results
+when that is enough, or trigger the configured compaction mode and retry. The
+option is disabled by default and works with both `default` and `safeguard`
+compaction modes, including provider-backed safeguard compaction.
+This is independent of `maxActiveTranscriptBytes`: the byte-size guard runs
+before a turn opens, while mid-turn precheck runs later in the embedded Pi tool
+loop after new tool results have been appended.
+
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
@@ -298,6 +312,11 @@ OpenClaw also enforces a safety floor for embedded runs:
   and keeps Pi's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
+- Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
+  optional tool-loop precheck after new tool results and before the next model
+  call. This is a trigger only; summary generation still uses the configured
+  compaction path. It is independent of `maxActiveTranscriptBytes`, which is a
+  turn-start active-transcript byte-size guard.
 - Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
   string such as `"20mb"` to run local compaction before a turn when the active
   transcript gets large. This guard is active only when

@@ -1,3 +1,5 @@
+import { providerIdFromModelId, providerTimeoutConfigJson } from "./provider-auth.ts";
+
 export function psSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
@@ -10,6 +12,16 @@ export function encodePowerShell(script: string): string {
   return Buffer.from(`$ProgressPreference = 'SilentlyContinue'\n${script}`, "utf16le").toString(
     "base64",
   );
+}
+
+export function windowsModelProviderTimeoutScript(modelId: string): string {
+  const providerId = providerIdFromModelId(modelId);
+  const configJson = providerTimeoutConfigJson(modelId, "windows");
+  if (!providerId || !configJson) {
+    return "";
+  }
+  return `Invoke-OpenClaw config set ${psSingleQuote(`models.providers.${providerId}`)} ${psSingleQuote(configJson)} --strict-json
+if ($LASTEXITCODE -ne 0) { throw "model provider timeout config set failed" }`;
 }
 
 export const windowsOpenClawResolver = String.raw`function Resolve-OpenClawCommand {

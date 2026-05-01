@@ -72,13 +72,6 @@ export function getSlashCommandState(accountId: string): SlashCommandAccountStat
 }
 
 /**
- * Get all active slash command account states.
- */
-export function getAllSlashCommandStates(): ReadonlyMap<string, SlashCommandAccountState> {
-  return accountStates;
-}
-
-/**
  * Activate slash commands for a specific account.
  * Called from the monitor after bot connects.
  */
