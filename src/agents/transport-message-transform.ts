@@ -68,6 +68,9 @@ export function transformTransportMessages(
       msg.provider === model.provider && msg.api === model.api && msg.model === model.id;
     const content: typeof msg.content = [];
     for (const block of msg.content) {
+      if (!block) {
+        continue;
+      }
       if (block.type === "thinking") {
         if (block.redacted) {
           if (isSameModel) {

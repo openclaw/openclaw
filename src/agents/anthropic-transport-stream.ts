@@ -337,6 +337,9 @@ function convertAnthropicMessages(
     if (msg.role === "assistant") {
       const blocks: Array<Record<string, unknown>> = [];
       for (const block of msg.content) {
+        if (!block) {
+          continue;
+        }
         if (block.type === "text") {
           if (block.text.trim().length > 0) {
             blocks.push({
