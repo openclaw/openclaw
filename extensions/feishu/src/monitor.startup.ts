@@ -42,19 +42,29 @@ function isAbortErrorMessage(message: string | undefined): boolean {
   return normalizeLowercaseStringOrEmpty(message).includes("aborted");
 }
 
-export async function fetchBotIdentityForMonitor(
+// Serialise startup probes so concurrent gateway-driven startAccount calls
+// (one per Feishu account via Promise.all) do not burst Feishu's bot-info
+// endpoint from the same IP — which causes rotating timeouts (#63475).
+let startupProbeQueue: Promise<unknown> = Promise.resolve();
+
+async function fetchBotIdentityCore(
   account: ResolvedFeishuAccount,
-  options: FetchBotOpenIdOptions = {},
+  options: FetchBotOpenIdOptions,
 ): Promise<FeishuMonitorBotIdentity> {
   if (options.abortSignal?.aborted) {
     return {};
   }
 
   const timeoutMs = options.timeoutMs ?? FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS;
-  const result = await probeFeishu(account, {
-    timeoutMs,
-    abortSignal: options.abortSignal,
-  });
+  let result;
+  try {
+    result = await probeFeishu(account, {
+      timeoutMs,
+      abortSignal: options.abortSignal,
+    });
+  } catch {
+    return {};
+  }
   if (result.ok) {
     return { botOpenId: result.botOpenId, botName: result.botName };
   }
@@ -71,6 +81,40 @@ export async function fetchBotIdentityForMonitor(
     );
   }
   return {};
+}
+
+export async function fetchBotIdentityForMonitor(
+  account: ResolvedFeishuAccount,
+  options: FetchBotOpenIdOptions = {},
+): Promise<FeishuMonitorBotIdentity> {
+  // Short-circuit before joining the queue if already aborted.
+  if (options.abortSignal?.aborted) {
+    return {};
+  }
+
+  // Chain onto the shared queue so only one probe is in-flight at a time,
+  // regardless of how many concurrent callers exist.
+  const ticket = startupProbeQueue.then(() => fetchBotIdentityCore(account, options));
+  // Swallow rejections in the queue itself so a failing probe does not block
+  // subsequent accounts.
+  startupProbeQueue = ticket.catch(() => {});
+
+  // Race the queue wait against the abort signal so a stopped account does not
+  // block behind another account's long probe timeout.
+  if (options.abortSignal) {
+    const signal = options.abortSignal;
+    const abortRace = new Promise<FeishuMonitorBotIdentity>((resolve) => {
+      signal.addEventListener("abort", () => resolve({}), { once: true });
+    });
+    return Promise.race([ticket, abortRace]);
+  }
+
+  return ticket;
+}
+
+/** Reset the startup probe queue (for testing). */
+export function resetStartupProbeQueueForTest(): void {
+  startupProbeQueue = Promise.resolve();
 }
 
 export async function fetchBotOpenIdForMonitor(

@@ -2,6 +2,7 @@ import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runt
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+import { fetchBotIdentityForMonitor, resetStartupProbeQueueForTest } from "./monitor.startup.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -50,6 +51,7 @@ async function waitForStartedAccount(started: string[], accountId: string) {
 
 afterEach(() => {
   stopFeishuMonitor();
+  resetStartupProbeQueueForTest();
 });
 
 describe("Feishu monitor startup preflight", () => {
@@ -188,5 +190,175 @@ describe("Feishu monitor startup preflight", () => {
     } finally {
       abortController.abort();
     }
+  });
+});
+
+describe("Feishu startup probe queue serialisation (#63475)", () => {
+  it("serialises concurrent fetchBotIdentityForMonitor calls from parallel startAccount", async () => {
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const order: string[] = [];
+    const gates = new Map<string, () => void>();
+
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      const id = account.accountId;
+      order.push(`enter:${id}`);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // Wait until the test explicitly releases this probe.
+      await new Promise<void>((resolve) => {
+        gates.set(id, resolve);
+      });
+      inFlight -= 1;
+      order.push(`exit:${id}`);
+      return { ok: true, botOpenId: `bot_${id}` };
+    });
+
+    const accounts = ["acct1", "acct2", "acct3"].map((id) => ({
+      accountId: id,
+      appId: `cli_${id}`,
+      appSecret: `secret_${id}`,
+    }));
+
+    // Simulate the gateway calling fetchBotIdentityForMonitor concurrently
+    // for each account (same pattern as Promise.all in server-channels.ts).
+    const promises = accounts.map((acct) => fetchBotIdentityForMonitor(acct as never));
+
+    // Allow microtasks to settle — only the first probe should be in-flight.
+    await vi.waitFor(() => expect(gates.size).toBe(1));
+    expect(inFlight).toBe(1);
+    expect(order).toEqual(["enter:acct1"]);
+
+    // Release first probe.
+    gates.get("acct1")!();
+    await vi.waitFor(() => expect(gates.size).toBe(2));
+    expect(order).toEqual(["enter:acct1", "exit:acct1", "enter:acct2"]);
+    expect(inFlight).toBe(1);
+
+    // Release second probe.
+    gates.get("acct2")!();
+    await vi.waitFor(() => expect(gates.size).toBe(3));
+    expect(order).toEqual([
+      "enter:acct1",
+      "exit:acct1",
+      "enter:acct2",
+      "exit:acct2",
+      "enter:acct3",
+    ]);
+    expect(inFlight).toBe(1);
+
+    // Release third probe.
+    gates.get("acct3")!();
+    const results = await Promise.all(promises);
+
+    expect(maxInFlight).toBe(1);
+    expect(results).toEqual([
+      { botOpenId: "bot_acct1" },
+      { botOpenId: "bot_acct2" },
+      { botOpenId: "bot_acct3" },
+    ]);
+  });
+
+  it("does not block subsequent accounts when one probe fails", async () => {
+    const order: string[] = [];
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      order.push(account.accountId);
+      if (account.accountId === "fail") {
+        throw new Error("network error");
+      }
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const accounts = ["fail", "ok1", "ok2"].map((id) => ({
+      accountId: id,
+      appId: `cli_${id}`,
+      appSecret: `secret_${id}`,
+    }));
+
+    const [r1, r2, r3] = await Promise.all(
+      accounts.map((acct) => fetchBotIdentityForMonitor(acct as never)),
+    );
+
+    expect(order).toEqual(["fail", "ok1", "ok2"]);
+    // The failing probe should still return (error is caught internally).
+    expect(r1).toEqual({});
+    expect(r2).toEqual({ botOpenId: "bot_ok1" });
+    expect(r3).toEqual({ botOpenId: "bot_ok2" });
+  });
+
+  it("respects abort signal inside the serialised queue", async () => {
+    const order: string[] = [];
+    const abortController = new AbortController();
+
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      order.push(account.accountId);
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const accounts = ["a", "b"].map((id) => ({
+      accountId: id,
+      appId: `cli_${id}`,
+      appSecret: `secret_${id}`,
+    }));
+
+    // Abort before any probes run.
+    abortController.abort();
+
+    const results = await Promise.all(
+      accounts.map((acct) =>
+        fetchBotIdentityForMonitor(acct as never, { abortSignal: abortController.signal }),
+      ),
+    );
+
+    // Both should return empty since the signal was already aborted.
+    expect(results).toEqual([{}, {}]);
+    expect(order).toEqual([]);
+  });
+
+  it("aborted account escapes the queue without waiting for the in-flight probe", async () => {
+    let releaseAlpha!: () => void;
+    const alphaGate = new Promise<void>((resolve) => {
+      releaseAlpha = resolve;
+    });
+    const order: string[] = [];
+
+    probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
+      order.push(account.accountId);
+      if (account.accountId === "alpha") {
+        await alphaGate;
+      }
+      return { ok: true, botOpenId: `bot_${account.accountId}` };
+    });
+
+    const accounts = ["alpha", "beta"].map((id) => ({
+      accountId: id,
+      appId: `cli_${id}`,
+      appSecret: `secret_${id}`,
+    }));
+
+    const betaAbort = new AbortController();
+
+    // Start both concurrently — alpha enters the probe, beta queues behind it.
+    const alphaPromise = fetchBotIdentityForMonitor(accounts[0] as never);
+    const betaPromise = fetchBotIdentityForMonitor(accounts[1] as never, {
+      abortSignal: betaAbort.signal,
+    });
+
+    // Wait for alpha to be in-flight.
+    await vi.waitFor(() => expect(order).toEqual(["alpha"]));
+
+    // Abort beta while it is still queued behind alpha's long probe.
+    betaAbort.abort();
+    const betaResult = await betaPromise;
+
+    // Beta must return immediately with an empty identity — NOT wait for alpha.
+    expect(betaResult).toEqual({});
+    // Alpha is still running (not released yet).
+    expect(order).toEqual(["alpha"]);
+
+    // Release alpha and let the queue drain cleanly.
+    releaseAlpha();
+    const alphaResult = await alphaPromise;
+    expect(alphaResult).toEqual({ botOpenId: "bot_alpha" });
   });
 });
