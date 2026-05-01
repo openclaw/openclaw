@@ -61,8 +61,9 @@ Local plugins are treated as developer-controlled directories. OpenClaw does not
 run `npm install`, `pnpm install`, or dependency repair for them. If a local
 plugin has dependencies, install them in that plugin before loading it.
 
-TypeScript local plugins can use the emergency Jiti path. Packaged JavaScript
-plugins load through native import/require instead of Jiti.
+Third-party TypeScript local plugins can use the emergency Jiti path. Packaged
+JavaScript plugins and bundled internal plugins load through native
+import/require instead of Jiti.
 
 ## Startup and reload
 

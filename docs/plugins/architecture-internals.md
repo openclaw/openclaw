@@ -23,7 +23,7 @@ At startup, OpenClaw does roughly this:
    `slots`, `load.paths`)
 5. decide enablement for each candidate
 6. load enabled native modules: built bundled modules use a native loader;
-   unbuilt native plugins use jiti
+   third-party local source TypeScript uses the emergency Jiti fallback
 7. call native `register(api)` hooks and collect registrations into the plugin registry
 8. expose the registry to commands/runtime surfaces
 
