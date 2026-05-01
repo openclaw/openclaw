@@ -88,8 +88,7 @@ describe("Parallels smoke model selection", () => {
 
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL");
-    expect(providerAuth).toContain("openai/gpt-5.4");
-    expect(providerAuth).toContain("openai/gpt-4.1-mini");
+    expect(providerAuth).toContain("openai/gpt-5.5");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
@@ -106,16 +105,14 @@ describe("Parallels smoke model selection", () => {
   it("writes full model ids as config map keys in provider batches", () => {
     const source = `
 import { modelProviderConfigBatchJson } from "./${TS_PATHS.common}";
-const result = modelProviderConfigBatchJson("openai/gpt-4.1-mini", "windows");
+const result = modelProviderConfigBatchJson("openai/gpt-5.5", "windows");
 console.log(result);
 `;
     const batch = JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" })) as Array<{
       path: string;
     }>;
 
-    expect(batch.map((entry) => entry.path)).toContain(
-      'agents.defaults.models["openai/gpt-4.1-mini"]',
-    );
+    expect(batch.map((entry) => entry.path)).toContain('agents.defaults.models["openai/gpt-5.5"]');
   });
 
   it("keeps snapshot, host, package, and quote helpers shared", () => {
@@ -242,7 +239,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.4",
+      modelId: "openai/gpt-5.5",
     });
 
     expect(
@@ -260,7 +257,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     });
   });
 
-  it("uses the faster OpenAI model for Windows smoke unless overridden", () => {
+  it("uses the shared GPT-5 OpenAI model for Windows smoke unless overridden", () => {
     const source = `
 import { resolveWindowsProviderAuth } from "./${TS_PATHS.common}";
 const result = resolveWindowsProviderAuth({
@@ -270,7 +267,7 @@ console.log(JSON.stringify(result));
 `;
     expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toMatchObject({
       apiKeyEnv: "OPENAI_API_KEY",
-      modelId: "openai/gpt-4.1-mini",
+      modelId: "openai/gpt-5.5",
     });
 
     expect(

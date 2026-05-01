@@ -322,7 +322,7 @@ function writePackedBundledPluginActivationConfig(homeDir: string): void {
       {
         agents: {
           defaults: {
-            model: { primary: "openai/gpt-4.1-mini" },
+            model: { primary: "openai/gpt-5.5" },
           },
         },
         channels: {

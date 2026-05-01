@@ -97,7 +97,7 @@ const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalo
       name: "Claude Opus 4.5 (OpenRouter)",
       contextWindow: 200000,
     },
-    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
+    { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5.4 mini" },
     { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
     { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5 (Codex)" },
     { provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax M2.7" },
