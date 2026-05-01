@@ -56,7 +56,7 @@ export function restoreFeishuLifecycleStateDir(originalStateDir: string | undefi
   process.env.OPENCLAW_STATE_DIR = originalStateDir;
 }
 
-export const FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE = {
+const FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE = {
   kind: "prefetched",
   botOpenId: "ou_bot_1",
   botName: "Bot",
@@ -77,7 +77,7 @@ export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDisp
   };
 }
 
-export function createImmediateInboundDebounce() {
+function createImmediateInboundDebounce() {
   return {
     resolveInboundDebounceMs: vi.fn(() => 0),
     createInboundDebouncer: <T>(params: InboundDebouncerParams<T>) => ({
@@ -93,7 +93,7 @@ export function createImmediateInboundDebounce() {
   };
 }
 
-export function installFeishuLifecycleRuntime(params: {
+function installFeishuLifecycleRuntime(params: {
   resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
   finalizeInboundContext: PluginRuntime["channel"]["reply"]["finalizeInboundContext"];
   dispatchReplyFromConfig: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
@@ -309,7 +309,7 @@ async function expectFeishuLifecycleEventually(
   }
 }
 
-export async function replayFeishuLifecycleEvent(params: {
+async function replayFeishuLifecycleEvent(params: {
   handler: (data: unknown) => Promise<void>;
   event: unknown;
   waitForFirst: () => void | Promise<void>;
