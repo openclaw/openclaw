@@ -205,7 +205,7 @@ export function getCurrentCapabilityMetadataSnapshot(params: {
 }
 
 export function hasSnapshotCapabilityAvailability(params: {
-  snapshot: PluginMetadataSnapshot;
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
   key: CapabilityContractKey;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
@@ -262,7 +262,7 @@ export function hasSnapshotCapabilityAvailability(params: {
 }
 
 export function hasSnapshotProviderEnvAvailability(params: {
-  snapshot: PluginMetadataSnapshot;
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
   providerId: string;
   config?: OpenClawConfig;
 }): boolean {
