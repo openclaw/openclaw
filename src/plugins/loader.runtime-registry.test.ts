@@ -21,6 +21,7 @@ import {
   registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
+import type { PluginRecord } from "./registry-types.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { setActivePluginRegistry } from "./runtime.js";
 import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
@@ -28,6 +29,42 @@ import type { CreatePluginRuntimeOptions } from "./runtime/index.js";
 afterEach(() => {
   resetPluginLoaderTestStateForTest();
 });
+
+function createLoadedPluginRecord(id: string): PluginRecord {
+  return {
+    id,
+    name: id,
+    source: "test",
+    origin: "workspace",
+    enabled: true,
+    status: "loaded",
+    toolNames: [],
+    hookNames: [],
+    channelIds: [],
+    cliBackendIds: [],
+    providerIds: [],
+    speechProviderIds: [],
+    realtimeTranscriptionProviderIds: [],
+    realtimeVoiceProviderIds: [],
+    mediaUnderstandingProviderIds: [],
+    imageGenerationProviderIds: [],
+    videoGenerationProviderIds: [],
+    musicGenerationProviderIds: [],
+    webFetchProviderIds: [],
+    webSearchProviderIds: [],
+    migrationProviderIds: [],
+    memoryEmbeddingProviderIds: [],
+    agentHarnessIds: [],
+    gatewayMethods: [],
+    cliCommands: [],
+    services: [],
+    gatewayDiscoveryServiceIds: [],
+    commands: [],
+    httpRoutes: 0,
+    hookCount: 0,
+    configSchema: false,
+  };
+}
 
 describe("getCompatibleActivePluginRegistry", () => {
   it("reuses the active registry only when the load context cache key matches", () => {
@@ -128,6 +165,81 @@ describe("getCompatibleActivePluginRegistry", () => {
         toolDiscovery: true,
       }),
     ).toBe(registry);
+  });
+
+  it("reuses an active wider registry for compatible scoped runtime loads", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(createLoadedPluginRecord("demo"), createLoadedPluginRecord("other"));
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo", "other"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        onlyPluginIds: ["demo"],
+        installBundledRuntimeDeps: false,
+      }),
+    ).toBe(registry);
+  });
+
+  it("does not reuse a wider registry for scoped loads when the load context changes", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(createLoadedPluginRecord("demo"), createLoadedPluginRecord("other"));
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo", "other"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        workspaceDir: "/tmp/workspace-b",
+        onlyPluginIds: ["demo"],
+        installBundledRuntimeDeps: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        config: {
+          plugins: {
+            allow: ["demo"],
+            load: { paths: ["/tmp/changed.js"] },
+          },
+        },
+        onlyPluginIds: ["demo"],
+        installBundledRuntimeDeps: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        onlyPluginIds: ["missing"],
+        installBundledRuntimeDeps: false,
+      }),
+    ).toBeUndefined();
   });
 
   it("does not reuse a default-mode active registry for gateway-bindable tool discovery", () => {
