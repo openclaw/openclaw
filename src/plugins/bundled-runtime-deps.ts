@@ -25,6 +25,7 @@ import {
 import {
   isSourceCheckoutRoot,
   listSiblingExternalBundledRuntimeDepsRoots,
+  pruneSiblingExternalBundledRuntimeDepsRoots,
   pruneUnknownBundledRuntimeDepsRoots,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
@@ -404,6 +405,10 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
   });
   const plan = createBundledRuntimeDepsPackagePlan(params);
   if (plan.missingSpecs.length === 0) {
+    pruneSiblingExternalBundledRuntimeDepsRoots({
+      installRoot: plan.installRootPlan.installRoot,
+      ...(params.warn ? { warn: params.warn } : {}),
+    });
     return { plan, repairedSpecs: [] };
   }
   const reuseResult = withBundledRuntimeDepsInstallRootLock(plan.installRootPlan.installRoot, () =>
@@ -416,6 +421,12 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
   );
   if (reuseResult) {
     const refreshedPlan = createBundledRuntimeDepsPackagePlan(params);
+    if (reuseResult.status === "materialized") {
+      pruneSiblingExternalBundledRuntimeDepsRoots({
+        installRoot: refreshedPlan.installRootPlan.installRoot,
+        ...(params.warn ? { warn: params.warn } : {}),
+      });
+    }
     return {
       plan: refreshedPlan,
       repairedSpecs: [],
@@ -440,6 +451,10 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
         }
       : {}),
     ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+    ...(params.warn ? { warn: params.warn } : {}),
+  });
+  pruneSiblingExternalBundledRuntimeDepsRoots({
+    installRoot: plan.installRootPlan.installRoot,
     ...(params.warn ? { warn: params.warn } : {}),
   });
   return { plan, repairedSpecs: result.installSpecs };
