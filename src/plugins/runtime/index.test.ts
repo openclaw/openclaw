@@ -243,6 +243,13 @@ describe("plugin runtime command execution", () => {
           "bindSession",
           "fromToolContext",
         ]);
+        expectFunctionKeys(
+          runtime.tasks.runs.bindSession({ sessionKey: "agent:main:main" }).lifecycle as Record<
+            string,
+            unknown
+          >,
+          ["create", "progress", "finalize"],
+        );
         expectFunctionKeys(runtime.tasks.flows as Record<string, unknown>, [
           "bindSession",
           "fromToolContext",

@@ -1,4 +1,10 @@
-import { listTasksForFlowId } from "../../tasks/runtime-internal.js";
+import {
+  createTaskRecord,
+  finalizeTaskRunById,
+  listTasksForFlowId,
+  markTaskRunningById,
+  recordTaskProgressById,
+} from "../../tasks/runtime-internal.js";
 import {
   mapTaskFlowDetail,
   mapTaskFlowView,
@@ -29,6 +35,11 @@ import type {
   PluginRuntimeTasks,
   TaskFlowDetail,
   TaskRunCancelResult,
+  TaskRunDetail,
+  TaskRunLifecycleCreateParams,
+  TaskRunLifecycleFinalizeParams,
+  TaskRunLifecycleProgressParams,
+  TaskRunLifecycleRuntime,
 } from "./runtime-tasks.types.js";
 export type {
   BoundTaskFlowsRuntime,
@@ -36,10 +47,19 @@ export type {
   PluginRuntimeTaskFlows,
   PluginRuntimeTaskRuns,
   PluginRuntimeTasks,
+  TaskRunLifecycleRuntime,
 } from "./runtime-tasks.types.js";
 
 function assertSessionKey(sessionKey: string | undefined, errorMessage: string): string {
   const normalized = sessionKey?.trim();
+  if (!normalized) {
+    throw new Error(errorMessage);
+  }
+  return normalized;
+}
+
+function assertRequiredString(value: string | undefined, errorMessage: string): string {
+  const normalized = value?.trim();
   if (!normalized) {
     throw new Error(errorMessage);
   }
@@ -57,6 +77,107 @@ function mapCancelledTaskResult(
   };
 }
 
+function findLifecycleTask(params: { ownerKey: string; taskKind: string; runId: string }) {
+  return listTasksForRelatedSessionKeyForOwner({
+    relatedSessionKey: params.ownerKey,
+    callerOwnerKey: params.ownerKey,
+  }).find(
+    (task) =>
+      task.runtime === "cli" && task.taskKind === params.taskKind && task.runId === params.runId,
+  );
+}
+
+function createTaskRunLifecycleRuntime(params: {
+  ownerKey: string;
+  requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
+}): TaskRunLifecycleRuntime {
+  const create = (input: TaskRunLifecycleCreateParams): TaskRunDetail => {
+    const taskKind = assertRequiredString(
+      input.taskKind,
+      "Task lifecycle create requires taskKind.",
+    );
+    const runId = assertRequiredString(input.runId, "Task lifecycle create requires runId.");
+    const title = assertRequiredString(input.title, "Task lifecycle create requires title.");
+    const status = input.status ?? "running";
+    const task = createTaskRecord({
+      runtime: "cli",
+      taskKind,
+      sourceId: input.sourceId,
+      requesterSessionKey: params.ownerKey,
+      ownerKey: params.ownerKey,
+      scopeKind: "session",
+      requesterOrigin: params.requesterOrigin,
+      agentId: input.agentId,
+      runId,
+      label: input.label,
+      task: title,
+      preferMetadata: true,
+      status,
+      startedAt: status === "running" ? (input.startedAt ?? Date.now()) : input.startedAt,
+      lastEventAt: input.lastEventAt,
+      progressSummary: input.progressSummary,
+      notifyPolicy: input.notifyPolicy,
+      deliveryStatus: input.deliveryStatus,
+    });
+    if (status === "running" && task.status !== "running") {
+      return mapTaskRunDetail(
+        markTaskRunningById({
+          taskId: task.taskId,
+          startedAt: input.startedAt ?? Date.now(),
+          lastEventAt: input.lastEventAt,
+          progressSummary: input.progressSummary,
+        }) ?? task,
+      );
+    }
+    return mapTaskRunDetail(task);
+  };
+
+  const progress = (input: TaskRunLifecycleProgressParams): TaskRunDetail | undefined => {
+    const taskKind = assertRequiredString(
+      input.taskKind,
+      "Task lifecycle progress requires taskKind.",
+    );
+    const runId = assertRequiredString(input.runId, "Task lifecycle progress requires runId.");
+    const task = findLifecycleTask({ ownerKey: params.ownerKey, taskKind, runId });
+    if (!task) {
+      return undefined;
+    }
+    const updated = recordTaskProgressById({
+      taskId: task.taskId,
+      lastEventAt: input.lastEventAt,
+      progressSummary: input.progressSummary,
+      eventSummary: input.eventSummary,
+    });
+    return updated ? mapTaskRunDetail(updated) : undefined;
+  };
+
+  const finalize = (input: TaskRunLifecycleFinalizeParams): TaskRunDetail | undefined => {
+    const taskKind = assertRequiredString(
+      input.taskKind,
+      "Task lifecycle finalize requires taskKind.",
+    );
+    const runId = assertRequiredString(input.runId, "Task lifecycle finalize requires runId.");
+    const task = findLifecycleTask({ ownerKey: params.ownerKey, taskKind, runId });
+    if (!task) {
+      return undefined;
+    }
+    const updated = finalizeTaskRunById({
+      taskId: task.taskId,
+      status: input.status,
+      startedAt: input.startedAt,
+      endedAt: input.endedAt,
+      lastEventAt: input.lastEventAt,
+      error: input.error,
+      progressSummary: input.progressSummary,
+      terminalSummary: input.terminalSummary,
+      terminalOutcome: input.terminalOutcome,
+    });
+    return updated ? mapTaskRunDetail(updated) : undefined;
+  };
+
+  return { create, progress, finalize };
+}
+
 function createBoundTaskRunsRuntime(params: {
   sessionKey: string;
   requesterOrigin?: import("../../tasks/task-registry.types.js").TaskDeliveryState["requesterOrigin"];
@@ -71,6 +192,10 @@ function createBoundTaskRunsRuntime(params: {
   return {
     sessionKey: ownerKey,
     ...(requesterOrigin ? { requesterOrigin } : {}),
+    lifecycle: createTaskRunLifecycleRuntime({
+      ownerKey,
+      requesterOrigin,
+    }),
     get: (taskId) => {
       const task = getTaskByIdForOwner({ taskId, callerOwnerKey: ownerKey });
       return task ? mapTaskRunDetail(task) : undefined;
