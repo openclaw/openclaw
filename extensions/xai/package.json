@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/xai-plugin",
+  "version": "2026.4.25",
+  "private": true,
+  "description": "OpenClaw xAI plugin",
+  "type": "module",
+  "dependencies": {
+    "@mariozechner/pi-ai": "0.71.1",
+    "typebox": "1.1.36"
+  },
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*",
+    "ws": "^8.20.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

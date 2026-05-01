@@ -13,6 +13,10 @@ export type LegacyConfigMigration = {
   apply: (raw: Record<string, unknown>, changes: string[]) => void;
 };
 
+export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
+  legacyRules?: LegacyConfigRule[];
+};
+
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { isRecord } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -70,7 +74,7 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
     return null;
   }
 
-  const args = command.slice(1);
+  const args = command.slice(1).map((part) => part.replace(/\{input\}/g, "{{MediaPath}}"));
   const timeoutSeconds =
     typeof transcriber?.timeoutSeconds === "number" ? transcriber?.timeoutSeconds : undefined;
 
@@ -84,50 +88,6 @@ export const mapLegacyAudioTranscription = (value: unknown): Record<string, unkn
   return result;
 };
 
-export const getAgentsList = (agents: Record<string, unknown> | null) => {
-  const list = agents?.list;
-  return Array.isArray(list) ? list : [];
-};
-
-export const resolveDefaultAgentIdFromRaw = (raw: Record<string, unknown>) => {
-  const agents = getRecord(raw.agents);
-  const list = getAgentsList(agents);
-  const defaultEntry = list.find(
-    (entry): entry is { id: string } =>
-      isRecord(entry) &&
-      entry.default === true &&
-      typeof entry.id === "string" &&
-      entry.id.trim() !== "",
-  );
-  if (defaultEntry) {
-    return defaultEntry.id.trim();
-  }
-  const routing = getRecord(raw.routing);
-  const routingDefault =
-    typeof routing?.defaultAgentId === "string" ? routing.defaultAgentId.trim() : "";
-  if (routingDefault) {
-    return routingDefault;
-  }
-  const firstEntry = list.find(
-    (entry): entry is { id: string } =>
-      isRecord(entry) && typeof entry.id === "string" && entry.id.trim() !== "",
-  );
-  if (firstEntry) {
-    return firstEntry.id.trim();
-  }
-  return "main";
-};
-
-export const ensureAgentEntry = (list: unknown[], id: string): Record<string, unknown> => {
-  const normalized = id.trim();
-  const existing = list.find(
-    (entry): entry is Record<string, unknown> =>
-      isRecord(entry) && typeof entry.id === "string" && entry.id.trim() === normalized,
-  );
-  if (existing) {
-    return existing;
-  }
-  const created: Record<string, unknown> = { id: normalized };
-  list.push(created);
-  return created;
-};
+export const defineLegacyConfigMigration = (
+  migration: LegacyConfigMigrationSpec,
+): LegacyConfigMigrationSpec => migration;

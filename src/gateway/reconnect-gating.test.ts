@@ -21,6 +21,12 @@ describe("isNonRecoverableAuthError", () => {
     );
   });
 
+  it("blocks reconnect for AUTH_BOOTSTRAP_TOKEN_INVALID", () => {
+    expect(
+      isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID)),
+    ).toBe(true);
+  });
+
   it("blocks reconnect for AUTH_PASSWORD_MISSING", () => {
     expect(
       isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING)),
@@ -37,6 +43,12 @@ describe("isNonRecoverableAuthError", () => {
     expect(isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_RATE_LIMITED))).toBe(
       true,
     );
+  });
+
+  it("blocks reconnect for AUTH_DEVICE_TOKEN_MISMATCH", () => {
+    expect(
+      isNonRecoverableAuthError(makeError(ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH)),
+    ).toBe(true);
   });
 
   it("blocks reconnect for PAIRING_REQUIRED", () => {

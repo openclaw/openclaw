@@ -1,5 +1,6 @@
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
 import { createTypingStartGuard } from "../../channels/typing-start-guard.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 
 export type TypingController = {
@@ -29,10 +30,23 @@ export function createTypingController(params: {
     silentToken = SILENT_REPLY_TOKEN,
     log,
   } = params;
+  if (!onReplyStart && !onCleanup) {
+    return {
+      onReplyStart: async () => {},
+      startTypingLoop: async () => {},
+      startTypingOnText: async () => {},
+      refreshTypingTtl: () => {},
+      isActive: () => false,
+      markRunComplete: () => {},
+      markDispatchIdle: () => {},
+      cleanup: () => {},
+    };
+  }
   let started = false;
   let active = false;
   let runComplete = false;
   let dispatchIdle = false;
+  let triggerInFlight = false;
   // Important: callbacks (tool/block streaming) can fire late (after the run completed),
   // especially when upstream event emitters don't await async listeners.
   // Once we stop typing, we "seal" the controller so late events can't restart typing forever.
@@ -107,9 +121,24 @@ export function createTypingController(params: {
   });
 
   const triggerTyping = async () => {
-    await startGuard.run(async () => {
-      await onReplyStart?.();
-    });
+    if (triggerInFlight) {
+      return;
+    }
+    triggerInFlight = true;
+    try {
+      await startGuard.run(async () => {
+        await onReplyStart?.();
+      });
+    } catch (err) {
+      log?.(`typing start failed: ${String(err)}`);
+    } finally {
+      triggerInFlight = false;
+    }
+  };
+
+  const scheduleTyping = async () => {
+    void triggerTyping();
+    await Promise.resolve();
   };
 
   const typingLoop = createTypingKeepaliveLoop({
@@ -132,7 +161,7 @@ export function createTypingController(params: {
       return;
     }
     started = true;
-    await triggerTyping();
+    await scheduleTyping();
   };
 
   const maybeStopOnIdle = () => {
@@ -169,7 +198,7 @@ export function createTypingController(params: {
     if (sealed) {
       return;
     }
-    const trimmed = text?.trim();
+    const trimmed = normalizeOptionalString(text);
     if (!trimmed) {
       return;
     }

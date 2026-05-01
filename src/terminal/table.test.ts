@@ -1,9 +1,18 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "./ansi.js";
-import { wrapNoteMessage } from "./note.js";
+import { resolveNoteColumns, wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 describe("renderTable", () => {
+  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
     const out = renderTable({
       width: 40,
@@ -170,6 +179,42 @@ describe("renderTable", () => {
     expect(out).toContain("before");
     expect(out).toContain("after");
   });
+
+  it("falls back to ASCII borders on legacy Windows consoles", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.stubEnv("WT_SESSION", "");
+    vi.stubEnv("TERM_PROGRAM", "");
+    vi.stubEnv("TERM", "vt100");
+
+    const out = renderTable({
+      columns: [
+        { key: "A", header: "A", minWidth: 6 },
+        { key: "B", header: "B", minWidth: 10, flex: true },
+      ],
+      rows: [{ A: "row", B: "value" }],
+    });
+
+    expect(out).toContain("+");
+    expect(out).not.toContain("┌");
+  });
+
+  it("keeps unicode borders on modern Windows terminals", () => {
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    vi.stubEnv("WT_SESSION", "1");
+    vi.stubEnv("TERM", "");
+    vi.stubEnv("TERM_PROGRAM", "");
+
+    const out = renderTable({
+      columns: [
+        { key: "A", header: "A", minWidth: 6 },
+        { key: "B", header: "B", minWidth: 10, flex: true },
+      ],
+      rows: [{ A: "row", B: "value" }],
+    });
+
+    expect(out).toContain("┌");
+    expect(out).not.toContain("+");
+  });
 });
 
 describe("wrapNoteMessage", () => {
@@ -224,5 +269,13 @@ describe("wrapNoteMessage", () => {
     const input = "\\\\\\\\server\\\\share\\\\some\\\\really\\\\long\\\\path\\\\file.txt";
     const wrapped = wrapNoteMessage(input, { maxWidth: 12, columns: 80 });
     expect(wrapped).toBe(input);
+  });
+
+  it("clamps bogus TTY columns before clack wraps note text", () => {
+    expect(resolveNoteColumns(undefined)).toBe(80);
+    expect(resolveNoteColumns(0)).toBe(80);
+    expect(resolveNoteColumns(1)).toBe(80);
+    expect(resolveNoteColumns(79)).toBe(80);
+    expect(resolveNoteColumns(120)).toBe(120);
   });
 });

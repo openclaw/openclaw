@@ -7,13 +7,16 @@ read_when:
 title: "Nodes"
 ---
 
-# Nodes
-
 A **node** is a companion device (macOS/iOS/Android/headless) that connects to the Gateway **WebSocket** (same port as operators) with `role: "node"` and exposes a command surface (e.g. `canvas.*`, `camera.*`, `device.*`, `notifications.*`, `system.*`) via `node.invoke`. Protocol details: [Gateway protocol](/gateway/protocol).
 
-Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL; deprecated/removed for current nodes).
+Legacy transport: [Bridge protocol](/gateway/bridge-protocol) (TCP JSONL;
+historical only for current nodes).
 
-macOS can also run in **node mode**: the menubar app connects to the Gateway’s WS server and exposes its local canvas/camera commands as a node (so `openclaw nodes …` works against this Mac).
+macOS can also run in **node mode**: the menubar app connects to the Gateway’s
+WS server and exposes its local canvas/camera commands as a node (so
+`openclaw nodes …` works against this Mac). In remote gateway mode, browser
+automation is handled by the CLI node host (`openclaw node run` or the
+installed node service), not by the native app node.
 
 Notes:
 
@@ -36,11 +39,24 @@ openclaw nodes status
 openclaw nodes describe --node <idOrNameOrIp>
 ```
 
+If a node retries with changed auth details (role/scopes/public key), the prior
+pending request is superseded and a new `requestId` is created. Re-run
+`openclaw devices list` before approving.
+
 Notes:
 
 - `nodes status` marks a node as **paired** when its device pairing role includes `node`.
-- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject`) is a separate gateway-owned
+- The device pairing record is the durable approved-role contract. Token
+  rotation stays inside that contract; it cannot upgrade a paired node into a
+  different role that pairing approval never granted.
+- `node.pair.*` (CLI: `openclaw nodes pending/approve/reject/remove/rename`) is a separate gateway-owned
   node pairing store; it does **not** gate the WS `connect` handshake.
+- `openclaw nodes remove --node <id|name|ip>` deletes stale entries from that
+  separate gateway-owned node pairing store.
+- Approval scope follows the pending request's declared commands:
+  - commandless request: `operator.pairing`
+  - non-exec node commands: `operator.pairing` + `operator.write`
+  - `system.run` / `system.run.prepare` / `system.which`: `operator.pairing` + `operator.admin`
 
 ## Remote node host (system.run)
 
@@ -96,12 +112,13 @@ Notes:
 - In local mode, node host intentionally ignores `gateway.remote.token` / `gateway.remote.password`.
 - In remote mode, `gateway.remote.token` / `gateway.remote.password` are eligible per remote precedence rules.
 - If active local `gateway.auth.*` SecretRefs are configured but unresolved, node-host auth fails closed.
-- Legacy `CLAWDBOT_GATEWAY_*` env vars are intentionally ignored by node-host auth resolution.
+- Node-host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
 ### Start a node host (service)
 
 ```bash
 openclaw node install --host <gateway-host> --port 18789 --display-name "Build Node"
+openclaw node start
 openclaw node restart
 ```
 
@@ -114,6 +131,9 @@ openclaw devices list
 openclaw devices approve <requestId>
 openclaw nodes status
 ```
+
+If the node retries with changed auth details, re-run `openclaw devices list`
+and approve the current `requestId`.
 
 Naming options:
 
@@ -150,6 +170,8 @@ Or per session:
 Once set, any `exec` call with `host=node` runs on the node host (subject to the
 node allowlist/approvals).
 
+`host=auto` will not implicitly choose the node on its own, but an explicit per-call `host=node` request is allowed from `auto`. If you want node exec to be the default for the session, set `tools.exec.host=node` or `/exec host=node ...` explicitly.
+
 Related:
 
 - [Node host CLI](/cli/node)
@@ -165,6 +187,29 @@ openclaw nodes invoke --node <idOrNameOrIp> --command canvas.eval --params '{"ja
 ```
 
 Higher-level helpers exist for the common “give the agent a MEDIA attachment” workflows.
+
+## Command policy
+
+Node commands must pass two gates before they can be invoked:
+
+1. The node must declare the command in its WebSocket `connect.commands` list.
+2. The gateway's platform policy must allow the declared command.
+
+Windows and macOS companion nodes allow safe declared commands such as
+`canvas.*`, `camera.list`, `location.get`, and `screen.snapshot` by default.
+Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
+`screen.record` still require explicit opt-in with
+`gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
+defaults and extra allowlist entries.
+
+Plugin-owned node commands can add a Gateway node-invoke policy. That policy
+runs after the allowlist check and before forwarding to the node, so raw
+`node.invoke`, CLI helpers, and dedicated agent tools share the same plugin
+permission boundary. Dangerous plugin node commands still require explicit
+`gateway.nodes.allowCommands` opt-in.
+
+After a node changes its declared command list, reject the old device pairing
+and approve the new request so the gateway stores the updated command snapshot.
 
 ## Screenshots (canvas snapshots)
 
@@ -285,6 +330,8 @@ Available families:
 - `photos.latest`
 - `contacts.search`, `contacts.add`
 - `calendar.events`, `calendar.add`
+- `callLog.search`
+- `sms.search`
 - `motion.activity`, `motion.pedometer`
 
 Example invokes:
@@ -307,13 +354,18 @@ The headless node host exposes `system.run`, `system.which`, and `system.execApp
 Examples:
 
 ```bash
-openclaw nodes run --node <idOrNameOrIp> -- echo "Hello from mac node"
 openclaw nodes notify --node <idOrNameOrIp> --title "Ping" --body "Gateway ready"
+openclaw nodes invoke --node <idOrNameOrIp> --command system.which --params '{"name":"git"}'
 ```
 
 Notes:
 
 - `system.run` returns stdout/stderr/exit code in the payload.
+- Shell execution now goes through the `exec` tool with `host=node`; `nodes` remains the direct-RPC surface for explicit node commands.
+- `nodes invoke` does not expose `system.run` or `system.run.prepare`; those stay on the exec path only.
+- The exec path prepares a canonical `systemRunPlan` before approval. Once an
+  approval is granted, the gateway forwards that stored plan, not any later
+  caller-edited command/cwd/session fields.
 - `system.notify` respects notification permission state on the macOS app.
 - Unrecognized node `platform` / `deviceFamily` metadata uses a conservative default allowlist that excludes `system.run` and `system.which`. If you intentionally need those commands for an unknown platform, add them explicitly via `gateway.nodes.allowCommands`.
 - `system.run` supports `--cwd`, `--env KEY=VAL`, `--command-timeout`, and `--needs-screen-recording`.

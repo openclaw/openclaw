@@ -1,20 +1,15 @@
-import { parseFiniteNumber } from "openclaw/plugin-sdk/bluebubbles";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asNullableRecord,
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+  readStringField,
+} from "openclaw/plugin-sdk/text-runtime";
 import { extractHandleFromChatGuid, normalizeBlueBubblesHandle } from "./targets.js";
 import type { BlueBubblesAttachment } from "./types.js";
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function readString(record: Record<string, unknown> | null, key: string): string | undefined {
-  if (!record) {
-    return undefined;
-  }
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
+export const asRecord = asNullableRecord;
+const readString = readStringField;
 
 function readNumber(record: Record<string, unknown> | null, key: string): number | undefined {
   if (!record) {
@@ -39,7 +34,7 @@ function readNumberLike(record: Record<string, unknown> | null, key: string): nu
   return parseFiniteNumber(record[key]);
 }
 
-function extractAttachments(message: Record<string, unknown>): BlueBubblesAttachment[] {
+export function extractAttachments(message: Record<string, unknown>): BlueBubblesAttachment[] {
   const raw = message["attachments"];
   if (!Array.isArray(raw)) {
     return [];
@@ -64,6 +59,32 @@ function extractAttachments(message: Record<string, unknown>): BlueBubblesAttach
   return out;
 }
 
+// Apple UTIs used by BlueBubbles for voice notes / audio attachments. Webhook
+// payloads sometimes carry only a UTI without a normalized `audio/*` MIME
+// (notably iMessage voice notes recorded on macOS 26 Tahoe), so audio
+// detection must consult both. Intentionally narrow: covers what BB emits for
+// iMessage voice notes today (m4a/MPEG-4 audio). Broader UTIs like
+// `public.aiff-audio`, `public.wav`, `public.mp3` are not iMessage voice-note
+// formats and pull in `audio/*` MIME paths anyway.
+const APPLE_AUDIO_UTIS = new Set<string>([
+  "public.audio",
+  "public.mpeg-4-audio",
+  "com.apple.m4a-audio",
+  "com.apple.coreaudio-format",
+]);
+
+export function isBlueBubblesAudioAttachment(attachment: BlueBubblesAttachment): boolean {
+  const mime = attachment.mimeType?.trim().toLowerCase();
+  if (mime && mime.startsWith("audio/")) {
+    return true;
+  }
+  const uti = attachment.uti?.trim().toLowerCase();
+  if (uti && APPLE_AUDIO_UTIS.has(uti)) {
+    return true;
+  }
+  return false;
+}
+
 function buildAttachmentPlaceholder(attachments: BlueBubblesAttachment[]): string {
   if (attachments.length === 0) {
     return "";
@@ -71,7 +92,7 @@ function buildAttachmentPlaceholder(attachments: BlueBubblesAttachment[]): strin
   const mimeTypes = attachments.map((entry) => entry.mimeType ?? "");
   const allImages = mimeTypes.every((entry) => entry.startsWith("image/"));
   const allVideos = mimeTypes.every((entry) => entry.startsWith("video/"));
-  const allAudio = mimeTypes.every((entry) => entry.startsWith("audio/"));
+  const allAudio = attachments.every(isBlueBubblesAudioAttachment);
   const tag = allImages
     ? "<media:image>"
     : allVideos
@@ -174,8 +195,8 @@ function extractReplyMetadata(message: Record<string, unknown>): {
       : undefined;
 
   return {
-    replyToId: (replyToId ?? fallbackReplyId)?.trim() || undefined,
-    replyToBody: replyToBody?.trim() || undefined,
+    replyToId: normalizeOptionalString(replyToId ?? fallbackReplyId),
+    replyToBody: normalizeOptionalString(replyToBody),
     replyToSender: normalizedSender || undefined,
   };
 }
@@ -189,14 +210,34 @@ function readFirstChatRecord(message: Record<string, unknown>): Record<string, u
   return asRecord(first);
 }
 
+function readParticipantEntries(record: Record<string, unknown> | null): unknown[] | undefined {
+  if (!record) {
+    return undefined;
+  }
+  const participants = record["participants"];
+  if (Array.isArray(participants)) {
+    return participants;
+  }
+  const handles = record["handles"];
+  if (Array.isArray(handles)) {
+    return handles;
+  }
+  const participantHandles = record["participantHandles"];
+  if (Array.isArray(participantHandles)) {
+    return participantHandles;
+  }
+  return undefined;
+}
+
 function extractSenderInfo(message: Record<string, unknown>): {
   senderId: string;
+  senderIdExplicit: boolean;
   senderName?: string;
 } {
   const handleValue = message.handle ?? message.sender;
   const handle =
     asRecord(handleValue) ?? (typeof handleValue === "string" ? { address: handleValue } : null);
-  const senderId =
+  const senderIdRaw =
     readString(handle, "address") ??
     readString(handle, "handle") ??
     readString(handle, "id") ??
@@ -204,13 +245,18 @@ function extractSenderInfo(message: Record<string, unknown>): {
     readString(message, "sender") ??
     readString(message, "from") ??
     "";
+  const senderId = senderIdRaw.trim();
   const senderName =
     readString(handle, "displayName") ??
     readString(handle, "name") ??
     readString(message, "senderName") ??
     undefined;
 
-  return { senderId, senderName };
+  return {
+    senderId,
+    senderIdExplicit: Boolean(senderId),
+    senderName,
+  };
 }
 
 function extractChatContext(message: Record<string, unknown>): {
@@ -259,16 +305,11 @@ function extractChatContext(message: Record<string, unknown>): {
     readString(chatFromList, "name") ??
     undefined;
 
-  const chatParticipants = chat ? chat["participants"] : undefined;
-  const messageParticipants = message["participants"];
-  const chatsParticipants = chatFromList ? chatFromList["participants"] : undefined;
-  const participants = Array.isArray(chatParticipants)
-    ? chatParticipants
-    : Array.isArray(messageParticipants)
-      ? messageParticipants
-      : Array.isArray(chatsParticipants)
-        ? chatsParticipants
-        : [];
+  const participants =
+    readParticipantEntries(chat) ??
+    readParticipantEntries(message) ??
+    readParticipantEntries(chatFromList) ??
+    [];
   const participantsCount = participants.length;
   const groupFromChatGuid = resolveGroupFlagFromChatGuid(chatGuid);
   const explicitIsGroup =
@@ -326,22 +367,23 @@ function normalizeParticipantEntry(entry: unknown): BlueBubblesParticipant | nul
   if (!normalizedId) {
     return null;
   }
-  const name = nameRaw?.trim() || undefined;
+  const name = normalizeOptionalString(nameRaw);
   return { id: normalizedId, name };
 }
 
-function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
-  if (!Array.isArray(raw) || raw.length === 0) {
+export function normalizeParticipantList(raw: unknown): BlueBubblesParticipant[] {
+  const entries = Array.isArray(raw) ? raw : (readParticipantEntries(asRecord(raw)) ?? []);
+  if (entries.length === 0) {
     return [];
   }
   const seen = new Set<string>();
   const output: BlueBubblesParticipant[] = [];
-  for (const entry of raw) {
+  for (const entry of entries) {
     const normalized = normalizeParticipantEntry(entry);
     if (!normalized?.id) {
       continue;
     }
-    const key = normalized.id.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(normalized.id);
     if (seen.has(key)) {
       continue;
     }
@@ -361,7 +403,7 @@ export function formatGroupMembers(params: {
     if (!entry?.id) {
       continue;
     }
-    const key = entry.id.toLowerCase();
+    const key = normalizeLowercaseStringOrEmpty(entry.id);
     if (seen.has(key)) {
       continue;
     }
@@ -441,6 +483,7 @@ export type BlueBubblesParticipant = {
 export type NormalizedWebhookMessage = {
   text: string;
   senderId: string;
+  senderIdExplicit: boolean;
   senderName?: string;
   messageId?: string;
   timestamp?: number;
@@ -460,12 +503,24 @@ export type NormalizedWebhookMessage = {
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
+  /** Webhook event type preserved for dedup key differentiation. */
+  eventType?: string;
+  /**
+   * When the debouncer merges multiple source webhook events into one
+   * processed message (see `combineDebounceEntries` in `monitor-debounce.ts`),
+   * this preserves every source `messageId` that contributed to the merged
+   * view. Downstream inbound-dedupe commits all of them so a later BlueBubbles
+   * MessagePoller replay of any individual source event is recognized as a
+   * duplicate rather than re-processed. Unset for single-event messages.
+   */
+  coalescedMessageIds?: string[];
 };
 
 export type NormalizedWebhookReaction = {
   action: "added" | "removed";
   emoji: string;
   senderId: string;
+  senderIdExplicit: boolean;
   senderName?: string;
   messageId: string;
   timestamp?: number;
@@ -550,7 +605,9 @@ export function resolveTapbackContext(message: NormalizedWebhookMessage): {
   if (!hasTapbackType && !hasTapbackMarker) {
     return null;
   }
-  const replyToId = message.associatedMessageGuid?.trim() || message.replyToId?.trim() || undefined;
+  const replyToId =
+    normalizeOptionalString(message.associatedMessageGuid) ??
+    normalizeOptionalString(message.replyToId);
   const actionHint = resolveTapbackActionHint(associatedType);
   const emojiHint =
     message.associatedMessageEmoji?.trim() || REACTION_TYPE_MAP.get(associatedType ?? -1)?.emoji;
@@ -569,10 +626,33 @@ export function parseTapbackText(params: {
   quotedText: string;
 } | null {
   const trimmed = params.text.trim();
-  const lower = trimmed.toLowerCase();
+  const lower = normalizeLowercaseStringOrEmpty(trimmed);
   if (!trimmed) {
     return null;
   }
+
+  const parseLeadingReactionAction = (
+    prefix: "reacted" | "removed",
+    defaultAction: "added" | "removed",
+  ) => {
+    if (!lower.startsWith(prefix)) {
+      return null;
+    }
+    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
+    if (!emoji) {
+      return null;
+    }
+    const quotedText = extractQuotedTapbackText(trimmed);
+    if (params.requireQuoted && !quotedText) {
+      return null;
+    }
+    const fallback = trimmed.slice(prefix.length).trim();
+    return {
+      emoji,
+      action: params.actionHint ?? defaultAction,
+      quotedText: quotedText ?? fallback,
+    };
+  };
 
   for (const [pattern, { emoji, action }] of TAPBACK_TEXT_MAP) {
     if (lower.startsWith(pattern)) {
@@ -591,30 +671,14 @@ export function parseTapbackText(params: {
     }
   }
 
-  if (lower.startsWith("reacted")) {
-    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
-    if (!emoji) {
-      return null;
-    }
-    const quotedText = extractQuotedTapbackText(trimmed);
-    if (params.requireQuoted && !quotedText) {
-      return null;
-    }
-    const fallback = trimmed.slice("reacted".length).trim();
-    return { emoji, action: params.actionHint ?? "added", quotedText: quotedText ?? fallback };
+  const reacted = parseLeadingReactionAction("reacted", "added");
+  if (reacted) {
+    return reacted;
   }
 
-  if (lower.startsWith("removed")) {
-    const emoji = extractFirstEmoji(trimmed) ?? params.emojiHint;
-    if (!emoji) {
-      return null;
-    }
-    const quotedText = extractQuotedTapbackText(trimmed);
-    if (params.requireQuoted && !quotedText) {
-      return null;
-    }
-    const fallback = trimmed.slice("removed".length).trim();
-    return { emoji, action: params.actionHint ?? "removed", quotedText: quotedText ?? fallback };
+  const removed = parseLeadingReactionAction("removed", "removed");
+  if (removed) {
+    return removed;
   }
   return null;
 }
@@ -660,6 +724,7 @@ function extractMessagePayload(payload: Record<string, unknown>): Record<string,
 
 export function normalizeWebhookMessage(
   payload: Record<string, unknown>,
+  options?: { eventType?: string },
 ): NormalizedWebhookMessage | null {
   const message = extractMessagePayload(payload);
   if (!message) {
@@ -672,7 +737,7 @@ export function normalizeWebhookMessage(
     readString(message, "subject") ??
     "";
 
-  const { senderId, senderName } = extractSenderInfo(message);
+  const { senderId, senderIdExplicit, senderName } = extractSenderInfo(message);
   const { chatGuid, chatIdentifier, chatId, chatName, isGroup, participants } =
     extractChatContext(message);
   const normalizedParticipants = normalizeParticipantList(participants);
@@ -717,7 +782,7 @@ export function normalizeWebhookMessage(
 
   // BlueBubbles may omit `handle` in webhook payloads; for DM chat GUIDs we can still infer sender.
   const senderFallbackFromChatGuid =
-    !senderId && !isGroup && chatGuid ? extractHandleFromChatGuid(chatGuid) : null;
+    !senderIdExplicit && !isGroup && chatGuid ? extractHandleFromChatGuid(chatGuid) : null;
   const normalizedSender = normalizeBlueBubblesHandle(senderId || senderFallbackFromChatGuid || "");
   if (!normalizedSender) {
     return null;
@@ -727,6 +792,7 @@ export function normalizeWebhookMessage(
   return {
     text,
     senderId: normalizedSender,
+    senderIdExplicit,
     senderName,
     messageId,
     timestamp,
@@ -746,6 +812,7 @@ export function normalizeWebhookMessage(
     replyToId: replyMetadata.replyToId,
     replyToBody: replyMetadata.replyToBody,
     replyToSender: replyMetadata.replyToSender,
+    eventType: options?.eventType,
   };
 }
 
@@ -777,7 +844,7 @@ export function normalizeWebhookReaction(
   const emoji = (associatedEmoji?.trim() || mapping?.emoji) ?? `reaction:${associatedType}`;
   const action = mapping?.action ?? resolveTapbackActionHint(associatedType) ?? "added";
 
-  const { senderId, senderName } = extractSenderInfo(message);
+  const { senderId, senderIdExplicit, senderName } = extractSenderInfo(message);
   const { chatGuid, chatIdentifier, chatId, chatName, isGroup } = extractChatContext(message);
 
   const fromMe = readBoolean(message, "isFromMe") ?? readBoolean(message, "is_from_me");
@@ -793,7 +860,7 @@ export function normalizeWebhookReaction(
       : undefined;
 
   const senderFallbackFromChatGuid =
-    !senderId && !isGroup && chatGuid ? extractHandleFromChatGuid(chatGuid) : null;
+    !senderIdExplicit && !isGroup && chatGuid ? extractHandleFromChatGuid(chatGuid) : null;
   const normalizedSender = normalizeBlueBubblesHandle(senderId || senderFallbackFromChatGuid || "");
   if (!normalizedSender) {
     return null;
@@ -803,6 +870,7 @@ export function normalizeWebhookReaction(
     action,
     emoji,
     senderId: normalizedSender,
+    senderIdExplicit,
     senderName,
     messageId: associatedGuid,
     timestamp,

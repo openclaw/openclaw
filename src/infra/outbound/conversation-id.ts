@@ -1,31 +1,37 @@
-function normalizeConversationId(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
+
+function resolveExplicitConversationTargetId(target: string): string | undefined {
+  for (const prefix of ["channel:", "conversation:", "group:", "room:", "dm:"]) {
+    if (normalizeLowercaseStringOrEmpty(target).startsWith(prefix)) {
+      return normalizeOptionalString(target.slice(prefix.length));
+    }
   }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return undefined;
 }
 
 export function resolveConversationIdFromTargets(params: {
   threadId?: string | number;
   targets: Array<string | undefined | null>;
 }): string | undefined {
-  const threadId =
-    params.threadId != null ? normalizeConversationId(String(params.threadId)) : undefined;
+  const threadId = stringifyRouteThreadId(params.threadId);
   if (threadId) {
     return threadId;
   }
 
   for (const rawTarget of params.targets) {
-    const target = normalizeConversationId(rawTarget);
+    const target = normalizeOptionalString(rawTarget);
     if (!target) {
       continue;
     }
-    if (target.startsWith("channel:")) {
-      const channelId = normalizeConversationId(target.slice("channel:".length));
-      if (channelId) {
-        return channelId;
-      }
+    const explicitConversationId = resolveExplicitConversationTargetId(target);
+    if (explicitConversationId) {
+      return explicitConversationId;
+    }
+    if (target.includes(":") && explicitConversationId === undefined) {
       continue;
     }
     const mentionMatch = target.match(/^<#(\d+)>$/);

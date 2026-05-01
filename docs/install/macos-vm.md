@@ -92,7 +92,9 @@ lume create openclaw --os macos --ipsw latest
 
 This downloads macOS and creates the VM. A VNC window opens automatically.
 
-Note: The download can take a while depending on your connection.
+<Note>
+The download can take a while depending on your connection.
+</Note>
 
 ---
 
@@ -112,7 +114,7 @@ After setup completes, enable SSH:
 
 ---
 
-## 4) Get the VM's IP address
+## 4) Get the VM IP address
 
 ```bash
 lume get openclaw
@@ -155,17 +157,17 @@ nano ~/.openclaw/openclaw.json
 
 Add your channels:
 
-```json
+```json5
 {
-  "channels": {
-    "whatsapp": {
-      "dmPolicy": "allowlist",
-      "allowFrom": ["+15551234567"]
+  channels: {
+    whatsapp: {
+      dmPolicy: "allowlist",
+      allowFrom: ["+15551234567"],
     },
-    "telegram": {
-      "botToken": "YOUR_BOT_TOKEN"
-    }
-  }
+    telegram: {
+      botToken: "YOUR_BOT_TOKEN",
+    },
+  },
 }
 ```
 
@@ -209,15 +211,15 @@ Inside the VM:
 
 Add to your OpenClaw config:
 
-```json
+```json5
 {
-  "channels": {
-    "bluebubbles": {
-      "serverUrl": "http://localhost:1234",
-      "password": "your-api-password",
-      "webhookPath": "/bluebubbles-webhook"
-    }
-  }
+  channels: {
+    bluebubbles: {
+      serverUrl: "http://localhost:1234",
+      password: "your-api-password",
+      webhookPath: "/bluebubbles-webhook",
+    },
+  },
 }
 ```
 

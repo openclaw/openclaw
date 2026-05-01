@@ -69,7 +69,7 @@ protocol MotionServicing: Sendable {
     func pedometer(params: OpenClawPedometerParams) async throws -> OpenClawPedometerPayload
 }
 
-struct WatchMessagingStatus: Sendable, Equatable {
+struct WatchMessagingStatus: Equatable {
     var supported: Bool
     var paired: Bool
     var appInstalled: Bool
@@ -77,7 +77,7 @@ struct WatchMessagingStatus: Sendable, Equatable {
     var activationState: String
 }
 
-struct WatchQuickReplyEvent: Sendable, Equatable {
+struct WatchQuickReplyEvent: Equatable {
     var replyId: String
     var promptId: String
     var actionId: String
@@ -88,7 +88,21 @@ struct WatchQuickReplyEvent: Sendable, Equatable {
     var transport: String
 }
 
-struct WatchNotificationSendResult: Sendable, Equatable {
+struct WatchExecApprovalResolveEvent: Equatable {
+    var replyId: String
+    var approvalId: String
+    var decision: OpenClawWatchExecApprovalDecision
+    var sentAtMs: Int?
+    var transport: String
+}
+
+struct WatchExecApprovalSnapshotRequestEvent: Equatable {
+    var requestId: String
+    var sentAtMs: Int?
+    var transport: String
+}
+
+struct WatchNotificationSendResult: Equatable {
     var deliveredImmediately: Bool
     var queuedForDelivery: Bool
     var transport: String
@@ -96,10 +110,22 @@ struct WatchNotificationSendResult: Sendable, Equatable {
 
 protocol WatchMessagingServicing: AnyObject, Sendable {
     func status() async -> WatchMessagingStatus
+    func setStatusHandler(_ handler: (@Sendable (WatchMessagingStatus) -> Void)?)
     func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?)
+    func setExecApprovalResolveHandler(_ handler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?)
+    func setExecApprovalSnapshotRequestHandler(
+        _ handler: (@Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?)
     func sendNotification(
         id: String,
         params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
+    func sendExecApprovalPrompt(
+        _ message: OpenClawWatchExecApprovalPromptMessage) async throws -> WatchNotificationSendResult
+    func sendExecApprovalResolved(
+        _ message: OpenClawWatchExecApprovalResolvedMessage) async throws -> WatchNotificationSendResult
+    func sendExecApprovalExpired(
+        _ message: OpenClawWatchExecApprovalExpiredMessage) async throws -> WatchNotificationSendResult
+    func syncExecApprovalSnapshot(
+        _ message: OpenClawWatchExecApprovalSnapshotMessage) async throws -> WatchNotificationSendResult
 }
 
 extension CameraController: CameraServicing {}

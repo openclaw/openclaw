@@ -1,20 +1,27 @@
-import type { DiscordPluralKitConfig } from "../discord/pluralkit.js";
 import type {
-  BlockStreamingChunkConfig,
-  BlockStreamingCoalesceConfig,
+  ChannelPreviewStreamingConfig,
+  ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
   OutboundRetryConfig,
   ReplyToMode,
 } from "./types.base.js";
-import type { ChannelHeartbeatVisibilityConfig } from "./types.channels.js";
+import type {
+  ChannelHealthMonitorConfig,
+  ChannelHeartbeatVisibilityConfig,
+} from "./types.channels.js";
 import type { DmConfig, ProviderCommandsConfig } from "./types.messages.js";
 import type { SecretInput } from "./types.secrets.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
 export type DiscordStreamMode = "off" | "partial" | "block" | "progress";
+
+export type DiscordPluralKitConfig = {
+  enabled?: boolean;
+  token?: string;
+};
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -30,7 +37,6 @@ export type DiscordDmConfig = {
 };
 
 export type DiscordGuildChannelConfig = {
-  allow?: boolean;
   requireMention?: boolean;
   /**
    * If true, drop messages that mention another user/role but not this one (not @everyone/@here).
@@ -52,6 +58,12 @@ export type DiscordGuildChannelConfig = {
   systemPrompt?: string;
   /** If false, omit thread starter context for this channel (default: true). */
   includeThreadStarter?: boolean;
+  /** If true, automatically create a thread for each new message in this channel. */
+  autoThread?: boolean;
+  /** Archive duration (minutes) for auto-created threads. Valid values: 60, 1440, 4320, 10080. */
+  autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+  /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */
+  autoThreadName?: "message" | "generated";
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
@@ -104,6 +116,8 @@ export type DiscordIntentsConfig = {
   presence?: boolean;
   /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
   guildMembers?: boolean;
+  /** Enable Guild Voice States intent. Defaults to voice.enabled, unless explicitly set. */
+  voiceStates?: boolean;
 };
 
 export type DiscordVoiceAutoJoinConfig = {
@@ -116,20 +130,26 @@ export type DiscordVoiceAutoJoinConfig = {
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
+  /** Optional LLM model override for Discord voice channel responses. */
+  model?: string;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /** Initial @discordjs/voice Ready wait in milliseconds (default: 30000). */
+  connectTimeoutMs?: number;
+  /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
+  reconnectGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
 
 export type DiscordExecApprovalConfig = {
-  /** Enable exec approval forwarding to Discord DMs. Default: false. */
-  enabled?: boolean;
-  /** Discord user IDs to receive approval prompts. Required if enabled. */
+  /** Enable mode for Discord exec approvals on this account. Default: auto when approvers can be resolved; false disables. */
+  enabled?: import("./types.approvals.js").NativeExecApprovalEnableMode;
+  /** Discord user IDs to receive approval prompts. Optional: falls back to commands.ownerAllowFrom when possible. */
   approvers?: string[];
   /** Only forward approvals for these agent IDs. Omit = all agents. */
   agentFilter?: string[];
@@ -139,7 +159,7 @@ export type DiscordExecApprovalConfig = {
   cleanupAfterResolve?: boolean;
   /** Where to send approval prompts. "dm" sends to approver DMs (default), "channel" sends to the
    *  originating Discord channel, "both" sends to both. When target is "channel" or "both", buttons
-   *  are only usable by configured approvers; other users receive an ephemeral denial. */
+   *  are only usable by resolved approvers; other users receive an ephemeral denial. */
   target?: "dm" | "channel" | "both";
 };
 
@@ -191,6 +211,11 @@ export type DiscordSlashCommandConfig = {
   ephemeral?: boolean;
 };
 
+export type DiscordThreadConfig = {
+  /** If true, Discord thread sessions inherit the parent channel transcript. Default: false. */
+  inheritParent?: boolean;
+};
+
 export type DiscordAutoPresenceConfig = {
   /** Enable automatic runtime/quota-based Discord presence updates. Default: false. */
   enabled?: boolean;
@@ -220,8 +245,12 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: SecretInput;
+  /** Optional Discord application/client ID. Set this when REST application lookup is blocked. */
+  applicationId?: string;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
+  /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
+  gatewayInfoTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
@@ -236,30 +265,12 @@ export type DiscordAccountConfig = {
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
   groupPolicy?: GroupPolicy;
+  /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
+  contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
-  /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
-  chunkMode?: "length" | "newline";
-  /** Disable block streaming for this account. */
-  blockStreaming?: boolean;
-  /**
-   * Live stream preview mode:
-   * - "off": disable preview updates
-   * - "partial": edit a single preview message
-   * - "block": stream in chunked preview updates
-   * - "progress": alias that maps to "partial" on Discord
-   *
-   * Legacy boolean values are still accepted and auto-migrated.
-   */
-  streaming?: DiscordStreamMode | boolean;
-  /**
-   * @deprecated Legacy key; migrated automatically to `streaming`.
-   */
-  streamMode?: "partial" | "block" | "off";
-  /** Chunking config for Discord stream previews in `streaming: "block"`. */
-  draftChunk?: BlockStreamingChunkConfig;
-  /** Merge streamed block replies before sending. */
-  blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
+  streaming?: ChannelPreviewStreamingConfig;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines
@@ -276,15 +287,17 @@ export type DiscordAccountConfig = {
   retry?: OutboundRetryConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: DiscordActionConfig;
-  /** Control reply threading when reply tags are present (off|first|all). */
+  /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Thread session behavior. */
+  thread?: DiscordThreadConfig;
   /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM policy key. Doctor migrates legacy channels.discord.dm.policy here.
    * Legacy key: channels.discord.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM allowlist. Doctor migrates legacy channels.discord.dm.allowFrom here.
    * Legacy key: channels.discord.dm.allowFrom.
    */
   allowFrom?: string[];
@@ -295,6 +308,8 @@ export type DiscordAccountConfig = {
   guilds?: Record<string, DiscordGuildEntry>;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Channel health monitor overrides for this channel/account. */
+  healthMonitor?: ChannelHealthMonitorConfig;
   /** Exec approval forwarding configuration. */
   execApprovals?: DiscordExecApprovalConfig;
   /** Agent-controlled interactive components (buttons, select menus). */
@@ -331,18 +346,18 @@ export type DiscordAccountConfig = {
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
   /**
-   * In-process worker settings for queued inbound Discord runs.
-   * This is separate from Carbon's eventQueue listener budget.
+   * Legacy compatibility block. Discord no longer enforces channel-owned
+   * timeouts for queued inbound agent runs.
    */
   inboundWorker?: {
     /**
-     * Max time (ms) a queued inbound run may execute before OpenClaw aborts it.
-     * Defaults to 1800000 (30 minutes). Set 0 to disable the worker-owned timeout.
+     * Ignored. Queued Discord agent runs are governed by the session/tool/runtime
+     * lifecycle, not by Discord channel config.
      */
     runTimeoutMs?: number;
   };
   /**
-   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * Discord EventQueue configuration. Controls how Discord gateway events are processed.
    * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
    * It does not control the lifetime of queued inbound agent turns.
    */
@@ -362,3 +377,9 @@ export type DiscordConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & DiscordAccountConfig;
+
+declare module "./types.channels.js" {
+  interface ChannelsConfig {
+    discord?: DiscordConfig;
+  }
+}

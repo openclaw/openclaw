@@ -1,18 +1,23 @@
-import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
+  loadAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { readCodexCliCredentialsCached } from "./cli-credentials.js";
 import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "./model-auth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 export function resolveModelAuthLabel(params: {
   provider?: string;
   cfg?: OpenClawConfig;
-  sessionEntry?: SessionEntry;
+  sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
+  workspaceDir?: string;
+  includeExternalProfiles?: boolean;
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();
   if (!resolvedProvider) {
@@ -20,9 +25,16 @@ export function resolveModelAuthLabel(params: {
   }
 
   const providerKey = normalizeProviderId(resolvedProvider);
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
+  const store =
+    params.includeExternalProfiles === false
+      ? loadAuthProfileStoreWithoutExternalProfiles(params.agentDir)
+      : ensureAuthProfileStore(params.agentDir, {
+          externalCli: externalCliDiscoveryForProviderAuth({
+            cfg: params.cfg,
+            provider: providerKey,
+            preferredProfile: params.sessionEntry?.authProfileOverride,
+          }),
+        });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
   const order = resolveAuthProfileOrder({
     cfg: params.cfg,
@@ -51,12 +63,19 @@ export function resolveModelAuthLabel(params: {
     return `api-key${label ? ` (${label})` : ""}`;
   }
 
-  const envKey = resolveEnvApiKey(providerKey);
+  const envKey = resolveEnvApiKey(providerKey, process.env, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
   if (envKey?.apiKey) {
     if (envKey.source.includes("OAUTH_TOKEN")) {
       return `oauth (${envKey.source})`;
     }
     return `api-key (${envKey.source})`;
+  }
+
+  if (providerKey === "codex" && readCodexCliCredentialsCached({ ttlMs: 5_000 })) {
+    return "oauth (codex-cli)";
   }
 
   const customKey = resolveUsableCustomProviderApiKey({

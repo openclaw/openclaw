@@ -4,9 +4,7 @@ import type {
   DmPolicy,
   GroupPolicy,
   SecretInput,
-} from "openclaw/plugin-sdk/nextcloud-talk";
-
-export type { DmPolicy, GroupPolicy };
+} from "../runtime-api.js";
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
@@ -20,6 +18,11 @@ export type NextcloudTalkRoomConfig = {
   allowFrom?: string[];
   /** Optional system prompt snippet for this room. */
   systemPrompt?: string;
+};
+
+type NextcloudTalkNetworkConfig = {
+  /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
+  dangerouslyAllowPrivateNetwork?: boolean;
 };
 
 export type NextcloudTalkAccountConfig = {
@@ -75,9 +78,11 @@ export type NextcloudTalkAccountConfig = {
   responsePrefix?: string;
   /** Media upload max size in MB. */
   mediaMaxMb?: number;
+  /** Network policy overrides for self-hosted Nextcloud Talk on trusted private/internal hosts. */
+  network?: NextcloudTalkNetworkConfig;
 };
 
-export type NextcloudTalkConfig = {
+type NextcloudTalkConfig = {
   /** Optional per-account Nextcloud Talk configuration (multi-account). */
   accounts?: Record<string, NextcloudTalkAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
@@ -97,7 +102,7 @@ export type CoreConfig = {
  */
 
 /** Actor in the activity (the message sender). */
-export type NextcloudTalkActor = {
+type NextcloudTalkActor = {
   type: "Person";
   /** User ID in Nextcloud. */
   id: string;
@@ -106,7 +111,7 @@ export type NextcloudTalkActor = {
 };
 
 /** The message object in the activity. */
-export type NextcloudTalkObject = {
+type NextcloudTalkObject = {
   type: "Note";
   /** Message ID. */
   id: string;
@@ -119,7 +124,7 @@ export type NextcloudTalkObject = {
 };
 
 /** Target conversation/room. */
-export type NextcloudTalkTarget = {
+type NextcloudTalkTarget = {
   type: "Collection";
   /** Room token. */
   id: string;
@@ -172,19 +177,17 @@ export type NextcloudTalkWebhookServerOptions = {
   path: string;
   secret: string;
   maxBodyBytes?: number;
+  authRateLimit?: {
+    maxRequests?: number;
+    windowMs?: number;
+  };
   readBody?: (req: import("node:http").IncomingMessage, maxBodyBytes: number) => Promise<string>;
   isBackendAllowed?: (backend: string) => boolean;
   shouldProcessMessage?: (message: NextcloudTalkInboundMessage) => boolean | Promise<boolean>;
+  processMessage?: (
+    message: NextcloudTalkInboundMessage,
+  ) => void | "processed" | "duplicate" | Promise<void | "processed" | "duplicate">;
   onMessage: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;
-};
-
-/** Options for sending a message. */
-export type NextcloudTalkSendOptions = {
-  baseUrl: string;
-  secret: string;
-  roomToken: string;
-  message: string;
-  replyTo?: string;
 };

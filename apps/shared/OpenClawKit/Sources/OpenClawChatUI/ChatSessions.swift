@@ -1,7 +1,9 @@
 import Foundation
 
 public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable {
-    public var id: String { self.selectionID }
+    public var id: String {
+        self.selectionID
+    }
 
     public let modelID: String
     public let name: String
@@ -34,10 +36,19 @@ public struct OpenClawChatModelChoice: Identifiable, Codable, Sendable, Hashable
 public struct OpenClawChatSessionsDefaults: Codable, Sendable {
     public let model: String?
     public let contextTokens: Int?
+    public let mainSessionKey: String?
+
+    public init(model: String?, contextTokens: Int?, mainSessionKey: String? = nil) {
+        self.model = model
+        self.contextTokens = contextTokens
+        self.mainSessionKey = mainSessionKey
+    }
 }
 
 public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashable {
-    public var id: String { self.key }
+    public var id: String {
+        self.key
+    }
 
     public let key: String
     public let kind: String?
@@ -69,4 +80,18 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let count: Int?
     public let defaults: OpenClawChatSessionsDefaults?
     public let sessions: [OpenClawChatSessionEntry]
+
+    public init(
+        ts: Double?,
+        path: String?,
+        count: Int?,
+        defaults: OpenClawChatSessionsDefaults?,
+        sessions: [OpenClawChatSessionEntry])
+    {
+        self.ts = ts
+        self.path = path
+        self.count = count
+        self.defaults = defaults
+        self.sessions = sessions
+    }
 }

@@ -1,9 +1,14 @@
 import { isAbsolute } from "node:path";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
+import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeText } from "../normalize-text.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
+
+export { normalizeText } from "../normalize-text.js";
 
 const MAX_RUNTIME_MODE_LENGTH = 64;
 const MAX_MODEL_LENGTH = 200;
+const MAX_THINKING_LENGTH = 32;
 const MAX_PERMISSION_PROFILE_LENGTH = 80;
 const MAX_CWD_LENGTH = 4096;
 const MIN_TIMEOUT_SECONDS = 1;
@@ -77,6 +82,14 @@ export function validateRuntimeModelInput(rawModel: unknown): string {
   });
 }
 
+export function validateRuntimeThinkingInput(rawThinking: unknown): string {
+  return validateBoundedText({
+    value: rawThinking,
+    field: "Thinking level",
+    maxLength: MAX_THINKING_LENGTH,
+  });
+}
+
 export function validateRuntimePermissionProfileInput(rawProfile: unknown): string {
   return validateBoundedText({
     value: rawProfile,
@@ -141,6 +154,7 @@ export function validateRuntimeOptionPatch(
   const allowedKeys = new Set([
     "runtimeMode",
     "model",
+    "thinking",
     "cwd",
     "permissionProfile",
     "timeoutSeconds",
@@ -165,6 +179,13 @@ export function validateRuntimeOptionPatch(
       next.model = undefined;
     } else {
       next.model = validateRuntimeModelInput(rawPatch.model);
+    }
+  }
+  if (Object.hasOwn(rawPatch, "thinking")) {
+    if (rawPatch.thinking === undefined) {
+      next.thinking = undefined;
+    } else {
+      next.thinking = validateRuntimeThinkingInput(rawPatch.thinking);
     }
   }
   if (Object.hasOwn(rawPatch, "cwd")) {
@@ -211,19 +232,12 @@ export function validateRuntimeOptionPatch(
   return next;
 }
 
-export function normalizeText(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed || undefined;
-}
-
 export function normalizeRuntimeOptions(
   options: AcpSessionRuntimeOptions | undefined,
 ): AcpSessionRuntimeOptions {
   const runtimeMode = normalizeText(options?.runtimeMode);
   const model = normalizeText(options?.model);
+  const thinking = normalizeText(options?.thinking);
   const cwd = normalizeText(options?.cwd);
   const permissionProfile = normalizeText(options?.permissionProfile);
   let timeoutSeconds: number | undefined;
@@ -241,6 +255,7 @@ export function normalizeRuntimeOptions(
   return {
     ...(runtimeMode ? { runtimeMode } : {}),
     ...(model ? { model } : {}),
+    ...(thinking ? { thinking } : {}),
     ...(cwd ? { cwd } : {}),
     ...(permissionProfile ? { permissionProfile } : {}),
     ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
@@ -291,6 +306,7 @@ export function buildRuntimeControlSignature(options: AcpSessionRuntimeOptions):
   return JSON.stringify({
     runtimeMode: normalized.runtimeMode ?? null,
     model: normalized.model ?? null,
+    thinking: normalized.thinking ?? null,
     permissionProfile: normalized.permissionProfile ?? null,
     timeoutSeconds: normalized.timeoutSeconds ?? null,
     backendExtras: extras,
@@ -304,6 +320,9 @@ export function buildRuntimeConfigOptionPairs(
   const pairs = new Map<string, string>();
   if (normalized.model) {
     pairs.set("model", normalized.model);
+  }
+  if (normalized.thinking) {
+    pairs.set("thinking", normalized.thinking);
   }
   if (normalized.permissionProfile) {
     pairs.set("approval_policy", normalized.permissionProfile);
@@ -324,9 +343,16 @@ export function inferRuntimeOptionPatchFromConfigOption(
   value: string,
 ): Partial<AcpSessionRuntimeOptions> {
   const validated = validateRuntimeConfigOptionInput(key, value);
-  const normalizedKey = validated.key.toLowerCase();
+  const normalizedKey = normalizeLowercaseStringOrEmpty(validated.key);
   if (normalizedKey === "model") {
     return { model: validateRuntimeModelInput(validated.value) };
+  }
+  if (
+    normalizedKey === "thinking" ||
+    normalizedKey === "thought_level" ||
+    normalizedKey === "reasoning_effort"
+  ) {
+    return { thinking: validateRuntimeThinkingInput(validated.value) };
   }
   if (
     normalizedKey === "approval_policy" ||

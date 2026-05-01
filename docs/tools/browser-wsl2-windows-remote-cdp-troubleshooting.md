@@ -1,47 +1,41 @@
 ---
-summary: "Troubleshoot WSL2 Gateway + Windows Chrome remote CDP and extension-relay setups in layers"
+summary: "Troubleshoot WSL2 Gateway + Windows Chrome remote CDP in layers"
 read_when:
   - Running OpenClaw Gateway in WSL2 while Chrome lives on Windows
   - Seeing overlapping browser/control-ui errors across WSL2 and Windows
-  - Deciding between raw remote CDP and the Chrome extension relay in split-host setups
+  - Deciding between host-local Chrome MCP and raw remote CDP in split-host setups
 title: "WSL2 + Windows + remote Chrome CDP troubleshooting"
 ---
 
-# WSL2 + Windows + remote Chrome CDP troubleshooting
-
-This guide covers the common split-host setup where:
-
-- OpenClaw Gateway runs inside WSL2
-- Chrome runs on Windows
-- browser control must cross the WSL2/Windows boundary
-
-It also covers the layered failure pattern from [issue #39369](https://github.com/openclaw/openclaw/issues/39369): several independent problems can show up at once, which makes the wrong layer look broken first.
+In the common split-host setup, OpenClaw Gateway runs inside WSL2, Chrome runs on Windows, and browser control must cross the WSL2 and Windows boundary. The layered failure pattern from [issue #39369](https://github.com/openclaw/openclaw/issues/39369) means several independent problems can show up at once, which makes the wrong layer look broken first.
 
 ## Choose the right browser mode first
 
 You have two valid patterns:
 
-### Option 1: Raw remote CDP
+### Option 1: Raw remote CDP from WSL2 to Windows
 
 Use a remote browser profile that points from WSL2 to a Windows Chrome CDP endpoint.
 
 Choose this when:
 
-- you only need browser control
-- you are comfortable exposing Chrome remote debugging to WSL2
-- you do not need the Chrome extension relay
+- the Gateway stays inside WSL2
+- Chrome runs on Windows
+- you need browser control to cross the WSL2/Windows boundary
 
-### Option 2: Chrome extension relay
+### Option 2: Host-local Chrome MCP
 
-Use the built-in `chrome` profile plus the OpenClaw Chrome extension.
+Use `existing-session` / `user` only when the Gateway itself runs on the same host as Chrome.
 
 Choose this when:
 
-- you want to attach to an existing Windows Chrome tab with the toolbar button
-- you want extension-based control instead of raw `--remote-debugging-port`
-- the relay itself must be reachable across the WSL2/Windows boundary
+- OpenClaw and Chrome are on the same machine
+- you want the local signed-in browser state
+- you do not need cross-host browser transport
+- you do not need advanced managed/raw-CDP-only routes like `responsebody`, PDF
+  export, download interception, or batch actions
 
-If you use the extension relay across namespaces, `browser.relayBindHost` is the important setting introduced in [Browser](/tools/browser) and [Chrome extension](/tools/chrome-extension).
+For WSL2 Gateway + Windows Chrome, prefer raw remote CDP. Chrome MCP is host-local, not a WSL2-to-Windows bridge.
 
 ## Working architecture
 
@@ -62,7 +56,6 @@ Several failures can overlap:
 - `gateway.controlUi.allowedOrigins` does not match the page origin
 - token or pairing is missing
 - the browser profile points at the wrong address
-- the extension relay is still loopback-only when you actually need cross-namespace access
 
 Because of that, fixing one layer can still leave a different error visible.
 
@@ -143,33 +136,12 @@ Notes:
 
 - use the WSL2-reachable address, not whatever only works on Windows
 - keep `attachOnly: true` for externally managed browsers
+- `cdpUrl` can be `http://`, `https://`, `ws://`, or `wss://`
+- use HTTP(S) when you want OpenClaw to discover `/json/version`
+- use WS(S) only when the browser provider gives you a direct DevTools socket URL
 - test the same URL with `curl` before expecting OpenClaw to succeed
 
-### Layer 4: If you use the Chrome extension relay instead
-
-If the browser machine and the Gateway are separated by a namespace boundary, the relay may need a non-loopback bind address.
-
-Example:
-
-```json5
-{
-  browser: {
-    enabled: true,
-    defaultProfile: "chrome",
-    relayBindHost: "0.0.0.0",
-  },
-}
-```
-
-Use this only when needed:
-
-- default behavior is safer because the relay stays loopback-only
-- `0.0.0.0` expands exposure surface
-- keep Gateway auth, node pairing, and the surrounding network private
-
-If you do not need the extension relay, prefer the raw remote CDP profile above.
-
-### Layer 5: Verify the Control UI layer separately
+### Layer 4: Verify the Control UI layer separately
 
 Open the UI from Windows:
 
@@ -185,19 +157,13 @@ Helpful page:
 
 - [Control UI](/web/control-ui)
 
-### Layer 6: Verify end-to-end browser control
+### Layer 5: Verify end-to-end browser control
 
 From WSL2:
 
 ```bash
 openclaw browser open https://example.com --browser-profile remote
 openclaw browser tabs --browser-profile remote
-```
-
-For the extension relay:
-
-```bash
-openclaw browser tabs --browser-profile chrome
 ```
 
 Good result:
@@ -218,10 +184,15 @@ Treat each message as a layer-specific clue:
   - device approval problem
 - `Remote CDP for profile "remote" is not reachable`
   - WSL2 cannot reach the configured `cdpUrl`
+- `Browser attachOnly is enabled and CDP websocket for profile "remote" is not reachable`
+  - the HTTP endpoint answered, but the DevTools WebSocket still could not be opened
+- stale viewport / dark-mode / locale / offline overrides after a remote session
+  - run `openclaw browser stop --browser-profile remote`
+  - this closes the active control session and releases Playwright/CDP emulation state without restarting the gateway or the external browser
 - `gateway timeout after 1500ms`
   - often still CDP reachability or a slow/unreachable remote endpoint
-- `Chrome extension relay is running, but no tab is connected`
-  - extension relay profile selected, but no attached tab exists yet
+- `No Chrome tabs found for profile="user"`
+  - local Chrome MCP profile selected where no host-local tabs are available
 
 ## Fast triage checklist
 
@@ -229,14 +200,20 @@ Treat each message as a layer-specific clue:
 2. WSL2: does `curl http://WINDOWS_HOST_OR_IP:9222/json/version` work?
 3. OpenClaw config: does `browser.profiles.<name>.cdpUrl` use that exact WSL2-reachable address?
 4. Control UI: are you opening `http://127.0.0.1:18789/` instead of a LAN IP?
-5. Extension relay only: do you actually need `browser.relayBindHost`, and if so is it set explicitly?
+5. Are you trying to use `existing-session` across WSL2 and Windows instead of raw remote CDP?
 
 ## Practical takeaway
 
-The setup is usually viable. The hard part is that browser transport, Control UI origin security, token/pairing, and extension-relay topology can each fail independently while looking similar from the user side.
+The setup is usually viable. The hard part is that browser transport, Control UI origin security, and token/pairing can each fail independently while looking similar from the user side.
 
 When in doubt:
 
 - verify the Windows Chrome endpoint locally first
 - verify the same endpoint from WSL2 second
 - only then debug OpenClaw config or Control UI auth
+
+## Related
+
+- [Browser](/tools/browser)
+- [Browser login](/tools/browser-login)
+- [Browser Linux troubleshooting](/tools/browser-linux-troubleshooting)

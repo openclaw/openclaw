@@ -1,4 +1,5 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { MemoryCitationsMode } from "../config/types.memory.js";
 
 // Result types
 
@@ -7,6 +8,20 @@ export type AssembleResult = {
   messages: AgentMessage[];
   /** Estimated total tokens in assembled context */
   estimatedTokens: number;
+  /**
+   * Controls which token estimate the runner treats as authoritative for
+   * preemptive overflow prechecks. The returned `messages` are always the
+   * prompt sent to the model; this only affects the precheck's token comparison.
+   *
+   * - "assembled": the precheck uses only the assembled prompt's estimate.
+   * - "preassembly_may_overflow": the precheck takes the maximum of the
+   *   assembled estimate and the pre-assembly (unwindowed) session-history
+   *   estimate. Engines opt into this when their assembled view can hide an
+   *   overflow that would still affect the underlying transcript.
+   *
+   * Defaults to "assembled".
+   */
+  promptAuthority?: "assembled" | "preassembly_may_overflow";
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */
   systemPromptAddition?: string;
 };
@@ -21,6 +36,10 @@ export type CompactResult = {
     tokensBefore: number;
     tokensAfter?: number;
     details?: unknown;
+    /** Session id after compaction, when the runtime rotated transcripts. */
+    sessionId?: string;
+    /** Session file after compaction, when the runtime rotated transcripts. */
+    sessionFile?: string;
   };
 };
 
@@ -49,6 +68,13 @@ export type ContextEngineInfo = {
   version?: string;
   /** True when the engine manages its own compaction lifecycle. */
   ownsCompaction?: boolean;
+  /**
+   * Controls how turn-triggered maintenance should be executed.
+   *
+   * Engines remain compatible by default unless the host explicitly opts into
+   * background turn maintenance.
+   */
+  turnMaintenanceMode?: "foreground" | "background";
 };
 
 export type SubagentSpawnPreparation = {
@@ -57,7 +83,97 @@ export type SubagentSpawnPreparation = {
 };
 
 export type SubagentEndReason = "deleted" | "completed" | "swept" | "released";
-export type ContextEngineRuntimeContext = Record<string, unknown>;
+
+export type TranscriptRewriteReplacement = {
+  /** Existing transcript entry id to replace on the active branch. */
+  entryId: string;
+  /** Replacement message content for that entry. */
+  message: AgentMessage;
+};
+
+export type TranscriptRewriteRequest = {
+  /** Message entry replacements to apply in one branch-and-reappend pass. */
+  replacements: TranscriptRewriteReplacement[];
+};
+
+export type TranscriptRewriteResult = {
+  /** Whether the active branch changed. */
+  changed: boolean;
+  /** Estimated bytes removed from the active branch message payloads. */
+  bytesFreed: number;
+  /** Number of transcript message entries rewritten. */
+  rewrittenEntries: number;
+  /** Optional reason when no rewrite occurred. */
+  reason?: string;
+};
+
+export type ContextEngineMaintenanceResult = TranscriptRewriteResult;
+
+export type ContextEnginePromptCacheRetention = "none" | "short" | "long" | "in_memory" | "24h";
+
+export type ContextEnginePromptCacheUsage = {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  total?: number;
+};
+
+export type ContextEnginePromptCacheObservationChangeCode =
+  | "cacheRetention"
+  | "model"
+  | "streamStrategy"
+  | "systemPrompt"
+  | "tools"
+  | "transport";
+
+export type ContextEnginePromptCacheObservationChange = {
+  code: ContextEnginePromptCacheObservationChangeCode;
+  detail: string;
+};
+
+export type ContextEnginePromptCacheObservation = {
+  broke: boolean;
+  previousCacheRead?: number;
+  cacheRead?: number;
+  changes?: ContextEnginePromptCacheObservationChange[];
+};
+
+export type ContextEnginePromptCacheInfo = {
+  /** Runtime-resolved retention for the actual provider/model/request path. */
+  retention?: ContextEnginePromptCacheRetention;
+  /** Usage from the most recent API call, not accumulated retry/tool-loop totals. */
+  lastCallUsage?: ContextEnginePromptCacheUsage;
+  /** Result from the runtime's prompt-cache observability heuristic. */
+  observation?: ContextEnginePromptCacheObservation;
+  /** Last known cache-touch timestamp from runtime-managed cache-TTL bookkeeping. */
+  lastCacheTouchAt?: number;
+  /** Known cache expiry time when the runtime can source it confidently. */
+  expiresAt?: number;
+};
+
+export type ContextEngineRuntimeContext = Record<string, unknown> & {
+  /**
+   * True when the host has explicitly opted this maintenance run into
+   * consuming deferred compaction debt.
+   */
+  allowDeferredCompactionExecution?: boolean;
+  /** Runtime-resolved context window budget for the active model call. */
+  tokenBudget?: number;
+  /** Best-effort current prompt/context token estimate for this turn. */
+  currentTokenCount?: number;
+  /** Optional prompt-cache telemetry for cache-aware engines. */
+  promptCache?: ContextEnginePromptCacheInfo;
+  /**
+   * Safe transcript rewrite helper implemented by the runtime.
+   *
+   * Engines decide what is safe to rewrite; the runtime owns how the session
+   * DAG is updated on disk.
+   */
+  rewriteTranscriptEntries?: (
+    request: TranscriptRewriteRequest,
+  ) => Promise<TranscriptRewriteResult>;
+};
 
 /**
  * ContextEngine defines the pluggable contract for context management.
@@ -72,13 +188,31 @@ export interface ContextEngine {
   /**
    * Initialize engine state for a session, optionally importing historical context.
    */
-  bootstrap?(params: { sessionId: string; sessionFile: string }): Promise<BootstrapResult>;
+  bootstrap?(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+  }): Promise<BootstrapResult>;
+
+  /**
+   * Run transcript maintenance after bootstrap, successful turns, or compaction.
+   *
+   * Engines can use runtimeContext.rewriteTranscriptEntries() to request safe
+   * branch-and-reappend transcript rewrites without depending on Pi internals.
+   */
+  maintain?(params: {
+    sessionId: string;
+    sessionKey?: string;
+    sessionFile: string;
+    runtimeContext?: ContextEngineRuntimeContext;
+  }): Promise<ContextEngineMaintenanceResult>;
 
   /**
    * Ingest a single message into the engine's store.
    */
   ingest(params: {
     sessionId: string;
+    sessionKey?: string;
     message: AgentMessage;
     /** True when the message belongs to a heartbeat run. */
     isHeartbeat?: boolean;
@@ -89,6 +223,7 @@ export interface ContextEngine {
    */
   ingestBatch?(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     /** True when the batch belongs to a heartbeat run. */
     isHeartbeat?: boolean;
@@ -101,6 +236,7 @@ export interface ContextEngine {
    */
   afterTurn?(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     messages: AgentMessage[];
     /** Number of messages that existed before the prompt was sent. */
@@ -121,8 +257,18 @@ export interface ContextEngine {
    */
   assemble(params: {
     sessionId: string;
+    sessionKey?: string;
     messages: AgentMessage[];
     tokenBudget?: number;
+    /** Tool names available for this run so engines can align prompt guidance with runtime tool access. */
+    availableTools?: Set<string>;
+    /** Active memory citation mode when engines want to mirror memory prompt guidance. */
+    citationsMode?: MemoryCitationsMode;
+    /** Current model identifier (e.g. "claude-opus-4", "gpt-4o", "qwen2.5-7b").
+     *  Allows context engine plugins to adapt formatting per model. */
+    model?: string;
+    /** The incoming user prompt for this turn (useful for retrieval-oriented engines). */
+    prompt?: string;
   }): Promise<AssembleResult>;
 
   /**
@@ -131,6 +277,7 @@ export interface ContextEngine {
    */
   compact(params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     tokenBudget?: number;
     /** Force compaction even below the default trigger threshold. */
@@ -153,6 +300,11 @@ export interface ContextEngine {
   prepareSubagentSpawn?(params: {
     parentSessionKey: string;
     childSessionKey: string;
+    contextMode?: "isolated" | "fork";
+    parentSessionId?: string;
+    parentSessionFile?: string;
+    childSessionId?: string;
+    childSessionFile?: string;
     ttlMs?: number;
   }): Promise<SubagentSpawnPreparation | undefined>;
 
