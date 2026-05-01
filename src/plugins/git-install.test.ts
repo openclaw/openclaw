@@ -204,7 +204,8 @@ describe("installPluginFromGitSpec", () => {
     runCommandWithTimeoutMock.mockResolvedValueOnce({
       code: 1,
       stdout: "",
-      stderr: "fatal: could not read Username for 'https://token:secret@github.com/acme/demo.git'",
+      stderr:
+        "fatal: could not read Username for 'https://token:secret@github.com/acme/demo.git' while retrying https://other:credential@github.com/acme/fallback.git",
     });
 
     const result = await installPluginFromGitSpec({
@@ -215,8 +216,11 @@ describe("installPluginFromGitSpec", () => {
     if (!result.ok) {
       expect(result.error).toContain("failed to clone github.com/acme/demo");
       expect(result.error).toContain("https://***:***@github.com/acme/demo.git");
+      expect(result.error).toContain("https://***:***@github.com/acme/fallback.git");
       expect(result.error).not.toContain("token");
       expect(result.error).not.toContain("secret");
+      expect(result.error).not.toContain("other");
+      expect(result.error).not.toContain("credential");
     }
     expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
   });
