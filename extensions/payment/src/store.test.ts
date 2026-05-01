@@ -148,6 +148,39 @@ describe("Authorization header redaction parity with redact-primitives", () => {
   });
 });
 
+describe("redactSensitiveValue — embedded PAN scan-and-replace (Fix 3)", () => {
+  it("redacts an embedded PAN in an error message (surrounding text preserved)", () => {
+    expect(redactSensitiveValue("Card 4242424242424242 declined")).toBe("Card [REDACTED] declined");
+  });
+
+  it("redacts a dash-separated PAN (entire string is the PAN)", () => {
+    expect(redactSensitiveValue("4242-4242-4242-4242")).toBe("[REDACTED]");
+  });
+
+  it("redacts a mixed-separator PAN (spaces and dashes)", () => {
+    expect(redactSensitiveValue("4242 4242-4242 4242")).toBe("[REDACTED]");
+  });
+
+  it("does NOT redact a 13-digit string that fails Luhn (non-card number)", () => {
+    // 1234567890123 — 13 digits, Luhn-invalid
+    expect(redactSensitiveValue("ID: 1234567890123 not a card")).toBe(
+      "ID: 1234567890123 not a card",
+    );
+  });
+
+  it("redacts an embedded PAN inside a nested object value", () => {
+    const result = redactSensitiveValue({
+      message: "Card 4242424242424242 declined",
+    }) as Record<string, unknown>;
+    expect(result["message"]).toBe("Card [REDACTED] declined");
+  });
+
+  it("does NOT redact a phone-like hyphenated number (too few digits)", () => {
+    // "1-415-555-1234" strips to 14155551234 — 11 digits, under the 13-digit threshold
+    expect(redactSensitiveValue("call 1-415-555-1234")).toBe("call 1-415-555-1234");
+  });
+});
+
 describe("redactSensitiveValue — non-card numeric strings NOT redacted", () => {
   it("does not redact a dollar amount string", () => {
     // "12345" — short and not Luhn-valid as PAN (only 5 digits, under 13)

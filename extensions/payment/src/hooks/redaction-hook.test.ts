@@ -224,6 +224,34 @@ describe("redaction hook — PAN detection blocks the message", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Embedded PAN detection — MUST block (Fix 3)
+// ---------------------------------------------------------------------------
+
+describe("redaction hook — embedded PAN in toolCall arguments blocks message", () => {
+  it("blocks when a PAN is embedded in an error-message-like string", () => {
+    const result = scanMessageForCardData(
+      makeEvent(
+        makeAssistantMessage([
+          makeToolCallBlock({
+            "toolCall.arguments.note": "Card 4242424242424242 declined",
+          }),
+        ]),
+      ),
+    );
+    expect(result).toBeDefined();
+    expect(result!.block).toBe(true);
+  });
+
+  it("blocks when a dash-separated PAN appears in toolCall arguments", () => {
+    const result = scanMessageForCardData(
+      makeEvent(makeAssistantMessage([makeToolCallBlock({ cardNumber: "4242-4242-4242-4242" })])),
+    );
+    expect(result).toBeDefined();
+    expect(result!.block).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // CVV detection — MUST block in CVV-key context
 // ---------------------------------------------------------------------------
 

@@ -42,6 +42,26 @@ export function isPanShape(value: string): boolean {
   return luhnCheck(digits);
 }
 
+/**
+ * Scans a string for embedded PAN matches (separator-tolerant).
+ * Returns true if any 13-19 digit cluster (with optional space/dash separators)
+ * passes the Luhn check — even when surrounded by other text.
+ *
+ * Mirrors store.ts:redactPansInString for detection parity.
+ * NOTE: store.ts retains its own inline copy — keep in sync.
+ */
+export function containsEmbeddedPan(value: string): boolean {
+  const pattern = /\b(?:\d[ -]?){12,18}\d\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(value)) !== null) {
+    const digits = match[0].replace(/[ -]/g, "");
+    if (digits.length >= 13 && digits.length <= 19 && luhnCheck(digits)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Key names that indicate a CVV-like value. Case-insensitive. */
 export const CVV_KEY_PATTERN = /^(cvv2?|cvc2?|card_?security_?code|security_?code)$/i;
 
@@ -97,11 +117,16 @@ function _scan(
           return { kind: "cvv", preview: "[cvv]" };
         }
       }
-      // PAN-shaped string
+      // PAN-shaped string (whole-string match)
       if (isPanShape(value)) {
         // Safe preview: last4 only
         const digits = value.replace(/[\s-]/g, "");
         return { kind: "pan", preview: `••${digits.slice(-4)}` };
+      }
+      // Embedded PAN: PAN present within a longer string (e.g. error messages,
+      // free-text fields). Uses the same separator-tolerant regex as store.ts.
+      if (containsEmbeddedPan(value)) {
+        return { kind: "pan", preview: "<embedded PAN>" };
       }
       return undefined;
     }

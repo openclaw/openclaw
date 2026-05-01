@@ -9,7 +9,7 @@
     "plugin:ci": "pnpm dlx @openclaw/plugin-inspector@0.3.5 ci --no-openclaw --runtime --mock-sdk --allow-execute"
   },
   "dependencies": {
-    "typebox": "1.1.37",
+    "typebox": "1.1.34",
     "zod": "^4.3.6"
   },
   "devDependencies": {

@@ -48,21 +48,33 @@ function luhnCheck(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-// TODO(payment-plugin): I4 — extend PAN detection to scan-and-replace embedded
-// matches with separator tolerance (dashes, parens, dots, embedded in free text).
-// Currently `isPanShape` only matches strings that are entirely a PAN with
-// optional spaces. Real-world leak vectors include error messages and merchant
-// names containing the PAN inline. Tracked in feature-plan U2 follow-up.
 /**
- * Returns true if the string (stripped of spaces) looks like a PAN:
+ * Returns true if the string (stripped of spaces/dashes) looks like a PAN:
  * 13-19 digits and passes Luhn check.
  */
 function isPanShape(value: string): boolean {
-  const digits = value.replace(/\s+/g, "");
+  const digits = value.replace(/[\s-]/g, "");
   if (!/^\d{13,19}$/.test(digits)) {
     return false;
   }
   return luhnCheck(digits);
+}
+
+/**
+ * Scan-and-replace embedded PAN matches within a string, with separator tolerance.
+ * Replaces each Luhn-valid 13-19 digit cluster (digits optionally separated by spaces
+ * or hyphens) with "[REDACTED]". Preserves surrounding text.
+ *
+ * Applied before the whole-string PAN check so that strings like
+ * "Card 4242424242424242 declined" are correctly sanitized.
+ */
+function redactPansInString(input: string): string {
+  return input.replace(/\b(?:\d[ -]?){12,18}\d\b/g, (match) => {
+    const digits = match.replace(/[ -]/g, "");
+    if (digits.length < 13 || digits.length > 19) return match;
+    if (!luhnCheck(digits)) return match;
+    return "[REDACTED]";
+  });
 }
 
 /** Key names that indicate a CVV-like value. Case-insensitive. */
@@ -107,7 +119,15 @@ function redact(value: unknown, parentKey: string | null, seen: WeakSet<object>)
       ) {
         return "[REDACTED]";
       }
-      // PAN-shaped string
+      // Embedded-PAN scan-and-replace (separator-tolerant): catches PANs embedded
+      // in error messages, free-text fields, and strings with dashes/spaces.
+      // Run BEFORE the whole-string isPanShape check.
+      const scanned = redactPansInString(value);
+      if (scanned !== value) {
+        return scanned;
+      }
+      // Whole-string PAN check (now redundant for pure-PAN strings, but kept for
+      // backward compatibility and to handle any edge case the regex misses).
       if (isPanShape(value)) {
         return "[REDACTED]";
       }

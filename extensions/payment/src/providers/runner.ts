@@ -3,7 +3,10 @@ import { spawn } from "node:child_process";
 export type CommandRunResult = {
   stdout: string;
   stderr: string;
+  /** Real exit code, or -1 if the process was killed by a signal. */
   exitCode: number;
+  /** Set when the process was terminated by a signal (SIGTERM, SIGKILL, etc.). */
+  signal?: NodeJS.Signals;
 };
 
 export type CommandRunner = (
@@ -62,11 +65,20 @@ export function createNodeCommandRunner(): CommandRunner {
 
       let timedOut = false;
       let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
 
       if (options?.timeoutMs !== undefined && options.timeoutMs > 0) {
         timeoutHandle = setTimeout(() => {
           timedOut = true;
           child.kill("SIGTERM");
+          // Escalate to SIGKILL after 2 seconds if the child didn't exit on SIGTERM.
+          sigkillTimer = setTimeout(() => {
+            try {
+              child.kill("SIGKILL");
+            } catch {
+              /* already exited */
+            }
+          }, 2000);
         }, options.timeoutMs);
       }
 
@@ -74,12 +86,18 @@ export function createNodeCommandRunner(): CommandRunner {
         if (timeoutHandle !== undefined) {
           clearTimeout(timeoutHandle);
         }
+        if (sigkillTimer !== undefined) {
+          clearTimeout(sigkillTimer);
+        }
         reject(new Error(`Command "${command}" failed to spawn: ${err.message}`));
       });
 
-      child.on("close", (code: number | null) => {
+      child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
         if (timeoutHandle !== undefined) {
           clearTimeout(timeoutHandle);
+        }
+        if (sigkillTimer !== undefined) {
+          clearTimeout(sigkillTimer);
         }
         if (timedOut) {
           reject(
@@ -92,7 +110,8 @@ export function createNodeCommandRunner(): CommandRunner {
         resolve({
           stdout: Buffer.concat(stdoutChunks).toString("utf8"),
           stderr: Buffer.concat(stderrChunks).toString("utf8"),
-          exitCode: code ?? 1,
+          exitCode: code ?? -1,
+          signal: signal ?? undefined,
         });
       });
 
