@@ -54,6 +54,7 @@ import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
   pruneLegacyStoreKeys,
+  ensureContextEnginesInitialized,
   resolveAgentConfig,
   resolveContextEngine,
   resolveDisplaySessionKey,
@@ -92,6 +93,7 @@ type SubagentSpawnDeps = {
   forkSessionFromParent: typeof forkSessionFromParent;
   getGlobalHookRunner: () => SubagentLifecycleHookRunner | null;
   getRuntimeConfig: typeof getRuntimeConfig;
+  ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
   resolveParentForkMaxTokens: typeof resolveParentForkMaxTokens;
   updateSessionStore: typeof updateSessionStore;
@@ -102,6 +104,7 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   forkSessionFromParent,
   getGlobalHookRunner,
   getRuntimeConfig,
+  ensureContextEnginesInitialized,
   resolveContextEngine,
   resolveParentForkMaxTokens,
   updateSessionStore,
@@ -417,6 +420,7 @@ async function prepareContextEngineSubagentSpawn(params: {
   { status: "ok"; preparation?: SubagentSpawnPreparation } | { status: "error"; error: string }
 > {
   try {
+    subagentSpawnDeps.ensureContextEnginesInitialized();
     const engine = await subagentSpawnDeps.resolveContextEngine(params.cfg);
     const preparation = await engine.prepareSubagentSpawn?.({
       parentSessionKey: params.requesterInternalKey,

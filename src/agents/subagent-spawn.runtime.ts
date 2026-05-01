@@ -8,6 +8,7 @@ export {
   forkSessionFromParent,
   resolveParentForkMaxTokens,
 } from "../auto-reply/reply/session-fork.js";
+export { ensureContextEnginesInitialized } from "../context-engine/init.js";
 export { resolveContextEngine } from "../context-engine/registry.js";
 export { callGateway } from "../gateway/call.js";
 export { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";

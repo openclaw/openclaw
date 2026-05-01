@@ -117,6 +117,7 @@ export function expectPersistedRuntimeModel(params: {
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
+  ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
@@ -178,6 +179,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    ensureContextEnginesInitialized:
+      params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
     resolveParentForkMaxTokens: params.resolveParentForkMaxTokensMock ?? (() => 100_000),
     mergeSessionEntry: (
