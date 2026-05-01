@@ -125,7 +125,7 @@ The setup script accepts these optional environment variables:
 | Variable                                   | Purpose                                                         |
 | ------------------------------------------ | --------------------------------------------------------------- |
 | `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                  |
-| `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during build (space-separated)       |
+| `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during local image builds            |
 | `OPENCLAW_EXTENSIONS`                      | Pre-install plugin deps at build time (space-separated names)   |
 | `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`) |
 | `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
@@ -384,7 +384,7 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     full-featured container:
 
     1. **Persist `/home/node`**: `export OPENCLAW_HOME_VOLUME="openclaw_home"`
-    2. **Bake system deps**: `export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"`
+    2. **Bake extra system deps**: `export OPENCLAW_DOCKER_APT_PACKAGES="jq ffmpeg"`
     3. **Install Playwright browsers**:
        ```bash
        docker compose run --rm openclaw-cli \
@@ -409,6 +409,10 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     refreshed through Dependabot Docker base-image PRs; release builds do not run
     a distro upgrade layer. See
     [OCI image annotations](https://github.com/opencontainers/image-spec/blob/main/annotations.md).
+    The official OpenClaw Docker release image includes baseline runtime tools
+    such as `curl`, `git`, `lsof`, `openssl`, and `python3`, so workspace Python
+    scripts run without a custom image. `OPENCLAW_DOCKER_APT_PACKAGES` adds
+    packages beyond that baseline when you build locally.
   </Accordion>
 </AccordionGroup>
 

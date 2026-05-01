@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerInstallDocsPath = join(repoRoot, "docs", "install", "docker.md");
 const packageJsonPath = join(repoRoot, "package.json");
 
 function collapseDockerContinuations(dockerfile: string): string {
@@ -60,6 +61,17 @@ describe("Dockerfile", () => {
     expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
     expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
     expect(dockerfile).toContain("ca-certificates procps hostname curl git lsof openssl python3");
+  });
+
+  it("documents python3 as a default gateway runtime package", async () => {
+    const docs = await readFile(dockerInstallDocsPath, "utf8");
+
+    expect(docs).toContain("The official OpenClaw Docker release image includes");
+    expect(docs).toContain("`python3`");
+    expect(docs).toMatch(/workspace\s+Python\s+scripts/);
+    expect(docs).toMatch(
+      /`OPENCLAW_DOCKER_APT_PACKAGES`\s+adds\s+packages\s+beyond\s+that\s+baseline/,
+    );
   });
 
   it("installs optional browser dependencies after pnpm install", async () => {
