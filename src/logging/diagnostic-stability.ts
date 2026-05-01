@@ -27,6 +27,7 @@ export type DiagnosticStabilityEventRecord = {
   detector?: string;
   deliveryKind?: string;
   toolName?: string;
+  activeWorkKind?: string;
   pairedToolName?: string;
   provider?: string;
   model?: string;
@@ -231,11 +232,22 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       record.queueDepth = event.queueDepth;
       break;
+    case "session.long_running":
+    case "session.stalled":
     case "session.stuck":
       record.outcome = event.state;
+      if (event.type === "session.stuck") {
+        record.level = "warning";
+      }
       assignReasonCode(record, event.reason);
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
+      if (event.activeWorkKind) {
+        record.activeWorkKind = event.activeWorkKind;
+      }
+      if (event.activeToolName) {
+        record.toolName = event.activeToolName;
+      }
       break;
     case "queue.lane.enqueue":
       record.source = event.lane;
@@ -248,6 +260,9 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "run.attempt":
       record.count = event.attempt;
+      break;
+    case "run.progress":
+      assignReasonCode(record, event.reason);
       break;
     case "context.assembled":
       record.channel = event.channel;

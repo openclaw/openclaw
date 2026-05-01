@@ -147,9 +147,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "integer",
             exclusiveMinimum: 0,
             maximum: 9007199254740991,
-            title: "Stuck Session Warning Threshold (ms)",
+            title: "Session Liveness Threshold (ms)",
             description:
-              "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+              "Age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Increase for long multi-tool turns; decrease for faster stale-session detection.",
           },
           otel: {
             type: "object",
@@ -24484,8 +24484,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["observability"],
     },
     "diagnostics.stuckSessionWarnMs": {
-      label: "Stuck Session Warning Threshold (ms)",
-      help: "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+      label: "Session Liveness Threshold (ms)",
+      help: "Age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Increase for long multi-tool turns; decrease for faster stale-session detection.",
       tags: ["observability", "storage"],
     },
     "diagnostics.otel.enabled": {
