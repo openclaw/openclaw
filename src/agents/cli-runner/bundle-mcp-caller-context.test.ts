@@ -124,6 +124,38 @@ describe("applyBundleMcpCallerContext", () => {
     });
   });
 
+  it("preserves numeric and boolean header values verbatim when injecting", () => {
+    // McpServerConfig.headers permits string | number | boolean. The injection
+    // step must NOT downcast existing values to strings (or drop them) when
+    // adding the caller placeholders.
+    const merged = applyBundleMcpCallerContext(
+      {
+        mcpServers: {
+          remote: {
+            type: "http",
+            url: "https://api.example/mcp",
+            headers: {
+              "X-Tenant": 42,
+              "X-Use-Beta": true,
+              Authorization: "Bearer secret",
+            },
+          },
+        },
+      },
+      new Set(["remote"]),
+    );
+
+    expect(merged.mcpServers.remote.headers).toEqual({
+      "X-Tenant": 42,
+      "X-Use-Beta": true,
+      Authorization: "Bearer secret",
+      "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
+      "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
+      "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+      "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+    });
+  });
+
   it("respects existing user headers case-insensitively (HTTP semantics)", () => {
     // User supplied `X-Session-Key` (capitalized). Since HTTP headers are
     // case-insensitive, we must NOT also inject the lowercase `x-session-key`
