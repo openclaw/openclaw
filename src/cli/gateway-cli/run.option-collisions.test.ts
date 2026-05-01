@@ -119,6 +119,10 @@ vi.mock("../../infra/restart-sentinel.js", () => ({
   writeRestartSentinel: (payload: unknown) => writeRestartSentinel(payload),
 }));
 
+vi.mock("../../infra/supervisor-markers.js", () => ({
+  detectRespawnSupervisor: () => null,
+}));
+
 vi.mock("../../logging/console.js", () => ({
   setConsoleSubsystemFilter: (filters: string[]) => setConsoleSubsystemFilter(filters),
   setConsoleTimestampPrefix: () => undefined,
