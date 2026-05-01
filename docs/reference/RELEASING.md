@@ -445,6 +445,8 @@ The canonical checklist for update and plugin validation is
 [Testing updates and plugins](/help/testing-updates-plugins). Use it when
 deciding which local, Docker, Package Acceptance, or release-check lane proves a
 plugin install/update, doctor cleanup, or published-package migration change.
+Exhaustive published update migration from every stable `2026.4.23+` package is
+a separate manual `Update Migration` workflow, not part of Full Release CI.
 
 Legacy package-acceptance leniency is intentionally time boxed. Packages through
 `2026.4.25` may use the compatibility path for metadata gaps already published

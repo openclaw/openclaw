@@ -6,6 +6,7 @@ const SCENARIOS = new Set([
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "plugin-deps-cleanup",
   "tilde-log-path",
   "versioned-runtime-deps",
 ]);

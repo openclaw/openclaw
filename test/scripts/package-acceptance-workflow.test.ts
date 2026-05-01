@@ -9,6 +9,7 @@ const PACKAGE_JSON = "package.json";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
+const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 
 type WorkflowStep = {
@@ -94,6 +95,7 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("--history-count 6");
     expect(workflow).toContain("--include-version 2026.4.23");
     expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
+    expect(workflow).toContain('"all-since-"');
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
     expect(workflow).toContain("update-channel-switch upgrade-survivor");
@@ -132,6 +134,22 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("Published upgrade survivor baseline:");
     expect(workflow).toContain("Published upgrade survivor baselines:");
     expect(workflow).toContain("Published upgrade survivor scenarios:");
+  });
+
+  it("keeps exhaustive update migration as a separate manual package gate", () => {
+    const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
+    const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+
+    expect(workflow).toContain("name: Update Migration");
+    expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
+    expect(workflow).toContain("source: ref");
+    expect(workflow).toContain("suite_profile: custom");
+    expect(workflow).toContain("docker_lanes: update-migration");
+    expect(workflow).toContain("default: all-since-2026.4.23");
+    expect(workflow).toContain("default: plugin-deps-cleanup");
+    expect(workflow).toContain("telegram_mode: none");
+    expect(workflow).toContain("secrets: inherit");
+    expect(packageWorkflow).toContain("published-upgrade-survivor/update-migration");
   });
 });
 

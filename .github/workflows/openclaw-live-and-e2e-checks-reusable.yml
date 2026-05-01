@@ -34,17 +34,17 @@ on:
         default: 1
         type: number
       published_upgrade_survivor_baseline:
-        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lane
         required: false
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional exact baseline list for published-upgrade-survivor lane expansion
+        description: Optional exact baseline list for published-upgrade-survivor/update-migration lane expansion
         required: false
         default: ""
         type: string
       published_upgrade_survivor_scenarios:
-        description: Optional scenario list for published-upgrade-survivor lane expansion
+        description: Optional scenario list for published-upgrade-survivor/update-migration lane expansion
         required: false
         default: ""
         type: string
@@ -129,17 +129,17 @@ on:
         default: 1
         type: number
       published_upgrade_survivor_baseline:
-        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        description: Published OpenClaw package baseline for the published-upgrade-survivor/update-migration Docker lane
         required: false
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional exact baseline list for published-upgrade-survivor lane expansion
+        description: Optional exact baseline list for published-upgrade-survivor/update-migration lane expansion
         required: false
         default: ""
         type: string
       published_upgrade_survivor_scenarios:
-        description: Optional scenario list for published-upgrade-survivor lane expansion
+        description: Optional scenario list for published-upgrade-survivor/update-migration lane expansion
         required: false
         default: ""
         type: string

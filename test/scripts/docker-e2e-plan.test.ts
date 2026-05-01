@@ -352,9 +352,37 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29",
       "published-upgrade-survivor-2026.4.29-feishu-channel",
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
     ]);
+  });
+
+  it("expands update migration across baselines and cleanup scenarios", () => {
+    const plan = planFor({
+      selectedLaneNames: ["update-migration"],
+      upgradeSurvivorBaselines: "2026.4.29 2026.4.23",
+      upgradeSurvivorScenarios: "plugin-deps-cleanup",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "update-migration-2026.4.29-plugin-deps-cleanup",
+      "update-migration-2026.4.23-plugin-deps-cleanup",
+    ]);
+    expect(plan.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: expect.stringContaining("pnpm test:docker:update-migration"),
+          imageKind: "bare",
+          stateScenario: "upgrade-survivor",
+        }),
+        expect.objectContaining({
+          command: expect.stringContaining(
+            "OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='plugin-deps-cleanup'",
+          ),
+        }),
+      ]),
+    );
   });
 
   it("plans a live-only selected lane without package e2e images", () => {

@@ -73,6 +73,7 @@ export const UPGRADE_SURVIVOR_SCENARIOS = [
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "plugin-deps-cleanup",
   "tilde-log-path",
   "versioned-runtime-deps",
 ];
@@ -153,7 +154,7 @@ export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, 
     return poolLanes;
   }
   return poolLanes.flatMap((poolLane) => {
-    if (poolLane.name !== "published-upgrade-survivor") {
+    if (poolLane.name !== "published-upgrade-survivor" && poolLane.name !== "update-migration") {
       return [poolLane];
     }
     const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];

@@ -70,12 +70,12 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list for published-upgrade-survivor; use release-history for last 6 plus key legacy releases
+        description: Optional baseline list for published-upgrade-survivor/update-migration; use release-history or all-since-2026.4.23
         required: false
         default: ""
         type: string
       published_upgrade_survivor_scenarios:
-        description: Optional scenario list for published-upgrade-survivor; use reported-issues for known upgrade failure shapes
+        description: Optional scenario list for published-upgrade-survivor/update-migration; use reported-issues for known upgrade failure shapes
         required: false
         default: ""
         type: string
@@ -150,12 +150,12 @@ on:
         default: openclaw@latest
         type: string
       published_upgrade_survivor_baselines:
-        description: Optional baseline list for published-upgrade-survivor; use release-history for last 6 plus key legacy releases
+        description: Optional baseline list for published-upgrade-survivor/update-migration; use release-history or all-since-2026.4.23
         required: false
         default: ""
         type: string
       published_upgrade_survivor_scenarios:
-        description: Optional scenario list for published-upgrade-survivor; use reported-issues for known upgrade failure shapes
+        description: Optional scenario list for published-upgrade-survivor/update-migration; use reported-issues for known upgrade failure shapes
         required: false
         default: ""
         type: string
@@ -442,7 +442,7 @@ jobs:
           fi
           releases_json=""
           npm_versions_json=""
-          if [[ "$REQUESTED_BASELINES" == *"release-history"* ]]; then
+          if [[ "$REQUESTED_BASELINES" == *"release-history"* || "$REQUESTED_BASELINES" == *"all-since-"* ]]; then
             releases_json=".artifacts/package-candidate-input/openclaw-releases.json"
             npm_versions_json=".artifacts/package-candidate-input/openclaw-npm-versions.json"
             mkdir -p "$(dirname "$releases_json")"
