@@ -157,9 +157,9 @@ function isPdftoppmAvailable(): boolean {
 
 const FS = /* #__PURE__ */ (() => {
   try {
-    return require("fs");
-  } catch {
     return require("node:fs");
+  } catch {
+    return require("fs");
   }
 })();
 
