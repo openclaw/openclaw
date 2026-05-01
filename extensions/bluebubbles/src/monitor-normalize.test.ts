@@ -61,6 +61,25 @@ describe("normalizeWebhookMessage", () => {
     expect(result).toBeNull();
   });
 
+  it("accepts fromMe group messages without sender handle by synthesizing senderId=me", () => {
+    const result = normalizeWebhookMessage({
+      type: "new-message",
+      data: {
+        guid: "msg-fromme-group-1",
+        text: "assistant reply",
+        isGroup: true,
+        isFromMe: true,
+        handle: null,
+        chatGuid: "iMessage;+;chat123456",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.senderId).toBe("me");
+    expect(result?.fromMe).toBe(true);
+    expect(result?.isGroup).toBe(true);
+  });
+
   it("accepts array-wrapped payload data", () => {
     const result = normalizeWebhookMessage({
       type: "new-message",
