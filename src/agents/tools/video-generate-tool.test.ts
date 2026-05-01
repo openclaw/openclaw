@@ -93,10 +93,13 @@ describe("createVideoGenerateTool", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns null when no video-generation config or auth-backed provider is available", () => {
+  it("defers video-generation model resolution until execution", async () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
 
-    expect(createVideoGenerateTool({ config: asConfig({}) })).toBeNull();
+    const tool = createVideoGenerateTool({ config: asConfig({}) });
+    await expect(tool.execute("tool-call-1", { prompt: "make a clip" })).rejects.toThrow(
+      "No video-generation model configured.",
+    );
   });
 
   it("registers when video-generation config is present", () => {

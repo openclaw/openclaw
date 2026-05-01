@@ -380,15 +380,6 @@ export function createImageTool(options?: {
     }
     return null;
   }
-  const imageModelConfig = resolveImageModelConfigForTool({
-    cfg: options?.config,
-    agentDir,
-  });
-  if (!imageModelConfig) {
-    return null;
-  }
-  const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
-
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
@@ -462,6 +453,14 @@ export function createImageTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
+      const imageModelConfig = resolveImageModelConfigForTool({
+        cfg: options?.config,
+        agentDir,
+      });
+      if (!imageModelConfig) {
+        throw new Error("No image model configured.");
+      }
+      const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(options?.config);
       const maxBytesMb = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
