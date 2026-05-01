@@ -132,6 +132,7 @@ export function registerPluginsCli(program: Command) {
       await refreshPluginRegistryAfterConfigMutation({
         config: next,
         reason: "policy-changed",
+        policyPluginIds: [enableResult.pluginId],
         logger: {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
@@ -166,6 +167,7 @@ export function registerPluginsCli(program: Command) {
       await refreshPluginRegistryAfterConfigMutation({
         config: next,
         reason: "policy-changed",
+        policyPluginIds: [id],
         logger: {
           warn: (message) => defaultRuntime.log(theme.warn(message)),
         },
