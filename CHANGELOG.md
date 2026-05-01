@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Browser/snapshot: propagate the configured snapshot timeout through the agent tool, Chrome MCP, and Playwright snapshot paths so snapshot actions honor the requested deadline instead of hanging. Fixes #72934. Thanks @masatohoshino.
 - Plugins/TTS: keep bundled speech-provider discovery available on cold package Gateway paths and add bundled plugin matrix runtime probes for health, readiness, RPC, TTS discovery, and post-ready runtime-deps watchdog coverage. Refs #75283. Thanks @vincentkoc.
 - Google Meet/Twilio: show delegated voice call ID, DTMF, and intro-greeting state in `googlemeet doctor`, and avoid claiming DTMF was sent when no Meet PIN sequence was configured. Refs #72478. Thanks @DougButdorf.
 - Voice Call/Twilio: send notify-mode initial TwiML directly in the outbound create-call request while keeping conversation and pre-connect DTMF calls webhook-driven, so one-shot notify calls do not depend on a first-answer webhook fetch. Supersedes #72758. Thanks @tyshepps.
