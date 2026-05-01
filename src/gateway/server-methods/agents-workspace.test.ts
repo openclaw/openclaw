@@ -542,7 +542,7 @@ describe("agents.workspace.delete", () => {
   });
 
   it("deletes a file", async () => {
-    mocks.fsStat.mockResolvedValue({
+    mocks.fsLstat.mockResolvedValue({
       isDirectory: () => false,
     } as unknown as Stats);
 
@@ -559,7 +559,7 @@ describe("agents.workspace.delete", () => {
   });
 
   it("deletes an empty directory", async () => {
-    mocks.fsStat.mockResolvedValue({
+    mocks.fsLstat.mockResolvedValue({
       isDirectory: () => true,
     } as unknown as Stats);
 
@@ -577,7 +577,7 @@ describe("agents.workspace.delete", () => {
   });
 
   it("rejects deleting non-empty directory without recursive flag", async () => {
-    mocks.fsStat.mockResolvedValue({
+    mocks.fsLstat.mockResolvedValue({
       isDirectory: () => true,
     } as unknown as Stats);
 
@@ -596,7 +596,7 @@ describe("agents.workspace.delete", () => {
   });
 
   it("deletes non-empty directory with recursive flag", async () => {
-    mocks.fsStat.mockResolvedValue({
+    mocks.fsLstat.mockResolvedValue({
       isDirectory: () => true,
     } as unknown as Stats);
 
@@ -982,18 +982,14 @@ describe("agents.workspace parameter validation edge cases", () => {
     expect(getLastCall()?.ok).toBe(true);
   });
 
-  it("handles empty path", async () => {
-    mocks.readFileWithinRoot.mockResolvedValue({
-      buffer: Buffer.from("content"),
-      stat: { size: 7, mtimeMs: Date.now() } as unknown as Stats,
-      realPath: "/tmp/test-workspace/main",
-    });
-
+  it("rejects empty path (NonEmptyString)", async () => {
     const { getLastCall } = await invokeWorkspaceHandler("agents.workspace.get", {
       agentId: "main",
       path: "",
     });
 
-    expect(getLastCall()?.ok).toBe(true);
+    const lastCall = getLastCall();
+    expect(lastCall?.ok).toBe(false);
+    expect((lastCall?.error as { code?: string })?.code).toBe(ErrorCodes.INVALID_REQUEST);
   });
 });

@@ -308,9 +308,13 @@ async function workspaceMove(
         throw new Error("Destination path resolves outside workspace root");
       }
       break;
-    } catch {
-      // Ancestor doesn't exist yet, check its parent
-      checkDir = path.dirname(checkDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        // Ancestor doesn't exist yet, check its parent
+        checkDir = path.dirname(checkDir);
+        continue;
+      }
+      throw err;
     }
   }
 
