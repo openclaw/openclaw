@@ -175,14 +175,12 @@ function comparableCommand(value: unknown): unknown {
 }
 
 const unorderedCommandArrayFields = new Set(["channel_types", "contexts", "integration_types"]);
-const subcommandOptionOnlyFields = new Set([
+const optionComparisonOmittedFields = new Set([
   "contexts",
   "default_member_permissions",
   "description_localized",
-  "description_localizations",
   "integration_types",
   "name_localized",
-  "name_localizations",
 ]);
 
 function stableComparableObject(value: unknown, path: string[] = []): unknown {
@@ -210,7 +208,7 @@ function stableComparableObject(value: unknown, path: string[] = []): unknown {
         if (entry === undefined) {
           return false;
         }
-        if (path.includes("options") && subcommandOptionOnlyFields.has(key)) {
+        if (path.includes("options") && optionComparisonOmittedFields.has(key)) {
           return false;
         }
         if ((key === "required" || key === "autocomplete") && entry === false) {

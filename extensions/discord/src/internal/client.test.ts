@@ -204,6 +204,63 @@ describe("Client.deployCommands", () => {
     expect(deleteRequest).not.toHaveBeenCalled();
   });
 
+  it("patches changed option localization maps", async () => {
+    const client = createInternalTestClient([
+      createTestCommand({
+        name: "one",
+        options: [
+          {
+            type: 3,
+            name: "value",
+            name_localizations: { de: "wert" },
+            description: "Value",
+            description_localizations: { de: "Wert" },
+          },
+        ],
+      }),
+    ]);
+    const get = vi.fn(async () => [
+      {
+        id: "cmd1",
+        application_id: "app1",
+        type: ApplicationCommandType.ChatInput,
+        name: "one",
+        description: "one command",
+        options: [
+          {
+            type: 3,
+            name: "value",
+            name_localizations: { de: "alter-wert" },
+            description: "Value",
+            description_localizations: { de: "Alter Wert" },
+          },
+        ],
+      },
+    ]);
+    const patch = vi.fn(async () => undefined);
+    const post = vi.fn(async () => undefined);
+    const deleteRequest = vi.fn(async () => undefined);
+    attachRestMock(client, { get, patch, post, delete: deleteRequest });
+
+    await client.deployCommands({ mode: "reconcile" });
+
+    expect(patch).toHaveBeenCalledWith(
+      Routes.applicationCommand("app1", "cmd1"),
+      expect.objectContaining({
+        body: expect.objectContaining({
+          options: [
+            expect.objectContaining({
+              name_localizations: { de: "wert" },
+              description_localizations: { de: "Wert" },
+            }),
+          ],
+        }),
+      }),
+    );
+    expect(post).not.toHaveBeenCalled();
+    expect(deleteRequest).not.toHaveBeenCalled();
+  });
+
   it("skips command deploy when the serialized command set is unchanged", async () => {
     const client = createInternalTestClient([createTestCommand({ name: "one" })]);
     const get = vi.fn(async () => []);
