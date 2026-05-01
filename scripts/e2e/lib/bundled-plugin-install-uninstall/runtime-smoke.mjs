@@ -303,11 +303,18 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
     };
   }
   if (plan.speechProviders[0]) {
+    const provider = plan.speechProviders[0];
     config.messages = {
       ...config.messages,
       tts: {
         ...config.messages?.tts,
-        provider: plan.speechProviders[0],
+        provider,
+        providers: {
+          ...config.messages?.tts?.providers,
+          [provider]: {
+            ...config.messages?.tts?.providers?.[provider],
+          },
+        },
       },
     };
   }
