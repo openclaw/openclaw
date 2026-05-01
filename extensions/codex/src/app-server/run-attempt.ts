@@ -1398,6 +1398,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
+    enableHeartbeatTool: params.trigger === "heartbeat",
+    forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
       input.onYieldDetected();
       emitCodexAppServerEvent(params, {

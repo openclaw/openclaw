@@ -1,4 +1,5 @@
 import { createCodingTools, createReadTool } from "@mariozechner/pi-coding-agent";
+import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
@@ -347,6 +348,10 @@ export function createOpenClawCodingTools(options?: {
   disableMessageTool?: boolean;
   /** Keep the message tool available even when the selected profile omits it. */
   forceMessageTool?: boolean;
+  /** Include the heartbeat response tool for structured heartbeat outcomes. */
+  enableHeartbeatTool?: boolean;
+  /** Keep the heartbeat response tool available even when the selected profile omits it. */
+  forceHeartbeatTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
   /**
@@ -408,7 +413,15 @@ export function createOpenClawCodingTools(options?: {
   const profilePolicy = resolveToolProfilePolicy(profile);
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
 
-  const runtimeProfileAlsoAllow = options?.forceMessageTool ? ["message"] : [];
+  const enableHeartbeatTool =
+    options?.enableHeartbeatTool === true ||
+    (options?.trigger === "heartbeat" &&
+      options?.config?.messages?.visibleReplies === "message_tool");
+  const forceHeartbeatTool = options?.forceHeartbeatTool === true || enableHeartbeatTool;
+  const runtimeProfileAlsoAllow = [
+    ...(options?.forceMessageTool ? ["message"] : []),
+    ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
+  ];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
     ...runtimeProfileAlsoAllow,
@@ -647,6 +660,7 @@ export function createOpenClawCodingTools(options?: {
       modelHasVision: options?.modelHasVision,
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
+      enableHeartbeatTool,
       ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,

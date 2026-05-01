@@ -360,12 +360,14 @@ describe("runCodexAppServerAttempt", () => {
       "update_plan",
       "web_search",
       "message",
+      "heartbeat_respond",
       "sessions_spawn",
     ].map((name) => ({ name }));
 
     expect(__testing.applyCodexDynamicToolProfile(tools, {}).map((tool) => tool.name)).toEqual([
       "web_search",
       "message",
+      "heartbeat_respond",
       "sessions_spawn",
     ]);
   });
