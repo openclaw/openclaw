@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/voice: run voice-channel turns under a voice-output policy that hides the agent `tts` tool and asks for spoken reply text, so `/vc join` sessions synthesize and play agent replies instead of ending with `NO_REPLY`. Fixes #61536. Thanks @aounakram.
 - Plugins/runtime-deps: prune legacy version-scoped plugin runtime-deps roots during bundled dependency repair and cover the path in Package Acceptance's upgrade-survivor matrix, so upgrades from 2026.4.x no longer leave stale per-plugin runtime trees after doctor runs. Thanks @vincentkoc.
 - Plugins/runtime-deps: keep Gateway startup plugin imports and runtime plugin fallback loads verify-only after startup/config repair planning, so packaged installs no longer spawn package-manager repair from hot paths after readiness. Refs #75283 and #75069. Thanks @brokemac79 and @xiaohuaxi.
 - Voice Call/realtime: add default-off fast memory/session context for `openclaw_agent_consult`, giving live calls a bounded answer-or-miss path before the full agent consult. Fixes #71849. Thanks @amzzzzzzz.

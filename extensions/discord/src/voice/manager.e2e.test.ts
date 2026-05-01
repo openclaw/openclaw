@@ -539,6 +539,41 @@ describe("DiscordVoiceManager", () => {
     expect(commandArgs?.model).toBe("openai/gpt-5.4-mini");
   });
 
+  it("runs voice replies under Discord voice output policy", async () => {
+    agentCommandMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello back" }],
+    } as never);
+
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager({ groupPolicy: "open" }, client, {
+      commands: { useAccessGroups: false },
+    });
+    await processVoiceSegment(manager, "u-guest");
+
+    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+      | { message?: string; messageChannel?: string; messageProvider?: string }
+      | undefined;
+
+    expect(commandArgs?.messageChannel).toBe("discord");
+    expect(commandArgs?.messageProvider).toBe("discord-voice");
+    expect(commandArgs?.message).toContain("Do not call the tts tool");
+    expect(textToSpeechMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        text: "hello back",
+      }),
+    );
+  });
+
   it("reuses speaker context cache for repeated segments from the same speaker", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
