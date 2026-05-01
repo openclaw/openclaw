@@ -23,7 +23,7 @@
 # Build (override base):
 #   docker build --build-arg BASE_IMAGE=<upstream-image> -f Dockerfile.fork .
 
-ARG BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.4.24-slim"
+ARG BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.5.2-slim"
 
 # ── Stage 1: source — install gh, lark-cli, gcloud ──────────────
 FROM ${BASE_IMAGE} AS source
