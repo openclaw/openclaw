@@ -9,12 +9,14 @@ import {
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
+  ConfigMutationConflictError,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -100,6 +102,10 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_HOME",
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
+] as const;
+const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
+  ...SERVICE_REFRESH_PATH_ENV_KEYS,
+  "OPENCLAW_PROFILE",
 ] as const;
 
 const UPDATE_QUIPS = [
@@ -318,6 +324,34 @@ function resolveUpdatedInstallCommandEnv(
   return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
 }
 
+export function resolvePostInstallDoctorEnv(params?: {
+  baseEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  if (!params?.serviceEnv) {
+    return resolvedEnv;
+  }
+
+  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
+  for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
+    const value = serviceEnv[key]?.trim();
+    if (value) {
+      resolvedEnv[key] = serviceEnv[key];
+    }
+  }
+  return resolvedEnv;
+}
+
+export function resolveUpdatedGatewayRestartPort(params: {
+  config?: OpenClawConfig;
+  processEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+}): number {
+  return resolveGatewayPort(params.config, params.serviceEnv ?? params.processEnv ?? process.env);
+}
+
 type UpdateDryRunPreview = {
   dryRun: true;
   root: string;
@@ -505,6 +539,8 @@ async function runPackageInstallUpdate(params: {
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   jsonMode: boolean;
+  managedServiceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
 }): Promise<UpdateRunResult> {
   const manager = await resolveGlobalManager({
     root: params.root,
@@ -569,7 +605,10 @@ async function runPackageInstallUpdate(params: {
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
           env: {
-            ...disableUpdatedPackageCompileCacheEnv(process.env),
+            ...resolvePostInstallDoctorEnv({
+              serviceEnv: params.managedServiceEnv,
+              invocationCwd: params.invocationCwd,
+            }),
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
           },
@@ -942,7 +981,7 @@ async function maybeRestartService(params: {
     const diagnosticLines = [
       "Gateway did not become healthy after restart.",
       ...renderRestartDiagnostics(health),
-      `Restart log: ${resolveGatewayRestartLogPath(process.env)}`,
+      `Restart log: ${resolveGatewayRestartLogPath(params.serviceEnv ?? process.env)}`,
       `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
     ];
     if (params.opts.json) {
@@ -1117,12 +1156,49 @@ async function persistRequestedUpdateChannel(params: {
       channel: params.requestedChannel,
     },
   };
+  try {
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: params.configSnapshot.hash,
+    });
+    return createUpdatedChannelSnapshot(params.configSnapshot, next);
+  } catch (error) {
+    if (!(error instanceof ConfigMutationConflictError)) {
+      throw error;
+    }
+  }
+
+  const refreshed = await readConfigFileSnapshot();
+  if (!refreshed.valid) {
+    return refreshed;
+  }
+  const refreshedChannel = normalizeUpdateChannel(refreshed.config.update?.channel);
+  if (refreshedChannel === params.requestedChannel) {
+    return refreshed;
+  }
+  const refreshedNext = {
+    ...refreshed.sourceConfig,
+    update: {
+      ...refreshed.sourceConfig.update,
+      channel: params.requestedChannel,
+    },
+  };
   await replaceConfigFile({
-    nextConfig: next,
-    baseHash: params.configSnapshot.hash,
+    nextConfig: refreshedNext,
+    baseHash: refreshed.hash,
   });
+  return createUpdatedChannelSnapshot(refreshed, refreshedNext);
+}
+
+function createUpdatedChannelSnapshot(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  next: OpenClawConfig,
+): Awaited<ReturnType<typeof readConfigFileSnapshot>> {
+  if (!snapshot.valid) {
+    return snapshot;
+  }
   return {
-    ...params.configSnapshot,
+    ...snapshot,
     hash: undefined,
     parsed: next,
     sourceConfig: asResolvedSourceConfig(next),
@@ -1572,6 +1648,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
             startedAt,
             progress,
             jsonMode: Boolean(opts.json),
+            managedServiceEnv: prePackageServiceStop?.serviceEnv,
+            invocationCwd,
           })
         : await runGitUpdate({
             root,
@@ -1732,10 +1810,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
-  const gatewayPort = resolveGatewayPort(
-    postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
-    process.env,
-  );
+  let gatewayPort = resolveUpdatedGatewayRestartPort({
+    config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+    processEnv: process.env,
+  });
   if (shouldRestart) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
@@ -1749,6 +1827,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         })
       ) {
         gatewayServiceEnv = serviceState.env;
+        gatewayPort = resolveUpdatedGatewayRestartPort({
+          config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+          processEnv: process.env,
+          serviceEnv: gatewayServiceEnv,
+        });
         restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
         refreshGatewayServiceEnv = true;
       }

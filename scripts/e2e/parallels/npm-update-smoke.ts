@@ -13,6 +13,7 @@ import {
   resolveHostIp,
   resolveLatestVersion,
   resolveProviderAuth,
+  resolveWindowsProviderAuth,
   run,
   say,
   startHostServer,
@@ -145,6 +146,7 @@ function platformRecord<T>(value: T): Record<Platform, T> {
 
 class NpmUpdateSmoke {
   private auth: ProviderAuth;
+  private windowsAuth: ProviderAuth;
   private runDir = "";
   private tgzDir = "";
   private latestVersion = "";
@@ -164,6 +166,11 @@ class NpmUpdateSmoke {
 
   constructor(private options: NpmUpdateOptions) {
     this.auth = resolveProviderAuth({
+      apiKeyEnv: options.apiKeyEnv,
+      modelId: options.modelId,
+      provider: options.provider,
+    });
+    this.windowsAuth = resolveWindowsProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
       provider: options.provider,
@@ -243,6 +250,7 @@ class NpmUpdateSmoke {
     env: NodeJS.ProcessEnv = {},
   ): Job {
     const logPath = path.join(this.runDir, `${platform}-fresh.log`);
+    const auth = this.authForPlatform(platform);
     const args = [
       "exec",
       "tsx",
@@ -252,9 +260,9 @@ class NpmUpdateSmoke {
       "--provider",
       this.options.provider,
       "--model",
-      this.auth.modelId,
+      auth.modelId,
       "--api-key-env",
-      this.auth.apiKeyEnv,
+      auth.apiKeyEnv,
       "--target-package-spec",
       this.packageSpec,
       "--json",
@@ -376,7 +384,7 @@ class NpmUpdateSmoke {
 
   private updateScript(platform: Platform): string {
     const input = {
-      auth: this.auth,
+      auth: this.authForPlatform(platform),
       expectedNeedle: this.updateExpectedNeedle,
       updateTarget: this.updateTargetEffective,
     };
@@ -389,6 +397,10 @@ class NpmUpdateSmoke {
         return linuxUpdateScript(input);
     }
     return die("unsupported platform");
+  }
+
+  private authForPlatform(platform: Platform): ProviderAuth {
+    return platform === "windows" ? this.windowsAuth : this.auth;
   }
 
   private spawnLogged(
@@ -441,15 +453,34 @@ class NpmUpdateSmoke {
     timeoutMs: number,
     ctx: UpdateJobContext,
   ): Promise<void> {
-    const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx);
-    const status = await this.runStreamingToJobLog(
-      "prlctl",
-      ["exec", macosVm, ...macosExecArgs, "/bin/bash", "-lc", script],
-      timeoutMs,
-      ctx,
+    const scriptPath = this.writeGuestScript(
+      macosVm,
+      script,
+      "openclaw-parallels-npm-update-macos",
     );
-    if (status !== 0) {
-      throw new Error(`macOS update command failed with exit code ${status}`);
+    const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx);
+    const sudoUserArgIndex = macosExecArgs.indexOf("-u");
+    const sudoUser =
+      sudoUserArgIndex >= 0 && sudoUserArgIndex + 1 < macosExecArgs.length
+        ? macosExecArgs[sudoUserArgIndex + 1]
+        : "";
+    if (sudoUser) {
+      run("prlctl", ["exec", macosVm, "/usr/sbin/chown", sudoUser, scriptPath], {
+        timeoutMs: 30_000,
+      });
+    }
+    try {
+      const status = await this.runStreamingToJobLog(
+        "prlctl",
+        ["exec", macosVm, ...macosExecArgs, "/bin/bash", scriptPath],
+        timeoutMs,
+        ctx,
+      );
+      if (status !== 0) {
+        throw new Error(`macOS update command failed with exit code ${status}`);
+      }
+    } finally {
+      this.removeGuestScript(macosVm, scriptPath);
     }
   }
 
@@ -688,15 +719,62 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     timeoutMs: number,
     ctx: UpdateJobContext,
   ): Promise<void> {
-    const status = await this.runStreamingToJobLog(
-      "prlctl",
-      ["exec", this.linuxVm, "/usr/bin/env", "HOME=/root", "bash", "-lc", script],
-      timeoutMs,
-      ctx,
+    const scriptPath = this.writeGuestScript(
+      this.linuxVm,
+      script,
+      "openclaw-parallels-npm-update-linux",
     );
-    if (status !== 0) {
-      throw new Error(`Linux update command failed with exit code ${status}`);
+    try {
+      const status = await this.runStreamingToJobLog(
+        "prlctl",
+        [
+          "exec",
+          this.linuxVm,
+          "/usr/bin/env",
+          "HOME=/root",
+          "PATH=/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/snap/bin",
+          "bash",
+          scriptPath,
+        ],
+        timeoutMs,
+        ctx,
+      );
+      if (status !== 0) {
+        throw new Error(`Linux update command failed with exit code ${status}`);
+      }
+    } finally {
+      this.removeGuestScript(this.linuxVm, scriptPath);
     }
+  }
+
+  private writeGuestScript(vm: string, script: string, prefix: string): string {
+    const scriptPath = `/tmp/${prefix}-${process.pid}-${Date.now()}.sh`;
+    const write = run("prlctl", ["exec", vm, "/usr/bin/tee", scriptPath], {
+      check: false,
+      input: script,
+      quiet: true,
+      timeoutMs: 120_000,
+    });
+    if (write.status !== 0) {
+      throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
+    }
+    const chmod = run("prlctl", ["exec", vm, "/bin/chmod", "755", scriptPath], {
+      check: false,
+      quiet: true,
+      timeoutMs: 30_000,
+    });
+    if (chmod.status !== 0) {
+      throw new Error(`failed to chmod guest script ${scriptPath}: ${chmod.stderr.trim()}`);
+    }
+    return scriptPath;
+  }
+
+  private removeGuestScript(vm: string, scriptPath: string): void {
+    run("prlctl", ["exec", vm, "/bin/rm", "-f", scriptPath], {
+      check: false,
+      quiet: true,
+      timeoutMs: 30_000,
+    });
   }
 
   private async runStreamingToJobLog(

@@ -291,6 +291,3 @@ export interface Credentials {
   appId: string;
   clientSecret: string;
 }
-
-// Re-export getNextMsgSeq for consumers that import from messages.ts.
-export { getNextMsgSeq } from "./routes.js";
