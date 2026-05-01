@@ -12,10 +12,14 @@ type WhatsAppSetupConfig = {
   };
 };
 
+type MockFn = ((...args: unknown[]) => unknown) & {
+  mock: { calls: unknown[][] };
+};
+
 type WizardPromptHarness = {
-  text: (...args: unknown[]) => unknown;
-  select: (...args: unknown[]) => unknown;
-  note: (...args: unknown[]) => unknown;
+  text: MockFn;
+  select: MockFn;
+  note: MockFn;
 };
 
 type QueuedWizardPrompterFactory<T extends WizardPromptHarness> = (params: {
