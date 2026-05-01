@@ -102,6 +102,9 @@ function collectGoogleChatAccountAssignment(params: {
     expected: "string-or-object",
     apply: (value) => {
       params.target.serviceAccount = value;
+      if (explicitRef) {
+        delete params.target.serviceAccountRef;
+      }
     },
   });
 }
@@ -125,7 +128,8 @@ export function collectRuntimeConfigAssignments(params: {
           ({ account, enabled }) =>
             enabled &&
             !hasOwnProperty(account, "serviceAccount") &&
-            !hasOwnProperty(account, "serviceAccountRef"),
+            !hasOwnProperty(account, "serviceAccountRef") &&
+            !hasOwnProperty(account, "serviceAccountFile"),
         );
   collectGoogleChatAccountAssignment({
     target: googleChat,

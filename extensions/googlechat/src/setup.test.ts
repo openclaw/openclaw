@@ -456,6 +456,40 @@ describe("resolveGoogleChatAccount", () => {
     );
   });
 
+  it("does not inherit top-level serviceAccountRef into account-owned credentials", () => {
+    const resolved = resolveGoogleChatAccount({
+      cfg: {
+        channels: {
+          googlechat: {
+            serviceAccountRef: {
+              source: "exec",
+              provider: "onepassword",
+              id: "default-service-account.json",
+            },
+            accounts: {
+              work: {
+                serviceAccount: {
+                  client_email: "work@example.com",
+                  private_key: "work-key",
+                  type: "service_account",
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.credentialSource).toBe("inline");
+    expect(resolved.credentials).toEqual({
+      client_email: "work@example.com",
+      private_key: "work-key",
+      type: "service_account",
+    });
+    expect(resolved.config.serviceAccountRef).toBeUndefined();
+  });
+
   it("inherits shared defaults from accounts.default for named accounts", () => {
     const cfg: OpenClawConfig = {
       channels: {
