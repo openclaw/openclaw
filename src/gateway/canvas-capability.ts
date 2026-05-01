@@ -40,7 +40,16 @@ export function buildCanvasScopedHostUrl(baseUrl: string, capability: string): s
 }
 
 export function normalizeCanvasScopedUrl(rawUrl: string): NormalizedCanvasScopedUrl {
-  const url = new URL(rawUrl, "http://localhost");
+  let url: URL;
+  try {
+    url = new URL(rawUrl, "http://localhost");
+  } catch {
+    return {
+      pathname: "/",
+      scopedPath: false,
+      malformedScopedPath: true,
+    };
+  }
   const prefix = `${CANVAS_CAPABILITY_PATH_PREFIX}/`;
   let scopedPath = false;
   let malformedScopedPath = false;

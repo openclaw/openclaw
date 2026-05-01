@@ -1,4 +1,4 @@
-import type { Socket } from "node:net";
+import { connect, type Socket } from "node:net";
 import { describe, expect, test } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { A2UI_PATH, CANVAS_HOST_PATH, CANVAS_WS_PATH } from "../canvas-host/a2ui.js";
@@ -157,6 +157,32 @@ async function expectWsConnected(url: string, headers?: Record<string, string>):
     ws.once("error", (err) => {
       finish(() => reject(err));
     });
+  });
+}
+
+async function sendRawHttpRequest(params: {
+  host: string;
+  port: number;
+  requestTarget: string;
+}): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const socket = connect({ host: params.host, port: params.port }, () => {
+      socket.write(
+        `GET ${params.requestTarget} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n`,
+      );
+    });
+    let response = "";
+    socket.setEncoding("utf8");
+    socket.setTimeout(WS_REJECT_TIMEOUT_MS, () => {
+      socket.destroy(new Error("timeout"));
+    });
+    socket.on("data", (chunk) => {
+      response += chunk;
+    });
+    socket.once("end", () => {
+      resolve(response);
+    });
+    socket.once("error", reject);
   });
 }
 
@@ -448,6 +474,26 @@ describe("gateway canvas host auth", () => {
         await expectWsConnected(url, {
           authorization: "Bearer rotated-token",
         });
+      },
+    });
+  }, 60_000);
+
+  test("rejects malformed raw HTTP request targets without disrupting gateway", async () => {
+    await withCanvasGatewayHarness({
+      resolvedAuth: tokenResolvedAuth,
+      handleHttpRequest: allowCanvasHostHttp,
+      run: async ({ listener }) => {
+        for (const requestTarget of ["//", "///", "//${jndi:ldap://example}.action"]) {
+          const response = await sendRawHttpRequest({
+            host: "127.0.0.1",
+            port: listener.port,
+            requestTarget,
+          });
+          expect(response).toMatch(/^HTTP\/1\.1 401 /);
+        }
+
+        const res = await fetchCanvas(`http://127.0.0.1:${listener.port}${CANVAS_HOST_PATH}/`);
+        expect(res.status).toBe(401);
       },
     });
   }, 60_000);

@@ -535,7 +535,13 @@ export function createGatewayHttpServer(opts: {
     }
 
     try {
-      const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      let requestPath: string;
+      try {
+        requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      } catch {
+        sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+        return;
+      }
       if (GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath) === "live") {
         await handleGatewayProbeRequest(
           req,
