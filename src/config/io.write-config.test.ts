@@ -308,4 +308,52 @@ describe("config io write", () => {
       plugins: [],
     } satisfies PluginManifestRegistry);
   });
+
+  it("short-circuits without disk write when only meta timestamp changes (#75534)", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const warn = vi.fn();
+      const io = createConfigIO({
+        env: { OPENCLAW_TEST_CONFIG_OVERWRITE_LOG: "1" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      // First write: creates the file.
+      await io.writeConfigFile({
+        gateway: { mode: "local", port: 18789 },
+      });
+
+      // Record modification time after first write.
+      const statAfterFirst = await fs.stat(configPath);
+
+      // Reset mocks and call counts.
+      warn.mockClear();
+      mockMaintainConfigBackups.mockClear();
+
+      // Small delay to ensure lastTouchedAt timestamp differs.
+      await new Promise((r) => setTimeout(r, 5));
+
+      // Second write: same logical content — should short-circuit.
+      const secondResult = await io.writeConfigFile({
+        gateway: { mode: "local", port: 18789 },
+      });
+
+      // Should return a hash (the on-disk one, since nothing was written).
+      expect(secondResult.persistedHash).toEqual(expect.any(String));
+
+      // No "Config overwrite" log should fire on a no-op write.
+      const overwriteLogs = warn.mock.calls.filter(
+        (call) => typeof call[0] === "string" && call[0].startsWith("Config overwrite:"),
+      );
+      expect(overwriteLogs).toHaveLength(0);
+
+      // Backup rotation should NOT be called on a no-op write.
+      expect(mockMaintainConfigBackups).not.toHaveBeenCalled();
+
+      // File mtime should be unchanged (no disk write occurred).
+      const statAfterSecond = await fs.stat(configPath);
+      expect(statAfterSecond.mtimeMs).toBe(statAfterFirst.mtimeMs);
+    });
+  });
 });

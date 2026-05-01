@@ -1573,6 +1573,39 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
     const nextHash = hashConfigRaw(json);
     const previousHash = resolveConfigSnapshotHash(snapshot);
+
+    // No-op short-circuit: if the only difference between the next config and
+    // the on-disk config is the volatile `meta.lastTouchedAt` / `lastTouchedVersion`
+    // fields, skip the disk write entirely.  This avoids the file-watcher →
+    // SIGUSR1 gateway-restart cascade on semantically-equal config patches
+    // (see #75534).
+    if (snapshot.exists && previousHash !== null && nextHash !== previousHash) {
+      // Hashes differ — check if it's only the meta timestamp that changed.
+      const stripVolatileMeta = (raw: string): string => {
+        try {
+          const obj = JSON.parse(raw);
+          if (obj && typeof obj === "object" && obj.meta) {
+            const { lastTouchedAt: _lta, lastTouchedVersion: _ltv, ...rest } = obj.meta;
+            obj.meta = Object.keys(rest).length > 0 ? rest : undefined;
+            if (obj.meta === undefined) {
+              delete obj.meta;
+            }
+          }
+          return JSON.stringify(obj, null, 2).trimEnd().concat("\n");
+        } catch {
+          return raw;
+        }
+      };
+      const nextStable = hashConfigRaw(stripVolatileMeta(json));
+      const prevStable = hashConfigRaw(stripVolatileMeta(snapshot.raw ?? ""));
+      if (nextStable === prevStable) {
+        return { persistedHash: previousHash };
+      }
+    } else if (snapshot.exists && previousHash !== null && nextHash === previousHash) {
+      // Byte-identical — trivial no-op.
+      return { persistedHash: nextHash };
+    }
+
     const changedPathCount = changedPaths?.size;
     const previousBytes =
       typeof snapshot.raw === "string" ? Buffer.byteLength(snapshot.raw, "utf-8") : null;
