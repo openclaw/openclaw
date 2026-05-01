@@ -1,6 +1,6 @@
 import { installChannelActionsContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { describe } from "vitest";
+import { describe, expect, it } from "vitest";
 import { telegramPlugin } from "../api.js";
 
 describe("telegram actions contract", () => {
@@ -20,5 +20,11 @@ describe("telegram actions contract", () => {
         expectedCapabilities: ["delivery-pin", "presentation"],
       },
     ],
+  });
+
+  it("keeps bundled Telegram message actions gateway-owned", () => {
+    for (const action of ["send", "poll", "react", "delete", "edit"] as const) {
+      expect(telegramPlugin.actions?.resolveExecutionMode?.({ action })).toBe("gateway");
+    }
   });
 });
