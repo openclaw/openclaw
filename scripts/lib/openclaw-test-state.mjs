@@ -319,9 +319,12 @@ export function renderShellSnippet(options = {}) {
   const scenario = requireScenario(options.scenario);
   const config = scenarioConfig(scenario, options);
   const env = scenarioEnv(scenario);
-  const template = `/tmp/openclaw-${label}-${scenario}-home.XXXXXX`;
+  const homeTemplate = `openclaw-${label}-${scenario}-home.XXXXXX`;
   const lines = [
-    `OPENCLAW_TEST_STATE_HOME="$(mktemp -d ${shellQuote(template)})"`,
+    'OPENCLAW_TEST_STATE_TMP_ROOT="${OPENCLAW_TEST_STATE_TMPDIR:-${TMPDIR:-/tmp}}"',
+    "export OPENCLAW_TEST_STATE_TMP_ROOT",
+    'mkdir -p "$OPENCLAW_TEST_STATE_TMP_ROOT"',
+    `OPENCLAW_TEST_STATE_HOME="$(mktemp -d "$OPENCLAW_TEST_STATE_TMP_ROOT/${homeTemplate}")"`,
     'export HOME="$OPENCLAW_TEST_STATE_HOME"',
     'export USERPROFILE="$OPENCLAW_TEST_STATE_HOME"',
     'export OPENCLAW_HOME="$OPENCLAW_TEST_STATE_HOME"',
@@ -360,7 +363,9 @@ export function renderShellFunction() {
     *)
       label="$(printf "%s" "$label" | tr -cs "A-Za-z0-9_.-" "-" | sed -e "s/^-*//" -e "s/-*$//")"
       [ -n "$label" ] || label="state"
-      OPENCLAW_TEST_STATE_HOME="$(mktemp -d "/tmp/openclaw-$label-$scenario-home.XXXXXX")"
+      local tmp_root="\${OPENCLAW_TEST_STATE_TMPDIR:-\${TMPDIR:-/tmp}}"
+      mkdir -p "$tmp_root"
+      OPENCLAW_TEST_STATE_HOME="$(mktemp -d "$tmp_root/openclaw-$label-$scenario-home.XXXXXX")"
       ;;
   esac
   export HOME="$OPENCLAW_TEST_STATE_HOME"

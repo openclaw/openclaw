@@ -117,8 +117,11 @@ the maintainer-only release runbook.
   Actions run. The workflow resolves the candidate to
   `package-under-test`, reuses the Docker E2E release scheduler against that
   tarball, and can run Telegram QA against the same tarball with
-  `telegram_mode=mock-openai` or `telegram_mode=live-frontier`.
-  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f telegram_mode=mock-openai`
+  `telegram_mode=mock-openai` or `telegram_mode=live-frontier`. When the
+  selected Docker lanes include `published-upgrade-survivor`, the package
+  artifact is the candidate and `published_upgrade_survivor_baseline` selects
+  the published baseline.
+  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f published_upgrade_survivor_baseline=openclaw@2026.4.26 -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
   - `package`: artifact-native package/update/plugin lanes without OpenWebUI or live ClawHub
@@ -457,7 +460,8 @@ gh workflow run package-acceptance.yml \
   -f workflow_ref=main \
   -f source=npm \
   -f package_spec=openclaw@beta \
-  -f suite_profile=product
+  -f suite_profile=product \
+  -f published_upgrade_survivor_baseline=openclaw@2026.4.26
 ```
 
 Common package profiles:

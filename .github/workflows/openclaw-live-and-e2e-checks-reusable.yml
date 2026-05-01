@@ -33,6 +33,11 @@ on:
         required: false
         default: 1
         type: number
+      published_upgrade_survivor_baseline:
+        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        required: false
+        default: openclaw@latest
+        type: string
       package_artifact_name:
         description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
         required: false
@@ -113,6 +118,11 @@ on:
         required: false
         default: 1
         type: number
+      published_upgrade_survivor_baseline:
+        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        required: false
+        default: openclaw@latest
+        type: string
       package_artifact_name:
         description: Existing workflow artifact containing openclaw-current.tgz; blank packs the selected ref
         required: false
@@ -684,6 +694,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_CHUNK: ${{ matrix.chunk_id }}
@@ -917,6 +928,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
       DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
