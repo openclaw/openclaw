@@ -10,6 +10,7 @@ import { resolveStorePath } from "./paths.js";
 import { loadSessionStore } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
+import type { SessionEntry } from "./types.js";
 export { parseSessionThreadInfo };
 
 function hasRoutableDeliveryContext(context?: {
@@ -81,25 +82,42 @@ function findSessionEntryInStore(
   store: ReturnType<typeof loadSessionStore>,
   keys: readonly string[],
 ) {
-  let legacyIndex: Map<string, string> | undefined;
+  let normalizedIndex: Map<string, SessionEntry> | undefined;
   for (const key of keys) {
-    const direct = store[key];
-    if (direct) {
-      return direct;
-    }
+    const trimmed = key.trim();
     const normalized = normalizeLowercaseStringOrEmpty(key);
-    legacyIndex ??= new Map(
-      Object.keys(store).map((candidate) => [
-        normalizeLowercaseStringOrEmpty(candidate),
-        candidate,
-      ]),
-    );
-    const legacyKey = legacyIndex.get(normalized);
-    if (legacyKey && store[legacyKey]) {
-      return store[legacyKey];
+    const directKey = Object.prototype.hasOwnProperty.call(store, normalized)
+      ? normalized
+      : Object.prototype.hasOwnProperty.call(store, trimmed)
+        ? trimmed
+        : undefined;
+    let bestEntry = directKey ? store[directKey] : undefined;
+    let bestUpdatedAt = bestEntry?.updatedAt ?? 0;
+    normalizedIndex ??= buildFreshestSessionEntryIndex(store);
+    const freshest = normalizedIndex.get(normalized);
+    if (freshest && (!bestEntry || (freshest.updatedAt ?? 0) > bestUpdatedAt)) {
+      bestEntry = freshest;
+      bestUpdatedAt = freshest.updatedAt ?? 0;
+    }
+    if (bestEntry) {
+      return bestEntry;
     }
   }
   return undefined;
+}
+
+function buildFreshestSessionEntryIndex(
+  store: Record<string, SessionEntry>,
+): Map<string, SessionEntry> {
+  const index = new Map<string, SessionEntry>();
+  for (const [key, entry] of Object.entries(store)) {
+    const normalized = normalizeLowercaseStringOrEmpty(key);
+    const existing = index.get(normalized);
+    if (!existing || (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+      index.set(normalized, entry);
+    }
+  }
+  return index;
 }
 
 function loadDeliverySessionEntry(params: {

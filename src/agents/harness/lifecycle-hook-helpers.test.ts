@@ -108,6 +108,42 @@ describe("agent harness lifecycle hook helpers", () => {
     ).resolves.toEqual({ action: "revise", reason: "revise once" });
   });
 
+  it("does not clear finalize retry budgets for runs that only share a prefix", async () => {
+    const hookRunner = {
+      hasHooks: () => true,
+      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
+        action: "revise",
+        retry: {
+          instruction: "revise child once",
+          idempotencyKey: "stable",
+          maxAttempts: 1,
+        },
+      }),
+    };
+    const childEvent = {
+      ...EVENT,
+      runId: "run:child",
+    };
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: childEvent,
+        ctx: { runId: "run:child", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "revise", reason: "revise child once" });
+
+    clearAgentHarnessFinalizeRetryBudget({ runId: "run" });
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: childEvent,
+        ctx: { runId: "run:child", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "continue" });
+  });
+
   it("keys finalize retry budgets by context run id when the event omits run id", async () => {
     const hookRunner = {
       hasHooks: () => true,

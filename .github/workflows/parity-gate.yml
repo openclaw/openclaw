@@ -12,6 +12,8 @@ on:
       - "src/context-engine/**"
       - "src/gateway/**"
       - "src/media/**"
+      - "src/plugin-sdk/**"
+      - "src/plugins/**"
       - ".github/workflows/parity-gate.yml"
   workflow_dispatch:
 

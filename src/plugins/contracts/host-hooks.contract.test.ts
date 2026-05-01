@@ -1178,6 +1178,50 @@ describe("host-hook fixture plugin contract", () => {
         files: [{ path: "/tmp/not-sent.txt" }],
       }),
     ).resolves.toEqual({ ok: false, error: "plugin is not loaded" });
+    await expect(
+      capturedApi?.enqueueNextTurnInjection({
+        sessionKey: "agent:main:main",
+        text: "stale prompt contribution",
+      }),
+    ).resolves.toEqual({
+      enqueued: false,
+      id: "",
+      sessionKey: "agent:main:main",
+    });
+    expect(
+      capturedApi?.setRunContext({
+        runId: "stale-run",
+        namespace: "state",
+        value: { stale: true },
+      }),
+    ).toBe(false);
+    expect(
+      getPluginRunContext({
+        pluginId: "stale-workflow-plugin",
+        get: { runId: "stale-run", namespace: "state" },
+      }),
+    ).toBeUndefined();
+    expect(
+      setPluginRunContext({
+        pluginId: "stale-workflow-plugin",
+        patch: { runId: "stale-run", namespace: "state", value: { live: true } },
+      }),
+    ).toBe(true);
+    capturedApi?.clearRunContext({ runId: "stale-run", namespace: "state" });
+    expect(
+      getPluginRunContext({
+        pluginId: "stale-workflow-plugin",
+        get: { runId: "stale-run", namespace: "state" },
+      }),
+    ).toEqual({ live: true });
+    expect(
+      capturedApi?.registerSessionSchedulerJob({
+        id: "stale-job",
+        sessionKey: "agent:main:main",
+        kind: "monitor",
+      }),
+    ).toBeUndefined();
+    expect(listPluginSessionSchedulerJobs("stale-workflow-plugin")).toEqual([]);
   });
 
   it("defensively ignores promise-like session projections from untyped plugins", async () => {

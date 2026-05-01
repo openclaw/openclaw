@@ -105,6 +105,37 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("prefers the freshest case-insensitive delivery route when legacy keys collide", () => {
+    const sessionKey = "agent:main:matrix:channel:!room";
+    storeState.store["Agent:Main:Matrix:Channel:!Room"] = {
+      ...buildEntry({
+        channel: "matrix",
+        to: "room:stale",
+        accountId: "old",
+      }),
+      updatedAt: 1,
+    };
+    storeState.store["agent:main:matrix:channel:!ROOM"] = {
+      ...buildEntry({
+        channel: "matrix",
+        to: "room:fresh",
+        accountId: "new",
+      }),
+      updatedAt: 2,
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:fresh",
+        accountId: "new",
+      },
+      threadId: undefined,
+    });
+  });
+
   it("looks up deliveryContext in per-agent session stores", () => {
     const sessionKey = "agent:worker:webchat:dm:user-456";
     storeState.stores["/tmp/sessions.json"] = {};

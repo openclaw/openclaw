@@ -15,18 +15,34 @@ const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget
 const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
+type FinalizeRetryBudget = Map<string, Map<string, number>>;
 
-function getFinalizeRetryBudget(): Map<string, number> {
-  return resolveGlobalSingleton<Map<string, number>>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
+function getFinalizeRetryBudget(): FinalizeRetryBudget {
+  return resolveGlobalSingleton<FinalizeRetryBudget>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
 }
 
-function pruneFinalizeRetryBudget(budget: Map<string, number>): void {
-  while (budget.size > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
-    const oldest = budget.keys().next().value;
-    if (oldest === undefined) {
+function countFinalizeRetryBudgetEntries(budget: FinalizeRetryBudget): number {
+  let count = 0;
+  for (const runBudget of budget.values()) {
+    count += runBudget.size;
+  }
+  return count;
+}
+
+function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
+  while (countFinalizeRetryBudgetEntries(budget) > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
+    const oldestRunId = budget.keys().next().value;
+    if (oldestRunId === undefined) {
       return;
     }
-    budget.delete(oldest);
+    const oldestRunBudget = budget.get(oldestRunId);
+    const oldestRetryKey = oldestRunBudget?.keys().next().value;
+    if (oldestRunBudget && oldestRetryKey !== undefined) {
+      oldestRunBudget.delete(oldestRetryKey);
+    }
+    if (!oldestRunBudget || oldestRunBudget.size === 0) {
+      budget.delete(oldestRunId);
+    }
   }
 }
 
@@ -36,12 +52,7 @@ export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }
     budget.clear();
     return;
   }
-  const prefix = `${params.runId}:`;
-  for (const key of budget.keys()) {
-    if (key.startsWith(prefix)) {
-      budget.delete(key);
-    }
-  }
+  budget.delete(params.runId);
 }
 
 export function runAgentHarnessLlmInputHook(params: {
@@ -137,14 +148,15 @@ function normalizeBeforeAgentFinalizeResult(
         typeof result.retry?.maxAttempts === "number" && Number.isFinite(result.retry.maxAttempts)
           ? Math.max(1, Math.floor(result.retry.maxAttempts))
           : 1;
-      const retryKey = [
-        event?.runId ?? event?.sessionId ?? "unknown-run",
-        result.retry?.idempotencyKey?.trim() || retryInstruction.slice(0, 160),
-      ].join(":");
+      const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
+      const retryKey = result.retry?.idempotencyKey?.trim() || retryInstruction.slice(0, 160);
       const budget = getFinalizeRetryBudget();
-      const nextCount = (budget.get(retryKey) ?? 0) + 1;
-      budget.delete(retryKey);
-      budget.set(retryKey, nextCount);
+      const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
+      const nextCount = (runBudget.get(retryKey) ?? 0) + 1;
+      runBudget.delete(retryKey);
+      runBudget.set(retryKey, nextCount);
+      budget.delete(retryRunId);
+      budget.set(retryRunId, runBudget);
       pruneFinalizeRetryBudget(budget);
       if (nextCount > maxAttempts) {
         return { action: "continue" };

@@ -2403,6 +2403,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               registerSessionExtension: (extension) => registerSessionExtension(record, extension),
               enqueueNextTurnInjection: (injection) => {
+                if (
+                  registryParams.activateGlobalSideEffects === false ||
+                  !shouldCommitWorkflowSideEffect()
+                ) {
+                  return Promise.resolve({
+                    enqueued: false,
+                    id: "",
+                    sessionKey:
+                      typeof injection.sessionKey === "string" ? injection.sessionKey.trim() : "",
+                  });
+                }
                 if (params.hookPolicy?.allowPromptInjection === false) {
                   pushDiagnostic({
                     level: "warn",
@@ -2443,15 +2454,30 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   event,
                 });
               },
-              setRunContext: (patch) => setPluginRunContext({ pluginId: record.id, patch }),
+              setRunContext: (patch) =>
+                registryParams.activateGlobalSideEffects !== false &&
+                shouldCommitWorkflowSideEffect()
+                  ? setPluginRunContext({ pluginId: record.id, patch })
+                  : false,
               getRunContext: (get) => getPluginRunContext({ pluginId: record.id, get }),
-              clearRunContext: (params) =>
+              clearRunContext: (params) => {
+                if (
+                  registryParams.activateGlobalSideEffects === false ||
+                  !shouldCommitWorkflowSideEffect()
+                ) {
+                  return;
+                }
                 clearPluginRunContext({
                   pluginId: record.id,
                   runId: params.runId,
                   namespace: params.namespace,
-                }),
-              registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
+                });
+              },
+              registerSessionSchedulerJob: (job) =>
+                registryParams.activateGlobalSideEffects === false ||
+                shouldCommitWorkflowSideEffect()
+                  ? registerSessionSchedulerJob(record, job)
+                  : undefined,
               scheduleSessionTurn: (schedule) =>
                 registryParams.activateGlobalSideEffects === false
                   ? Promise.resolve(undefined)
