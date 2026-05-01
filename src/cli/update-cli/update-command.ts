@@ -163,6 +163,7 @@ export function shouldUseLegacyProcessRestartAfterUpdate(params: {
 type PrePackageServiceStop = {
   stopped: boolean;
   inspected: boolean;
+  runtimeInspected: boolean;
   running: boolean;
   serviceEnv?: NodeJS.ProcessEnv;
 };
@@ -177,13 +178,14 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
     service = resolveGatewayService();
     serviceState = await readGatewayServiceState(service, { env: process.env });
   } catch {
-    return { stopped: false, inspected: false, running: false };
+    return { stopped: false, inspected: false, runtimeInspected: false, running: false };
   }
 
   if (!serviceState.installed) {
-    return { stopped: false, inspected: true, running: false };
+    return { stopped: false, inspected: true, runtimeInspected: true, running: false };
   }
 
+  const runtimeInspected = Boolean(serviceState.runtime);
   if (!params.shouldRestart) {
     if (!params.jsonMode && serviceState.running) {
       defaultRuntime.log(
@@ -195,20 +197,43 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
     return {
       stopped: false,
       inspected: true,
+      runtimeInspected,
       running: serviceState.running,
       serviceEnv: serviceState.env,
     };
   }
 
+  if (!runtimeInspected) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: false,
+      running: false,
+      serviceEnv: serviceState.env,
+    };
+  }
+
   if (!serviceState.running) {
-    return { stopped: false, inspected: true, running: false, serviceEnv: serviceState.env };
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      running: false,
+      serviceEnv: serviceState.env,
+    };
   }
 
   if (!params.jsonMode) {
     defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
   }
   await service.stop({ env: serviceState.env, stdout: process.stdout });
-  return { stopped: true, inspected: true, running: true, serviceEnv: serviceState.env };
+  return {
+    stopped: true,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    serviceEnv: serviceState.env,
+  };
 }
 
 async function maybeRestartServiceAfterFailedPackageUpdate(params: {
@@ -256,10 +281,13 @@ function shouldBlockPackageUpdateFromGatewayServiceEnv(params: {
   if (!stopState?.inspected) {
     return true;
   }
-  if (!stopState.running) {
+  if (stopState.stopped) {
     return false;
   }
-  return !stopState.stopped;
+  if (!stopState.runtimeInspected) {
+    return true;
+  }
+  return stopState.running;
 }
 
 function formatCommandFailure(stdout: string, stderr: string): string {
