@@ -49,7 +49,7 @@ export type ManifestModelCatalogSuppressionEntry = {
   when?: NonNullable<ModelCatalog["suppressions"]>[number]["when"];
 };
 
-export type ManifestModelCatalogSuppressionPlan = {
+type ManifestModelCatalogSuppressionPlan = {
   suppressions: readonly ManifestModelCatalogSuppressionEntry[];
 };
 
