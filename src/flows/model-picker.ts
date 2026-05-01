@@ -713,6 +713,7 @@ export async function promptDefaultModel(
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: resolved.model,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         env: params.env,
       });
   if (models.length === 0) {
@@ -749,7 +750,12 @@ export async function promptDefaultModel(
   const hasPreferredProvider = preferredProvider
     ? filteredModels.some((entry) => matchesPreferredProvider?.(entry.provider))
     : false;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir, env: params.env });
+  const hasAuth = createProviderAuthChecker({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    env: params.env,
+  });
   const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
 
   // Show the literal form (e.g. nvidia/nvidia/...) in the "Keep current" label
@@ -912,7 +918,12 @@ export async function promptModelAllowlist(params: {
     fallbackKeys.length > 0 ||
     (params.initialSelections?.length ?? 0) > 0 ||
     configuredRaw.length > 0;
-  const hasAuth = createProviderAuthChecker({ cfg, agentDir: params.agentDir, env: params.env });
+  const hasAuth = createProviderAuthChecker({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    env: params.env,
+  });
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,

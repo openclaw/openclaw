@@ -32,6 +32,7 @@ export function resolveVisibleModelCatalog(params: {
   defaultModel?: string;
   agentId?: string;
   agentDir?: string;
+  workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   view?: ModelCatalogVisibilityView;
 }): ModelCatalogEntry[] {
@@ -55,6 +56,7 @@ export function resolveVisibleModelCatalog(params: {
   );
   const hasAuth = createProviderAuthChecker({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     env: params.env,
   });

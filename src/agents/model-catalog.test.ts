@@ -125,6 +125,26 @@ describe("loadModelCatalog", () => {
     }
   });
 
+  it("reloads dynamic registry entries after clearing the cache", async () => {
+    const models = [{ id: "existing", name: "Existing", provider: "ollama" }];
+    mockPiDiscoveryModels(models);
+
+    const first = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(first).toContainEqual({ id: "existing", name: "Existing", provider: "ollama" });
+
+    models.push({ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", provider: "ollama" });
+    resetModelCatalogCacheForTest();
+    mockPiDiscoveryModels(models);
+
+    const second = await loadModelCatalog({ config: {} as OpenClawConfig });
+    expect(second).toContainEqual({ id: "existing", name: "Existing", provider: "ollama" });
+    expect(second).toContainEqual({
+      id: "glm-5.1:cloud",
+      name: "GLM 5.1 Cloud",
+      provider: "ollama",
+    });
+  });
+
   it("returns partial results on discovery errors", async () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     try {

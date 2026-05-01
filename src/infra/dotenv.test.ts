@@ -188,12 +188,12 @@ describe("loadDotEnv", () => {
         );
 
         vi.spyOn(process, "cwd").mockReturnValue(cwdDir);
-        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        loggerMocks.warn.mockClear();
 
         loadDotEnv({ quiet: true });
 
         expect(process.env.FOO).toBe("from-shell");
-        expect(warn).not.toHaveBeenCalled();
+        expect(loggerMocks.warn).not.toHaveBeenCalled();
       });
     });
   });

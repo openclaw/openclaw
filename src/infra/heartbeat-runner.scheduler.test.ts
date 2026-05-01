@@ -137,6 +137,27 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("schedules every configured agent when only global heartbeat defaults exist", async () => {
+    useFakeHeartbeatTime();
+
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig([{ id: "main" }, { id: "ops" }]),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+    const mainDueMs = resolveDueFromNow(0, 30 * 60_000, "main");
+    const opsDueMs = resolveDueFromNow(0, 30 * 60_000, "ops");
+
+    await vi.advanceTimersByTimeAsync(Math.max(mainDueMs, opsDueMs) + 1);
+
+    expect(runSpy.mock.calls.map((call) => call[0]?.agentId)).toEqual(
+      expect.arrayContaining(["main", "ops"]),
+    );
+
+    runner.stop();
+  });
+
   it("continues scheduling after runOnce throws an unhandled error", async () => {
     useFakeHeartbeatTime();
 
@@ -315,6 +336,28 @@ describe("startHeartbeatRunner", () => {
           { id: "ops", heartbeat: { every: "15m" } },
         ]),
       } as OpenClawConfig,
+      runSpy,
+      wake: {
+        reason: "cron:job-123",
+        agentId: "ops",
+        sessionKey: "agent:ops:discord:channel:alerts",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "ops",
+        reason: "cron:job-123",
+        sessionKey: "agent:ops:discord:channel:alerts",
+      },
+    });
+
+    runner.stop();
+  });
+
+  it("routes targeted wake requests to agents enabled by global defaults", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: heartbeatConfig([{ id: "main" }, { id: "ops" }]),
       runSpy,
       wake: {
         reason: "cron:job-123",

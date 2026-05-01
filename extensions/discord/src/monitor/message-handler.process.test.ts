@@ -162,6 +162,17 @@ let processDiscordMessage: typeof import("./message-handler.process.js").process
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
+  settleReplyDispatcher: async (params: {
+    dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+    onSettled?: () => void | Promise<void>;
+  }) => {
+    params.dispatcher.markComplete();
+    try {
+      await params.dispatcher.waitForIdle();
+    } finally {
+      await params.onSettled?.();
+    }
+  },
   createReplyDispatcherWithTyping: (opts: {
     deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void;
   }) => ({
