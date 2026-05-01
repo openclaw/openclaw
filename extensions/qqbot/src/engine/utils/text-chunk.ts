@@ -12,9 +12,6 @@
 /** Maximum text length for a single QQ Bot message. */
 export const TEXT_CHUNK_LIMIT = 5000;
 
-/** Text chunker function signature. */
-export type ChunkTextFn = (text: string, limit: number) => string[];
-
 /**
  * Naive text chunking fallback.
  *
