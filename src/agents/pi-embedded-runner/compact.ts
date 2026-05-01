@@ -350,7 +350,7 @@ function classifyCompactionFallbackResult(
   provider: string,
   model: string,
 ) {
-  if (result.ok !== false) {
+  if (result.ok) {
     return null;
   }
   const reason = result.reason?.trim();
