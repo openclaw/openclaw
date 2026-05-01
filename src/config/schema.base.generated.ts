@@ -4793,6 +4793,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                 description:
                                   "Controls how fast older memory loses rank when temporal decay is enabled (half-life in days, default: 30). Lower values prioritize recent context more aggressively.",
                               },
+                              model: {
+                                type: "string",
+                                enum: ["exponential", "weibull"],
+                              },
+                              weibullShape: {
+                                type: "number",
+                                minimum: 0.1,
+                                maximum: 5,
+                              },
                             },
                             additionalProperties: false,
                           },
@@ -6729,6 +6738,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                                   type: "integer",
                                   exclusiveMinimum: 0,
                                   maximum: 9007199254740991,
+                                },
+                                model: {
+                                  type: "string",
+                                  enum: ["exponential", "weibull"],
+                                },
+                                weibullShape: {
+                                  type: "number",
+                                  minimum: 0.1,
+                                  maximum: 5,
                                 },
                               },
                               additionalProperties: false,
