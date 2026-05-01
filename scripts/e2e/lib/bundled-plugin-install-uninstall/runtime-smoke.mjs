@@ -469,6 +469,7 @@ function assertNoPostReadyRuntimeDepsWork(logPath, readyIndex) {
 
 function assertNoRuntimeDepsLocks() {
   const roots = [
+    ...(process.env.OPENCLAW_PLUGIN_STAGE_DIR ? [process.env.OPENCLAW_PLUGIN_STAGE_DIR] : []),
     path.join(
       process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME || os.homedir(), ".openclaw"),
       "plugin-runtime-deps",
