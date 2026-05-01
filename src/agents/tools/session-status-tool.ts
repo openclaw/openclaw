@@ -213,8 +213,11 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
+  const currentProvider = params.sessionEntry?.providerOverride?.trim() ?? configDefault.provider;
+  const currentModel =
+    params.sessionEntry?.modelOverride?.trim() ??
+    params.sessionEntry?.model?.trim() ??
+    configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -515,23 +518,10 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      const runtimeModelIdentity = resolveSessionModelIdentityRef(
-        cfg,
-        resolved.entry,
-        agentId,
-        `${configured.provider}/${configured.model}`,
-      );
-      const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
-      const runtimeModelForCard = runtimeModelIdentity.model.trim();
-
       const selectedProvider = resolved.entry.providerOverride?.trim() ?? configured.provider;
 
       const selectedModel =
         resolved.entry.modelOverride?.trim() ?? resolved.entry.model?.trim() ?? configured.model;
-
-      // ✅ FIX: ACTIVE identity (runtime, can be partial)
-      const activeProvider = runtimeProviderForCard;
-      const activeModel = runtimeModelForCard;
 
       // ✅ FIX: Pass SELECTED to status text (NOT runtime)
       const providerForCard = selectedProvider;
