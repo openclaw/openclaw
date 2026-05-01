@@ -850,7 +850,7 @@ describe("daily-content", () => {
     ).resolves.toBeNull();
   });
 
-  it("applies remembered session-summary provenance to basename and absolute-path aliases", async () => {
+  it("applies remembered session-summary provenance to basename and in-workspace absolute-path aliases", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-daily-content-aliases-"));
     tmpDirs.push(root);
     const memoryDir = path.join(root, "memory");
@@ -860,7 +860,6 @@ describe("daily-content", () => {
       fileName: "2026-04-19-vendor-pitch.md",
       sessionSummary: true,
     });
-    const windowsAbsoluteAlias = "C:/Users/example/workspace/memory/2026-04-19-vendor-pitch.md";
 
     await expect(
       isSessionSummaryDailyMemoryPath({
@@ -875,15 +874,6 @@ describe("daily-content", () => {
       isSessionSummaryDailyMemoryPath({
         workspaceDir: root,
         filePath: path.join(root, "memory", "2026-04-19-vendor-pitch.md"),
-        cache: new Map(),
-        snippet: "We should follow up with the vendor tomorrow.",
-        startLine: 11,
-      }),
-    ).resolves.toBe(true);
-    await expect(
-      isSessionSummaryDailyMemoryPath({
-        workspaceDir: root,
-        filePath: windowsAbsoluteAlias,
         cache: new Map(),
         snippet: "We should follow up with the vendor tomorrow.",
         startLine: 11,
@@ -985,6 +975,30 @@ describe("daily-content", () => {
       isSessionSummaryDailyMemoryPath({
         workspaceDir: root,
         filePath: "/old/workspace/memory/2026-04-19-vendor-pitch.md",
+        cache: new Map(),
+        snippet: "We should follow up with the vendor tomorrow.",
+        startLine: 11,
+      }),
+    ).resolves.toBe(false);
+  });
+
+  it("does not apply remembered provenance to foreign Windows absolute-path aliases", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-daily-content-foreign-windows-remembered-"),
+    );
+    tmpDirs.push(root);
+    const memoryDir = path.join(root, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await rememberRecentDailyMemoryFile({
+      memoryDir,
+      fileName: "2026-04-19-vendor-pitch.md",
+      sessionSummary: true,
+    });
+
+    await expect(
+      isSessionSummaryDailyMemoryPath({
+        workspaceDir: root,
+        filePath: "C:/old/workspace/memory/2026-04-19-vendor-pitch.md",
         cache: new Map(),
         snippet: "We should follow up with the vendor tomorrow.",
         startLine: 11,

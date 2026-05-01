@@ -288,16 +288,9 @@ function resolveRememberedSummaryFileNameForInputPath(filePath: string): string 
 }
 
 function canUseRememberedSummaryInputPathAlias(params: {
-  normalizedPath: string;
   probePaths: Array<{ absolutePath: string; relativePath: string }>;
 }): boolean {
-  if (params.probePaths.length > 0) {
-    return true;
-  }
-  return (
-    isWindowsStyleSessionSummaryAbsolutePath(params.normalizedPath) &&
-    !path.isAbsolute(params.normalizedPath)
-  );
+  return params.probePaths.length > 0;
 }
 
 async function refreshRememberedSummaryEntryForMissingProbe(params: {
@@ -585,7 +578,7 @@ export async function isSessionSummaryDailyMemoryPath(params: {
     }));
   const rememberedSessionSummaryFileName = !sawExistingCandidate
     ? (resolveRememberedSummaryFileNameForProbePaths(probePaths) ??
-      (canUseRememberedSummaryInputPathAlias({ normalizedPath, probePaths })
+      (canUseRememberedSummaryInputPathAlias({ probePaths })
         ? resolveRememberedSummaryFileNameForInputPath(params.filePath)
         : null))
     : null;
