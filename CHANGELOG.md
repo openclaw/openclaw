@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - Voice Call/Google Meet: add Twilio Meet join phase logs around pre-connect DTMF, realtime stream setup, and initial greeting handoff for easier live-call debugging. Thanks @donkeykong91 and @PfanP.
 - macOS app: move recent session context rows into a Context submenu while keeping usage and cost details root-level, so the menu bar companion stays compact with many active sessions. Thanks @guti.
 - Gateway/SDK: add SDK-facing tools.invoke RPC with shared HTTP policy, typed approval/refusal results, and SDK helper support. Refs #74705. Thanks @BunsDev and @ai-hpc.
+- Discord: keep active buttons, selects, and forms working across Gateway restarts until they expire, so multi-step Discord interactions are less likely to break during upgrades or restarts. Thanks @amknight.
 - Messages/docs: clarify that `BodyForAgent` is the primary inbound model text while `Body` is the legacy envelope fallback, and add Signal coverage so channel hardening patches target the real prompt path. Refs #66198. Thanks @defonota3box.
 - Slack: keep track of bot-participated threads across restarts, so ongoing threaded conversations can continue auto-replying after the Gateway is restarted. Thanks @amknight.
 - Control UI/Usage: add UTC quarter-hour token buckets for the Usage Mosaic and reuse them for hour filtering, keeping the legacy session-span fallback for older summaries. (#74337) Thanks @konanok.
