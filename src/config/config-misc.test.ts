@@ -65,6 +65,35 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("plugins.installBundledRuntimeDeps", () => {
+  it("accepts boolean values (true/false)", () => {
+    for (const value of [true, false]) {
+      const result = OpenClawSchema.safeParse({
+        plugins: { installBundledRuntimeDeps: value },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.plugins?.installBundledRuntimeDeps).toBe(value);
+      }
+    }
+  });
+
+  it("treats omission as undefined so default behavior is preserved", () => {
+    const result = OpenClawSchema.safeParse({ plugins: {} });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.plugins?.installBundledRuntimeDeps).toBeUndefined();
+    }
+  });
+
+  it("rejects non-boolean values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: { installBundledRuntimeDeps: "false" },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("models.pricing", () => {
   it("accepts the model pricing bootstrap toggle", () => {
     for (const enabled of [true, false]) {

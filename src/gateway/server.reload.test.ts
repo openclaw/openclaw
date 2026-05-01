@@ -940,6 +940,49 @@ describe("gateway hot reload", () => {
     });
   });
 
+  it("skips bundled runtime deps repair on hot reload when plugins.installBundledRuntimeDeps is false", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      const nextConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "token",
+          },
+        },
+        plugins: {
+          installBundledRuntimeDeps: false,
+        },
+      };
+
+      await onHotReload?.(
+        {
+          changedPaths: ["channels.telegram.enabled"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels.telegram.enabled"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          restartChannels: new Set(["telegram"]),
+          disposeMcpRuntimes: false,
+          planPluginRuntimeDeps: true,
+          noopPaths: [],
+        },
+        nextConfig,
+      );
+
+      expect(hoisted.repairBundledRuntimeDepsPackagePlanAsync).not.toHaveBeenCalled();
+      expect(hoisted.pruneUnknownBundledRuntimeDepsRoots).not.toHaveBeenCalled();
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
+    });
+  });
+
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();

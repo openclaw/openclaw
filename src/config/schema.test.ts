@@ -117,6 +117,23 @@ describe("config schema", () => {
     expect(res.generatedAt).toBeTruthy();
   });
 
+  it("exposes plugins.installBundledRuntimeDeps in JSON schema and ui hints", () => {
+    const schema = baseSchema.schema as { properties?: Record<string, unknown> };
+    const pluginsSchema = schema.properties?.plugins as
+      | { properties?: Record<string, unknown> }
+      | undefined;
+    const installSchema = pluginsSchema?.properties?.installBundledRuntimeDeps as
+      | { type?: string; title?: string; description?: string }
+      | undefined;
+    expect(installSchema).toBeTruthy();
+    expect(installSchema?.type).toBe("boolean");
+    expect(installSchema?.title).toBe("Install Bundled Runtime Dependencies");
+    expect(installSchema?.description).toContain("default: true");
+    expect(baseSchema.uiHints["plugins.installBundledRuntimeDeps"]?.label).toBe(
+      "Install Bundled Runtime Dependencies",
+    );
+  });
+
   it("includes MCP SSE header schema under mcp.servers entries", () => {
     const schema = baseSchema.schema as {
       properties?: Record<string, unknown>;

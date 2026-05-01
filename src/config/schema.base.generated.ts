@@ -23848,6 +23848,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
           },
+          installBundledRuntimeDeps: {
+            type: "boolean",
+            title: "Install Bundled Runtime Dependencies",
+            description:
+              "Install bundled runtime dependencies for active bundled plugins during plugin load and gateway prestage (default: true). Set false to opt out of automatic runtime-dependency installs while keeping the plugin system enabled; missing dependencies are reported in startup logs so operators can stage them through their own tooling. Channel-only surfaces are not covered by this switch.",
+          },
           allow: {
             type: "array",
             items: {
@@ -28643,6 +28649,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "plugins.enabled": {
       label: "Enable Plugins",
       help: "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
+      tags: ["advanced"],
+    },
+    "plugins.installBundledRuntimeDeps": {
+      label: "Install Bundled Runtime Dependencies",
+      help: "Install bundled runtime dependencies for active bundled plugins during plugin load and gateway prestage (default: true). Set false to opt out of automatic runtime-dependency installs while keeping the plugin system enabled; missing dependencies are reported in startup logs so operators can stage them through their own tooling. Channel-only surfaces are not covered by this switch.",
       tags: ["advanced"],
     },
     "plugins.allow": {

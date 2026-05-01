@@ -357,6 +357,7 @@ const TARGET_KEYS = [
   "ui.assistant",
   "plugins",
   "plugins.enabled",
+  "plugins.installBundledRuntimeDeps",
   "plugins.allow",
   "plugins.deny",
   "plugins.load",
@@ -793,6 +794,12 @@ describe("config help copy quality", () => {
     expect(pluginConversationPolicy.includes("llm_output")).toBe(true);
     expect(pluginConversationPolicy.includes("before_agent_finalize")).toBe(true);
     expect(pluginConversationPolicy.includes("agent_end")).toBe(true);
+
+    const installBundledRuntimeDeps = FIELD_HELP["plugins.installBundledRuntimeDeps"];
+    expect(installBundledRuntimeDeps).toBeTruthy();
+    expect(/default:?\s*true/i.test(installBundledRuntimeDeps)).toBe(true);
+    expect(/opt out|opt-out|disable/i.test(installBundledRuntimeDeps)).toBe(true);
+    expect(/missing/i.test(installBundledRuntimeDeps)).toBe(true);
   });
 
   it("documents auth/model root semantics and provider secret handling", () => {

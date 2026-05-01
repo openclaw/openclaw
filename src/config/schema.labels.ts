@@ -902,6 +902,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "discovery.mdns.mode": "mDNS Discovery Mode",
   plugins: "Plugins",
   "plugins.enabled": "Enable Plugins",
+  "plugins.installBundledRuntimeDeps": "Install Bundled Runtime Dependencies",
   "plugins.allow": "Plugin Allowlist",
   "plugins.deny": "Plugin Denylist",
   "plugins.load": "Plugin Loader",

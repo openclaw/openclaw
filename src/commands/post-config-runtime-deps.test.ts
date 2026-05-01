@@ -32,6 +32,7 @@ function createPlan(overrides: Record<string, unknown> = {}) {
     conflicts: [],
     missing: [],
     installSpecs: [],
+    missingSpecs: [],
     ...overrides,
   };
 }
@@ -137,6 +138,65 @@ describe("preparePostConfigBundledRuntimeDeps", () => {
 
     expect(mocks.repairBundledRuntimeDepsPackagePlanAsync).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+  });
+
+  it("skips install when plugins.installBundledRuntimeDeps is false", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/state" } as NodeJS.ProcessEnv;
+    const config = {
+      gateway: { mode: "local" },
+      channels: { telegram: { enabled: true } },
+      plugins: { installBundledRuntimeDeps: false },
+    } as unknown as OpenClawConfig;
+    mocks.createBundledRuntimeDepsPackagePlan.mockReturnValueOnce(
+      createPlan({
+        missing: [{ name: "grammy", version: "1.0.0", pluginIds: ["telegram"] }],
+        installSpecs: ["grammy@1.0.0"],
+        missingSpecs: ["grammy@1.0.0"],
+      }),
+    );
+    const runtime = createRuntime();
+
+    await preparePostConfigBundledRuntimeDeps({
+      config,
+      runtime,
+      env,
+      packageRoot: "/pkg",
+    });
+
+    expect(mocks.createBundledRuntimeDepsPackagePlan).toHaveBeenCalledWith({
+      packageRoot: "/pkg",
+      config,
+      includeConfiguredChannels: true,
+      includeEnabledByDefaultPlugins: false,
+      env,
+    });
+    expect(mocks.repairBundledRuntimeDepsPackagePlanAsync).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Bundled plugin runtime deps install is disabled (plugins.installBundledRuntimeDeps=false)",
+      ),
+    );
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("grammy@1.0.0"));
+  });
+
+  it("emits an all-present log when opt-out is set and no deps are missing", async () => {
+    const config = {
+      gateway: { mode: "local" },
+      plugins: { installBundledRuntimeDeps: false },
+    } as unknown as OpenClawConfig;
+    mocks.createBundledRuntimeDepsPackagePlan.mockReturnValueOnce(createPlan());
+    const runtime = createRuntime();
+
+    await preparePostConfigBundledRuntimeDeps({
+      config,
+      runtime,
+      packageRoot: "/pkg",
+    });
+
+    expect(mocks.repairBundledRuntimeDepsPackagePlanAsync).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining("all required deps present, install skipped"),
+    );
   });
 
   it("keeps the repair error attached to the post-config failure", async () => {

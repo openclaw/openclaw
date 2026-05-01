@@ -1088,6 +1088,63 @@ module.exports = {
     );
   });
 
+  it("skips bundled runtime deps install when plugins.installBundledRuntimeDeps is false", () => {
+    const bundledDir = makeTempDir();
+    const plugin = writePlugin({
+      id: "discord",
+      dir: path.join(bundledDir, "discord"),
+      filename: "index.cjs",
+      body: `module.exports = { id: "discord", register() {} };`,
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    fs.writeFileSync(
+      path.join(plugin.dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "@openclaw/discord",
+          version: "1.0.0",
+          openclaw: { extensions: ["./index.cjs"] },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "discord",
+          channels: ["discord"],
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          installBundledRuntimeDeps: false,
+        },
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+      },
+      bundledRuntimeDepsInstaller: () => {
+        throw new Error("installer should not run when plugins.installBundledRuntimeDeps is false");
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "discord")?.status).toBe("loaded");
+  });
+
   it("keeps bundled runtime dep install logs off non-activating loads", () => {
     const bundledDir = makeTempDir();
     const plugin = writePlugin({

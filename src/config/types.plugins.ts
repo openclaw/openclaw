@@ -43,6 +43,13 @@ export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
   enabled?: boolean;
+  /**
+   * Install bundled runtime dependencies for active bundled plugins during
+   * plugin load and gateway prestage. Default true preserves existing
+   * behavior; set false to opt out of automatic install while keeping the
+   * plugin system enabled.
+   */
+  installBundledRuntimeDeps?: boolean;
   /** Optional plugin allowlist (plugin ids). */
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */

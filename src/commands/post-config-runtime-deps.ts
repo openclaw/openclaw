@@ -69,6 +69,18 @@ export async function preparePostConfigBundledRuntimeDeps(params: {
     includeEnabledByDefaultPlugins: false,
     env,
   });
+  if (params.config.plugins?.installBundledRuntimeDeps === false) {
+    if (plan.missingSpecs.length > 0) {
+      params.runtime.log(
+        `Bundled plugin runtime deps install is disabled (plugins.installBundledRuntimeDeps=false); skipping install for ${plan.missingSpecs.length} missing specs: ${plan.missingSpecs.join(", ")}`,
+      );
+    } else {
+      params.runtime.log(
+        "Bundled plugin runtime deps install is disabled (plugins.installBundledRuntimeDeps=false); all required deps present, install skipped",
+      );
+    }
+    return;
+  }
   if (plan.conflicts.length > 0) {
     const detail = formatConflictSummary(plan.conflicts);
     const message = [

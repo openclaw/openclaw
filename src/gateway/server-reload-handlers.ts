@@ -69,6 +69,12 @@ async function planPluginRuntimeDepsForHotReload(params: {
   nextConfig: OpenClawConfig;
   logReload: GatewayReloadLog;
 }): Promise<void> {
+  if (params.nextConfig.plugins?.installBundledRuntimeDeps === false) {
+    params.logReload.info(
+      "config hot reload bundled runtime deps install is disabled (plugins.installBundledRuntimeDeps=false); skipping repair and prune",
+    );
+    return;
+  }
   const packageRoot = resolveOpenClawPackageRootSync({
     argv1: process.argv[1],
     cwd: process.cwd(),

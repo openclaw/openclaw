@@ -1192,6 +1192,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Plugin system controls for enabling extensions, constraining load scope, configuring entries, and tracking installs. Keep plugin policy explicit and least-privilege in production environments.",
   "plugins.enabled":
     "Enable or disable plugin/extension loading globally during startup and config reload (default: true). Keep enabled only when extension capabilities are required by your deployment.",
+  "plugins.installBundledRuntimeDeps":
+    "Install bundled runtime dependencies for active bundled plugins during plugin load and gateway prestage (default: true). Set false to opt out of automatic runtime-dependency installs while keeping the plugin system enabled; missing dependencies are reported in startup logs so operators can stage them through their own tooling. Channel-only surfaces are not covered by this switch.",
   "plugins.allow":
     "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
   "plugins.deny":

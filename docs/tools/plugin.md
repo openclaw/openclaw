@@ -113,6 +113,16 @@ External plugins and custom load paths must still be installed through
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the full
 planning and staging lifecycle.
 
+To opt out of automatic bundled runtime-dependency installs while keeping the
+plugin system itself enabled, set `plugins.installBundledRuntimeDeps: false`
+(default `true`). When set to `false`, both per-plugin runtime-dependency
+repair during plugin load and the gateway prestage skip the install step;
+operators are responsible for staging the required dependencies before startup.
+Missing dependencies are reported in startup logs so the gap stays visible.
+This switch only governs `plugins.*` runtime-deps; channel-only surfaces are
+not covered by it. Behavior is the same across operating systems supported by
+OpenClaw.
+
 ## Plugin types
 
 OpenClaw recognizes two plugin formats:
@@ -228,14 +238,15 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 }
 ```
 
-| Field            | Description                                               |
-| ---------------- | --------------------------------------------------------- |
-| `enabled`        | Master toggle (default: `true`)                           |
-| `allow`          | Plugin allowlist (optional)                               |
-| `deny`           | Plugin denylist (optional; deny wins)                     |
-| `load.paths`     | Extra plugin files/directories                            |
-| `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
-| `entries.\<id\>` | Per-plugin toggles + config                               |
+| Field                       | Description                                                                                                                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                   | Master toggle (default: `true`)                                                                                                                                                                         |
+| `installBundledRuntimeDeps` | Install bundled plugin runtime deps during plugin load and gateway prestage (default: `true`; set `false` to opt out, missing deps are reported in startup logs, channel-only surfaces are not covered) |
+| `allow`                     | Plugin allowlist (optional)                                                                                                                                                                             |
+| `deny`                      | Plugin denylist (optional; deny wins)                                                                                                                                                                   |
+| `load.paths`                | Extra plugin files/directories                                                                                                                                                                          |
+| `slots`                     | Exclusive slot selectors (e.g. `memory`, `contextEngine`)                                                                                                                                               |
+| `entries.\<id\>`            | Per-plugin toggles + config                                                                                                                                                                             |
 
 `plugins.allow` is exclusive. When it is non-empty, only listed plugins can load
 or expose tools, even if `tools.allow` contains `"*"` or a specific plugin-owned

@@ -26,6 +26,17 @@ const pruneUnknownBundledRuntimeDepsRoots = vi.hoisted(() =>
 const repairBundledRuntimeDepsPackagePlanAsync = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ repairedSpecs: ["grammy@1.37.0"] })),
 );
+const createBundledRuntimeDepsPackagePlan = vi.hoisted(() =>
+  vi.fn((_params: unknown) => ({
+    deps: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
+    missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
+    conflicts: [],
+    installSpecs: ["grammy@1.37.0"],
+    installRootPlan: { installRoot: "/runtime", externalRoots: [] },
+    packageRoot: "/package",
+    missingSpecs: ["grammy@1.37.0"],
+  })),
+);
 const pluginManifestRegistry = vi.hoisted(
   (): PluginManifestRegistry => ({
     plugins: [
@@ -134,6 +145,8 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
+  createBundledRuntimeDepsPackagePlan: (params: unknown) =>
+    createBundledRuntimeDepsPackagePlan(params),
   repairBundledRuntimeDepsPackagePlanAsync: (params: unknown) =>
     repairBundledRuntimeDepsPackagePlanAsync(params),
 }));
@@ -207,6 +220,15 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     });
     repairBundledRuntimeDepsPackagePlanAsync.mockReset().mockResolvedValue({
       repairedSpecs: ["grammy@1.37.0"],
+    });
+    createBundledRuntimeDepsPackagePlan.mockClear().mockReturnValue({
+      deps: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
+      missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
+      conflicts: [],
+      installSpecs: ["grammy@1.37.0"],
+      installRootPlan: { installRoot: "/runtime", externalRoots: [] },
+      packageRoot: "/package",
+      missingSpecs: ["grammy@1.37.0"],
     });
     loadPluginLookUpTable.mockClear().mockReturnValue({
       manifestRegistry: pluginManifestRegistry,
@@ -598,6 +620,73 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
         pluginLookUpTable: undefined,
         preferSetupRuntimeForChannelPlugins: false,
         suppressPluginInfoLogs: false,
+      }),
+    );
+  });
+
+  it("skips repair and warns about missing deps when plugins.installBundledRuntimeDeps is false", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "token",
+        },
+      },
+      plugins: {
+        installBundledRuntimeDeps: false,
+      },
+    } as OpenClawConfig;
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(createBundledRuntimeDepsPackagePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        exactPluginIds: ["telegram"],
+      }),
+    );
+    expect(repairBundledRuntimeDepsPackagePlanAsync).not.toHaveBeenCalled();
+    expect(pruneUnknownBundledRuntimeDepsRoots).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "bundled runtime deps install is disabled (plugins.installBundledRuntimeDeps=false)",
+      ),
+    );
+    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("missing specs: grammy@1.37.0"));
+  });
+
+  it("does not install source-checkout startup plugin deps when plugins.installBundledRuntimeDeps is false", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "token",
+        },
+      },
+      plugins: {
+        installBundledRuntimeDeps: false,
+      },
+    } as OpenClawConfig;
+    isSourceCheckoutRoot.mockReturnValueOnce(true);
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: cfg,
+      startupRuntimeConfig: cfg,
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(repairBundledRuntimeDepsPackagePlanAsync).not.toHaveBeenCalled();
+    expect(prepareBundledPluginRuntimeLoadRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "telegram",
+        installMissingDeps: false,
       }),
     );
   });

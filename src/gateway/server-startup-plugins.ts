@@ -10,7 +10,10 @@ import {
   isSourceCheckoutRoot,
   pruneUnknownBundledRuntimeDepsRoots,
 } from "../plugins/bundled-runtime-deps-roots.js";
-import { repairBundledRuntimeDepsPackagePlanAsync } from "../plugins/bundled-runtime-deps.js";
+import {
+  createBundledRuntimeDepsPackagePlan,
+  repairBundledRuntimeDepsPackagePlanAsync,
+} from "../plugins/bundled-runtime-deps.js";
 import { prepareBundledPluginRuntimeLoadRoot } from "../plugins/bundled-runtime-root.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
@@ -76,35 +79,60 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
   }
   let repairError: unknown;
   const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  const installBundledRuntimeDepsDisabled = params.cfg.plugins?.installBundledRuntimeDeps === false;
   if (packageRoot) {
-    try {
-      pruneUnknownBundledRuntimeDepsRoots({
-        env: process.env,
-        warn: (message) => params.log.warn(message),
-      });
-      const startedAt = Date.now();
-      const result = await repairBundledRuntimeDepsPackagePlanAsync({
-        packageRoot,
-        config: params.cfg,
-        exactPluginIds: params.pluginIds,
-        env: process.env,
-        warn: (message) => params.log.warn(message),
-        onProgress: (message) => params.log.info(message),
-      });
-      if (result.repairedSpecs.length > 0) {
-        params.log.info(
-          `[plugins] prepared bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.repairedSpecs.join(", ")}`,
-        );
-      } else if (result.reusedSpecs && result.reusedSpecs.length > 0) {
-        params.log.info(
-          `[plugins] reused bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.reusedSpecs.join(", ")}`,
+    if (installBundledRuntimeDepsDisabled) {
+      try {
+        const skipPlan = createBundledRuntimeDepsPackagePlan({
+          packageRoot,
+          config: params.cfg,
+          exactPluginIds: params.pluginIds,
+          env: process.env,
+        });
+        if (skipPlan.missingSpecs.length > 0) {
+          params.log.warn(
+            `[plugins] bundled runtime deps install is disabled (plugins.installBundledRuntimeDeps=false); skipping repair for ${params.pluginIds.length} plugins, ${skipPlan.missingSpecs.length} missing specs: ${skipPlan.missingSpecs.join(", ")}`,
+          );
+        } else {
+          params.log.info(
+            `[plugins] bundled runtime deps install is disabled (plugins.installBundledRuntimeDeps=false); all required deps present for ${params.pluginIds.length} plugins, repair skipped`,
+          );
+        }
+      } catch (error) {
+        params.log.warn(
+          `[plugins] bundled runtime deps install is disabled (plugins.installBundledRuntimeDeps=false); failed to plan missing deps before skip: ${String(error)}`,
         );
       }
-    } catch (error) {
-      repairError = error;
-      params.log.warn(
-        `[plugins] bundled runtime dependency staging failed; plugin load will verify without synchronous repair: ${String(error)}`,
-      );
+    } else {
+      try {
+        pruneUnknownBundledRuntimeDepsRoots({
+          env: process.env,
+          warn: (message) => params.log.warn(message),
+        });
+        const startedAt = Date.now();
+        const result = await repairBundledRuntimeDepsPackagePlanAsync({
+          packageRoot,
+          config: params.cfg,
+          exactPluginIds: params.pluginIds,
+          env: process.env,
+          warn: (message) => params.log.warn(message),
+          onProgress: (message) => params.log.info(message),
+        });
+        if (result.repairedSpecs.length > 0) {
+          params.log.info(
+            `[plugins] prepared bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.repairedSpecs.join(", ")}`,
+          );
+        } else if (result.reusedSpecs && result.reusedSpecs.length > 0) {
+          params.log.info(
+            `[plugins] reused bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.reusedSpecs.join(", ")}`,
+          );
+        }
+      } catch (error) {
+        repairError = error;
+        params.log.warn(
+          `[plugins] bundled runtime dependency staging failed; plugin load will verify without synchronous repair: ${String(error)}`,
+        );
+      }
     }
   }
   prestageGatewayBundledRuntimeMirrors({
@@ -127,7 +155,8 @@ function prestageGatewayBundledRuntimeMirrors(params: {
   const allowSourceCheckoutRepair =
     params.previousRepairError === undefined &&
     typeof params.packageRoot === "string" &&
-    isSourceCheckoutRoot(params.packageRoot);
+    isSourceCheckoutRoot(params.packageRoot) &&
+    params.cfg.plugins?.installBundledRuntimeDeps !== false;
   const startedAt = Date.now();
   const preparedPluginIds: string[] = [];
   for (const record of params.manifestRegistry.plugins) {
