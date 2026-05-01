@@ -48,12 +48,12 @@ function validateRelativePath(pathInput: string): string | null {
   // Remove leading ./
   let normalized = pathInput.replace(/^\.\//, "");
 
-  // Reject .. and absolute paths
-  if (normalized.startsWith("..") || normalized.startsWith("/")) {
+  // Reject absolute paths
+  if (normalized.startsWith("/")) {
     return null;
   }
 
-  // Check for .. in path
+  // Check for .. path segments (traversal)
   const parts = normalized.split(/[/\\]/);
   if (parts.some((p) => p === "..")) {
     return null;

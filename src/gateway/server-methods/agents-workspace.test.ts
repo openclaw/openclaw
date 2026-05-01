@@ -760,6 +760,8 @@ describe("agents.workspace.move", () => {
 
   it("rejects when destination exists and overwrite is false", async () => {
     mocks.fsAccess.mockResolvedValue(undefined);
+    // Destination exists (lstat succeeds)
+    mocks.fsLstat.mockResolvedValue({ isFile: () => true } as unknown as Stats);
 
     const { getLastCall } = await invokeWorkspaceHandler("agents.workspace.move", {
       agentId: "main",
@@ -775,6 +777,7 @@ describe("agents.workspace.move", () => {
 
   it("allows overwriting when overwrite is true", async () => {
     mocks.fsAccess.mockResolvedValue(undefined);
+    mocks.fsLstat.mockResolvedValue({ isFile: () => true } as unknown as Stats);
     mocks.fsMkdir.mockResolvedValue(undefined);
     mocks.fsRename.mockResolvedValue(undefined);
 
