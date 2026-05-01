@@ -59,7 +59,10 @@ import {
   parseInstallableRuntimeDep,
   type RuntimeDepEntry,
 } from "./bundled-runtime-deps-specs.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
+import {
+  normalizePluginsConfigWithResolver,
+  type NormalizePluginId,
+} from "./config-normalization-shared.js";
 
 export {
   createBundledRuntimeDepsInstallArgs,
@@ -222,7 +225,7 @@ function collectPackageLevelRuntimeDepsForPlugin(params: {
   pluginDepEntries: readonly RuntimeDepEntry[];
   config?: OpenClawConfig;
   manifestCache: BundledPluginRuntimeDepsManifestCache;
-  normalizePluginId?: (id: string) => string | undefined;
+  normalizePluginId?: NormalizePluginId;
 }): { deps: readonly RuntimeDepEntry[]; conflicts: readonly RuntimeDepConflict[] } {
   if (!params.config) {
     return { deps: params.pluginDepEntries, conflicts: [] };
