@@ -10,7 +10,14 @@ import { normalizeTargetForProvider } from "../../infra/outbound/target-normaliz
 import { tryResolveLoadedOutboundTarget } from "../../infra/outbound/targets-loaded.js";
 import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-session.js";
 import type { OutboundChannel } from "../../infra/outbound/targets.js";
+import { getChildLogger } from "../../logging.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel-normalize.js";
+
+const deliveryTargetLogger = getChildLogger({ subsystem: "cron-delivery-target" });
 
 export type DeliveryTargetResolution =
   | {
@@ -124,8 +131,35 @@ export async function resolveDeliveryTarget(
   },
   options?: { dryRun?: boolean },
 ): Promise<DeliveryTargetResolution> {
-  const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
-  const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  const rawRequestedChannel =
+    typeof jobPayload.channel === "string" ? jobPayload.channel.trim() : undefined;
+  const normalizedRequestedChannel =
+    rawRequestedChannel && rawRequestedChannel !== "last"
+      ? normalizeMessageChannel(rawRequestedChannel)
+      : undefined;
+  let requestedChannel = rawRequestedChannel || "last";
+  let explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
+  if (
+    rawRequestedChannel &&
+    rawRequestedChannel !== "last" &&
+    !explicitTo &&
+    (!normalizedRequestedChannel || !isDeliverableMessageChannel(normalizedRequestedChannel))
+  ) {
+    try {
+      const { resolveMessageChannelSelection } = await loadChannelSelectionRuntime();
+      const selection = await resolveMessageChannelSelection({ cfg });
+      if (selection.configured.length === 1) {
+        requestedChannel = selection.channel;
+        explicitTo = rawRequestedChannel;
+      }
+    } catch (err) {
+      deliveryTargetLogger.warn(
+        { error: formatErrorMessage(err), requestedChannel: rawRequestedChannel },
+        "cron: failed to infer delivery target channel",
+      );
+      // Keep the original request when channel inference is ambiguous or unavailable.
+    }
+  }
   const allowMismatchedLastTo = requestedChannel === "last";
 
   const sessionCfg = cfg.session;

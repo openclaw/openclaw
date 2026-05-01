@@ -393,6 +393,39 @@ describe("resolveDeliveryTarget", () => {
     );
   });
 
+  it("resolves numeric explicit delivery targets through the sole configured channel", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "last",
+      to: "834732674",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        channel: "alpha",
+        to: "834732674",
+      }),
+    );
+  });
+
+  it("treats a non-channel delivery.channel value as the explicit target when only one channel is configured", async () => {
+    setMainSessionEntry(undefined);
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "834732674",
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        ok: true,
+        channel: "alpha",
+        to: "834732674",
+      }),
+    );
+  });
+
   it("skips id-like target normalization for dry-run delivery previews", async () => {
     setMainSessionEntry(undefined);
     vi.mocked(maybeResolveIdLikeTarget).mockClear();
