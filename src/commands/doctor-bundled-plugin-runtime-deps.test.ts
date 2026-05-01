@@ -122,7 +122,11 @@ function expectNoLegacyRuntimeDepsManifest(installRoot: string): void {
 }
 
 function createNonInteractiveDoctorPrompter(
-  options: { repair?: boolean; updateInProgress?: boolean } = {},
+  options: {
+    repair?: boolean;
+    updateInProgress?: boolean;
+    confirmAutoFix?: DoctorPrompter["confirmAutoFix"];
+  } = {},
 ): DoctorPrompter {
   const shouldRepair = options.repair ?? false;
   return {
@@ -136,15 +140,17 @@ function createNonInteractiveDoctorPrompter(
       updateInProgress: options.updateInProgress ?? false,
     },
     confirm: async () => false,
-    confirmAutoFix: async () => false,
+    confirmAutoFix: options.confirmAutoFix ?? (async () => false),
     confirmAggressiveAutoFix: async () => false,
     confirmRuntimeRepair: async () => false,
     select: async (_params: unknown, fallback: unknown) => fallback,
   } as DoctorPrompter;
 }
 
-function createPlainNonInteractivePrompter(): DoctorPrompter {
-  return createNonInteractiveDoctorPrompter();
+function createPlainNonInteractivePrompter(
+  options: { confirmAutoFix?: DoctorPrompter["confirmAutoFix"] } = {},
+): DoctorPrompter {
+  return createNonInteractiveDoctorPrompter(options);
 }
 
 function createNonInteractiveRepairPrompter(
@@ -519,10 +525,11 @@ describe("doctor bundled plugin runtime deps", () => {
       "bedrock-only": "1.0.0",
     });
     const installed = createInstalledRuntimeDeps();
+    const confirmAutoFix = vi.fn(async () => true);
 
     await maybeRepairBundledPluginRuntimeDeps({
       runtime: createRuntime(),
-      prompter: createPlainNonInteractivePrompter(),
+      prompter: createPlainNonInteractivePrompter({ confirmAutoFix }),
       packageRoot: root,
       config: {
         plugins: {
@@ -538,6 +545,7 @@ describe("doctor bundled plugin runtime deps", () => {
     });
 
     expect(installed).toEqual([]);
+    expect(confirmAutoFix).not.toHaveBeenCalled();
   });
 
   it("repairs explicitly enabled provider deps", async () => {
