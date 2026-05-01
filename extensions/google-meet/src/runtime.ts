@@ -169,16 +169,23 @@ export class GoogleMeetRuntime {
     return [...this.#sessions.values()].toSorted((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
-  status(sessionId?: string): {
+  async status(sessionId?: string): Promise<{
     found: boolean;
     session?: GoogleMeetSession;
     sessions?: GoogleMeetSession[];
-  } {
+  }> {
     this.#refreshHealth(sessionId);
     if (!sessionId) {
-      return { found: true, sessions: this.list() };
+      const sessions = [...this.#sessions.values()].toSorted((a, b) =>
+        a.createdAt.localeCompare(b.createdAt),
+      );
+      await Promise.all(sessions.map((session) => this.#refreshCaptionHealthForSession(session)));
+      return { found: true, sessions };
     }
     const session = this.#sessions.get(sessionId);
+    if (session) {
+      await this.#refreshCaptionHealthForSession(session);
+    }
     return session ? { found: true, session } : { found: false };
   }
 
@@ -590,8 +597,20 @@ export class GoogleMeetRuntime {
     };
   }
 
+  async #refreshCaptionHealthForSession(session: GoogleMeetSession) {
+    if (session.mode !== "transcribe") {
+      this.#refreshSpeechReadiness(session);
+      return;
+    }
+    await this.#refreshBrowserHealthForChromeSession(session);
+  }
+
   async #refreshBrowserHealthForChromeSession(session: GoogleMeetSession) {
-    if (!isManagedChromeBrowserSession(session) || evaluateSpeechReadiness(session).ready) {
+    if (!isManagedChromeBrowserSession(session)) {
+      this.#refreshSpeechReadiness(session);
+      return;
+    }
+    if (session.mode === "realtime" && evaluateSpeechReadiness(session).ready) {
       this.#refreshSpeechReadiness(session);
       return;
     }
@@ -601,10 +620,12 @@ export class GoogleMeetRuntime {
           ? await recoverCurrentMeetTabOnNode({
               runtime: this.params.runtime,
               config: this.params.config,
+              mode: session.mode,
               url: session.url,
             })
           : await recoverCurrentMeetTab({
               config: this.params.config,
+              mode: session.mode,
               url: session.url,
             });
       if (result.found && result.browser && session.chrome) {
