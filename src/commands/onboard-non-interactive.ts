@@ -11,11 +11,12 @@ import { runNonInteractiveRemoteSetup } from "./onboard-non-interactive/remote.j
 import type { OnboardOptions } from "./onboard-types.js";
 
 function createNonInteractiveMigrationPrompter(runtime: RuntimeEnv): WizardPrompter {
-  const unavailable = (message: string): never => {
-    throw new Error(
-      `Non-interactive migration import needs explicit flags before prompting: ${message}`,
+  const unavailable = <T>(message: string): Promise<T> =>
+    Promise.reject(
+      new Error(
+        `Non-interactive migration import needs explicit flags before prompting: ${message}`,
+      ),
     );
-  };
   return {
     async intro(title) {
       runtime.log(title);
@@ -26,17 +27,17 @@ function createNonInteractiveMigrationPrompter(runtime: RuntimeEnv): WizardPromp
     async note(message, title) {
       runtime.log(title ? `${title}\n${message}` : message);
     },
-    async select(params) {
-      unavailable(params.message);
+    select(params) {
+      return unavailable(params.message);
     },
-    async multiselect(params) {
-      unavailable(params.message);
+    multiselect(params) {
+      return unavailable(params.message);
     },
-    async text(params) {
-      unavailable(params.message);
+    text(params) {
+      return unavailable(params.message);
     },
-    async confirm(params) {
-      unavailable(params.message);
+    confirm(params) {
+      return unavailable(params.message);
     },
     progress(label) {
       runtime.log(label);
