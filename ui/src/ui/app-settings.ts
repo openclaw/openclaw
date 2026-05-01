@@ -178,16 +178,16 @@ function applySessionSelection(host: SettingsHost, session: string) {
   });
 }
 
+type ChatAutostartPromotionTarget = {
+  pendingChatAutostart: ChatAutostartRequest | null;
+  chatAutostart: ChatAutostartRequest | null;
+};
+
 /**
  * Promote a deferred autostart request that was staged behind a pending gateway
  * confirmation so it still targets the captured session after the switch.
  */
-export function promoteStagedAutostartPrompt<
-  T extends {
-    pendingChatAutostart: ChatAutostartRequest | null;
-    chatAutostart: ChatAutostartRequest | null;
-  },
->(target: T): void {
+export function promoteStagedAutostartPrompt(target: ChatAutostartPromotionTarget): void {
   const nextRequest = target.pendingChatAutostart;
   target.pendingChatAutostart = null;
   if (nextRequest) {
