@@ -90,9 +90,17 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
     : path.join(resolveStateDir(env), "logs", "cache-trace.jsonl");
 
   const includeMessages =
-    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages;
-  const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
-  const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
+    config?.includeMessages === false
+      ? false
+      : (parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) ?? config?.includeMessages);
+  const includePrompt =
+    config?.includePrompt === false
+      ? false
+      : (parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt);
+  const includeSystem =
+    config?.includeSystem === false
+      ? false
+      : (parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem);
 
   return {
     enabled,
