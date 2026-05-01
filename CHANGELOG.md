@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Docker/healthcheck: extend Dockerfile `HEALTHCHECK --start-period` from 15s to 600s so orchestrators (Compose `depends_on: service_healthy`, Swarm, podman, k8s probes derived from the OCI healthcheck) do not flip containers to `(unhealthy)` during a legitimate cold start while bundled runtime deps stage and the gateway binds. (#75701) Thanks @inxaos.
 - Gateway/config: report failed backup restores as failed in logs and config observe audit records instead of marking them valid. (#70515) Thanks @davidangularme.
 
 ## 2026.4.30
