@@ -13,9 +13,15 @@ type VoiceCallStartResult = {
   error?: string;
 };
 
+type VoiceCallSpeakResult = {
+  success?: boolean;
+  error?: string;
+};
+
 export type VoiceCallMeetJoinResult = {
   callId: string;
   dtmfSent: boolean;
+  introSent: boolean;
 };
 
 async function createConnectedGatewayClient(
@@ -67,6 +73,7 @@ export async function joinMeetViaVoiceCallGateway(params: {
   config: GoogleMeetConfig;
   dialInNumber: string;
   dtmfSequence?: string;
+  message?: string;
 }): Promise<VoiceCallMeetJoinResult> {
   let client: VoiceCallGatewayClient | undefined;
 
@@ -76,7 +83,6 @@ export async function joinMeetViaVoiceCallGateway(params: {
       "voicecall.start",
       {
         to: params.dialInNumber,
-        message: params.config.voiceCall.introMessage ?? params.config.realtime.introMessage,
         mode: "conversation",
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
@@ -95,7 +101,25 @@ export async function joinMeetViaVoiceCallGateway(params: {
         { timeoutMs: params.config.voiceCall.requestTimeoutMs },
       );
     }
-    return { callId: start.callId, dtmfSent: Boolean(params.dtmfSequence) };
+    if (params.message) {
+      await sleep(params.config.voiceCall.postDtmfSpeechDelayMs);
+      const spoken = (await client.request(
+        "voicecall.speak",
+        {
+          callId: start.callId,
+          message: params.message,
+        },
+        { timeoutMs: params.config.voiceCall.requestTimeoutMs },
+      )) as VoiceCallSpeakResult;
+      if (spoken.success === false) {
+        throw new Error(spoken.error || "voicecall.speak failed");
+      }
+    }
+    return {
+      callId: start.callId,
+      dtmfSent: Boolean(params.dtmfSequence),
+      introSent: Boolean(params.message),
+    };
   } finally {
     await client?.stopAndWait({ timeoutMs: 1_000 });
   }
@@ -116,6 +140,31 @@ export async function endMeetVoiceCallGatewayCall(params: {
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
     );
+  } finally {
+    await client?.stopAndWait({ timeoutMs: 1_000 });
+  }
+}
+
+export async function speakMeetViaVoiceCallGateway(params: {
+  config: GoogleMeetConfig;
+  callId: string;
+  message: string;
+}): Promise<void> {
+  let client: VoiceCallGatewayClient | undefined;
+
+  try {
+    client = await createConnectedGatewayClient(params.config);
+    const spoken = (await client.request(
+      "voicecall.speak",
+      {
+        callId: params.callId,
+        message: params.message,
+      },
+      { timeoutMs: params.config.voiceCall.requestTimeoutMs },
+    )) as VoiceCallSpeakResult;
+    if (spoken.success === false) {
+      throw new Error(spoken.error || "voicecall.speak failed");
+    }
   } finally {
     await client?.stopAndWait({ timeoutMs: 1_000 });
   }

@@ -52,6 +52,7 @@ export type GoogleMeetConfig = {
     token?: string;
     requestTimeoutMs: number;
     dtmfDelayMs: number;
+    postDtmfSpeechDelayMs: number;
     introMessage?: string;
   };
   realtime: {
@@ -181,6 +182,7 @@ export const DEFAULT_GOOGLE_MEET_CONFIG: GoogleMeetConfig = {
     enabled: true,
     requestTimeoutMs: 30_000,
     dtmfDelayMs: 2_500,
+    postDtmfSpeechDelayMs: 5_000,
   },
   realtime: {
     provider: "openai",
@@ -431,6 +433,10 @@ export function resolveGoogleMeetConfigWithEnv(
       dtmfDelayMs: resolveNumber(
         voiceCall.dtmfDelayMs,
         DEFAULT_GOOGLE_MEET_CONFIG.voiceCall.dtmfDelayMs,
+      ),
+      postDtmfSpeechDelayMs: resolveNumber(
+        voiceCall.postDtmfSpeechDelayMs,
+        DEFAULT_GOOGLE_MEET_CONFIG.voiceCall.postDtmfSpeechDelayMs,
       ),
       introMessage: normalizeOptionalString(voiceCall.introMessage),
     },

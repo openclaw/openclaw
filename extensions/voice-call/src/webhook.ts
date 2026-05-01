@@ -195,6 +195,13 @@ export class VoiceCallWebhookServer {
     return this.realtimeHandler;
   }
 
+  speakRealtime(callId: string, instructions: string): { success: boolean; error?: string } {
+    if (!this.realtimeHandler) {
+      return { success: false, error: "Realtime voice handler is not configured" };
+    }
+    return this.realtimeHandler.speak(callId, instructions);
+  }
+
   setRealtimeHandler(handler: RealtimeCallHandler): void {
     this.realtimeHandler = handler;
   }

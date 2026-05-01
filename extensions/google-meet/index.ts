@@ -119,6 +119,10 @@ const googleMeetConfigSchema = {
       advanced: true,
     },
     "voiceCall.dtmfDelayMs": { label: "DTMF Delay (ms)", advanced: true },
+    "voiceCall.postDtmfSpeechDelayMs": {
+      label: "Post-DTMF Speech Delay (ms)",
+      advanced: true,
+    },
     "voiceCall.introMessage": { label: "Voice Call Intro Message", advanced: true },
     "realtime.provider": {
       label: "Realtime Provider",

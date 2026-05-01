@@ -41,7 +41,7 @@ function buildGreetingInstructions(
 ): string | undefined {
   const trimmedGreeting = greeting?.trim();
   if (!trimmedGreeting) {
-    return baseInstructions;
+    return undefined;
   }
   const intro =
     "Start the call by greeting the caller naturally. Include this greeting in your first spoken reply:";
@@ -64,9 +64,15 @@ type CallRegistration = {
 
 type ActiveRealtimeVoiceBridge = RealtimeVoiceBridgeSession;
 
+type RealtimeSpeakResult = {
+  success: boolean;
+  error?: string;
+};
+
 export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
   private readonly pendingStreamTokens = new Map<string, PendingStreamToken>();
+  private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
   private publicOrigin: string | null = null;
   private publicPathPrefix = "";
 
@@ -199,6 +205,19 @@ export class RealtimeCallHandler {
     this.toolHandlers.set(name, fn);
   }
 
+  speak(callId: string, instructions: string): RealtimeSpeakResult {
+    const bridge = this.activeBridgesByCallId.get(callId);
+    if (!bridge) {
+      return { success: false, error: "No active realtime bridge for call" };
+    }
+    try {
+      bridge.triggerGreeting(instructions);
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: formatErrorMessage(error) };
+    }
+  }
+
   private issueStreamToken(meta: Omit<PendingStreamToken, "expiry"> = {}): string {
     const token = randomUUID();
     this.pendingStreamTokens.set(token, { expiry: Date.now() + STREAM_TOKEN_TTL_MS, ...meta });
@@ -254,7 +273,7 @@ export class RealtimeCallHandler {
       instructions: this.config.instructions,
       tools: this.config.tools,
       initialGreetingInstructions,
-      triggerGreetingOnReady: true,
+      triggerGreetingOnReady: Boolean(initialGreetingInstructions),
       audioSink: {
         isOpen: () => ws.readyState === WebSocket.OPEN,
         sendAudio: (muLaw) => {
@@ -312,6 +331,8 @@ export class RealtimeCallHandler {
         console.error("[voice-call] realtime voice error:", error.message);
       },
       onClose: (reason) => {
+        this.activeBridgesByCallId.delete(callId);
+        this.activeBridgesByCallId.delete(callSid);
         if (reason !== "error") {
           return;
         }
@@ -330,6 +351,14 @@ export class RealtimeCallHandler {
           });
       },
     });
+    this.activeBridgesByCallId.set(callId, bridge);
+    this.activeBridgesByCallId.set(callSid, bridge);
+    const closeBridge = bridge.close.bind(bridge);
+    bridge.close = () => {
+      this.activeBridgesByCallId.delete(callId);
+      this.activeBridgesByCallId.delete(callSid);
+      closeBridge();
+    };
 
     bridge.connect().catch((error: Error) => {
       console.error("[voice-call] Failed to connect realtime bridge:", error);

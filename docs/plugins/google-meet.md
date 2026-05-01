@@ -1411,6 +1411,9 @@ participant:
   the PIN.
 - Increase the leading pauses in `--dtmf-sequence` if Meet answers slowly, for
   example `wwww123456#`.
+- If the participant joins but you miss the first spoken line, increase
+  `plugins.entries.google-meet.config.voiceCall.postDtmfSpeechDelayMs` so the
+  intro is spoken after Meet finishes admitting the phone participant.
 
 If webhooks do not arrive, debug the Voice Call plugin first: the provider must
 reach `plugins.entries.voice-call.config.publicUrl` or the configured tunnel.

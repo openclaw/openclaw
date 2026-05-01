@@ -27,23 +27,47 @@ describe("Google Meet voice-call gateway", () => {
     gatewayMocks.startGatewayClientWhenEventLoopReady.mockClear();
   });
 
-  it("starts Twilio Meet calls in conversation mode with the realtime intro by default", async () => {
+  it("starts Twilio Meet calls silently, sends DTMF, then speaks the realtime intro", async () => {
     const config = resolveGoogleMeetConfig({
-      voiceCall: { gatewayUrl: "ws://127.0.0.1:18789" },
+      voiceCall: {
+        gatewayUrl: "ws://127.0.0.1:18789",
+        dtmfDelayMs: 1,
+        postDtmfSpeechDelayMs: 1,
+      },
       realtime: { introMessage: "Say exactly: I'm here and listening." },
     });
 
     await joinMeetViaVoiceCallGateway({
       config,
       dialInNumber: "+15551234567",
+      dtmfSequence: "123456#",
+      message: "Say exactly: I'm here and listening.",
     });
 
-    expect(gatewayMocks.request).toHaveBeenCalledWith(
+    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
+      1,
       "voicecall.start",
       {
         to: "+15551234567",
-        message: "Say exactly: I'm here and listening.",
         mode: "conversation",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
+      2,
+      "voicecall.dtmf",
+      {
+        callId: "call-1",
+        digits: "123456#",
+      },
+      { timeoutMs: 30_000 },
+    );
+    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
+      3,
+      "voicecall.speak",
+      {
+        callId: "call-1",
+        message: "Say exactly: I'm here and listening.",
       },
       { timeoutMs: 30_000 },
     );

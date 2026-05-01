@@ -369,12 +369,27 @@ export default definePluginEntry({
       "voicecall.speak",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
-          await respondToCallMessageAction({
-            requestParams: params,
-            respond,
-            action: (request) => request.rt.manager.speak(request.callId, request.message),
-            failure: "speak failed",
-          });
+          const request = await resolveCallMessageRequest(params);
+          if ("error" in request) {
+            respond(false, { error: request.error });
+            return;
+          }
+          if (request.rt.config.realtime.enabled) {
+            const realtimeResult = request.rt.webhookServer.speakRealtime(
+              request.callId,
+              request.message,
+            );
+            if (realtimeResult.success) {
+              respond(true, { success: true });
+              return;
+            }
+          }
+          const result = await request.rt.manager.speak(request.callId, request.message);
+          if (!result.success) {
+            respond(false, { error: result.error || "speak failed" });
+            return;
+          }
+          respond(true, { success: true });
         } catch (err) {
           sendError(respond, err);
         }

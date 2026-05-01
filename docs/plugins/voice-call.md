@@ -766,6 +766,11 @@ If Voice Call is green but the Meet participant never joins, check the Meet
 dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy while
 the meeting rejects or ignores an incorrect DTMF sequence.
 
+Google Meet starts Voice Call silently, sends DTMF, then asks Voice Call to
+speak the intro after `voiceCall.postDtmfSpeechDelayMs`. Increase that delay in
+the Google Meet plugin config if the first line is spoken before Meet admits the
+phone participant.
+
 ### Realtime call has no speech
 
 Confirm only one audio mode is enabled. `realtime.enabled` and
