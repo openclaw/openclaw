@@ -253,7 +253,7 @@ export async function writePackageDistInventory(packageRoot: string): Promise<st
   return inventory;
 }
 
-export async function readPackageDistInventory(packageRoot: string): Promise<string[]> {
+async function readPackageDistInventory(packageRoot: string): Promise<string[]> {
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   const raw = await fs.readFile(inventoryPath, "utf8");
   const parsed = JSON.parse(raw) as unknown;
