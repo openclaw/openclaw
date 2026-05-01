@@ -13,9 +13,9 @@ type CreateSessionsSpawnTool =
   (typeof import("./tools/sessions-spawn-tool.js"))["createSessionsSpawnTool"];
 type SubagentRegistryTesting = (typeof import("./subagent-registry.js"))["__testing"];
 type SubagentSpawnTesting = (typeof import("./subagent-spawn.js"))["__testing"];
-export type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
-export type GatewayRequest = { method?: string; params?: unknown; timeoutMs?: number };
-export type AgentWaitCall = { runId?: string; timeoutMs?: number };
+type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
+type GatewayRequest = { method?: string; params?: unknown; timeoutMs?: number };
+type AgentWaitCall = { runId?: string; timeoutMs?: number };
 type SessionsSpawnGatewayMockOptions = {
   includeSessionsList?: boolean;
   includeChatHistory?: boolean;
@@ -131,10 +131,6 @@ let cachedSubagentSpawnTesting: SubagentSpawnTesting | null = null;
 
 export function getCallGatewayMock(): Mock {
   return hoisted.callGatewayMock;
-}
-
-export function getGatewayRequests(): Array<GatewayRequest> {
-  return getCallGatewayMock().mock.calls.map((call: unknown[]) => call[0] as GatewayRequest);
 }
 
 export async function waitForSessionsSpawnEvent(

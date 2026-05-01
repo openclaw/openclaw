@@ -566,6 +566,13 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   );
 }
 
+export function resolveAttemptToolPolicyMessageProvider(params: {
+  messageProvider?: string;
+  messageChannel?: string;
+}): string | undefined {
+  return params.messageProvider ?? params.messageChannel;
+}
+
 function collectAttemptExplicitToolAllowlistSources(params: {
   config?: EmbeddedRunAttemptParams["config"];
   sessionKey?: string;
@@ -784,7 +791,7 @@ export async function runEmbeddedAttempt(
                 elevated: params.bashElevated,
               },
               sandbox,
-              messageProvider: params.messageChannel ?? params.messageProvider,
+              messageProvider: resolveAttemptToolPolicyMessageProvider(params),
               agentAccountId: params.agentAccountId,
               messageTo: params.messageTo,
               messageThreadId: params.messageThreadId,
@@ -1003,7 +1010,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
-      messageProvider: params.messageChannel ?? params.messageProvider,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
@@ -1030,7 +1037,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
-      messageProvider: params.messageChannel ?? params.messageProvider,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
@@ -1684,11 +1691,19 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
-        provider: params.provider,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-      });
+      const hasExplicitSseTransport = [
+        (params.streamParams as { transport?: unknown } | undefined)?.transport,
+        (params.model as { params?: { transport?: unknown } }).params?.transport,
+      ]
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .includes("sse");
+      const shouldUseWebSocketTransport =
+        !hasExplicitSseTransport &&
+        shouldUseOpenAIWebSocketTransport({
+          provider: params.provider,
+          modelApi: params.model.api,
+          modelBaseUrl: params.model.baseUrl,
+        });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({
             provider: params.provider,

@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { TwilioConfig } from "../config.js";
 import { getHeader } from "../http-headers.js";
 import type { MediaStreamHandler } from "../media-stream.js";
 import { chunkAudio } from "../telephony-audio.js";
@@ -69,6 +68,11 @@ type StreamSendResult = {
   sent: boolean;
 };
 
+type TwilioProviderConfig = {
+  accountSid?: string;
+  authToken?: string;
+};
+
 export class TwilioProvider implements VoiceCallProvider {
   readonly name = "twilio" as const;
 
@@ -129,7 +133,7 @@ export class TwilioProvider implements VoiceCallProvider {
     this.streamAuthTokens.delete(providerCallId);
   }
 
-  constructor(config: TwilioConfig, options: TwilioProviderOptions = {}) {
+  constructor(config: TwilioProviderConfig, options: TwilioProviderOptions = {}) {
     if (!config.accountSid) {
       throw new Error("Twilio Account SID is required");
     }
@@ -452,7 +456,11 @@ export class TwilioProvider implements VoiceCallProvider {
     if (!storedTwiml) {
       return null;
     }
+    const kind = this.notifyCalls.has(view.callIdFromQuery) ? "notify" : "pre-connect";
     this.deleteStoredTwiml(view.callIdFromQuery);
+    console.log(
+      `[voice-call] Twilio initial TwiML consumed for call ${view.callIdFromQuery} (kind=${kind}, callSid=${view.callSid ?? "unknown"})`,
+    );
     return storedTwiml;
   }
 
@@ -546,8 +554,14 @@ export class TwilioProvider implements VoiceCallProvider {
     if (input.inlineTwiml) {
       this.twimlStorage.set(input.callId, input.inlineTwiml);
       this.notifyCalls.add(input.callId);
+      console.log(
+        `[voice-call] Stored Twilio initial TwiML for call ${input.callId} (kind=notify)`,
+      );
     } else if (input.preConnectTwiml) {
       this.twimlStorage.set(input.callId, input.preConnectTwiml);
+      console.log(
+        `[voice-call] Stored Twilio initial TwiML for call ${input.callId} (kind=pre-connect)`,
+      );
     }
 
     // Build request params - always use URL-based TwiML.

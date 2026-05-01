@@ -114,6 +114,24 @@ export type SDKError = {
   details?: unknown;
 };
 
+export type ToolInvokeParams = {
+  args?: JsonObject;
+  sessionKey?: string;
+  agentId?: string;
+  confirm?: boolean;
+  idempotencyKey?: string;
+};
+
+export type ToolInvokeResult = {
+  ok: boolean;
+  toolName: string;
+  output?: unknown;
+  requiresApproval?: boolean;
+  approvalId?: string;
+  source?: string;
+  error?: SDKError;
+};
+
 export type RunResult = {
   runId: string;
   status: RunStatus;

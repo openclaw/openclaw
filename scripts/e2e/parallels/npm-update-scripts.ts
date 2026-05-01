@@ -65,14 +65,15 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck("/opt/homebrew/bin/openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
 /opt/homebrew/bin/openclaw models set ${shellQuote(input.auth.modelId)}
 /opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
+/opt/homebrew/bin/openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} /opt/homebrew/bin/openclaw agent --local --agent main --session-id parallels-npm-update-macos --message 'Reply with exact ASCII text OK only.' --json`;
+${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} /opt/homebrew/bin/openclaw agent --local --agent main --session-id parallels-npm-update-macos --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
 }
 
 export function windowsUpdateScript(input: NpmUpdateScriptInput): string {
@@ -110,6 +111,7 @@ function Stop-OpenClawGatewayProcesses {
 Remove-FuturePluginEntries
 Stop-OpenClawGatewayProcesses
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
+$env:OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'
 $updateOutput = Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
 $updateExit = $LASTEXITCODE
 $updateOutput
@@ -141,9 +143,26 @@ if ($LASTEXITCODE -ne 0) {
 Wait-OpenClawGateway
 Invoke-OpenClaw models set ${psSingleQuote(input.auth.modelId)}
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
+Invoke-OpenClaw config set tools.profile minimal
+$configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if ($null -eq $config.models) {
+  $config | Add-Member -MemberType NoteProperty -Name models -Value ([pscustomobject]@{})
+}
+if ($null -eq $config.models.providers) {
+  $config.models | Add-Member -MemberType NoteProperty -Name providers -Value ([pscustomobject]@{})
+}
+$config.models.providers | Add-Member -Force -MemberType NoteProperty -Name openai -Value ([pscustomobject]@{
+  baseUrl = 'https://api.openai.com/v1'
+  models = @()
+  timeoutSeconds = 300
+})
+$config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
+Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
-Invoke-OpenClaw agent --local --agent main --session-id parallels-npm-update-windows --message 'Reply with exact ASCII text OK only.' --json`;
+Invoke-OpenClaw agent --local --agent main --session-id parallels-npm-update-windows --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
 }
 
 export function linuxUpdateScript(input: NpmUpdateScriptInput): string {
@@ -197,14 +216,15 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck("openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
 openclaw models set ${shellQuote(input.auth.modelId)}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
+openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} openclaw agent --local --agent main --session-id parallels-npm-update-linux --message 'Reply with exact ASCII text OK only.' --json`;
+${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} openclaw agent --local --agent main --session-id parallels-npm-update-linux --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {

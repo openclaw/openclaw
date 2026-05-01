@@ -87,7 +87,9 @@ describe("Parallels smoke model selection", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
-    expect(providerAuth).toContain("openai/gpt-5.4");
+    expect(providerAuth).toContain("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL");
+    expect(providerAuth).toContain("openai/gpt-5.5");
+    expect(providerAuth).toContain("openai/gpt-4.1-mini");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
@@ -95,7 +97,7 @@ describe("Parallels smoke model selection", () => {
     for (const scriptPath of [...OS_TS_PATHS, TS_PATHS.npmUpdate]) {
       const script = readFileSync(scriptPath, "utf8");
 
-      expect(script, scriptPath).toContain("resolveProviderAuth");
+      expect(script, scriptPath).toMatch(/resolve(?:Windows)?ProviderAuth/u);
       expect(script, scriptPath).toContain("--model <provider/model>");
       expect(script, scriptPath).toContain("modelId");
     }
@@ -213,13 +215,19 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     }
   });
 
+  it("waits for apt locks during Linux snapshot bootstrap", () => {
+    const script = readFileSync(TS_PATHS.linux, "utf8");
+
+    expect(script).toContain("DPkg::Lock::Timeout=300");
+  });
+
   it("resolves provider defaults and explicit model overrides", () => {
     expect(resolveProviderAuth("openai", { env: { OPENAI_API_KEY: "sk-openai" } })).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.4",
+      modelId: "openai/gpt-5.5",
     });
 
     expect(
@@ -234,6 +242,31 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       authChoice: "apiKey",
       authKeyFlag: "anthropic-api-key",
       modelId: "anthropic/custom",
+    });
+  });
+
+  it("uses the faster OpenAI model for Windows smoke unless overridden", () => {
+    const source = `
+import { resolveWindowsProviderAuth } from "./${TS_PATHS.common}";
+const result = resolveWindowsProviderAuth({
+  provider: "openai",
+});
+console.log(JSON.stringify(result));
+`;
+    expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toMatchObject({
+      apiKeyEnv: "OPENAI_API_KEY",
+      modelId: "openai/gpt-4.1-mini",
+    });
+
+    expect(
+      JSON.parse(
+        runTsEval(source, {
+          OPENAI_API_KEY: "sk-openai",
+          OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL: "openai/custom-windows",
+        }),
+      ),
+    ).toMatchObject({
+      modelId: "openai/custom-windows",
     });
   });
 
@@ -283,11 +316,16 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       expect(script, scriptPath).toContain("AgentWorkspaceScript");
       expect(script, scriptPath).toContain("parallels-");
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
+      expect(script, scriptPath).toContain("tools.profile");
+      expect(script, scriptPath).toContain("--thinking");
+      expect(script, scriptPath).toContain("minimal");
     }
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
+    expect(npmUpdateScripts).toContain("tools.profile");
+    expect(npmUpdateScripts).toContain("--thinking minimal");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {
@@ -321,12 +359,23 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(combined).toContain("where.exe git.exe");
   });
 
+  it("preseeds dev update channel before stable-to-dev update lanes", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(macos).toContain('channel: "dev"');
+    expect(windows).toContain("Name channel -Value 'dev'");
+    expect(macos).toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1");
+    expect(windows).toContain("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS");
+  });
+
   it("passes aggregate model overrides into each OS fresh lane", () => {
     const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
 
     expect(script).toContain("scripts/e2e/parallels/${platform}-smoke.ts");
     expect(script).toContain('"--model"');
-    expect(script).toContain("this.auth.modelId");
+    expect(script).toContain("auth.modelId");
+    expect(script).toContain("authForPlatform");
     expect(script).toContain("OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR");
   });
 
@@ -352,6 +401,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(macos).not.toContain("Authorization: Bot");
     expect(discord).toContain("Authorization: Bot");
     expect(discord).toContain('"--silent"');
+    expect(discord).toContain("plugins deps --repair");
     expect(discord).toContain("channels status --probe --json");
     expect(discord).toContain("Stop ${this.input.vmName} after successful Discord smoke");
   });
@@ -402,6 +452,9 @@ console.log(JSON.stringify(result));
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
+    expect(script).toContain("$config.models.providers");
+    expect(script).toContain("timeoutSeconds = 300");
+    expect(script).toContain("parallels-windows-smoke.jsonl");
   });
 
   it("waits through transient Windows restoring state before VM operations", () => {

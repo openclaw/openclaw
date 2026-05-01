@@ -11,7 +11,6 @@ import {
 import {
   createAccountScopedAllowFromSection,
   createAccountScopedGroupAccessSection,
-  createAllowlistSetupWizardProxy,
   createLegacyCompatChannelDmPolicy,
   parseMentionOrPrefixedId,
   patchChannelConfigForAccount,
@@ -178,12 +177,4 @@ export function createDiscordSetupWizardBase(handlers: {
     dmPolicy: discordDmPolicy,
     disable: (cfg: OpenClawConfig) => setSetupChannelEnabled(cfg, channel, false),
   } satisfies ChannelSetupWizard;
-}
-export function createDiscordSetupWizardProxy(loadWizard: () => Promise<ChannelSetupWizard>) {
-  return createAllowlistSetupWizardProxy({
-    loadWizard,
-    createBase: createDiscordSetupWizardBase,
-    fallbackResolvedGroupAllowlist: (entries) =>
-      entries.map((input) => ({ input, resolved: false })),
-  });
 }

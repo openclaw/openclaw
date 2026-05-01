@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 
 export type SetupCheck = {
@@ -24,31 +25,10 @@ function resolveUserPath(input: string): string {
   return input;
 }
 
-function isLocalOnlyWebhookHost(hostname: string): boolean {
-  const host = hostname.trim().toLowerCase();
-  if (!host) {
-    return false;
-  }
-  if (
-    host === "localhost" ||
-    host === "0.0.0.0" ||
-    host === "::" ||
-    host === "::1" ||
-    host.startsWith("127.")
-  ) {
-    return true;
-  }
-  if (host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) {
-    return true;
-  }
-  const private172 = /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
-  return private172 || host.startsWith("fc") || host.startsWith("fd");
-}
-
 function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
   try {
     const parsed = new URL(webhookUrl);
-    return isLocalOnlyWebhookHost(parsed.hostname);
+    return isBlockedHostnameOrIp(parsed.hostname);
   } catch {
     return false;
   }
