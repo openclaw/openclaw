@@ -11,6 +11,7 @@ import type {
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatContextLimitTruncationNotice } from "./pi-embedded-runner/context-truncation-notice.js";
 import {
@@ -22,8 +23,33 @@ import {
   setRawSessionAppendMessage,
 } from "./session-raw-append-message.js";
 import { createPendingToolCallState } from "./session-tool-result-state.js";
-import { makeMissingToolResult, sanitizeToolCallInputs } from "./session-transcript-repair.js";
+import {
+  makeMissingToolResult,
+  sanitizeToolCallInputsWithReport,
+  type DroppedToolCallInfo,
+} from "./session-transcript-repair.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
+
+const log = createSubsystemLogger("session/tool-guard");
+
+/**
+ * Build a synthetic error tool result that informs the model a tool is not available.
+ * This gives the model a chance to self-correct instead of silently dropping the call.
+ */
+function makeUnknownToolErrorResult(detail: DroppedToolCallInfo): AgentMessage {
+  const reasonText =
+    detail.reason === "not_in_allowlist"
+      ? `Tool "${detail.name}" is not available. Use only the tools listed in your system prompt.`
+      : `Tool call for "${detail.name}" was malformed (${detail.reason}). Use only the tools listed in your system prompt.`;
+  return {
+    role: "toolResult",
+    toolCallId: detail.id,
+    toolName: detail.name,
+    content: [{ type: "text", text: `[openclaw] ${reasonText}` }],
+    isError: true,
+    timestamp: Date.now(),
+  } as Extract<AgentMessage, { role: "toolResult" }>;
+}
 
 /**
  * Truncate oversized text content blocks in a tool result message.
@@ -381,16 +407,52 @@ export function installSessionToolResultGuard(
     let nextMessage = message;
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
-      const sanitized = sanitizeToolCallInputs([message], {
+      const report = sanitizeToolCallInputsWithReport([message], {
         allowedToolNames: opts?.allowedToolNames,
       });
-      if (sanitized.length === 0) {
+
+      // Log dropped tool calls for observability.
+      if (report.droppedToolCalls > 0 && report.droppedToolCallDetails.length > 0) {
+        const droppedNames = report.droppedToolCallDetails
+          .map((d) => `${d.name} (${d.reason})`)
+          .join(", ");
+        log.warn(
+          `[tool-call-dropped] Dropped ${report.droppedToolCalls} unknown/invalid tool call(s): ${droppedNames}`,
+          {
+            droppedToolCalls: report.droppedToolCalls,
+            details: report.droppedToolCallDetails,
+            sessionKey: opts?.sessionKey,
+          },
+        );
+      }
+
+      if (report.messages.length === 0) {
+        // Entire assistant message was dropped — safe to inject synthetic error
+        // results because there is no surviving assistant turn whose tool_use
+        // ordering would be violated.
+        for (const detail of report.droppedToolCallDetails) {
+          if (detail.id) {
+            const errorResult = makeUnknownToolErrorResult(detail);
+            const persisted = applyBeforeWriteHook(
+              persistToolResult(persistMessage(errorResult), {
+                toolCallId: detail.id,
+                toolName: detail.name,
+                isSynthetic: true,
+              }),
+            );
+            if (persisted) {
+              originalAppend(
+                capToolResultForPersistence(persisted, maxToolResultChars) as never,
+              );
+            }
+          }
+        }
         if (pendingState.shouldFlushForSanitizedDrop()) {
           flushPendingToolResults();
         }
         return undefined;
       }
-      nextMessage = sanitized[0];
+      nextMessage = report.messages[0];
     }
     const nextRole = (nextMessage as { role?: unknown }).role;
 
