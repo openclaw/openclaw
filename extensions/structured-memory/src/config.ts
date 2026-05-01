@@ -53,12 +53,52 @@ export interface ResolvedStructuredMemoryConfig {
   recall: {
     maxResults: number;
   };
+  // Phase 1: RFC-defined domain default confidence
+  domainDefaults: {
+    personal: number;
+    work: number;
+    health: number;
+    legal: number;
+    fallback: number;
+  };
 }
 
 const DEFAULT_CLASSIFICATION_TIMEOUT_MS = 5000;
 const DEFAULT_HALF_LIFE_DAYS = 14;
 const DEFAULT_MIN_MAINTENANCE_SCORE = 0.1;
 const DEFAULT_MAX_RESULTS = 15;
+
+// RFC-defined domain default confidence values
+const DOMAIN_DEFAULT_CONFIDENCE: ResolvedStructuredMemoryConfig["domainDefaults"] = {
+  personal: 0.5,
+  work: 0.3,
+  health: 0.1,
+  legal: 0.1,
+  // RFC: global fallback is 0.3, not 0.5
+  fallback: 0.3,
+};
+
+export function getDomainDefaultConfidence(
+  attributes?: string,
+): number {
+  if (!attributes) return DOMAIN_DEFAULT_CONFIDENCE.fallback;
+  try {
+    const parsed = JSON.parse(attributes) as Record<string, unknown>;
+    if (Array.isArray(parsed.domains)) {
+      for (const domain of parsed.domains) {
+        if (typeof domain === "string") {
+          const key = domain.toLowerCase() as keyof typeof DOMAIN_DEFAULT_CONFIDENCE;
+          if (key in DOMAIN_DEFAULT_CONFIDENCE) {
+            return DOMAIN_DEFAULT_CONFIDENCE[key];
+          }
+        }
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return DOMAIN_DEFAULT_CONFIDENCE.fallback;
+}
 
 export function resolveStructuredMemoryConfig(raw: unknown): ResolvedStructuredMemoryConfig {
   const obj = (raw ?? {}) as Record<string, unknown>;
@@ -91,5 +131,6 @@ export function resolveStructuredMemoryConfig(raw: unknown): ResolvedStructuredM
           ? recall.maxResults
           : DEFAULT_MAX_RESULTS,
     },
+    domainDefaults: DOMAIN_DEFAULT_CONFIDENCE,
   };
 }

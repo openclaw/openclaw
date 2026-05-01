@@ -33,6 +33,7 @@ function ensureSchema(db: SqliteDatabase): void {
       last_accessed_at TEXT,
       expire_at TEXT,
       contradiction_flag INTEGER NOT NULL DEFAULT 0,
+      allow_coexistence INTEGER NOT NULL DEFAULT 0,
       content TEXT,
       keywords TEXT NOT NULL DEFAULT '',
       agent_id TEXT NOT NULL,
@@ -53,6 +54,18 @@ function ensureSchema(db: SqliteDatabase): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_memory_records_expire ON memory_records(expire_at)
   `);
+
+  // Phase 1 schema additions (ALTER TABLE for backwards compat)
+  const addColumn = (col: string) => {
+    try {
+      db.exec(col);
+    } catch {
+      // column already exists — ignore
+    }
+  };
+  addColumn(`ALTER TABLE memory_records ADD COLUMN critical INTEGER NOT NULL DEFAULT 0`);
+  addColumn(`ALTER TABLE memory_records ADD COLUMN activate_at TEXT`);
+  addColumn(`ALTER TABLE memory_records ADD COLUMN consolidation_count INTEGER NOT NULL DEFAULT 0`);
 }
 
 export function getOrOpenDatabase(agentId: string): SqliteDatabase {
@@ -110,6 +123,10 @@ function castRow(row: unknown): MemoryRecord {
     last_accessed_at: typeof obj.last_accessed_at === "string" ? obj.last_accessed_at : null,
     expire_at: typeof obj.expire_at === "string" ? obj.expire_at : null,
     contradiction_flag: obj.contradiction_flag === 1 ? 1 : 0,
+    allow_coexistence: obj.allow_coexistence === 1 ? 1 : 0,
+    critical: obj.critical === 1 ? 1 : 0,
+    activate_at: typeof obj.activate_at === "string" ? obj.activate_at : null,
+    consolidation_count: Number(obj.consolidation_count ?? 0),
     content: typeof obj.content === "string" ? obj.content : null,
     keywords: String(obj.keywords ?? ""),
     agent_id: String(obj.agent_id ?? ""),
@@ -129,6 +146,9 @@ export function insertRecord(
     salience?: number;
     status?: string;
     expire_at?: string | null;
+    activate_at?: string | null;
+    critical?: 0 | 1;
+    allow_coexistence?: 0 | 1;
     content?: string | null;
     keywords: string;
     agent_id: string;
@@ -141,16 +161,17 @@ export function insertRecord(
   const stmt = db.prepare(`
     INSERT INTO memory_records
       (id, type, summary, confidence, importance, salience, status, created_at, updated_at,
-       last_accessed_at, expire_at, contradiction_flag, content, keywords, agent_id,
+       last_accessed_at, expire_at, contradiction_flag, allow_coexistence, critical, activate_at,
+       consolidation_count, content, keywords, agent_id,
        source_session_id, attributes)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     id,
     record.type,
     record.summary,
-    record.confidence ?? 0.5,
+    record.confidence ?? 0.3,
     record.importance,
     record.salience ?? 0.5,
     record.status ?? "active",
@@ -158,6 +179,10 @@ export function insertRecord(
     now,
     null,
     record.expire_at ?? null,
+    0,
+    record.allow_coexistence ?? 0,
+    record.critical ?? 0,
+    record.activate_at ?? null,
     0,
     record.content ?? null,
     record.keywords,
@@ -179,6 +204,9 @@ export function updateRecord(
     keywords?: string;
     content?: string | null;
     expire_at?: string | null;
+    activate_at?: string | null;
+    critical?: 0 | 1;
+    allow_coexistence?: 0 | 1;
     attributes?: string;
     status?: string;
   },
@@ -213,6 +241,18 @@ export function updateRecord(
   if (fields.expire_at !== undefined) {
     setClauses.push("expire_at = ?");
     values.push(fields.expire_at);
+  }
+  if (fields.activate_at !== undefined) {
+    setClauses.push("activate_at = ?");
+    values.push(fields.activate_at);
+  }
+  if (fields.critical !== undefined) {
+    setClauses.push("critical = ?");
+    values.push(fields.critical);
+  }
+  if (fields.allow_coexistence !== undefined) {
+    setClauses.push("allow_coexistence = ?");
+    values.push(fields.allow_coexistence);
   }
   if (fields.attributes !== undefined) {
     setClauses.push("attributes = ?");
@@ -316,26 +356,31 @@ export function findConflictingRecords(
   db: SqliteDatabase,
   type: RecordType,
   keywords: string,
+  agentId?: string,
 ): MemoryRecord[] {
   if (!keywords.trim()) return [];
   const terms = keywords.split(/\s+/).filter(Boolean);
-  if (terms.length < 2) return [];
+  if (terms.length < 3) return [];
 
   const conditions = terms.map(() => "keywords LIKE ?");
   const likeValues = terms.map((t) => `%${t}%`);
 
-  const rows = db
-    .prepare(
-      `SELECT * FROM memory_records WHERE type = ? AND status = 'active' AND (${conditions.join(" OR ")})`,
-    )
-    .all(type, ...likeValues) as unknown[];
+  let sql = `SELECT * FROM memory_records WHERE type = ? AND status = 'active' AND (${conditions.join(" OR ")})`;
+  const params: unknown[] = [type, ...likeValues];
+
+  if (agentId) {
+    sql += " AND agent_id = ?";
+    params.push(agentId);
+  }
+
+  const rows = db.prepare(sql).all(...params) as unknown[];
 
   const records = rows.map(castRow);
 
   return records.filter((record) => {
     const recordKeywords = record.keywords.split(/\s+/).filter(Boolean);
     const matched = terms.filter((term) => recordKeywords.some((kw) => kw.includes(term)));
-    return matched.length >= 2;
+    return matched.length >= 3;
   });
 }
 

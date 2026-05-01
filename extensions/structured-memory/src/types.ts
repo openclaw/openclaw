@@ -21,7 +21,11 @@ export interface MemoryRecord {
   updated_at: string;
   last_accessed_at: string | null;
   expire_at: string | null;
+  activate_at: string | null;
   contradiction_flag: 0 | 1;
+  allow_coexistence: 0 | 1;
+  critical: 0 | 1;
+  consolidation_count: number;
   content: string | null;
   keywords: string;
   agent_id: string;

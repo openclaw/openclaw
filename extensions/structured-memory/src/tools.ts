@@ -7,7 +7,7 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
-import type { ResolvedStructuredMemoryConfig } from "./config";
+import { getDomainDefaultConfidence, type ResolvedStructuredMemoryConfig } from "./config";
 import {
   getOrOpenDatabase,
   insertRecord,
@@ -277,21 +277,32 @@ export function createMemoryRecordAddTool(
           .replace(/\s+/g, " ")
           .trim();
 
+        let allowCoexistence: 0 | 1 = 0;
         let contradictionFlag: 0 | 1 = 0;
         if (userType) {
           const conflicting = findConflictingRecords(
             db,
             userType as MemoryRecord["type"],
             keywords,
+            agentId,
           );
           if (conflicting.length > 0) {
             contradictionFlag = 1;
+            // check if any conflicting record allows coexistence
+            if (conflicting.some((r) => r.allow_coexistence === 1)) {
+              allowCoexistence = 1;
+            }
           }
         }
 
         const rawConfidence =
           typeof params.confidence === "number" ? params.confidence : classification.confidence;
-        const finalConfidence = contradictionFlag ? Math.min(rawConfidence, 0.5) : rawConfidence;
+        const domainDefault = getDomainDefaultConfidence(
+	  typeof params.attributes === "string" ? params.attributes : undefined,
+	);
+	const finalConfidence = contradictionFlag && !allowCoexistence
+	  ? Math.min(rawConfidence, domainDefault)
+	  : rawConfidence;
 
         if (isUpdate && providedId) {
           const success = updateRecord(db, providedId, {
@@ -303,6 +314,7 @@ export function createMemoryRecordAddTool(
             attributes: typeof params.attributes === "string" ? params.attributes : undefined,
             expire_at: typeof params.expire_at === "string" ? params.expire_at : undefined,
             status: "active",
+            allow_coexistence: allowCoexistence,
           });
 
           if (!success) {
@@ -344,6 +356,7 @@ export function createMemoryRecordAddTool(
           expire_at: typeof params.expire_at === "string" ? params.expire_at : null,
           keywords,
           agent_id: agentId,
+          allow_coexistence: allowCoexistence,
           source_session_id: sessionKey,
           content: summary,
           attributes: typeof params.attributes === "string" ? params.attributes : "{}",

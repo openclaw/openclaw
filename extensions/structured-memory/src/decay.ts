@@ -39,6 +39,34 @@ export function computeRelevance(
     (1 + daysSinceAccess);
 
   const relevance = maintenanceScore;
+
+  // Phase 1: critical immunity — critical records never auto-archive
+  if (record.critical === 1) {
+    return {
+      relevance,
+      decay_factor: decayFactor,
+      access_boost: accessBoost,
+      maintenance_score: maintenanceScore,
+      should_archive: false,
+    };
+  }
+
+  // Phase 1: activate_at protection — future activation prevents archiving,
+  // and applies a lower relevance score so unactivated records rank lower
+  if (record.activate_at) {
+    const activateAt = new Date(record.activate_at).getTime();
+    if (now < activateAt) {
+      return {
+        relevance: relevance * 0.3,
+        decay_factor: decayFactor,
+        access_boost: accessBoost,
+        maintenance_score: maintenanceScore,
+        should_archive: false,
+        archive_reason: `protected (activates_at ${record.activate_at})`,
+      };
+    }
+  }
+
   const shouldArchive = relevance < config.decay.minMaintenanceScore;
 
   return {

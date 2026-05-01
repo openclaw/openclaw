@@ -14,20 +14,26 @@ import type { MaintenanceResult } from "./types";
 const MAX_SESSION_SCAN = 100;
 const MAX_SESSION_ARCHIVE = 10;
 
+function isProtected(record: { critical: 0 | 1; activate_at: string | null }): boolean {
+  if (record.critical === 1) return true;
+  if (record.activate_at && new Date(record.activate_at).getTime() > Date.now()) return true;
+  return false;
+}
+
 export async function runSessionMaintenance(params: {
   agentId: string;
   config: ResolvedStructuredMemoryConfig;
 }): Promise<MaintenanceResult> {
   const db = getOrOpenDatabase(params.agentId);
 
-  const expired = scanExpiredRecords(db);
+  const expired = scanExpiredRecords(db).filter((r) => !isProtected(r));
   let archivedExpired = 0;
   for (const record of expired.slice(0, MAX_SESSION_ARCHIVE)) {
     archiveRecord(db, record.id, "expired");
     archivedExpired++;
   }
 
-  const active = scanAllActiveRecords(db);
+  const active = scanAllActiveRecords(db).filter((r) => !isProtected(r));
   const toScan = active.slice(0, Math.min(MAX_SESSION_SCAN, active.length));
   let archivedDecayed = 0;
 
@@ -70,14 +76,14 @@ export async function runFullMaintenanceCycle(params: {
     try {
       const db = getOrOpenDatabase(agentId);
 
-      const expired = scanExpiredRecords(db);
+      const expired = scanExpiredRecords(db).filter((r) => !isProtected(r));
       let archivedExpired = 0;
       for (const record of expired) {
         archiveRecord(db, record.id, "expired");
         archivedExpired++;
       }
 
-      const active = scanAllActiveRecords(db);
+      const active = scanAllActiveRecords(db).filter((r) => !isProtected(r));
       let archivedDecayed = 0;
       for (const record of active) {
         const relevance = computeRelevance(record, { decay: params.config.decay });
