@@ -46,6 +46,25 @@ const bluebubblesNetworkSchema = z
   .strict()
   .optional();
 
+const bluebubblesInboundAudioEnricherSchema = z
+  .object({
+    /**
+     * When true (default) BlueBubbles voice notes are transcribed via the
+     * upstream BB Server's `audio-transcript` endpoint and the message body
+     * is rewritten before agent dispatch. (#68719)
+     */
+    enabled: z.boolean().optional(),
+    /** Per-attachment-type opt-outs. Today only `audio` is honored. */
+    perType: z
+      .object({
+        audio: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .optional();
+
 const bluebubblesCatchupSchema = z
   .object({
     /** Replay messages delivered while the gateway was unreachable. Defaults to on. */
@@ -92,6 +111,7 @@ const bluebubblesAccountSchema = z
     sendReadReceipts: z.boolean().optional(),
     network: bluebubblesNetworkSchema,
     catchup: bluebubblesCatchupSchema,
+    inboundAudioEnricher: bluebubblesInboundAudioEnricherSchema,
     blockStreaming: z.boolean().optional(),
     groups: z.object({}).catchall(bluebubblesGroupConfigSchema).optional(),
     coalesceSameSenderDms: z.boolean().optional(),

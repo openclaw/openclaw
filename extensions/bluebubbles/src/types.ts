@@ -36,6 +36,20 @@ export type BlueBubblesNetworkConfig = {
   dangerouslyAllowPrivateNetwork?: boolean;
 };
 
+/**
+ * Pre-dispatch transcript enricher for inbound BlueBubbles voice notes.
+ * Rewrites the placeholder body with Apple's on-device transcript so the
+ * agent receives the spoken text instead of `<media:audio>`. (#68719)
+ */
+export type BlueBubblesInboundAudioEnricherConfig = {
+  /** Default true. Set false to keep the placeholder body. */
+  enabled?: boolean;
+  /** Per-attachment-type opt-outs. Today only `audio` is honored. */
+  perType?: {
+    audio?: boolean;
+  };
+};
+
 export type BlueBubblesAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -97,6 +111,8 @@ export type BlueBubblesAccountConfig = {
   sendReadReceipts?: boolean;
   /** Network policy overrides for same-host or trusted private/internal BlueBubbles deployments. */
   network?: BlueBubblesNetworkConfig;
+  /** Pre-dispatch transcript enricher for inbound voice notes. Default-on. (#68719) */
+  inboundAudioEnricher?: BlueBubblesInboundAudioEnricherConfig;
   /** Per-group configuration keyed by chat GUID or identifier. */
   groups?: Record<string, BlueBubblesGroupConfig>;
   /** Per-action tool gating (default: true for all). */

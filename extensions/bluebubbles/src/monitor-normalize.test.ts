@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeWebhookMessage, normalizeWebhookReaction } from "./monitor-normalize.js";
+import {
+  buildMessagePlaceholder,
+  normalizeWebhookMessage,
+  normalizeWebhookReaction,
+} from "./monitor-normalize.js";
 
 function createFallbackDmPayload(overrides: Record<string, unknown> = {}) {
   return {
@@ -119,6 +123,40 @@ describe("normalizeWebhookMessage", () => {
 
     expect(result).not.toBeNull();
     expect(result?.participants).toEqual([{ id: "+15551234567" }, { id: "+15557654321" }]);
+  });
+});
+
+describe("buildMessagePlaceholder audio detection (#68719)", () => {
+  function makeMsg(attachments: Array<{ mimeType?: string; uti?: string }>) {
+    return {
+      text: "",
+      senderId: "+15551234567",
+      senderIdExplicit: false,
+      isGroup: false,
+      attachments,
+    } as Parameters<typeof buildMessagePlaceholder>[0];
+  }
+
+  it("emits <media:audio> for `audio/*` MIME (existing behavior)", () => {
+    expect(buildMessagePlaceholder(makeMsg([{ mimeType: "audio/x-m4a" }]))).toContain(
+      "<media:audio>",
+    );
+  });
+
+  it("emits <media:audio> for Apple `public.audio` UTI when MIME is missing", () => {
+    expect(buildMessagePlaceholder(makeMsg([{ uti: "public.audio" }]))).toContain("<media:audio>");
+  });
+
+  it("emits <media:audio> for Apple `com.apple.m4a-audio` UTI", () => {
+    expect(buildMessagePlaceholder(makeMsg([{ uti: "com.apple.m4a-audio" }]))).toContain(
+      "<media:audio>",
+    );
+  });
+
+  it("falls back to <media:attachment> for non-audio mixes", () => {
+    expect(
+      buildMessagePlaceholder(makeMsg([{ uti: "public.audio" }, { mimeType: "image/jpeg" }])),
+    ).toContain("<media:attachment>");
   });
 });
 

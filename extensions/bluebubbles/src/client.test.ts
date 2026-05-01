@@ -497,6 +497,83 @@ describe("client.getMessageAttachments", () => {
   });
 });
 
+// --- Audio transcript ------------------------------------------------------
+
+describe("client.getAudioTranscript (#68719)", () => {
+  it("returns the transcript string from a `data: <string>` envelope", async () => {
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ data: "  Pick up milk on the way home  " }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const client = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+    });
+    const transcript = await client.getAudioTranscript({ messageGuid: "msg-audio-1" });
+    expect(transcript).toBe("Pick up milk on the way home");
+    expect(String(mockFetch.mock.calls[0]?.[0])).toContain(
+      "/api/v1/message/audio-transcript/msg-audio-1",
+    );
+  });
+
+  it("returns the transcript from a `data: { transcript }` envelope", async () => {
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ data: { transcript: "hello world" } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const client = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+    });
+    expect(await client.getAudioTranscript({ messageGuid: "g" })).toBe("hello world");
+  });
+
+  it("returns null on 404 (older BB Server, endpoint unavailable)", async () => {
+    mockFetch.mockResolvedValue(new Response("not found", { status: 404 }));
+    const client = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+    });
+    expect(await client.getAudioTranscript({ messageGuid: "g" })).toBeNull();
+  });
+
+  it("returns null on transport error rather than throwing", async () => {
+    mockFetch.mockRejectedValue(new Error("ECONNREFUSED"));
+    const client = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+    });
+    expect(await client.getAudioTranscript({ messageGuid: "g" })).toBeNull();
+  });
+
+  it("returns null when the response body is empty/whitespace", async () => {
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ data: "   " }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const client = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+    });
+    expect(await client.getAudioTranscript({ messageGuid: "g" })).toBeNull();
+  });
+
+  it("returns null when the message guid is empty", async () => {
+    const client = createBlueBubblesClient({
+      serverUrl: "http://localhost:1234",
+      password: "s3cret",
+    });
+    expect(await client.getAudioTranscript({ messageGuid: "   " })).toBeNull();
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
 // --- Cache + invalidation --------------------------------------------------
 
 describe("client cache", () => {

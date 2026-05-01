@@ -546,6 +546,25 @@ Control whether responses are sent as a single message or streamed in blocks:
 - Media cap via `channels.bluebubbles.mediaMaxMb` for inbound and outbound media (default: 8 MB).
 - Outbound text is chunked to `channels.bluebubbles.textChunkLimit` (default: 4000 chars).
 
+### Inbound voice notes (audio transcripts)
+
+When BlueBubbles Server v1.14.0+ delivers an iMessage voice note, OpenClaw fetches the transcript Apple already produced on-device and substitutes it for the `<media:audio>` placeholder before the agent sees the message.
+
+- No third-party speech-to-text provider is required and no extra cost is incurred — the text comes from Apple's built-in dictation that ran on the sending device.
+- Audio attachments are detected by both MIME (`audio/*`) and Apple UTIs (`public.audio`, `public.mpeg-4-audio`, `com.apple.m4a-audio`, `com.apple.coreaudio-format`).
+- The transcript text is treated as PII: it never appears in verbose logs, only the character length is recorded.
+- Older BB Servers reply 404 to the `audio-transcript` endpoint; the call is best-effort and silently falls back to the placeholder body when unavailable.
+- If the user typed text alongside the voice note, the original text is preserved.
+
+Disable per account:
+
+```yaml
+channels:
+  bluebubbles:
+    inboundAudioEnricher:
+      enabled: false
+```
+
 ## Configuration reference
 
 Full configuration: [Configuration](/gateway/configuration)
@@ -577,6 +596,8 @@ Full configuration: [Configuration](/gateway/configuration)
   </Accordion>
   <Accordion title="Media and history">
     - `channels.bluebubbles.mediaMaxMb`: Inbound/outbound media cap in MB (default: 8).
+    - `channels.bluebubbles.inboundAudioEnricher.enabled`: Pre-dispatch transcription of inbound voice notes via the upstream BlueBubbles `audio-transcript` endpoint (default: `true`). See [Inbound voice notes](#inbound-voice-notes-audio-transcripts).
+    - `channels.bluebubbles.inboundAudioEnricher.perType.audio`: Per-type opt-out for audio transcription (default: enabled when the parent flag is on).
     - `channels.bluebubbles.mediaLocalRoots`: Explicit allowlist of absolute local directories permitted for outbound local media paths. Local path sends are denied by default unless this is configured. Per-account override: `channels.bluebubbles.accounts.<accountId>.mediaLocalRoots`.
     - `channels.bluebubbles.coalesceSameSenderDms`: Merge consecutive same-sender DM webhooks into one agent turn so Apple's text+URL split-send arrives as a single message (default: `false`). See [Coalescing split-send DMs](#coalescing-split-send-dms-command--url-in-one-composition) for scenarios, window tuning, and trade-offs. Widens the default inbound debounce window from 500 ms to 2500 ms when enabled without an explicit `messages.inbound.byChannel.bluebubbles`.
     - `channels.bluebubbles.historyLimit`: Max group messages for context (0 disables).

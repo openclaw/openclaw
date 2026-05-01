@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- BlueBubbles: pre-dispatch transcribe inbound voice notes via the upstream `audio-transcript` endpoint and substitute the transcript for the `<media:audio>` placeholder so agents see what the user said instead of apologizing about an empty body; gated by the new default-on `channels.bluebubbles.inboundAudioEnricher.enabled` flag, detects audio by both MIME and Apple UTIs, falls back silently on older BB Servers, and never logs transcript text. Fixes #68719. Thanks @markthebest12.
 - Messages/docs: clarify that `BodyForAgent` is the primary inbound model text while `Body` is the legacy envelope fallback, and add Signal coverage so channel hardening patches target the real prompt path. Refs #66198. Thanks @defonota3box.
 - Control UI/Usage: add UTC quarter-hour token buckets for the Usage Mosaic and reuse them for hour filtering, keeping the legacy session-span fallback for older summaries. (#74337) Thanks @konanok.
 

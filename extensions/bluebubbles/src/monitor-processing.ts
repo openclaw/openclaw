@@ -14,9 +14,10 @@ import {
   fetchBlueBubblesMessageAttachments,
 } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
-import { createBlueBubblesClientFromParts } from "./client.js";
+import { createBlueBubblesClient, createBlueBubblesClientFromParts } from "./client.js";
 import { resolveBlueBubblesConversationRoute } from "./conversation-route.js";
 import { fetchBlueBubblesHistory } from "./history.js";
+import { enrichInboundAudioMessage } from "./inbound-audio-enricher.js";
 import {
   claimBlueBubblesInboundMessage,
   commitBlueBubblesCoalescedMessageIds,
@@ -1244,6 +1245,46 @@ async function processMessageAfterDedupe(
       }
     }
   }
+
+  // Pre-dispatch transcript enricher for inbound audio messages (#68719).
+  // Substitutes BlueBubbles' on-device transcript for the `<media:audio>`
+  // placeholder so the agent sees what the user actually said. Best-effort:
+  // an unavailable BB endpoint, missing transcript, or any error keeps the
+  // existing placeholder body. Transcript text is treated as PII and is never
+  // logged.
+  let agentBody = rawBody;
+  let transcriptText: string | undefined;
+  if (attachments.length > 0 && !text && baseUrl && password) {
+    const outcome = await enrichInboundAudioMessage({
+      // Cached factory dedupes by accountId; same-account inbound bursts share one client
+      // instead of repeating SSRF policy + auth construction per message.
+      client: createBlueBubblesClient({ cfg: config, accountId: account.accountId }),
+      messageGuid: message.messageId,
+      attachments,
+      existingText: text,
+      account: account.config,
+    });
+    if (outcome.reason === "applied") {
+      transcriptText = outcome.transcript;
+      agentBody = outcome.transcript;
+      logVerbose(
+        core,
+        runtime,
+        `inbound audio enricher: transcript applied msgId=${sanitizeForLog(message.messageId ?? "")} chars=${outcome.transcript.length}`,
+      );
+    } else if (outcome.reason === "no-transcript") {
+      // Audio detected but BB returned nothing. Most often older BB Server (no
+      // audio-transcript endpoint) or a transient transport error. Helps operators
+      // distinguish "enricher disabled" from "endpoint unavailable" without a debugger.
+      // Never logs transcript content (none was produced) or attachment guids.
+      logVerbose(
+        core,
+        runtime,
+        `inbound audio enricher: no transcript msgId=${sanitizeForLog(message.messageId ?? "")} attachments=${attachments.length}`,
+      );
+    }
+  }
+
   let replyToId = message.replyToId;
   let replyToBody = message.replyToBody;
   let replyToSender = message.replyToSender;
@@ -1325,9 +1366,9 @@ async function processMessageAfterDedupe(
   });
   const baseBody = replyTag
     ? isTapbackMessage
-      ? `${rawBody} ${replyTag}`
-      : `${replyTag} ${rawBody}`
-    : rawBody;
+      ? `${agentBody} ${replyTag}`
+      : `${replyTag} ${agentBody}`
+    : agentBody;
   // Build fromLabel the same way as iMessage/Signal (formatInboundFromLabel):
   // group label + id for groups, sender for DMs.
   // The sender identity is included in the envelope body via formatInboundEnvelope.
@@ -1599,15 +1640,16 @@ async function processMessageAfterDedupe(
       });
     }
   }
-  const commandBody = messageText.trim();
+  const commandBody = transcriptText ?? messageText.trim();
 
   const ctxPayload = core.channel.reply.finalizeInboundContext({
     Body: body,
-    BodyForAgent: rawBody,
+    BodyForAgent: agentBody,
     InboundHistory: inboundHistory,
-    RawBody: rawBody,
+    RawBody: agentBody,
     CommandBody: commandBody,
     BodyForCommands: commandBody,
+    Transcript: transcriptText,
     MediaUrl: mediaUrls[0],
     MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
     MediaPath: mediaPaths[0],

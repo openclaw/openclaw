@@ -357,6 +357,58 @@ export class BlueBubblesClient {
   // --- Attachments (fixes #34749) -----------------------------------------
 
   /**
+   * GET /api/v1/message/audio-transcript/{guid}. Returns Apple's on-device
+   * voice-note transcript when BB Server is recent enough (>= 1.14.0) and the
+   * referenced message is an audio message. Older BB versions reply 404, in
+   * which case we treat the call as unavailable rather than an error so the
+   * inbound enricher can fall back to the placeholder body. (#68719)
+   *
+   * Returns `null` when the endpoint is unavailable, the message is not audio,
+   * or the response cannot be parsed. Never throws on transport/HTTP errors;
+   * the caller decides whether the absence of a transcript is fatal.
+   */
+  async getAudioTranscript(params: {
+    messageGuid: string;
+    timeoutMs?: number;
+  }): Promise<string | null> {
+    const guid = params.messageGuid.trim();
+    if (!guid) {
+      return null;
+    }
+    let response: Response;
+    let raw: unknown;
+    try {
+      const result = await this.requestJson({
+        method: "GET",
+        path: `/api/v1/message/audio-transcript/${encodeURIComponent(guid)}`,
+        timeoutMs: params.timeoutMs,
+      });
+      response = result.response;
+      raw = result.data;
+    } catch {
+      return null;
+    }
+    if (!response.ok || raw === null || typeof raw !== "object") {
+      return null;
+    }
+    const inner = (raw as { data?: unknown }).data;
+    if (typeof inner === "string") {
+      const trimmed = inner.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    }
+    if (inner && typeof inner === "object") {
+      const { transcript, text } = inner as { transcript?: unknown; text?: unknown };
+      const candidate =
+        typeof transcript === "string" ? transcript : typeof text === "string" ? text : null;
+      if (candidate !== null) {
+        const trimmed = candidate.trim();
+        return trimmed.length > 0 ? trimmed : null;
+      }
+    }
+    return null;
+  }
+
+  /**
    * GET /api/v1/message/{guid} to read attachment metadata. BlueBubbles may
    * fire `new-message` before attachment indexing completes, so this re-reads
    * after a delay. (#65430, #67437)
