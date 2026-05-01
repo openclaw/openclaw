@@ -22,9 +22,11 @@ function tryRealpath(value: string): string | null {
   }
 }
 
-// Call after normalizeMatchTarget so Windows separators are already slash-normalized.
 function hasDotPathSegment(value: string): boolean {
-  return value.split("/").some((segment) => segment === "." || segment === "..");
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .some((segment) => segment === "." || segment === "..");
 }
 
 function normalizeDotPathSegments(value: string): string {
