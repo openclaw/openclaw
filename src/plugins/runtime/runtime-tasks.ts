@@ -1,5 +1,5 @@
 import {
-  createTaskRecord,
+  createPluginTaskRecord,
   finalizeTaskRunById,
   listTasksForFlowId,
   markTaskRunningById,
@@ -99,7 +99,7 @@ function createTaskRunLifecycleRuntime(params: {
     const runId = assertRequiredString(input.runId, "Task lifecycle create requires runId.");
     const title = assertRequiredString(input.title, "Task lifecycle create requires title.");
     const status = input.status ?? "running";
-    const task = createTaskRecord({
+    const task = createPluginTaskRecord({
       runtime: "cli",
       taskKind,
       sourceId: input.sourceId,
