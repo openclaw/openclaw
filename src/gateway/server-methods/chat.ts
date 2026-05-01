@@ -1310,6 +1310,7 @@ function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
+  config?: OpenClawConfig;
   abortMeta?: {
     aborted: true;
     origin: AbortOrigin;
@@ -1350,6 +1351,7 @@ function appendAssistantTranscriptMessage(params: {
     content: params.content,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
+    config: params.config,
   });
 }
 
@@ -1386,7 +1388,7 @@ function persistAbortedPartials(params: {
   if (params.snapshots.length === 0) {
     return;
   }
-  const { storePath, entry } = loadSessionEntry(params.sessionKey);
+  const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
   for (const snapshot of params.snapshots) {
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = appendAssistantTranscriptMessage({
@@ -1394,6 +1396,7 @@ function persistAbortedPartials(params: {
       sessionId,
       storePath,
       sessionFile: entry?.sessionFile,
+      config: cfg,
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
       abortMeta: {
@@ -2264,6 +2267,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           storePath: latestStorePath,
           sessionFile: latestEntry?.sessionFile,
           agentId,
+          config: cfg,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
         });
@@ -2471,6 +2475,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   storePath: latestStorePath,
                   sessionFile: latestEntry?.sessionFile,
                   agentId,
+                  config: cfg,
                   createIfMissing: true,
                 });
                 if (appended.ok) {
@@ -2625,6 +2630,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       storePath,
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
+      config: cfg,
       createIfMissing: true,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {

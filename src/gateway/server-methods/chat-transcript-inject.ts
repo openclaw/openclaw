@@ -1,5 +1,6 @@
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { guardSessionManager } from "../../agents/session-tool-result-guard-wrapper.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
@@ -49,6 +50,8 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
+  /** When provided, forwarded to guardSessionManager so redactSensitive="off" is honoured. */
+  config?: OpenClawConfig;
   now?: number;
 }): GatewayInjectedTranscriptAppendResult {
   const now = params.now ?? Date.now();
@@ -102,8 +105,9 @@ export function appendInjectedAssistantMessageToTranscript(params: {
   try {
     // IMPORTANT: Use SessionManager so the entry is attached to the current leaf via parentId.
     // Raw jsonl appends break the parent chain and can hide compaction summaries from context.
-    // No agentId/sessionKey: system-level inject with no agent context; default redaction still applies.
-    const sessionManager = guardSessionManager(SessionManager.open(params.transcriptPath), {});
+    const sessionManager = guardSessionManager(SessionManager.open(params.transcriptPath), {
+      config: params.config,
+    });
     const messageId = sessionManager.appendMessage(messageBody);
     return { ok: true, messageId, message: messageBody };
   } catch (err) {

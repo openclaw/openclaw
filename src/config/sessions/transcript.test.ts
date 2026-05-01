@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { appendInjectedAssistantMessageToTranscript } from "../../gateway/server-methods/chat-transcript-inject.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
@@ -605,5 +606,75 @@ describe("transcript message redaction via guardSessionManager", () => {
       ).toBe("text");
     }
     emitSpy.mockRestore();
+  });
+});
+
+describe("gateway-injected transcript path honours redactSensitive config", () => {
+  // These tests call appendInjectedAssistantMessageToTranscript directly,
+  // which is the gateway path that previously silently ignored redactSensitive="off".
+  // No live OpenClaw instance is needed — only a tmp JSONL file is written.
+  const gatewayTempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of gatewayTempDirs) {
+      fs.rmSync(dir, { force: true, recursive: true });
+    }
+    gatewayTempDirs.length = 0;
+  });
+
+  function makeTranscriptPath(): string {
+    const dir = path.join(os.tmpdir(), `gw-inject-transcripts-${Date.now()}`);
+    fs.mkdirSync(dir, { recursive: true });
+    gatewayTempDirs.push(dir);
+    const p = path.join(dir, "session.jsonl");
+    // Write a well-formed session header so SessionManager.open succeeds.
+    // Fields must match the pi-coding-agent expected shape: type, version, id, timestamp, cwd.
+    fs.writeFileSync(
+      p,
+      JSON.stringify({
+        type: "session",
+        version: 1,
+        id: "gw-inject-session",
+        timestamp: new Date().toISOString(),
+        cwd: process.cwd(),
+      }) + "\n",
+      "utf-8",
+    );
+    return p;
+  }
+
+  it("honours redactSensitive=off on gateway-injected path (regression)", () => {
+    // Regression: before the fix, appendInjectedAssistantMessageToTranscript called
+    // guardSessionManager({}) without config, so redactSensitive="off" was silently ignored.
+    const transcriptPath = makeTranscriptPath();
+    const secret = "sk-abcdef1234567890xyz";
+
+    const result = appendInjectedAssistantMessageToTranscript({
+      transcriptPath,
+      message: `Here is the key: ${secret}`,
+      config: { logging: { redactSensitive: "off" } } as Parameters<
+        typeof appendInjectedAssistantMessageToTranscript
+      >[0]["config"],
+    });
+
+    expect(result.ok).toBe(true);
+    const raw = fs.readFileSync(transcriptPath, "utf-8");
+    // With redactSensitive="off" the secret must survive verbatim
+    expect(raw).toContain(secret);
+  });
+
+  it("applies default redaction on gateway-injected path when no config provided", () => {
+    const transcriptPath = makeTranscriptPath();
+    const secret = "sk-abcdef1234567890xyz";
+
+    const result = appendInjectedAssistantMessageToTranscript({
+      transcriptPath,
+      message: `Here is the key: ${secret}`,
+      // no config — safe fallback: default redaction should kick in
+    });
+
+    expect(result.ok).toBe(true);
+    const raw = fs.readFileSync(transcriptPath, "utf-8");
+    expect(raw).not.toContain(secret);
   });
 });
