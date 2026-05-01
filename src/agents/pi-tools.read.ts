@@ -717,6 +717,18 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   } as const;
 }
 
+function throwAbortError(): never {
+  const err = new Error("Aborted");
+  err.name = "AbortError";
+  throw err;
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throwAbortError();
+  }
+}
+
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return {
     mkdir: async (dir: string) => {
@@ -730,9 +742,14 @@ function createSandboxWriteOperations(params: SandboxToolParams) {
       try {
         const buf = await params.bridge.readFile({ filePath: absolutePath, cwd: params.root });
         existing = buf.toString("utf8");
-      } catch {
-        // File does not exist yet — start empty.
+      } catch (err) {
+        // Only treat genuine missing-file errors as empty; re-throw safety and I/O failures.
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!/ENOENT|no such file/i.test(msg)) {
+          throw err;
+        }
       }
+      await params.bridge.mkdirp({ filePath: path.dirname(absolutePath), cwd: params.root });
       await params.bridge.writeFile({
         filePath: absolutePath,
         cwd: params.root,
@@ -843,11 +860,15 @@ export function wrapToolWriteWithAppend(
       if (!filePath || !filePath.trim() || content === undefined || !content.trim()) {
         return tool.execute(toolCallId, args, signal, onUpdate);
       }
+      throwIfAborted(signal);
       // Strip @ workspace-alias prefix and expand ~ before resolving; mirrors resolveToCwd semantics.
       const normalized = filePath.startsWith("@") ? filePath.slice(1) : filePath;
       const expanded = expandTildeToOsHome(normalized);
       const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(ops.root, expanded);
-      await withFileMutationQueue(resolved, () => ops.appendFile(resolved, content));
+      await withFileMutationQueue(resolved, async () => {
+        throwIfAborted(signal);
+        await ops.appendFile(resolved, content);
+      });
       return {
         content: [{ type: "text", text: `Appended to ${filePath}.` }],
         details: { path: filePath, append: true },

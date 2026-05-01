@@ -29,6 +29,7 @@ import {
   createOpenClawReadTool,
   wrapToolMemoryFlushAppendOnlyWrite,
   wrapToolWorkspaceRootGuard,
+  wrapToolWriteWithAppend,
 } from "./pi-tools.read.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -267,6 +268,59 @@ describe("FS tools with workspaceOnly=false", () => {
     expect(hasToolError(result)).toBe(false);
     const content = await fs.readFile(insideFile, "utf-8");
     expect(content).toBe("entry 1\nentry 2\n");
+  });
+
+  it("does not mutate when an append call aborts while waiting in the same-file queue", async () => {
+    let markFirstStarted!: () => void;
+    let releaseFirst!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    const firstRelease = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const mutations: string[] = [];
+    const queuedFile = path.join(tmpDir, "queued-append.txt");
+    const baseTool: AnyAgentTool = {
+      name: "write",
+      label: "write",
+      description: "test write tool",
+      parameters: {} as AnyAgentTool["parameters"],
+      execute: vi.fn(async () => ({
+        content: [{ type: "text" as const, text: "fallback" }],
+        details: {},
+      })),
+    };
+    const writeTool = wrapToolWriteWithAppend(baseTool, {
+      root: tmpDir,
+      appendFile: async (_absolutePath, content) => {
+        mutations.push(content);
+        if (content === "first\n") {
+          markFirstStarted();
+          await firstRelease;
+        }
+      },
+    });
+
+    const first = writeTool.execute("queued-first", {
+      path: queuedFile,
+      content: "first\n",
+      append: true,
+    });
+    await firstStarted;
+
+    const controller = new AbortController();
+    const second = writeTool.execute(
+      "queued-second",
+      { path: queuedFile, content: "second\n", append: true },
+      controller.signal,
+    );
+    controller.abort();
+    releaseFirst();
+
+    await first;
+    await expect(second).rejects.toMatchObject({ name: "AbortError" });
+    expect(mutations).toEqual(["first\n"]);
   });
 
   it("restricts memory-triggered writes to append-only canonical memory files", async () => {
