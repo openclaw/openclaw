@@ -518,26 +518,33 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      
+      const statusSessionEntry = resolved.entry;
 
-      const selectedProvider = resolved.entry.providerOverride?.trim() ?? configured.provider;
+      // Preserve providerless runtime model identity:
+      // If a session has only a persisted runtime model (entry.model) with no
+      // providerOverride and no modelOverride, treat it as providerless so the
+      // status card shows it as-is without a provider prefix and without
+      // triggering a model auth lookup (modelAuthOverride: undefined below).
+      const hasProviderOverride = Boolean(statusSessionEntry.providerOverride?.trim());
+      const hasModelOverride = Boolean(statusSessionEntry.modelOverride?.trim());
+      const runtimeModel = statusSessionEntry.model?.trim();
 
       const providerlessRuntimeModel =
-        resolved.entry.model?.trim() &&
-        !resolved.entry.providerOverride?.trim() &&
-        !resolved.entry.modelOverride?.trim()
-          ? resolved.entry.model.trim()
-          : undefined;
+        runtimeModel && !hasProviderOverride && !hasModelOverride ? runtimeModel : undefined;
 
-const selectedModel =
-  resolved.entry.modelOverride?.trim() ?? providerlessRuntimeModel ?? configured.model;
+      // When providerless, suppress provider so no auth lookup occurs.
+      // When a provider override exists, use it. Otherwise fall back to configured.
+      const providerForCard = hasProviderOverride
+        ? statusSessionEntry.providerOverride!.trim()
+        : providerlessRuntimeModel
+          ? undefined
+          : configured.provider;
 
-      // ✅ FIX: Pass SELECTED to status text (NOT runtime)
-      const providerForCard = selectedProvider;
-      const modelForCard = selectedModel;
-
-      // Keep session entry untouched (runtime stays inside it)
-      const statusSessionEntry = resolved.entry;
+      // Prefer explicit model override, then providerless runtime model, then configured default.
+      const modelForCard =
+        (hasModelOverride ? statusSessionEntry.modelOverride!.trim() : undefined) ??
+        providerlessRuntimeModel ??
+        configured.model;
 
       const primaryModelLabel =
         providerForCard && modelForCard ? `${providerForCard}/${modelForCard}` : modelForCard;
@@ -602,6 +609,7 @@ const selectedModel =
         taskLineOverride: taskLine,
         skipDefaultTaskLookup: true,
         primaryModelLabelOverride: primaryModelLabel,
+        // Suppress model auth lookup when providerless runtime model is active.
         ...(providerForCard ? {} : { modelAuthOverride: undefined }),
         includeTranscriptUsage: true,
       });
