@@ -107,7 +107,13 @@ function hasTopLevelObjectSchema(
   schemaRecord: Record<string, unknown>,
   conditionalKey: TopLevelConditionalKey | null,
 ): boolean {
-  return "type" in schemaRecord && "properties" in schemaRecord && conditionalKey === null;
+  return (
+    "type" in schemaRecord &&
+    "properties" in schemaRecord &&
+    schemaRecord.properties != null &&
+    typeof schemaRecord.properties === "object" &&
+    conditionalKey === null
+  );
 }
 
 function isObjectLikeSchemaMissingType(
@@ -125,7 +131,18 @@ function isTypedSchemaMissingProperties(
   schemaRecord: Record<string, unknown>,
   conditionalKey: TopLevelConditionalKey | null,
 ): boolean {
-  return "type" in schemaRecord && !("properties" in schemaRecord) && conditionalKey === null;
+  if (!("type" in schemaRecord) || conditionalKey !== null) {
+    return false;
+  }
+  // Treat both missing `properties` and `properties` set to a non-object value
+  // (e.g. undefined/null) as "missing properties" — MCP servers sometimes return
+  // `{ type: "object" }` or `{ type: "object", properties: undefined }` for
+  // parameter-free tools.
+  if (!("properties" in schemaRecord)) {
+    return true;
+  }
+  const props = schemaRecord.properties;
+  return props == null || typeof props !== "object" || Array.isArray(props);
 }
 
 function isTrulyEmptySchema(schemaRecord: Record<string, unknown>): boolean {
