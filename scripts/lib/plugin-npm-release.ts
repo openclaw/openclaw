@@ -10,6 +10,12 @@ export type PluginPackageJson = {
   name?: string;
   version?: string;
   private?: boolean;
+  repository?:
+    | string
+    | {
+        type?: string;
+        url?: string;
+      };
   openclaw?: {
     extensions?: string[];
     install?: {
@@ -63,6 +69,8 @@ export type PublishablePluginPackageCandidate<
   packageDir: string;
   packageJson: TPackageJson;
 };
+
+export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Release helper preserves caller-specific package.json shape.
 function readPluginPackageJson<TPackageJson extends PluginPackageJson = PluginPackageJson>(
@@ -210,6 +218,10 @@ export function collectPublishablePluginPackageErrors(
   const errors: string[] = [];
   const packageName = packageJson.name?.trim() ?? "";
   const packageVersion = packageJson.version?.trim() ?? "";
+  const repositoryUrl =
+    typeof packageJson.repository === "string"
+      ? packageJson.repository.trim()
+      : (packageJson.repository?.url?.trim() ?? "");
   const extensions = packageJson.openclaw?.extensions ?? [];
 
   if (!packageName.startsWith("@openclaw/")) {
@@ -219,6 +231,11 @@ export function collectPublishablePluginPackageErrors(
   }
   if (packageJson.private === true) {
     errors.push("package.json private must not be true.");
+  }
+  if (repositoryUrl !== OPENCLAW_PLUGIN_NPM_REPOSITORY_URL) {
+    errors.push(
+      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "${repositoryUrl || "<missing>"}".`,
+    );
   }
   if (!packageVersion) {
     errors.push("package.json version must be non-empty.");
