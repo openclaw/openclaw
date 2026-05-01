@@ -24,6 +24,7 @@ describe("fs pinned write helper", () => {
         kind: "buffer",
         data: "hello",
       },
+      expectedSize: 5,
     });
 
     await expect(
@@ -51,6 +52,7 @@ describe("fs pinned write helper", () => {
             kind: "buffer",
             data: "owned",
           },
+          expectedSize: 5,
         }),
       ).rejects.toThrow();
 
@@ -76,6 +78,7 @@ describe("fs pinned write helper", () => {
           kind: "stream",
           stream: sourceHandle.createReadStream(),
         },
+        expectedSize: 8,
       });
     } finally {
       await sourceHandle.close();
@@ -83,4 +86,60 @@ describe("fs pinned write helper", () => {
 
     await expect(fs.readFile(path.join(root, "stream.txt"), "utf8")).resolves.toBe("streamed");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "restores the previous file when post-rename size verification fails",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-pinned-root-");
+      const targetPath = path.join(root, "note.txt");
+      await fs.writeFile(targetPath, "keep-me", "utf8");
+
+      await expect(
+        runPinnedWriteHelper({
+          rootPath: root,
+          relativeParentPath: "",
+          basename: "note.txt",
+          mkdir: true,
+          mode: 0o600,
+          input: {
+            kind: "buffer",
+            data: "hello",
+          },
+          expectedSize: 99,
+        }),
+      ).rejects.toThrow(/write size mismatch/);
+
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("keep-me");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects overwriting a symlinked destination before creating a backup",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-pinned-root-");
+      const outside = await tempDirs.make("openclaw-fs-pinned-outside-");
+      const targetPath = path.join(root, "note.txt");
+      const outsidePath = path.join(outside, "secret.txt");
+      await fs.writeFile(outsidePath, "outside-secret", "utf8");
+      await fs.symlink(outsidePath, targetPath);
+
+      await expect(
+        runPinnedWriteHelper({
+          rootPath: root,
+          relativeParentPath: "",
+          basename: "note.txt",
+          mkdir: true,
+          mode: 0o600,
+          input: {
+            kind: "buffer",
+            data: "hello",
+          },
+          expectedSize: 5,
+        }),
+      ).rejects.toThrow();
+
+      await expect(fs.readlink(targetPath)).resolves.toBe(outsidePath);
+      await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside-secret");
+    },
+  );
 });
