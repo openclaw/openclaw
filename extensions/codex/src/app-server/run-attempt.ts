@@ -2447,15 +2447,27 @@ export async function runCodexAppServerAttempt(
   try {
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
+    // Preserve any structured prompt error captured by the projector before
+    // the watchdog fired (e.g. usageLimitExceeded surfaced via the codex
+    // `error` notification or `turn/completed` turn.error). Falling back to
+    // the generic "attempt timed out" label here would erase the cause and
+    // collapse the failover decision to `surface_error reason=timeout`,
+    // which the channel reply layer renders as a generic timeout message.
+    const hasStructuredPromptError =
+      activeProjector.hasStructuredPromptError() && Boolean(result.promptError);
     const finalAborted =
-      result.aborted || (runAbortController.signal.aborted && !clientClosedAbort);
-    let finalPromptError =
-      clientClosedPromptError ??
-      (turnCompletionIdleTimedOut
-        ? turnCompletionIdleTimeoutMessage
-        : timedOut
-          ? "codex app-server attempt timed out"
-          : result.promptError);
+      (result.aborted || (runAbortController.signal.aborted && !clientClosedAbort)) &&
+      !hasStructuredPromptError;
+    const finalTimedOut = timedOut && !hasStructuredPromptError;
+    let finalPromptError = clientClosedPromptError
+      ? clientClosedPromptError
+      : hasStructuredPromptError
+        ? result.promptError
+        : turnCompletionIdleTimedOut
+          ? turnCompletionIdleTimeoutMessage
+          : timedOut
+            ? "codex app-server attempt timed out"
+            : result.promptError;
     const finalPromptErrorMessage =
       typeof finalPromptError === "string"
         ? finalPromptError
@@ -2482,8 +2494,11 @@ export async function runCodexAppServerAttempt(
         signal: runAbortController.signal,
       });
     }
-    const finalPromptErrorSource =
-      timedOut || clientClosedPromptError ? "prompt" : result.promptErrorSource;
+    const finalPromptErrorSource = hasStructuredPromptError
+      ? (result.promptErrorSource ?? "prompt")
+      : timedOut || clientClosedPromptError
+        ? "prompt"
+        : result.promptErrorSource;
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -2587,7 +2602,7 @@ export async function runCodexAppServerAttempt(
     });
     return {
       ...result,
-      timedOut,
+      timedOut: finalTimedOut,
       aborted: finalAborted,
       promptError: finalPromptError,
       promptErrorSource: finalPromptErrorSource,

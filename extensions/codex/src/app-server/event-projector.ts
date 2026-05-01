@@ -21,6 +21,13 @@ import {
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  projectCodexAppServerError,
+  type CodexErrorInfo,
+  type PlanType,
+  type RateLimitSnapshot,
+  type RateLimitWindow,
+} from "./error-projection.js";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { readCodexTurn } from "./protocol-validators.js";
@@ -33,8 +40,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
-import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import { rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import {
   resolveCodexToolProgressDetailMode,
@@ -161,6 +167,8 @@ export class CodexAppServerEventProjector {
   private completedTurn: CodexTurn | undefined;
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
+  private structuredPromptErrorCaptured = false;
+  private latestRateLimitSnapshot: RateLimitSnapshot | undefined;
   private aborted = false;
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
@@ -194,9 +202,13 @@ export class CodexAppServerEventProjector {
         error: formatErrorMessage(error),
       });
     }
+    // Account-scoped notifications carry no thread/turn id; consume them
+    // before the per-turn filter so we can attribute the latest rate-limit
+    // snapshot to a subsequent error notification on this turn.
     if (notification.method === "account/rateLimits/updated") {
       this.latestRateLimits = params;
       rememberCodexRateLimits(params);
+      this.handleAccountRateLimitsUpdated(params);
       return;
     }
     if (isHookNotificationMethod(notification.method)) {
@@ -254,8 +266,7 @@ export class CodexAppServerEventProjector {
         if (readBooleanAlias(params, ["willRetry", "will_retry"]) === true) {
           break;
         }
-        this.promptError = this.formatCodexErrorMessage(params) ?? "codex app-server error";
-        this.promptErrorSource = "prompt";
+        this.captureCodexAppServerError(params);
         break;
       default:
         break;
@@ -389,9 +400,25 @@ export class CodexAppServerEventProjector {
   }
 
   markTimedOut(): void {
-    this.aborted = true;
-    this.promptError = "codex app-server attempt timed out";
-    this.promptErrorSource = "prompt";
+    // Preserve a previously captured structured error (e.g. usageLimitExceeded
+    // surfaced via the `error` notification just before the watchdog tripped)
+    // so the runner can classify the cause correctly. Fall back to the
+    // generic timeout label only when nothing richer was observed.
+    if (!this.structuredPromptErrorCaptured) {
+      this.aborted = true;
+      this.promptError = "codex app-server attempt timed out";
+      this.promptErrorSource = "prompt";
+    }
+  }
+
+  /**
+   * Returns true when the projector has captured a structured prompt error
+   * carrying provider-specific failure detail (e.g. `usageLimitExceeded`).
+   * Run-attempt uses this to avoid relabeling the run as a timeout when the
+   * watchdog fires moments after the upstream rejected the request.
+   */
+  hasStructuredPromptError(): boolean {
+    return this.structuredPromptErrorCaptured;
   }
 
   markAborted(): void {
@@ -646,15 +673,7 @@ export class CodexAppServerEventProjector {
       this.aborted = true;
     }
     if (turn.status === "failed") {
-      this.promptError =
-        formatCodexUsageLimitErrorMessage({
-          message: turn.error?.message,
-          codexErrorInfo: turn.error?.codexErrorInfo as JsonValue | null | undefined,
-          rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
-        }) ??
-        turn.error?.message ??
-        "codex app-server turn failed";
-      this.promptErrorSource = "prompt";
+      this.captureCodexTurnError(turn.error ?? undefined);
     }
     for (const item of turn.items ?? []) {
       this.rememberAssistantPhase(item);
@@ -1294,16 +1313,6 @@ export class CodexAppServerEventProjector {
     });
   }
 
-  private formatCodexErrorMessage(params: JsonObject): string | undefined {
-    const error = isJsonObject(params.error) ? params.error : undefined;
-    return (
-      formatCodexUsageLimitErrorMessage({
-        message: error ? readString(error, "message") : undefined,
-        codexErrorInfo: error?.codexErrorInfo,
-        rateLimits: this.latestRateLimits ?? readRecentCodexRateLimits(),
-      }) ?? readCodexErrorNotificationMessage(params)
-    );
-  }
 
   private emitAgentEvent(
     event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
@@ -1464,6 +1473,63 @@ export class CodexAppServerEventProjector {
     const turnId = params.turnId;
     return threadId === this.threadId && (turnId === this.turnId || turnId === null);
   }
+
+  private handleAccountRateLimitsUpdated(params: JsonObject): void {
+    const snapshot = readRateLimitSnapshot(params.rateLimits);
+    if (snapshot) {
+      this.latestRateLimitSnapshot = snapshot;
+    }
+  }
+
+  private captureCodexAppServerError(params: JsonObject): void {
+    const errorRecord = isJsonObject(params.error) ? params.error : undefined;
+    const message = errorRecord
+      ? (readString(errorRecord, "message") ?? readString(errorRecord, "error"))
+      : readString(params, "message");
+    const codexErrorInfo = errorRecord ? readCodexErrorInfo(errorRecord.codexErrorInfo) : null;
+    const additionalDetails = errorRecord
+      ? (readString(errorRecord, "additionalDetails") ??
+        readString(errorRecord, "additional_details"))
+      : undefined;
+    this.applyCodexProjectedError({
+      fallbackMessage: "codex app-server error",
+      message,
+      codexErrorInfo,
+      additionalDetails,
+    });
+  }
+
+  private captureCodexTurnError(turnError: CodexTurn["error"] | undefined): void {
+    const message = turnError?.message;
+    const codexErrorInfo = turnError ? readCodexErrorInfo(turnError.codexErrorInfo) : null;
+    const additionalDetails = turnError?.additionalDetails ?? undefined;
+    this.applyCodexProjectedError({
+      fallbackMessage: "codex app-server turn failed",
+      message: message ?? undefined,
+      codexErrorInfo,
+      additionalDetails: additionalDetails ?? undefined,
+    });
+  }
+
+  private applyCodexProjectedError(input: {
+    fallbackMessage: string;
+    message: string | undefined;
+    codexErrorInfo: CodexErrorInfo | null;
+    additionalDetails: string | undefined;
+  }): void {
+    const projected = projectCodexAppServerError({
+      message: input.message,
+      codexErrorInfo: input.codexErrorInfo,
+      additionalDetails: input.additionalDetails,
+      rateLimits: this.latestRateLimitSnapshot,
+    });
+    const finalMessage = projected ?? input.message?.trim() ?? input.fallbackMessage;
+    this.promptError = finalMessage;
+    this.promptErrorSource = "prompt";
+    if (input.codexErrorInfo !== null || projected !== undefined) {
+      this.structuredPromptErrorCaptured = true;
+    }
+  }
 }
 
 function isHookNotificationMethod(method: string): method is "hook/started" | "hook/completed" {
@@ -1512,12 +1578,96 @@ function readBooleanAlias(record: JsonObject, keys: readonly string[]): boolean 
   return undefined;
 }
 
-function readCodexErrorNotificationMessage(record: JsonObject): string | undefined {
-  const error = record.error;
-  if (isJsonObject(error)) {
-    return readString(error, "message") ?? readString(error, "error");
+function asJsonValue(value: unknown): JsonValue | undefined {
+  if (value === undefined) {
+    return undefined;
   }
-  return readString(record, "message");
+  return value as JsonValue;
+}
+
+function readCodexErrorInfo(value: unknown): CodexErrorInfo | null {
+  if (typeof value === "string") {
+    if (
+      value === "contextWindowExceeded" ||
+      value === "usageLimitExceeded" ||
+      value === "serverOverloaded" ||
+      value === "cyberPolicy" ||
+      value === "internalServerError" ||
+      value === "unauthorized" ||
+      value === "badRequest" ||
+      value === "threadRollbackFailed" ||
+      value === "sandboxError" ||
+      value === "other"
+    ) {
+      return value;
+    }
+    return null;
+  }
+  const json = asJsonValue(value);
+  if (isJsonObject(json)) {
+    // The remaining variants are tagged objects (e.g.
+    // `{ httpConnectionFailed: { httpStatusCode } }`). The downstream
+    // projector only special-cases the simple string variants, so we just
+    // return the structured object verbatim for shape compatibility.
+    return json as unknown as CodexErrorInfo;
+  }
+  return null;
+}
+
+function readRateLimitSnapshot(value: JsonValue | undefined): RateLimitSnapshot | undefined {
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+  const snapshot: RateLimitSnapshot = {
+    limitId: readNullableString(value, "limitId") ?? null,
+    limitName: readNullableString(value, "limitName") ?? null,
+    primary: readRateLimitWindow(value.primary),
+    secondary: readRateLimitWindow(value.secondary),
+    credits: null,
+    planType: readPlanType(value.planType),
+    rateLimitReachedType: null,
+  };
+  return snapshot;
+}
+
+function readRateLimitWindow(value: JsonValue | undefined): RateLimitWindow | null {
+  if (!isJsonObject(value)) {
+    return null;
+  }
+  const usedPercent = readNumber(value, "usedPercent");
+  if (usedPercent === undefined) {
+    return null;
+  }
+  const windowDurationMins = readNumber(value, "windowDurationMins");
+  const resetsAt = readNumber(value, "resetsAt");
+  return {
+    usedPercent,
+    windowDurationMins: windowDurationMins ?? null,
+    resetsAt: resetsAt ?? null,
+  };
+}
+
+function readPlanType(value: JsonValue | undefined): PlanType | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  switch (value) {
+    case "free":
+    case "go":
+    case "plus":
+    case "pro":
+    case "prolite":
+    case "team":
+    case "self_serve_business_usage_based":
+    case "business":
+    case "enterprise_cbp_usage_based":
+    case "enterprise":
+    case "edu":
+    case "unknown":
+      return value;
+    default:
+      return null;
+  }
 }
 
 function readHookOutputEntries(

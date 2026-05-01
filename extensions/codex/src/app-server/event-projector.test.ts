@@ -606,15 +606,28 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
-  it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
+  it("projects usageLimitExceeded errors using the latest rate-limit snapshot", async () => {
     const projector = await createProjector();
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
 
-    await projector.handleNotification(rateLimitsUpdated(resetsAt));
+    await projector.handleNotification({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: null,
+          limitName: null,
+          credits: null,
+          rateLimitReachedType: null,
+          planType: "plus",
+          primary: { usedPercent: 100, windowDurationMins: 86, resetsAt: null },
+          secondary: null,
+        },
+      },
+    } as ProjectorNotification);
+
     await projector.handleNotification(
       forCurrentTurn("error", {
         error: {
-          message: "You've reached your usage limit.",
+          message: "ChatGPT rate limit reached",
           codexErrorInfo: "usageLimitExceeded",
           additionalDetails: null,
         },
@@ -624,102 +637,62 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptError).toContain("Run /codex account");
+    expect(result.promptError).toBeTruthy();
+    const promptError = typeof result.promptError === "string" ? result.promptError : "";
+    expect(promptError).toMatch(/usage limit/i);
+    expect(promptError).toMatch(/ChatGPT Plus/);
+    expect(promptError).toMatch(/86 minutes/);
     expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastAssistant).toBeUndefined();
+    expect(projector.hasStructuredPromptError()).toBe(true);
   });
 
-  it("uses Codex rate-limit resets for failed turns", async () => {
+  it("preserves a captured structured error when the watchdog later fires", async () => {
     const projector = await createProjector();
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
 
-    await projector.handleNotification(rateLimitsUpdated(resetsAt));
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "failed",
-          error: {
-            message: "You've reached your usage limit.",
-            codexErrorInfo: "usageLimitExceeded",
-            additionalDetails: null,
-          },
-          items: [],
+    await projector.handleNotification({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: null,
+          limitName: null,
+          credits: null,
+          rateLimitReachedType: null,
+          planType: "pro",
+          primary: { usedPercent: 100, windowDurationMins: 30, resetsAt: null },
+          secondary: null,
         },
-      }),
-    );
-
-    const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptErrorSource).toBe("prompt");
-  });
-
-  it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
-    const projector = await createProjector();
-    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    rememberCodexRateLimits({
-      rateLimits: {
-        limitId: "codex",
-        limitName: "Codex",
-        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
-        secondary: null,
-        credits: null,
-        planType: "plus",
-        rateLimitReachedType: "rate_limit_reached",
       },
-      rateLimitsByLimitId: null,
-    });
+    } as ProjectorNotification);
 
     await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "failed",
-          error: {
-            message: "You've reached your usage limit.",
-            codexErrorInfo: "usageLimitExceeded",
-            additionalDetails: null,
-          },
-          items: [],
+      forCurrentTurn("error", {
+        error: {
+          message: "ChatGPT rate limit reached",
+          codexErrorInfo: "usageLimitExceeded",
+          additionalDetails: null,
         },
+        willRetry: false,
       }),
     );
 
+    projector.markTimedOut();
+
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Next reset in");
-    expect(result.promptErrorSource).toBe("prompt");
+    const promptError = typeof result.promptError === "string" ? result.promptError : "";
+    expect(promptError).not.toContain("attempt timed out");
+    expect(promptError).toMatch(/usage limit/i);
+    expect(promptError).toMatch(/ChatGPT Pro/);
+    expect(projector.hasStructuredPromptError()).toBe(true);
   });
 
-  it("preserves Codex retry hints when failed turns omit structured reset details", async () => {
+  it("falls back to the timeout label when no structured error was captured", async () => {
     const projector = await createProjector();
-
-    await projector.handleNotification(
-      forCurrentTurn("turn/completed", {
-        turn: {
-          id: TURN_ID,
-          status: "failed",
-          error: {
-            message:
-              "You've hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at May 11th, 2026 9:00 AM.",
-            codexErrorInfo: "usageLimitExceeded",
-            additionalDetails: null,
-          },
-          items: [],
-        },
-      }),
-    );
-
+    projector.markTimedOut();
     const result = projector.buildResult(buildEmptyToolTelemetry());
-
-    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
-    expect(result.promptError).toContain("Codex says to try again at May 11th, 2026 9:00 AM.");
-    expect(result.promptError).not.toContain("Codex did not return a reset time");
-    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.promptError).toBe("codex app-server attempt timed out");
+    expect(projector.hasStructuredPromptError()).toBe(false);
   });
 
   it("normalizes snake_case current token usage fields", async () => {
