@@ -255,6 +255,31 @@ export type PluginSessionAttachmentResult =
     }
   | { ok: false; error: string };
 
+export type PluginSessionTurnSchedule =
+  | { at: string | number | Date }
+  | { delayMs: number }
+  | { cron: string; tz?: string };
+
+export type PluginSessionTurnScheduleParams = PluginSessionTurnSchedule & {
+  sessionKey: string;
+  message: string;
+  agentId?: string;
+  deleteAfterRun?: boolean;
+  deliveryMode?: "none" | "announce";
+  name?: string;
+  tag?: string;
+};
+
+export type PluginSessionTurnUnscheduleByTagParams = {
+  sessionKey: string;
+  tag: string;
+};
+
+export type PluginSessionTurnUnscheduleByTagResult = {
+  removed: number;
+  failed: number;
+};
+
 export function normalizePluginHostHookId(value: string | undefined): string {
   return (value ?? "").trim();
 }

@@ -288,10 +288,28 @@ export function createCapturedPluginRegistration(params?: {
           sessionActions.push(action);
         },
         sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
+        scheduleSessionTurn: async (schedule) => {
+          return {
+            id: schedule.name ?? "captured-session-turn",
+            pluginId: "captured-plugin-registration",
+            sessionKey: schedule.sessionKey,
+            kind: "session-turn",
+          };
+        },
+        unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
         registerSessionAction(action: PluginSessionActionRegistration) {
           sessionActions.push(action);
         },
         sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
+        scheduleSessionTurn: async (schedule) => {
+          return {
+            id: schedule.name ?? "captured-session-turn",
+            pluginId: "captured-plugin-registration",
+            sessionKey: schedule.sessionKey,
+            kind: "session-turn",
+          };
+        },
+        unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
         registerTool(tool) {
           if (typeof tool !== "function") {
             tools.push(tool);

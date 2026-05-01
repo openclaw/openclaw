@@ -71,6 +71,10 @@ import {
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
 import { sendPluginSessionAttachment } from "./host-hook-workflow.js";
 import {
+  schedulePluginSessionTurn,
+  unschedulePluginSessionTurnsByTag,
+} from "./host-hook-workflow.js";
+import {
   isPluginJsonValue,
   normalizePluginHostHookId,
   type PluginAgentEventSubscriptionRegistration,
@@ -2681,6 +2685,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
+              registerSessionAction: (action) => registerSessionAction(record, action),
               sendSessionAttachment: async (attachment) => {
                 if (registryParams.activateGlobalSideEffects === false) {
                   return { ok: false, error: "global side effects disabled" };
@@ -2710,27 +2715,39 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   };
                 }
               },
-              registerSessionAction: (action) => registerSessionAction(record, action),
-              sendSessionAttachment: (attachment) => {
+              scheduleSessionTurn: (schedule) => {
                 if (registryParams.activateGlobalSideEffects === false) {
-                  return Promise.resolve({ ok: false, error: "global side effects disabled" });
+                  return Promise.resolve(undefined);
                 }
-                const activeRegistry = getActivePluginRegistry();
+                const shouldCommit = () =>
+                  getActivePluginRegistry() === registry &&
+                  registry.plugins.some(
+                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
+                  );
+                return schedulePluginSessionTurn({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  origin: record.origin,
+                  schedule,
+                  shouldCommit,
+                });
+              },
+              unscheduleSessionTurnsByTag: (request) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return Promise.resolve({ removed: 0, failed: 0 });
+                }
                 const pluginLoaded =
-                  activeRegistry === registry &&
+                  getActivePluginRegistry() === registry &&
                   registry.plugins.some(
                     (plugin) => plugin.id === record.id && plugin.status === "loaded",
                   );
                 if (!pluginLoaded) {
-                  return Promise.resolve({ ok: false, error: "plugin is not loaded" });
+                  return Promise.resolve({ removed: 0, failed: 0 });
                 }
-                const runtimeConfig =
-                  (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
-                  params.config;
-                return sendPluginSessionAttachment({
-                  ...attachment,
-                  config: runtimeConfig,
+                return unschedulePluginSessionTurnsByTag({
+                  pluginId: record.id,
                   origin: record.origin,
+                  request,
                 });
               },
               registerMemoryCapability: (capability) => {

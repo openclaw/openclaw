@@ -69,6 +69,8 @@ export type BuildPluginApiParams = {
       | "registerSessionSchedulerJob"
       | "registerSessionAction"
       | "sendSessionAttachment"
+      | "scheduleSessionTurn"
+      | "unscheduleSessionTurnsByTag"
       | "registerDetachedTaskRuntime"
       | "registerMemoryCapability"
       | "registerMemoryPromptSection"
@@ -155,6 +157,9 @@ const noopSendSessionAttachment: OpenClawPluginApi["sendSessionAttachment"] = as
   ok: false,
   error: "not wired",
 });
+const noopScheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] = async () => undefined;
+const noopUnscheduleSessionTurnsByTag: OpenClawPluginApi["unscheduleSessionTurnsByTag"] =
+  async () => ({ removed: 0, failed: 0 });
 const noopRegisterDetachedTaskRuntime: OpenClawPluginApi["registerDetachedTaskRuntime"] = () => {};
 const noopRegisterMemoryCapability: OpenClawPluginApi["registerMemoryCapability"] = () => {};
 const noopRegisterMemoryPromptSection: OpenClawPluginApi["registerMemoryPromptSection"] = () => {};
@@ -255,10 +260,14 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     clearRunContext: handlers.clearRunContext ?? noopClearRunContext,
     registerSessionSchedulerJob:
       handlers.registerSessionSchedulerJob ?? noopRegisterSessionSchedulerJob,
+    scheduleSessionTurn: handlers.scheduleSessionTurn ?? noopScheduleSessionTurn,
+    unscheduleSessionTurnsByTag:
+      handlers.unscheduleSessionTurnsByTag ?? noopUnscheduleSessionTurnsByTag,
     registerSessionAction: handlers.registerSessionAction ?? noopRegisterSessionAction,
     sendSessionAttachment: handlers.sendSessionAttachment ?? noopSendSessionAttachment,
-    registerSessionAction: handlers.registerSessionAction ?? noopRegisterSessionAction,
-    sendSessionAttachment: handlers.sendSessionAttachment ?? noopSendSessionAttachment,
+    scheduleSessionTurn: handlers.scheduleSessionTurn ?? noopScheduleSessionTurn,
+    unscheduleSessionTurnsByTag:
+      handlers.unscheduleSessionTurnsByTag ?? noopUnscheduleSessionTurnsByTag,
     registerDetachedTaskRuntime:
       handlers.registerDetachedTaskRuntime ?? noopRegisterDetachedTaskRuntime,
     registerMemoryCapability: handlers.registerMemoryCapability ?? noopRegisterMemoryCapability,
