@@ -112,6 +112,10 @@ type AssertNever<T extends never> = T;
 type _AssertAllSessionEntryKeysAreReserved = AssertNever<MissingSessionEntryReservedSlotKeys>;
 
 const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<string>(SESSION_ENTRY_RESERVED_SLOT_KEY_LIST);
+const OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS = new Set<string>([
+  "prototype",
+  ...Object.getOwnPropertyNames(Object.prototype),
+]);
 
 const SESSION_ENTRY_SLOT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*$/u;
 
@@ -135,6 +139,12 @@ export function normalizeSessionEntrySlotKey(
     return {
       ok: false,
       error: `sessionEntrySlotKey is reserved by SessionEntry: ${key}`,
+    };
+  }
+  if (OBJECT_PROTOTYPE_RESERVED_SLOT_KEYS.has(key)) {
+    return {
+      ok: false,
+      error: `sessionEntrySlotKey is reserved by Object: ${key}`,
     };
   }
   return { ok: true, key };

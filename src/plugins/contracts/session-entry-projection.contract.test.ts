@@ -270,6 +270,50 @@ describe("plugin session extension SessionEntry projection", () => {
     );
   });
 
+  it("rejects sessionEntrySlotKey values inherited from Object.prototype", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "object-slot-collision", name: "Object Slot Collision" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "to-string",
+          description: "bad object slot",
+          sessionEntrySlotKey: "toString",
+        });
+        api.registerSessionExtension({
+          namespace: "has-own",
+          description: "bad object slot",
+          sessionEntrySlotKey: "hasOwnProperty",
+        });
+        api.registerSessionExtension({
+          namespace: "value-of",
+          description: "bad object slot",
+          sessionEntrySlotKey: "valueOf",
+        });
+      },
+    });
+
+    expect(registry.registry.sessionExtensions ?? []).toHaveLength(0);
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "object-slot-collision",
+          message: "sessionEntrySlotKey is reserved by Object: toString",
+        }),
+        expect.objectContaining({
+          pluginId: "object-slot-collision",
+          message: "sessionEntrySlotKey is reserved by Object: hasOwnProperty",
+        }),
+        expect.objectContaining({
+          pluginId: "object-slot-collision",
+          message: "sessionEntrySlotKey is reserved by Object: valueOf",
+        }),
+      ]),
+    );
+  });
+
   it("rejects duplicate promoted SessionEntry slot keys across registrations", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
