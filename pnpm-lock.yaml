@@ -802,9 +802,6 @@ importers:
       fake-indexeddb:
         specifier: ^6.2.5
         version: 6.2.5
-      jiti:
-        specifier: ^2.6.1
-        version: 2.6.1
       markdown-it:
         specifier: 14.1.1
         version: 14.1.1

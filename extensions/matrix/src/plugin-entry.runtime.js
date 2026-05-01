@@ -4,10 +4,9 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
-const { createJiti } = require("jiti");
 
 const PLUGIN_ID = "matrix";
 const OPENCLAW_PLUGIN_SDK_PACKAGE_NAMES = [
@@ -17,6 +16,7 @@ const OPENCLAW_PLUGIN_SDK_PACKAGE_NAMES = [
 const PLUGIN_SDK_EXPORT_PREFIX = "./plugin-sdk/";
 const PLUGIN_SDK_SOURCE_EXTENSIONS = [".ts", ".mts", ".js", ".mjs", ".cts", ".cjs"];
 const PLUGIN_ENTRY_RUNTIME_BASENAME = "plugin-entry.handlers.runtime";
+const NATIVE_RUNTIME_EXTENSIONS = [".js", ".mjs", ".cjs"];
 const JITI_EXTENSIONS = [
   ".ts",
   ".tsx",
@@ -169,14 +169,21 @@ function resolveBundledPluginRuntimeModulePath(moduleUrl, params) {
   );
 }
 
-const jiti = createJiti(import.meta.url, {
-  alias: buildPluginSdkAliasMap(import.meta.url),
-  interopDefault: true,
-  tryNative: false,
-  extensions: JITI_EXTENSIONS,
-});
+async function loadRuntimeModule(modulePath) {
+  if (NATIVE_RUNTIME_EXTENSIONS.includes(path.extname(modulePath))) {
+    return import(pathToFileURL(modulePath).href);
+  }
+  const { createJiti } = require("jiti");
+  const jiti = createJiti(import.meta.url, {
+    alias: buildPluginSdkAliasMap(import.meta.url),
+    interopDefault: true,
+    tryNative: false,
+    extensions: JITI_EXTENSIONS,
+  });
+  return jiti(modulePath);
+}
 
-const mod = jiti(
+const mod = await loadRuntimeModule(
   resolveBundledPluginRuntimeModulePath(import.meta.url, {
     pluginId: PLUGIN_ID,
     runtimeBasename: PLUGIN_ENTRY_RUNTIME_BASENAME,
