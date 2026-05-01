@@ -383,7 +383,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     }
     ```
 
-    - `url` — required, must be an `http://` or `https://` endpoint
+    - `url` — required, must be an `https://` endpoint
     - `secret` — optional HMAC-SHA256 signing key; when set, each POST includes `X-Openclaw-Signature: sha256=<hex>` computed over the raw request body. Accepts a literal string or a `SecretRef`.
     - `headers` — optional additional request headers; values accept a literal string or a `SecretRef` for per-header credentials
     - `timeoutMs` — per-request timeout in milliseconds (default: 5000)
