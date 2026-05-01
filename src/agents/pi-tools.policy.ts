@@ -244,13 +244,11 @@ export function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   const conversationKey = threadId ? baseSessionKey : raw;
   const conversation = parseRawSessionConversationRef(conversationKey);
   if (conversation) {
-    const resolvedConversation = /:(?:sender|thread|topic):/iu.test(conversation.rawId)
-      ? resolveSessionConversation({
-          channel: conversation.channel,
-          kind: conversation.kind,
-          rawId: conversation.rawId,
-        })
-      : null;
+    const resolvedConversation = resolveSessionConversation({
+      channel: conversation.channel,
+      kind: conversation.kind,
+      rawId: conversation.rawId,
+    });
     return {
       channel: conversation.channel,
       groupIds: collectUniqueStrings([
