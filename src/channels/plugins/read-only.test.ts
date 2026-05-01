@@ -14,6 +14,14 @@ import {
   listReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
 
+const jitiLoaderParams = vi.hoisted(
+  () =>
+    [] as Array<{
+      modulePath: string;
+      tryNative?: boolean;
+    }>,
+);
+
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
   return {
@@ -98,6 +106,10 @@ vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
   return {
     ...actual,
     getCachedPluginJitiLoader: ((params) => {
+      jitiLoaderParams.push({
+        modulePath: params.modulePath,
+        tryNative: params.tryNative,
+      });
       const actualLoader = actual.getCachedPluginJitiLoader(params);
       return ((modulePath: string) => {
         if (
@@ -419,6 +431,7 @@ function expectExternalChatSetupOnlyPluginLoaded(params: {
 }
 
 afterEach(() => {
+  jitiLoaderParams.length = 0;
   resetPluginLoaderTestStateForTest();
 });
 
@@ -484,6 +497,14 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     );
 
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
+    expect(
+      jitiLoaderParams.some(
+        (entry) =>
+          entry.tryNative === true &&
+          (entry.modulePath.endsWith("/plugins/loader.js") ||
+            entry.modulePath.endsWith("/plugins/loader.ts")),
+      ),
+    ).toBe(true);
   });
 
   it("matches setup-only plugins by manifest-owned channel ids when plugin id differs", () => {
