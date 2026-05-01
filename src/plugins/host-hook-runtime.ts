@@ -374,6 +374,9 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
   const failures: Array<{ pluginId: string; hookId: string; error: unknown }> = [];
+  const registryRecordKeys = new Set<string>();
+  const schedulerJobKey = (pluginId: string, jobId: string, sessionKey: string) =>
+    `${pluginId}\0${jobId}\0${sessionKey}`;
   if (params.records) {
     for (const record of params.records) {
       if (params.pluginId && record.pluginId !== params.pluginId) {
@@ -387,6 +390,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       if (params.sessionKey && sessionKey !== params.sessionKey) {
         continue;
       }
+      registryRecordKeys.add(schedulerJobKey(record.pluginId, jobId, sessionKey));
       const liveGeneration = getPluginSessionSchedulerJobGeneration({
         pluginId: record.pluginId,
         jobId,
@@ -436,7 +440,6 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         expectedGeneration: record.generation,
       });
     }
-    return failures;
   }
   const pluginIds = params.pluginId ? [params.pluginId] : [...state.schedulerJobsByPlugin.keys()];
   for (const pluginId of pluginIds) {
@@ -446,6 +449,12 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     }
     for (const [jobId, record] of jobs.entries()) {
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+        continue;
+      }
+      if (
+        registryRecordKeys.has(schedulerJobKey(pluginId, jobId, record.job.sessionKey)) ||
+        params.preserveJobIds?.has(jobId)
+      ) {
         continue;
       }
       try {

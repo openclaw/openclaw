@@ -2517,11 +2517,17 @@ export type OpenClawPluginApi = {
   registerSessionSchedulerJob: (
     job: PluginSessionSchedulerJobRegistration,
   ) => PluginSessionSchedulerJobHandle | undefined;
-  /** Schedule a future agent turn in a session using the host scheduler. */
+  /**
+   * Schedule a future agent turn in a session using the host scheduler.
+   * Bundled plugins only; workspace plugins receive undefined.
+   */
   scheduleSessionTurn: (
     params: PluginSessionTurnScheduleParams,
   ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
-  /** Remove plugin-scheduled session turns that share the same plugin-owned tag. */
+  /**
+   * Remove plugin-scheduled session turns that share the same plugin-owned tag.
+   * Bundled plugins only; workspace plugins receive a zero-count result.
+   */
   unscheduleSessionTurnsByTag: (
     params: PluginSessionTurnUnscheduleByTagParams,
   ) => Promise<PluginSessionTurnUnscheduleByTagResult>;

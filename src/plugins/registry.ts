@@ -2388,11 +2388,22 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 if (registryParams.activateGlobalSideEffects === false) {
                   return Promise.resolve(undefined);
                 }
-                const shouldCommit = () =>
-                  getActivePluginRegistry() === registry &&
-                  registry.plugins.some(
-                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
-                  );
+                const scheduledDuringRegistration = !registry.plugins.some(
+                  (plugin) => plugin.id === record.id,
+                );
+                const shouldCommit = () => {
+                  const currentRecord = registry.plugins.find((plugin) => plugin.id === record.id);
+                  if (currentRecord) {
+                    const activeRegistry = getActivePluginRegistry();
+                    return (
+                      (scheduledDuringRegistration ||
+                        activeRegistry === null ||
+                        activeRegistry === registry) &&
+                      currentRecord.status === "loaded"
+                    );
+                  }
+                  return record.enabled && record.status === "loaded";
+                };
                 return schedulePluginSessionTurn({
                   pluginId: record.id,
                   pluginName: record.name,
@@ -2405,11 +2416,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 if (registryParams.activateGlobalSideEffects === false) {
                   return Promise.resolve({ removed: 0, failed: 0 });
                 }
-                const pluginLoaded =
-                  getActivePluginRegistry() === registry &&
-                  registry.plugins.some(
-                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
-                  );
+                const calledDuringRegistration = !registry.plugins.some(
+                  (plugin) => plugin.id === record.id,
+                );
+                const currentRecord = registry.plugins.find((plugin) => plugin.id === record.id);
+                const activeRegistry = getActivePluginRegistry();
+                const pluginLoaded = currentRecord
+                  ? (calledDuringRegistration ||
+                      activeRegistry === null ||
+                      activeRegistry === registry) &&
+                    currentRecord.status === "loaded"
+                  : record.enabled && record.status === "loaded";
                 if (!pluginLoaded) {
                   return Promise.resolve({ removed: 0, failed: 0 });
                 }
