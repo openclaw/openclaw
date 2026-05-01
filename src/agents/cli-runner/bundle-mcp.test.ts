@@ -52,8 +52,9 @@ describe("prepareCliBundleMcpConfig", () => {
     const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
       mcpServers?: Record<string, { args?: string[] }>;
     };
-    expect(raw.mcpServers?.bundleProbe?.args?.[0]).toBeDefined();
-    expect(await fs.realpath(raw.mcpServers!.bundleProbe!.args![0] as string)).toEqual(
+    const bundleProbeArg = raw.mcpServers?.bundleProbe?.args?.[0];
+    expect(bundleProbeArg).toBeDefined();
+    expect(await fs.realpath(bundleProbeArg!)).toEqual(
       await fs.realpath(cliBundleMcpHarness.bundleProbeServerPath),
     );
     expect(prepared.mcpConfigHash).toMatch(/^[0-9a-f]{64}$/);
@@ -114,8 +115,9 @@ describe("prepareCliBundleMcpConfig", () => {
     const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
       mcpServers?: Record<string, { args?: string[] }>;
     };
-    expect(raw.mcpServers?.workspaceProbe?.args?.[0]).toBeDefined();
-    expect(await fs.realpath(raw.mcpServers!.workspaceProbe!.args![0] as string)).toEqual(
+    const workspaceProbeArg = raw.mcpServers?.workspaceProbe?.args?.[0];
+    expect(workspaceProbeArg).toBeDefined();
+    expect(await fs.realpath(workspaceProbeArg!)).toEqual(
       await fs.realpath(serverPath),
     );
 
