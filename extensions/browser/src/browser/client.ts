@@ -6,6 +6,7 @@ import type {
   BrowserTransport,
   SnapshotAriaNode,
 } from "./client.types.js";
+import { DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS } from "./constants.js";
 import type { BrowserDoctorReport } from "./doctor.js";
 
 export type {
@@ -315,6 +316,7 @@ export async function browserSnapshot(
     urls?: boolean;
     mode?: "efficient";
     profile?: string;
+    timeoutMs?: number;
   },
 ): Promise<SnapshotResult> {
   const q = new URLSearchParams();
@@ -360,8 +362,13 @@ export async function browserSnapshot(
   if (opts.profile) {
     q.set("profile", opts.profile);
   }
+  const resolvedTimeoutMs =
+    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? Math.floor(opts.timeoutMs)
+      : DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
+  q.set("timeoutMs", String(resolvedTimeoutMs));
   return await fetchBrowserJson<SnapshotResult>(withBaseUrl(baseUrl, `/snapshot?${q.toString()}`), {
-    timeoutMs: 20000,
+    timeoutMs: resolvedTimeoutMs,
   });
 }
 

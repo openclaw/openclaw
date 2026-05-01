@@ -364,6 +364,7 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
+  const snapshotTimeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
   const snapshotQuery = {
     ...(format ? { format } : {}),
     targetId,
@@ -378,6 +379,7 @@ export async function executeSnapshotAction(params: {
     labels,
     urls,
     mode,
+    ...(snapshotTimeoutMs !== undefined ? { timeoutMs: snapshotTimeoutMs } : {}),
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
@@ -387,6 +389,7 @@ export async function executeSnapshotAction(params: {
           path: "/snapshot",
           profile,
           query,
+          ...(snapshotTimeoutMs !== undefined ? { timeoutMs: snapshotTimeoutMs } : {}),
         })) as Awaited<ReturnType<typeof browserSnapshot>>)
       : await browserToolActionDeps.browserSnapshot(baseUrl, {
           ...query,

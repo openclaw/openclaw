@@ -9,6 +9,7 @@ import {
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
+  takeChromeMcpSnapshot,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -674,6 +675,27 @@ describe("chrome MCP page parsing", () => {
     const tabs = await listChromeMcpTabs("chrome-live");
     expect(factoryCalls).toBe(2);
     expect(tabs).toHaveLength(2);
+  });
+
+  it("forwards an explicit timeoutMs to take_snapshot via the callTool race", async () => {
+    vi.useFakeTimers();
+    const session = createFakeSession();
+    session.client.callTool = vi.fn(
+      async () => new Promise<never>(() => {}),
+    ) as typeof session.client.callTool;
+    setChromeMcpSessionFactoryForTest(async () => session);
+
+    const snapshotPromise = takeChromeMcpSnapshot({
+      profileName: "chrome-live",
+      targetId: "1",
+      timeoutMs: 75,
+    });
+    void snapshotPromise.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(75);
+
+    await expect(snapshotPromise).rejects.toThrow(/Chrome MCP "take_snapshot".*timed out/);
+    vi.useRealTimers();
   });
 
   it("honors timeoutMs for ephemeral availability probes", async () => {

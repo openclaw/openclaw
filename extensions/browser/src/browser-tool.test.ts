@@ -458,6 +458,67 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("propagates input.timeoutMs into the direct browser snapshot call", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "host",
+      snapshotFormat: "ai",
+      timeoutMs: 9000,
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        format: "ai",
+        timeoutMs: 9000,
+      }),
+    );
+  });
+
+  it("propagates input.timeoutMs into the proxied browser snapshot request", async () => {
+    mockSingleBrowserProxyNode();
+    setResolvedBrowserProfiles({
+      user: { driver: "existing-session", attachOnly: true, color: "#00AA00" },
+    });
+    gatewayMocks.callGatewayTool.mockResolvedValue({
+      ok: true,
+      payload: {
+        result: {
+          ok: true,
+          format: "ai",
+          targetId: "t1",
+          url: "https://x",
+          snapshot: "ok",
+        },
+        files: [],
+      },
+    });
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "node",
+      profile: "user",
+      snapshotFormat: "ai",
+      timeoutMs: 7777,
+    });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      expect.objectContaining({
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "GET",
+          path: "/snapshot",
+          profile: "user",
+          query: expect.objectContaining({ timeoutMs: 7777 }),
+          timeoutMs: 7777,
+        }),
+      }),
+    );
+  });
+
   it("uses config snapshot defaults when mode is not provided", async () => {
     configMocks.loadConfig.mockReturnValue({
       browser: { snapshotDefaults: { mode: "efficient" } },
