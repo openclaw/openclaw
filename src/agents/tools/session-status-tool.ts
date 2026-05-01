@@ -524,26 +524,34 @@ export function createSessionStatusTool(opts?: {
       const hasExplicitModelOverride = Boolean(
         resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
       );
+      
       const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
       const runtimeModelForCard = runtimeModelIdentity.model.trim();
-      const defaultProviderForCard =
-        runtimeProviderForCard ??
-        resolved.entry.providerOverride ??
-        configured.provider;
-      const defaultModelForCard =
-        runtimeModelForCard ??
-        resolved.entry.modelOverride ??
-        configured.model;
-      const statusSessionEntry =
-        !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
-          ? { ...resolved.entry, providerOverride: "" }
-          : resolved.entry;
-      const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
-      const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
+
+      let providerForCard: string;
+      let modelForCard: string;
+
+      // Keep provider + model from SAME source
+      if (runtimeProviderForCard && runtimeModelForCard) {
+        providerForCard = runtimeProviderForCard;
+        modelForCard = runtimeModelForCard;
+      } else if (
+        resolved.entry.providerOverride?.trim() &&
+        resolved.entry.modelOverride?.trim()
+      ) {
+        providerForCard = resolved.entry.providerOverride.trim();
+        modelForCard = resolved.entry.modelOverride.trim();
+      } else {
+        providerForCard = configured.provider;
+        modelForCard = configured.model;
+      }
+
+      const statusSessionEntry = resolved.entry;
+
       const primaryModelLabel =
-        providerForCard && defaultModelForCard
-          ? `${providerForCard}/${defaultModelForCard}`
-          : defaultModelForCard;
+        providerForCard && modelForCard
+          ? `${providerForCard}/${modelForCard}`
+          : modelForCard;
       const isGroup =
         statusSessionEntry.chatType === "group" ||
         statusSessionEntry.chatType === "channel" ||
@@ -568,7 +576,7 @@ export function createSessionStatusTool(opts?: {
           "unknown",
         workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
         provider: providerForCard,
-        model: defaultModelForCard,
+        model: modelForCard,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
         resolvedFastMode: statusSessionEntry.fastMode,
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
@@ -577,7 +585,7 @@ export function createSessionStatusTool(opts?: {
         resolveDefaultThinkingLevel: async () => {
           const configuredCatalog = buildConfiguredModelCatalog({ cfg });
           const configuredSelectedEntry = configuredCatalog.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+            (entry) => entry.provider === providerForCard && entry.id === modelForCard,
           );
           const shouldHydrateRuntimeCatalog =
             configuredCatalog.length === 0 ||
@@ -587,7 +595,7 @@ export function createSessionStatusTool(opts?: {
             ? await loadModelCatalog({ config: cfg })
             : undefined;
           const runtimeSelectedEntry = runtimeCatalog?.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+            (entry) => entry.provider === providerForCard && entry.id === modelForCard,
           );
           const catalog =
             runtimeSelectedEntry || configuredCatalog.length === 0
@@ -596,7 +604,7 @@ export function createSessionStatusTool(opts?: {
           return resolveThinkingDefault({
             cfg,
             provider: providerForCard,
-            model: defaultModelForCard,
+            model: modelForCard,
             catalog,
           });
         },
