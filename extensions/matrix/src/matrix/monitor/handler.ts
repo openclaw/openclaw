@@ -1956,7 +1956,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               },
             });
             return resolvePinnedMainDmOwnerFromAllowlist({
-              dmScope: cfg.session?.dmScope,
+              dmScope: livePinnedCfg.session?.dmScope,
               allowFrom: livePinnedDmAllowFrom,
               normalizeEntry: normalizeMatrixUserId,
             });
