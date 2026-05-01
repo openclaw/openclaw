@@ -644,6 +644,33 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("includes a MEDIA path hint in browser screenshot tool results", async () => {
+    const imageResult = {
+      content: [
+        { type: "text" as const, text: "MEDIA:/tmp/test.png" },
+        { type: "image" as const, data: "base64", mimeType: "image/png" },
+      ],
+      details: { path: "/tmp/test.png" },
+    };
+    toolCommonMocks.imageResultFromFile.mockResolvedValueOnce(imageResult);
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "screenshot",
+      target: "host",
+      targetId: "tab-1",
+    });
+
+    expect(toolCommonMocks.imageResultFromFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "browser:screenshot",
+        path: "/tmp/test.png",
+        extraText: "MEDIA:/tmp/test.png",
+      }),
+    );
+    expect(result).toEqual(imageResult);
+  });
+
   it("passes screenshot timeoutMs through the node browser proxy", async () => {
     mockSingleBrowserProxyNode();
     gatewayMocks.callGatewayTool.mockResolvedValueOnce({
