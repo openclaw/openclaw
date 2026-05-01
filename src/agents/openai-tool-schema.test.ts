@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isStrictOpenAIJsonSchemaCompatible,
+  normalizeOpenAIStrictToolParameters,
   normalizeStrictOpenAIJsonSchema,
   resolveOpenAIStrictToolFlagForInventory,
 } from "./openai-tool-schema.js";
@@ -61,5 +62,57 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(normalized.required).toEqual([]);
     expect(normalized.additionalProperties).toBe(false);
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
+  });
+
+  // Regression for #75467: when modelCompat declares
+  // `unsupportedToolSchemaKeywords: ["not"]`, the normalizer must strip
+  // top-level and nested `not` keywords from tool schemas before they
+  // reach the wire. Fireworks' kimi-k2p5-turbo rejects `{"not": {}}`
+  // (Zod `z.never()`) with HTTP 400, breaking tool dispatch entirely.
+  it("strips unsupported schema keywords from non-strict tool parameters when modelCompat opts in", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        scope: { not: {} },
+      },
+    };
+    const normalized = normalizeOpenAIStrictToolParameters(schema, false, {
+      modelCompat: { unsupportedToolSchemaKeywords: ["not"] },
+    }) as { properties?: { scope?: Record<string, unknown> } };
+
+    expect(normalized.properties?.scope).not.toHaveProperty("not");
+  });
+
+  it("strips unsupported schema keywords from strict-mode tool parameters too", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        scope: { not: {} },
+        keep: { type: "string" },
+      },
+      required: ["scope", "keep"],
+    };
+    const normalized = normalizeOpenAIStrictToolParameters(schema, true, {
+      modelCompat: { unsupportedToolSchemaKeywords: ["not"] },
+    }) as {
+      properties?: { scope?: Record<string, unknown>; keep?: { type?: string } };
+    };
+
+    expect(normalized.properties?.scope).not.toHaveProperty("not");
+    expect(normalized.properties?.keep?.type).toBe("string");
+  });
+
+  it("preserves the `not` keyword when modelCompat does not list it as unsupported", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        scope: { not: {} },
+      },
+    };
+    const normalized = normalizeOpenAIStrictToolParameters(schema, false, {
+      modelCompat: {},
+    }) as { properties?: { scope?: Record<string, unknown> } };
+
+    expect(normalized.properties?.scope).toHaveProperty("not");
   });
 });

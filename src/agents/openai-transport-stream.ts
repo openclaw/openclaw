@@ -24,6 +24,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { extractModelCompat } from "../plugins/provider-model-compat.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
@@ -399,10 +400,9 @@ function convertResponsesTools(
       type: "function" as const,
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true) as Record<
-        string,
-        unknown
-      >,
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, {
+        modelCompat: extractModelCompat(model),
+      }) as Record<string, unknown>,
     };
     return strict === undefined ? (base as FunctionTool) : { ...base, strict };
   });
@@ -1767,7 +1767,9 @@ function convertTools(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, {
+        modelCompat: extractModelCompat(model),
+      }),
       ...(strict === undefined ? {} : { strict }),
     },
   }));
