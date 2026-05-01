@@ -334,6 +334,37 @@ do not run in live chat traffic, check these first:
   Gateway session/status surfaces and, when debugging provider payloads, start
   the Gateway with `--raw-stream --raw-stream-path <path>`.
 
+### Slow plugin tool setup
+
+If agent turns appear to stall while preparing tools, enable trace logging and
+check for plugin tool factory timing lines:
+
+```bash
+openclaw config set logging.level trace
+openclaw logs --follow
+```
+
+Look for:
+
+```text
+[trace:plugin-tools] factory timings ...
+```
+
+The summary lists total factory time and the slowest plugin tool factories,
+including plugin id, declared tool names, result shape, and whether the tool is
+optional. Slow lines are promoted to warnings when a single factory takes at
+least 1s or total plugin tool factory prep takes at least 5s.
+
+If one plugin dominates the timing, inspect its runtime registrations:
+
+```bash
+openclaw plugins inspect <plugin-id> --runtime --json
+```
+
+Then update, reinstall, or disable that plugin. Plugin authors should move
+expensive dependency loading behind the tool execution path instead of doing it
+inside the tool factory.
+
 ### Duplicate channel or tool ownership
 
 Symptoms:
