@@ -209,7 +209,14 @@ async function listAllCronJobsForPluginTagCleanup(
     const listResult = await callGatewayTool(
       "cron.list",
       {},
-      { includeDisabled: true, limit: 200, query, ...(offset > 0 ? { offset } : {}) },
+      {
+        includeDisabled: true,
+        limit: 200,
+        query,
+        sortBy: "name",
+        sortDir: "asc",
+        ...(offset > 0 ? { offset } : {}),
+      },
       { scopes: [ADMIN_SCOPE] },
     );
     jobs.push(...readCronListJobs(listResult));
