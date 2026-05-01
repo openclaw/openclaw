@@ -39,15 +39,15 @@ export const writeConfigFile: AsyncUnknownMock = vi.fn(async () => undefined);
 export const replaceConfigFile: AsyncUnknownMock = vi.fn(
   async (params: { nextConfig: OpenClawConfig }) => await writeConfigFile(params.nextConfig),
 ) as AsyncUnknownMock;
-export const resolveStateDir: Mock<() => string> = vi.fn(() => "/tmp/openclaw-state");
+const resolveStateDir: Mock<() => string> = vi.fn(() => "/tmp/openclaw-state");
 export const installPluginFromMarketplace: Mock<InstallPluginFromMarketplaceFn> = vi.fn();
 export const installPluginFromGitSpec: Mock<InstallPluginFromGitSpecFn> = vi.fn();
-export const parseGitPluginSpec: Mock<ParseGitPluginSpecFn> = vi.fn();
-export const listMarketplacePlugins: Mock<ListMarketplacePluginsFn> = vi.fn();
-export const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallShortcutFn> = vi.fn();
+const parseGitPluginSpec: Mock<ParseGitPluginSpecFn> = vi.fn();
+const listMarketplacePlugins: Mock<ListMarketplacePluginsFn> = vi.fn();
+const resolveMarketplaceInstallShortcut: Mock<ResolveMarketplaceInstallShortcutFn> = vi.fn();
 export const enablePluginInConfig: UnknownMock = vi.fn();
 export const recordPluginInstall: UnknownMock = vi.fn();
-export const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
+const loadInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(async () =>
   clonePluginInstallRecords(mockInstalledPluginIndexInstallRecords),
 );
 export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock = vi.fn(
@@ -57,19 +57,19 @@ export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock 
     );
   },
 );
-export const loadPluginManifestRegistry: UnknownMock = vi.fn();
+const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
 export const buildPluginInspectReport: UnknownMock = vi.fn();
-export const buildAllPluginInspectReports: UnknownMock = vi.fn();
+const buildAllPluginInspectReports: UnknownMock = vi.fn();
 export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
-export const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
+const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
 export const inspectPluginRegistry: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistry: AsyncUnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const planPluginUninstall: UnknownMock = vi.fn();
 export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
-export const uninstallPlugin: AsyncUnknownMock = vi.fn();
+const uninstallPlugin: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledPlugins: AsyncUnknownMock = vi.fn();
 export const updateNpmInstalledHookPacks: AsyncUnknownMock = vi.fn();
 export const promptYesNo: AsyncUnknownMock = vi.fn();

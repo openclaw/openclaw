@@ -1691,11 +1691,19 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
-        provider: params.provider,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-      });
+      const hasExplicitSseTransport = [
+        (params.streamParams as { transport?: unknown } | undefined)?.transport,
+        (params.model as { params?: { transport?: unknown } }).params?.transport,
+      ]
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .includes("sse");
+      const shouldUseWebSocketTransport =
+        !hasExplicitSseTransport &&
+        shouldUseOpenAIWebSocketTransport({
+          provider: params.provider,
+          modelApi: params.model.api,
+          modelBaseUrl: params.model.baseUrl,
+        });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({
             provider: params.provider,
