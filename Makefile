@@ -1,6 +1,6 @@
 .PHONY: help clean clean-dist build rebuild deps test test-fast test-coverage \
        lint check format format-fix typecheck ui dev version \
-       test-contracts test-extensions test-channels
+       test-contracts test-extensions test-channels landing-gate
 
 # Default target
 help: ## Show available targets
@@ -48,7 +48,7 @@ lint: deps ## Lint only (oxlint)
 	pnpm lint
 
 format: deps ## Check formatting (oxfmt --check)
-	pnpm format
+	pnpm format:check
 
 format-fix: deps ## Fix formatting (oxfmt --write)
 	pnpm format:fix
