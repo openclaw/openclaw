@@ -32,6 +32,7 @@ const UPDATE_FILE_MARKER = "*** Update File: ";
 const MOVE_TO_MARKER = "*** Move to: ";
 
 export type ApplyPatchPathExtractionOptions = {
+  /** Tool execution cwd. Defaults to process.cwd(), matching createApplyPatchTool. */
   cwd?: string;
 };
 
@@ -56,9 +57,8 @@ function normalizePatchPath(
   if (!trimmed) {
     return undefined;
   }
-  const normalized = options.cwd
-    ? path.normalize(resolveSandboxInputPath(trimmed, options.cwd))
-    : path.posix.normalize(trimmed.replace(/\\/g, "/"));
+  const cwd = options.cwd ?? process.cwd();
+  const normalized = path.normalize(resolveSandboxInputPath(trimmed.replace(/\\/g, "/"), cwd));
   return normalized && normalized !== "." ? normalized : undefined;
 }
 
