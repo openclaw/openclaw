@@ -1,63 +1,40 @@
 # syntax=docker/dockerfile:1.7
 #
 # Fork-specific overlay on top of the upstream OpenClaw runtime image.
-# Multi-stage repack:
-#   1. source — start from BASE_IMAGE (upstream's slim runtime), trim
-#      runtime-unused content (docs, qa, node_modules cruft) and install
-#      our extra CLIs (gh, lark-cli).
-#   2. final — fresh slim base, copy only the trimmed /app and tools
-#      from stage 1. Layer history from BASE_IMAGE is left behind, so
-#      deletions in stage 1 actually shrink the resulting image.
+# Multi-stage build:
+#   1. source — start from BASE_IMAGE and install our extras (gh, lark-cli,
+#      gcloud), including all the apt scaffolding (gpg keys, sources lists,
+#      package indexes) needed to fetch them.
+#   2. final — start from BASE_IMAGE again and COPY only the installed
+#      artifacts from stage 1. Apt indexes, gpg keyrings, and any other
+#      install-time debris stay in stage 1 and never reach the final image.
 #
-# Build:
+# Final image inherits upstream's runtime config (USER, WORKDIR, ENV,
+# HEALTHCHECK, CMD) so we don't maintain duplicates here.
+#
+# BASE_IMAGE is a published upstream tag so cloudbuild does not rebuild the
+# upstream runtime from source. The cloudbuild pipeline overrides this with
+# a value derived from package.json's "version" field. The default below is
+# a fallback for local `docker build` and should be bumped in lockstep with
+# package.json.
+#
+# Build (local):
+#   docker build -f Dockerfile.fork .
+# Build (override base):
 #   docker build --build-arg BASE_IMAGE=<upstream-image> -f Dockerfile.fork .
 
-ARG BASE_IMAGE
-ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
+ARG BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.4.24-slim"
 
-# ── Stage 1: source ─────────────────────────────────────────────
+# ── Stage 1: source — install gh, lark-cli, gcloud ──────────────
 FROM ${BASE_IMAGE} AS source
 
 USER root
 
-# Trim runtime-unused content. Strictly file-extension based — packages
-# routinely keep runtime code in directories named `doc`/`docs`/`test`
-# (e.g., `yaml/doc/directives.js`) and JS files named `changelog.js`
-# (e.g., `@mariozechner/pi-coding-agent`), so directory- or basename-
-# pruning is unsafe in general. The savings here are smaller but safe
-# across packages we don't control.
-RUN set -eux; \
-    rm -rf /app/docs /app/qa; \
-    find /app/node_modules \
-      \( -type f \( -name '*.md' -o -name '*.markdown' \
-                  -o -name '*.map' \
-                  -o -name '.npmignore' -o -name '.gitignore' \) \
-      \) -delete 2>/dev/null || true; \
-    rm -rf /var/lib/apt/lists/* /var/cache/apt /root/.npm /tmp/*
-
-# Drop bundled channel extensions this fleet does not use. The fleet
-# survey shows every agent on z4 uses only `discord` and `feishu`.
-# Each `dist/extensions/<name>/node_modules/` carries that extension's
-# pinned runtime deps (e.g., whatsapp ~73 MB, matrix ~44 MB), which is
-# the bulk of the savings. Smoke step in cloudbuild.yaml protects
-# against accidentally dropping something the gateway needs.
-ARG OPENCLAW_DROP_CHANNEL_EXTENSIONS="\
-whatsapp matrix slack telegram googlechat nostr qqbot tlon \
-msteams mattermost nextcloud-talk synology-chat \
-line bluebubbles imessage signal voice-call \
-twitch irc wechat zalo zalo-personal qa-matrix"
-RUN set -eux; \
-    for name in $OPENCLAW_DROP_CHANNEL_EXTENSIONS; do \
-      rm -rf "/app/dist/extensions/$name" "/app/extensions/$name" 2>/dev/null || true; \
-    done; \
-    rm -rf /app/node_modules/@tloncorp /app/node_modules/@matrix-org 2>/dev/null || true
-
-# Install gh + lark-cli into source (so stage 2 copies them in one go).
 ARG OPENCLAW_GH_VERSION="2.92.0"
 ARG OPENCLAW_LARK_CLI_VERSION="1.0.21"
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates; \
+    apt-get install -y --no-install-recommends gnupg; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
       amd64|arm64) gh_arch="$arch";; \
@@ -73,52 +50,28 @@ RUN set -eux; \
     npm install -g --no-audit --no-fund --omit=optional \
       "@larksuite/cli@${OPENCLAW_LARK_CLI_VERSION}"; \
     npm cache clean --force; \
-    rm -rf /root/.npm /tmp/* /var/lib/apt/lists/*
+    install -m 0755 -d /usr/share/keyrings; \
+    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+      | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg; \
+    chmod a+r /usr/share/keyrings/cloud.google.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+      > /etc/apt/sources.list.d/google-cloud-sdk.list; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends google-cloud-cli; \
+    find /usr/lib/google-cloud-sdk -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true; \
+    find /usr/lib/google-cloud-sdk -type f -name '*.pyc' -delete 2>/dev/null || true
 
-# ── Stage 2: final — fresh slim, repacked ───────────────────────
-FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE}
+# ── Stage 2: final — BASE_IMAGE + the installed artifacts ───────
+FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.source="https://github.com/1aboveio/openclaw" \
   org.opencontainers.image.title="openclaw-fork" \
-  org.opencontainers.image.description="OpenClaw fork image with gh and lark-cli baked in." \
-  org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim"
+  org.opencontainers.image.description="OpenClaw fork image with gh, lark-cli, and gcloud baked in."
 
-# Mirror upstream's runtime apt list, plus ca-certificates which slim
-# does not ship by default. Also pull in the Google Cloud CLI from the
-# official apt repo — used by skills/extensions for auth, secret manager,
-# GCS, and AR token exchange. Adds ~300 MB.
-RUN apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates gnupg procps hostname curl git lsof openssl && \
-    install -m 0755 -d /usr/share/keyrings && \
-    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-      | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
-    chmod a+r /usr/share/keyrings/cloud.google.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-      > /etc/apt/sources.list.d/google-cloud-sdk.list && \
-    apt-get update && \
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      google-cloud-cli && \
-    find /usr/lib/google-cloud-sdk -type d -name __pycache__ -prune -exec rm -rf {} + 2>/dev/null || true && \
-    find /usr/lib/google-cloud-sdk -type f -name '*.pyc' -delete 2>/dev/null || true && \
-    rm -rf /var/lib/apt/lists/* /usr/share/man/* /usr/share/doc/*
-
-WORKDIR /app
-RUN chown node:node /app
-
-# Bring over /usr/local from source — gh, lark-cli (and its deps), the
-# corepack home, the openclaw symlink. Symlinks and modes are preserved.
-COPY --from=source /usr/local /usr/local
-
-# Stripped /app from source.
-COPY --from=source --chown=node:node /app /app
-
-ENV NODE_ENV=production
-ENV COREPACK_HOME=/usr/local/share/corepack
-USER node
-
-# Match upstream's healthcheck and CMD so external orchestrators behave
-# the same.
-HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
+COPY --from=source /usr/local/bin/gh /usr/local/bin/gh
+COPY --from=source /usr/local/bin/lark-cli /usr/local/bin/lark-cli
+COPY --from=source /usr/local/lib/node_modules/@larksuite /usr/local/lib/node_modules/@larksuite
+COPY --from=source /usr/lib/google-cloud-sdk /usr/lib/google-cloud-sdk
+COPY --from=source /usr/bin/gcloud /usr/bin/gcloud
+COPY --from=source /usr/bin/gsutil /usr/bin/gsutil
+COPY --from=source /usr/bin/bq /usr/bin/bq

@@ -1,10 +1,11 @@
 # Cloud Build pipeline for the openclaw fork.
-# Builds the upstream Docker image, layers a fork overlay (Dockerfile.fork)
-# on top to add common CLIs (gh, lark-cli; git is already present in the
-# upstream runtime), boots the gateway in the just-built image as a smoke
-# check, and only then publishes to Artifact Registry repos in us-central1
-# and asia-east2 (Hong Kong). A failed smoke check fails the build before
-# push, so broken images never reach the registry's moving tags.
+# Pulls the published upstream slim image (pinned inside Dockerfile.fork) and
+# layers a fork overlay on top to add common CLIs (gh, lark-cli, gcloud;
+# git is already present in the upstream runtime), boots the gateway in the
+# just-built image as a smoke check, and only then publishes to Artifact
+# Registry repos in us-central1 and asia-east2 (Hong Kong). A failed smoke
+# check fails the build before push, so broken images never reach the
+# registry's moving tags.
 #
 # Triggered by pushes to the `dev` (openclaw-dev) and `main` (openclaw-prod)
 # branches. The image is tagged with the upstream version from package.json,
@@ -26,25 +27,6 @@ steps:
         echo "VERSION=$$VERSION" > /workspace/env.sh
         echo "Building openclaw v$$VERSION (sha=${SHORT_SHA}, branch=${BRANCH_NAME})"
 
-  - id: build-base
-    name: gcr.io/cloud-builders/docker
-    entrypoint: bash
-    env:
-      - DOCKER_BUILDKIT=1
-    args:
-      - -ceu
-      - |
-        # NOTE: tried OPENCLAW_EXTENSIONS opt-in here; it only affects
-        # workspace dep resolution, not the dist/extensions bundles that
-        # `pnpm build:docker` produces. Physical strip happens in
-        # Dockerfile.fork's source stage instead.
-        docker build \
-          --platform=linux/amd64 \
-          --build-arg OPENCLAW_VARIANT=slim \
-          -t openclaw-base:${SHORT_SHA} \
-          -f Dockerfile \
-          .
-
   - id: build-fork
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
@@ -54,9 +36,12 @@ steps:
       - -ceu
       - |
         source /workspace/env.sh
+        # BASE_IMAGE is derived from package.json so the upstream base
+        # tracks the fork version automatically. Dockerfile.fork has a
+        # matching default for local `docker build` without this flag.
         docker build \
           --platform=linux/amd64 \
-          --build-arg BASE_IMAGE=openclaw-base:${SHORT_SHA} \
+          --build-arg BASE_IMAGE=ghcr.io/openclaw/openclaw:$$VERSION-slim \
           -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:v$$VERSION \
           -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${SHORT_SHA} \
           -t us-central1-docker.pkg.dev/$PROJECT_ID/openclaw/openclaw:${BRANCH_NAME} \
