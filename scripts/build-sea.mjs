@@ -26,6 +26,16 @@ function currentTarget() {
   throw new Error(`unsupported SEA host: ${platform}-${arch}`);
 }
 
+function assertSidecarNodeModulesTarget(target) {
+  const hostTarget = currentTarget();
+  if (target === hostTarget) {
+    return;
+  }
+  throw new Error(
+    `cannot build ${target} SEA package on ${hostTarget}: sidecar node_modules can contain native packages and must be installed for the target platform. Run this command on a matching ${target} host/container/Testbox.`,
+  );
+}
+
 function parseArgs(argv) {
   const args = argv.filter((arg) => arg !== "--");
   const options = {
@@ -323,6 +333,7 @@ async function signDarwinBinaryIfNeeded(binaryPath, target) {
 
 async function main() {
   const options = parseArgs(process.argv.slice(2));
+  assertSidecarNodeModulesTarget(options.target);
   const hostTarget = currentTarget();
   const builderNodePath = await fetchNodeForTarget(hostTarget);
   const executablePath =

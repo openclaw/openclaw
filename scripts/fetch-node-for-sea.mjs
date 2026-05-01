@@ -9,6 +9,13 @@ import { fileURLToPath } from "node:url";
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DEFAULT_NODE_VERSION = "25.9.0";
 const SUPPORTED_TARGETS = new Set(["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]);
+const MAX_REDIRECTS = 5;
+const PINNED_NODE_ARCHIVE_SHA256 = new Map([
+  ["25.9.0:darwin-arm64", "15eeeb03c60691a4764effa6cee920217f72058a70bcffe5f4c1209bbe4ad5a3"],
+  ["25.9.0:darwin-x64", "824d667ee88ca3e10e9917c9032937e6d1f5042aeb32affd145702d9ff877704"],
+  ["25.9.0:linux-arm64", "bf007bf0dcc2fddd90888fde374a1ad33c1ab2ca2ad324c645dd7aed0f9f1460"],
+  ["25.9.0:linux-x64", "1d8db7d6e291d167e8c467ae4094be175e1a0b3969c7ae1f8955b9f7824f7b2e"],
+]);
 
 function currentTarget() {
   const platform = process.platform;
@@ -58,8 +65,12 @@ function fetchBuffer(url, redirects = 0) {
     https
       .get(url, (response) => {
         const status = response.statusCode ?? 0;
-        if (status >= 300 && status < 400 && response.headers.location && redirects < 5) {
+        if (status >= 300 && status < 400 && response.headers.location) {
           response.resume();
+          if (redirects >= MAX_REDIRECTS) {
+            reject(new Error(`GET ${url} exceeded ${MAX_REDIRECTS} redirects`));
+            return;
+          }
           resolve(fetchBuffer(new URL(response.headers.location, url).href, redirects + 1));
           return;
         }
@@ -107,9 +118,21 @@ function nodeBinaryPath(extractDir, target) {
   return path.join(extractDir, "bin", platform === "win32" ? "node.exe" : "node");
 }
 
+function cacheMarkerPath(extractDir) {
+  return path.join(extractDir, ".openclaw-sea-node.sha256");
+}
+
 function archiveName(version, target) {
   const [platform, arch] = target.split("-");
   return `node-v${version}-${platform}-${arch}.tar.xz`;
+}
+
+function isTruthyEnvValue(value) {
+  return value === "1" || value === "true" || value === "yes";
+}
+
+function pinnedSha256(version, target) {
+  return PINNED_NODE_ARCHIVE_SHA256.get(`${version}:${target}`);
 }
 
 function expectedSha256(shasumsText, name) {
@@ -126,12 +149,29 @@ function expectedSha256(shasumsText, name) {
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const archive = archiveName(options.version, options.target);
+  const pinned = pinnedSha256(options.version, options.target);
+  const allowUnpinned = isTruthyEnvValue(process.env.OPENCLAW_SEA_ALLOW_UNPINNED_NODE);
+  if (!pinned && !allowUnpinned) {
+    throw new Error(
+      `no pinned SHA256 for ${archive}; update PINNED_NODE_ARCHIVE_SHA256 or set OPENCLAW_SEA_ALLOW_UNPINNED_NODE=1 for an explicit unpinned build`,
+    );
+  }
   const releaseBaseUrl = `https://nodejs.org/dist/v${options.version}`;
   const extractDir = path.join(options.cacheDir, `node-v${options.version}-${options.target}`);
   const binaryPath = nodeBinaryPath(extractDir, options.target);
   if (await exists(binaryPath)) {
-    console.log(binaryPath);
-    return;
+    if (!pinned) {
+      console.log(binaryPath);
+      return;
+    }
+    const cachedSha256 = (await fs.readFile(cacheMarkerPath(extractDir), "utf8").catch(() => ""))
+      .trim()
+      .toLowerCase();
+    if (cachedSha256 === pinned) {
+      console.log(binaryPath);
+      return;
+    }
+    await fs.rm(extractDir, { recursive: true, force: true });
   }
 
   await fs.mkdir(options.cacheDir, { recursive: true });
@@ -140,9 +180,15 @@ async function main() {
   const archiveBytes = await fetchBuffer(archiveUrl);
   const actualSha256 = createHash("sha256").update(archiveBytes).digest("hex");
   const wantedSha256 = expectedSha256(shasumsText, archive);
-  if (actualSha256 !== wantedSha256) {
+  const trustedSha256 = pinned ?? wantedSha256;
+  if (wantedSha256 !== trustedSha256) {
     throw new Error(
-      `SHA256 mismatch for ${archive}: expected ${wantedSha256}, received ${actualSha256}`,
+      `pinned SHA256 mismatch for ${archive}: release SHASUMS listed ${wantedSha256}, pinned ${trustedSha256}`,
+    );
+  }
+  if (actualSha256 !== trustedSha256) {
+    throw new Error(
+      `SHA256 mismatch for ${archive}: expected ${trustedSha256}, received ${actualSha256}`,
     );
   }
 
@@ -153,6 +199,7 @@ async function main() {
   const unpackedDir = path.join(tempRoot, archive.replace(/\.tar\.xz$/u, ""));
   await fs.rm(extractDir, { recursive: true, force: true });
   await fs.rename(unpackedDir, extractDir);
+  await fs.writeFile(cacheMarkerPath(extractDir), `${trustedSha256}\n`, "utf8");
   await fs.rm(tempRoot, { recursive: true, force: true });
   console.log(binaryPath);
 }
