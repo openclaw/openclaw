@@ -1216,6 +1216,66 @@ describe("security invariant: --include=card only in retrieveCardSecrets", () =>
 });
 
 // ---------------------------------------------------------------------------
+// 7b. I-1 and I-2 quality fixes
+// ---------------------------------------------------------------------------
+
+describe("U4 quality fixes: cause propagation and stderr in errors", () => {
+  it("propagates underlying error as cause when runner subprocess fails", async () => {
+    const underlying = new Error("ENOENT: link-cli not on PATH");
+    const runner = vi.fn().mockRejectedValue(underlying);
+    const adapter = createStripeLinkAdapter({
+      clientName: "test",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner,
+    });
+    try {
+      await adapter.getSetupStatus();
+      expect.fail("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ProviderUnavailableError);
+      expect((e as Error).cause).toBe(underlying);
+    }
+  });
+
+  it("includes stderr snippet in error message for non-card method", async () => {
+    const runner = vi.fn().mockResolvedValue({
+      stdout: "",
+      stderr: "rate limited: too many requests",
+      exitCode: 1,
+    });
+    const adapter = createStripeLinkAdapter({
+      clientName: "test",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner,
+    });
+    await expect(adapter.listFundingSources({})).rejects.toThrow(/rate limited/);
+  });
+
+  it("retrieveCardSecrets error message does NOT include stderr (defense-in-depth)", async () => {
+    const runner = vi.fn().mockResolvedValue({
+      stdout: "",
+      stderr: "card pan is 4242424242424242", // adversarial: stderr with PAN-shaped content
+      exitCode: 1,
+    });
+    const adapter = createStripeLinkAdapter({
+      clientName: "test",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner,
+    });
+    try {
+      await adapter.retrieveCardSecrets("spreq_test_001");
+      expect.fail("expected throw");
+    } catch (e) {
+      expect((e as Error).message).not.toMatch(/4242|pan/i);
+      expect((e as Error).message).toMatch(/card no longer available/i);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 8. Adapter id and rails
 // ---------------------------------------------------------------------------
 

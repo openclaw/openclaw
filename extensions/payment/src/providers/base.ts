@@ -85,8 +85,13 @@ export type CardSecrets = {
 export class PaymentProviderError extends Error {
   readonly code: PaymentProviderErrorCode;
   readonly providerId?: PaymentProviderId;
-  constructor(code: PaymentProviderErrorCode, message: string, providerId?: PaymentProviderId) {
-    super(message);
+  constructor(
+    code: PaymentProviderErrorCode,
+    message: string,
+    providerId?: PaymentProviderId,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
     this.name = "PaymentProviderError";
     this.code = code;
     this.providerId = providerId;
@@ -106,11 +111,13 @@ export class UnsupportedRailError extends PaymentProviderError {
     providerId: PaymentProviderId,
     rail: PaymentRail,
     action: "issueVirtualCard" | "executeMachinePayment",
+    options?: { cause?: unknown },
   ) {
     super(
       "unsupported_rail",
       `Provider "${providerId}" does not support rail "${rail}" for action "${action}"`,
       providerId,
+      options,
     );
     this.name = "UnsupportedRailError";
     this.rail = rail;
@@ -119,16 +126,21 @@ export class UnsupportedRailError extends PaymentProviderError {
 }
 
 export class ProviderUnavailableError extends PaymentProviderError {
-  constructor(providerId: PaymentProviderId, reason: string) {
-    super("provider_unavailable", `Provider "${providerId}" unavailable: ${reason}`, providerId);
+  constructor(providerId: PaymentProviderId, reason: string, options?: { cause?: unknown }) {
+    super(
+      "provider_unavailable",
+      `Provider "${providerId}" unavailable: ${reason}`,
+      providerId,
+      options,
+    );
     this.name = "ProviderUnavailableError";
   }
 }
 
 export class PolicyDeniedError extends PaymentProviderError {
   readonly reason: string;
-  constructor(reason: string, providerId?: PaymentProviderId) {
-    super("policy_denied", `Policy denied: ${reason}`, providerId);
+  constructor(reason: string, providerId?: PaymentProviderId, options?: { cause?: unknown }) {
+    super("policy_denied", `Policy denied: ${reason}`, providerId, options);
     this.name = "PolicyDeniedError";
     this.reason = reason;
   }
@@ -136,8 +148,13 @@ export class PolicyDeniedError extends PaymentProviderError {
 
 export class CardUnavailableError extends PaymentProviderError {
   readonly handleId?: string;
-  constructor(handleId: string | undefined, reason: string, providerId?: PaymentProviderId) {
-    super("card_unavailable", `Card unavailable: ${reason}`, providerId);
+  constructor(
+    handleId: string | undefined,
+    reason: string,
+    providerId?: PaymentProviderId,
+    options?: { cause?: unknown },
+  ) {
+    super("card_unavailable", `Card unavailable: ${reason}`, providerId, options);
     this.name = "CardUnavailableError";
     this.handleId = handleId;
   }

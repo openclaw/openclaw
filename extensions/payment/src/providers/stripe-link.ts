@@ -137,7 +137,7 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      throw new ProviderUnavailableError("stripe-link", msg);
+      throw new ProviderUnavailableError("stripe-link", msg, { cause: err });
     }
   }
 
@@ -205,7 +205,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     const result = await runCli(args);
 
     if (result.exitCode !== 0) {
-      throw new ProviderUnavailableError("stripe-link", "link-cli payment-methods list failed");
+      const stderrSnippet = result.stderr.trim().slice(0, 200);
+      const reason = stderrSnippet
+        ? `link-cli payment-methods list failed: ${stderrSnippet}`
+        : `link-cli payment-methods list failed (exit ${result.exitCode})`;
+      throw new ProviderUnavailableError("stripe-link", reason);
     }
 
     let parsed: unknown[];
@@ -215,10 +219,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
         throw new Error("expected array");
       }
       parsed = raw;
-    } catch {
+    } catch (err: unknown) {
       throw new ProviderUnavailableError(
         "stripe-link",
         "link-cli payment-methods list returned non-array JSON",
+        { cause: err },
       );
     }
 
@@ -305,16 +310,21 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     const result = await runCli(args);
 
     if (result.exitCode !== 0) {
-      throw new ProviderUnavailableError("stripe-link", "spend-request create failed");
+      const stderrSnippet = result.stderr.trim().slice(0, 200);
+      const reason = stderrSnippet
+        ? `spend-request create failed: ${stderrSnippet}`
+        : `spend-request create failed (exit ${result.exitCode})`;
+      throw new ProviderUnavailableError("stripe-link", reason);
     }
 
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-    } catch {
+    } catch (err: unknown) {
       throw new ProviderUnavailableError(
         "stripe-link",
         "spend-request create returned non-JSON output",
+        { cause: err },
       );
     }
 
@@ -531,16 +541,21 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     const createResult = await runCli(createArgs);
 
     if (createResult.exitCode !== 0) {
-      throw new ProviderUnavailableError("stripe-link", "spend-request create (MPP) failed");
+      const stderrSnippet = createResult.stderr.trim().slice(0, 200);
+      const reason = stderrSnippet
+        ? `spend-request create (MPP) failed: ${stderrSnippet}`
+        : `spend-request create (MPP) failed (exit ${createResult.exitCode})`;
+      throw new ProviderUnavailableError("stripe-link", reason);
     }
 
     let createParsed: Record<string, unknown>;
     try {
       createParsed = JSON.parse(createResult.stdout) as Record<string, unknown>;
-    } catch {
+    } catch (err: unknown) {
       throw new ProviderUnavailableError(
         "stripe-link",
         "spend-request create (MPP) returned non-JSON output",
+        { cause: err },
       );
     }
 
@@ -605,14 +620,20 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     // The token is not referenced again after this point.
 
     if (payResult.exitCode !== 0) {
-      throw new ProviderUnavailableError("stripe-link", "mpp pay failed");
+      const stderrSnippet = payResult.stderr.trim().slice(0, 200);
+      const reason = stderrSnippet
+        ? `mpp pay failed: ${stderrSnippet}`
+        : `mpp pay failed (exit ${payResult.exitCode})`;
+      throw new ProviderUnavailableError("stripe-link", reason);
     }
 
     let payParsed: Record<string, unknown>;
     try {
       payParsed = JSON.parse(payResult.stdout) as Record<string, unknown>;
-    } catch {
-      throw new ProviderUnavailableError("stripe-link", "mpp pay returned non-JSON output");
+    } catch (err: unknown) {
+      throw new ProviderUnavailableError("stripe-link", "mpp pay returned non-JSON output", {
+        cause: err,
+      });
     }
 
     // Assumption F: { result: { outcome, status_code, receipt_id, issued_at, target_url } }
@@ -673,10 +694,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     let parsed: Record<string, unknown>;
     try {
       parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-    } catch {
+    } catch (err: unknown) {
       throw new ProviderUnavailableError(
         "stripe-link",
         "spend-request retrieve returned non-JSON output",
+        { cause: err },
       );
     }
 

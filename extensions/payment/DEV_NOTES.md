@@ -119,6 +119,12 @@ The V1 scaffold sets `activation.onStartup: false` — `pnpm openclaw plugins li
 - **Don't add `tsc --noEmit` lanes** — fork uses `tsgo`, not `tsc` (per `AGENTS.md`).
 - **Don't skip the pre-commit hook with `--no-verify`**. If it fails, fix the underlying issue.
 
+## Known issues tracked for follow-up units
+
+- **I-3 — `--request-approval` long-poll bound only by `commandTimeoutMs` (60s default).** If the buyer takes longer than 60s to approve on the Link mobile app, the runner SIGTERMs and `runCli` rejects with a confusing `ProviderUnavailableError` rather than allowing `pending_approval` retry. Two paths to fix: (a) raise `commandTimeoutMs` default for approval flows or accept a separate `approvalTimeoutMs`, (b) when runner rejects with timeout specifically, map to `pending_approval` `CredentialHandle` so the manager's `getStatus` polling can pick up. Address in U5 or U6.
+
+- **I-4 — `runner.ts` SIGKILL escalation deferred.** `runner.ts` only sends SIGTERM on `commandTimeoutMs` exceedance. A misbehaving subprocess that traps SIGTERM hangs the parent indefinitely. Add a follow-up `setTimeout(() => child.kill("SIGKILL"), 2000)` after the SIGTERM, cleared on `'close'`. Becomes important under U4's heavy `link-cli` usage. Address in U5 or as a focused `runner.ts` fix.
+
 ## Escaping the sandbox
 
 If you need to run against the live install (rare; mostly for U8 final smoke gate):
