@@ -5,6 +5,7 @@ import {
   resolveSecretRefValues,
 } from "openclaw/plugin-sdk/runtime-secret-resolution";
 import { describe, expect, it } from "vitest";
+import { resolveGoogleChatAccount } from "./accounts.js";
 import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 
 describe("googlechat secret contract", () => {
@@ -55,6 +56,10 @@ describe("googlechat secret contract", () => {
 
     const workAccount = resolvedConfig.channels?.googlechat?.accounts?.work;
     expect(workAccount?.serviceAccount).toBe('{"client_email":"bot@example.com"}');
+    expect(workAccount?.serviceAccountRef).toBeUndefined();
+    const account = resolveGoogleChatAccount({ cfg: resolvedConfig, accountId: "work" });
+    expect(account.credentialSource).toBe("inline");
+    expect(account.credentials).toEqual({ client_email: "bot@example.com" });
     expect(context.warnings).toEqual([]);
   });
 });
