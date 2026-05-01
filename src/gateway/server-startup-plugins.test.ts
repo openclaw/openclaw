@@ -133,13 +133,13 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
-  createBundledRuntimeDepsInstallSpecs: (params: {
-    deps: readonly { name: string; version: string }[];
-  }) => params.deps.map((dep) => `${dep.name}@${dep.version}`),
-  pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
-    pruneUnknownBundledRuntimeDepsRoots(params),
   repairBundledRuntimeDepsPackagePlanAsync: (params: unknown) =>
     repairBundledRuntimeDepsPackagePlanAsync(params),
+}));
+
+vi.mock("../plugins/bundled-runtime-deps-roots.js", () => ({
+  pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
+    pruneUnknownBundledRuntimeDepsRoots(params),
 }));
 
 vi.mock("../plugins/bundled-runtime-deps-jiti-aliases.js", () => ({

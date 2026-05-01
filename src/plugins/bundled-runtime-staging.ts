@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpanSync } from "../infra/diagnostics-timeline.js";
-import { registerBundledRuntimeDependencyJitiAliases } from "./bundled-runtime-deps-jiti-aliases.js";
 import {
   installBundledRuntimeDeps,
   type BundledRuntimeDepsInstallParams,
-} from "./bundled-runtime-deps.js";
+} from "./bundled-runtime-deps-install.js";
+import { registerBundledRuntimeDependencyJitiAliases } from "./bundled-runtime-deps-jiti-aliases.js";
 import {
   prepareBundledPluginRuntimeLoadRoot,
   type PreparedBundledPluginRuntimeLoadRoot,

@@ -2,10 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  resolveBundledRuntimeDependencyInstallRoot,
-  type BundledRuntimeDepsInstallParams,
-} from "./bundled-runtime-deps.js";
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
+import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps-roots.js";
 import { materializeBundledRuntimeMirrorFile } from "./bundled-runtime-mirror.js";
 import {
   clearPreparedBundledPluginRuntimeLoadRoots,

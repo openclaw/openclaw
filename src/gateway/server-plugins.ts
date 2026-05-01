@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps.js";
+import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps-install.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import { loadPluginLookUpTable, type PluginLookUpTable } from "../plugins/plugin-lookup-table.js";

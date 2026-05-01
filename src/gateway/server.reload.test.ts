@@ -226,8 +226,15 @@ vi.mock("../plugins/bundled-runtime-deps.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/bundled-runtime-deps.js")>();
   return {
     ...actual,
-    pruneUnknownBundledRuntimeDepsRoots: hoisted.pruneUnknownBundledRuntimeDepsRoots,
     repairBundledRuntimeDepsPackagePlanAsync: hoisted.repairBundledRuntimeDepsPackagePlanAsync,
+  };
+});
+
+vi.mock("../plugins/bundled-runtime-deps-roots.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/bundled-runtime-deps-roots.js")>();
+  return {
+    ...actual,
+    pruneUnknownBundledRuntimeDepsRoots: hoisted.pruneUnknownBundledRuntimeDepsRoots,
   };
 });
 

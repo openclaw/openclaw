@@ -26,14 +26,12 @@ import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
 import {
   clearBundledRuntimeDependencyJitiAliases,
   resolveBundledRuntimeDependencyJitiAliasMap,
 } from "./bundled-runtime-deps-jiti-aliases.js";
-import {
-  clearBundledRuntimeDependencyNodePaths,
-  type BundledRuntimeDepsInstallParams,
-} from "./bundled-runtime-deps.js";
+import { clearBundledRuntimeDependencyNodePaths } from "./bundled-runtime-deps.js";
 import { clearBundledRuntimeDistMirrorPreparationCache } from "./bundled-runtime-dist-mirror-cache.js";
 import {
   clearPreparedBundledPluginRuntimeLoadRoots,

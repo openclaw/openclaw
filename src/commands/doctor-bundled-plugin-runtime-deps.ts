@@ -1,10 +1,10 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps-install.js";
 import {
   createBundledRuntimeDepsPackagePlan,
   repairBundledRuntimeDepsPackagePlanAsync,
-  type BundledRuntimeDepsInstallParams,
 } from "../plugins/bundled-runtime-deps.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";

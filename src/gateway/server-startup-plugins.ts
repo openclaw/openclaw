@@ -6,10 +6,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { registerBundledRuntimeDependencyJitiAliases } from "../plugins/bundled-runtime-deps-jiti-aliases.js";
-import {
-  pruneUnknownBundledRuntimeDepsRoots,
-  repairBundledRuntimeDepsPackagePlanAsync,
-} from "../plugins/bundled-runtime-deps.js";
+import { pruneUnknownBundledRuntimeDepsRoots } from "../plugins/bundled-runtime-deps-roots.js";
+import { repairBundledRuntimeDepsPackagePlanAsync } from "../plugins/bundled-runtime-deps.js";
 import { prepareBundledPluginRuntimeLoadRoot } from "../plugins/bundled-runtime-root.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";

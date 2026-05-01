@@ -1,9 +1,9 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { pruneUnknownBundledRuntimeDepsRoots } from "../plugins/bundled-runtime-deps-roots.js";
 import {
   createBundledRuntimeDepsPackagePlan,
-  pruneUnknownBundledRuntimeDepsRoots,
   repairBundledRuntimeDepsPackagePlanAsync,
   type BundledRuntimeDepsPackagePlan,
 } from "../plugins/bundled-runtime-deps.js";

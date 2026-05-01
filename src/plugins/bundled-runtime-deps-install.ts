@@ -6,7 +6,6 @@ import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { beginBundledRuntimeDepsInstall } from "./bundled-runtime-deps-activity.js";
 import {
   BUNDLED_RUNTIME_DEPS_LOCK_DIR,
-  withBundledRuntimeDepsFilesystemLock,
   withBundledRuntimeDepsFilesystemLockAsync,
 } from "./bundled-runtime-deps-lock.js";
 import {
@@ -33,10 +32,6 @@ export type BundledRuntimeDepsInstallParams = {
   installSpecs?: string[];
   warn?: (message: string) => void;
 };
-
-function withBundledRuntimeDepsInstallRootLock<T>(installRoot: string, run: () => T): T {
-  return withBundledRuntimeDepsFilesystemLock(installRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR, run);
-}
 
 async function withBundledRuntimeDepsInstallRootLockAsync<T>(
   installRoot: string,
@@ -358,46 +353,6 @@ export async function installBundledRuntimeDepsAsync(params: {
   } finally {
     cleanupBundledRuntimeDepsInstallContext(context);
   }
-}
-
-export function repairBundledRuntimeDepsInstallRoot(params: {
-  installRoot: string;
-  missingSpecs: string[];
-  installSpecs: string[];
-  env: NodeJS.ProcessEnv;
-  installDeps?: (params: BundledRuntimeDepsInstallParams) => void;
-  warn?: (message: string) => void;
-}): { installSpecs: string[] } {
-  return withBundledRuntimeDepsInstallRootLock(params.installRoot, () => {
-    const installSpecs = normalizeRuntimeDepSpecs(params.installSpecs);
-    const install =
-      params.installDeps ??
-      ((installParams) =>
-        installBundledRuntimeDeps({
-          installRoot: installParams.installRoot,
-          missingSpecs: installParams.missingSpecs,
-          installSpecs: installParams.installSpecs,
-          env: params.env,
-          warn: params.warn,
-        }));
-    const finishActivity = beginBundledRuntimeDepsInstall({
-      installRoot: params.installRoot,
-      missingSpecs: installSpecs,
-      installSpecs,
-    });
-    ensureNpmInstallExecutionManifest(params.installRoot, installSpecs);
-    try {
-      install({
-        installRoot: params.installRoot,
-        missingSpecs: installSpecs,
-        installSpecs,
-      });
-    } finally {
-      finishActivity();
-    }
-    removeLegacyRuntimeDepsManifest(params.installRoot);
-    return { installSpecs };
-  });
 }
 
 export async function repairBundledRuntimeDepsInstallRootAsync(params: {

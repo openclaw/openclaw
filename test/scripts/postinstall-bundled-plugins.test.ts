@@ -6,6 +6,8 @@ import {
   createBundledRuntimeDependencyInstallArgs,
   createBundledRuntimeDependencyInstallEnv,
   createNestedNpmInstallEnv,
+} from "../../scripts/lib/bundled-runtime-deps-install.mjs";
+import {
   isDirectPostinstallInvocation,
   pruneOpenClawCompileCache,
   pruneInstalledPackageDist,
@@ -51,41 +53,6 @@ async function writePluginPackage(
 }
 
 describe("bundled plugin postinstall", () => {
-  function createNpmInstallArgs(...packages: string[]) {
-    return createBundledRuntimeDependencyInstallArgs(packages);
-  }
-
-  function createBareNpmRunner(packages: string[]) {
-    return {
-      command: "npm",
-      args: createNpmInstallArgs(...packages),
-      env: {
-        HOME: "/tmp/home",
-        PATH: "/tmp/node/bin",
-      },
-      shell: false as const,
-    };
-  }
-
-  function expectNpmInstallSpawn(
-    spawnSync: ReturnType<typeof vi.fn>,
-    packageRoot: string,
-    packages: string[],
-  ) {
-    expect(spawnSync).toHaveBeenCalledWith("npm", createNpmInstallArgs(...packages), {
-      cwd: packageRoot,
-      encoding: "utf8",
-      env: {
-        HOME: "/tmp/home",
-        PATH: "/tmp/node/bin",
-      },
-      shell: false,
-      stdio: "pipe",
-      windowsHide: true,
-      windowsVerbatimArguments: undefined,
-    });
-  }
-
   it("recognizes direct invocation through symlinked temp prefixes", () => {
     const realpathSync = vi.fn((value: string) =>
       value.replace(/^\/var\/folders\//u, "/private/var/folders/"),
@@ -185,7 +152,6 @@ describe("bundled plugin postinstall", () => {
       env: { HOME: "/tmp/home" },
       extensionsDir,
       packageRoot,
-      npmRunner: createBareNpmRunner(["acpx@0.4.1"]),
       spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
@@ -725,34 +691,6 @@ describe("bundled plugin postinstall", () => {
     expect(unlinkSync).toHaveBeenCalledWith("/pkg/dist/stale.js");
   });
 
-  it("runs nested local installs with sanitized env when the sentinel package is missing", async () => {
-    const extensionsDir = await createExtensionsDir();
-    const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "acpx", {
-      dependencies: {
-        acpx: "0.4.1",
-      },
-    });
-    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
-
-    runBundledPluginPostinstall({
-      env: {
-        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
-        npm_config_global: "true",
-        npm_config_location: "global",
-        npm_config_prefix: "/opt/homebrew",
-        HOME: "/tmp/home",
-      },
-      extensionsDir,
-      packageRoot,
-      npmRunner: createBareNpmRunner(["acpx@0.4.1"]),
-      spawnSync,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    expectNpmInstallSpawn(spawnSync, packageRoot, ["acpx@0.4.1"]);
-  });
-
   it("skips reinstall when the bundled sentinel package already exists", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
@@ -777,26 +715,6 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(spawnSync).not.toHaveBeenCalled();
-  });
-
-  it("reinstalls bundled runtime deps when optional native children are missing", async () => {
-    const extensionsDir = await createExtensionsDir();
-    const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writeDiscordDaveyOptionalDependencyFixture(extensionsDir, packageRoot);
-    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
-
-    runBundledPluginPostinstall({
-      env: { HOME: "/tmp/home", OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1" },
-      extensionsDir,
-      packageRoot,
-      arch: "arm64",
-      npmRunner: createBareNpmRunner(["@snazzah/davey@0.1.11"]),
-      platform: "win32",
-      spawnSync,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    expectNpmInstallSpawn(spawnSync, packageRoot, ["@snazzah/davey@0.1.11"]);
   });
 
   it("does not reinstall when only another platform optional native child is missing", async () => {
@@ -872,103 +790,6 @@ describe("bundled plugin postinstall", () => {
         },
       ]),
     );
-  });
-
-  it("installs missing bundled plugin runtime deps during global installs", async () => {
-    const extensionsDir = await createExtensionsDir();
-    const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "slack", {
-      dependencies: {
-        "@slack/web-api": "7.11.0",
-      },
-    });
-    await writePluginPackage(extensionsDir, "telegram", {
-      dependencies: {
-        grammy: "1.38.4",
-      },
-    });
-    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
-
-    runBundledPluginPostinstall({
-      env: {
-        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
-        npm_config_global: "true",
-        npm_config_location: "global",
-        npm_config_prefix: "/opt/homebrew",
-        HOME: "/tmp/home",
-      },
-      extensionsDir,
-      packageRoot,
-      npmRunner: createBareNpmRunner(["@slack/web-api@7.11.0", "grammy@1.38.4"]),
-      spawnSync,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    expectNpmInstallSpawn(spawnSync, packageRoot, ["@slack/web-api@7.11.0", "grammy@1.38.4"]);
-  });
-
-  it("installs only missing bundled plugin runtime deps", async () => {
-    const extensionsDir = await createExtensionsDir();
-    const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "slack", {
-      dependencies: {
-        "@slack/web-api": "7.11.0",
-      },
-    });
-    await writePluginPackage(extensionsDir, "telegram", {
-      dependencies: {
-        grammy: "1.38.4",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@slack", "web-api"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@slack", "web-api", "package.json"),
-      "{}\n",
-    );
-    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
-
-    runBundledPluginPostinstall({
-      env: {
-        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
-        HOME: "/tmp/home",
-      },
-      extensionsDir,
-      packageRoot,
-      npmRunner: createBareNpmRunner(["grammy@1.38.4"]),
-      spawnSync,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    expectNpmInstallSpawn(spawnSync, packageRoot, ["grammy@1.38.4"]);
-  });
-
-  it("installs bundled plugin deps when npm location is global", async () => {
-    const extensionsDir = await createExtensionsDir();
-    const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "telegram", {
-      dependencies: {
-        grammy: "1.38.4",
-      },
-    });
-    const spawnSync = vi.fn(() => ({ status: 0, stderr: "", stdout: "" }));
-
-    runBundledPluginPostinstall({
-      env: {
-        OPENCLAW_EAGER_BUNDLED_PLUGIN_DEPS: "1",
-        npm_config_location: "global",
-        npm_config_prefix: "/opt/homebrew",
-        HOME: "/tmp/home",
-      },
-      extensionsDir,
-      packageRoot,
-      npmRunner: createBareNpmRunner(["grammy@1.38.4"]),
-      spawnSync,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    expectNpmInstallSpawn(spawnSync, packageRoot, ["grammy@1.38.4"]);
   });
 
   it("prunes only bundled plugin package node_modules in source checkouts", async () => {

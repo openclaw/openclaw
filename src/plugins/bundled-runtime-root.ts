@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
+import { withBundledRuntimeDepsFilesystemLock } from "./bundled-runtime-deps-lock.js";
 import {
-  ensureBundledPluginRuntimeDeps,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
+} from "./bundled-runtime-deps-roots.js";
+import {
+  ensureBundledPluginRuntimeDeps,
   registerBundledRuntimeDependencyNodePath,
-  withBundledRuntimeDepsFilesystemLock,
-  type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps.js";
 import {
   markBundledRuntimeDistMirrorPrepared,

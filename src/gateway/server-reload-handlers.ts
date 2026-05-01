@@ -16,10 +16,8 @@ import {
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
-import {
-  pruneUnknownBundledRuntimeDepsRoots,
-  repairBundledRuntimeDepsPackagePlanAsync,
-} from "../plugins/bundled-runtime-deps.js";
+import { pruneUnknownBundledRuntimeDepsRoots } from "../plugins/bundled-runtime-deps-roots.js";
+import { repairBundledRuntimeDepsPackagePlanAsync } from "../plugins/bundled-runtime-deps.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   activateSecretsRuntimeSnapshot,

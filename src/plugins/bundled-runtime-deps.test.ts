@@ -11,29 +11,38 @@ import {
   waitForBundledRuntimeDepsInstallIdle,
 } from "./bundled-runtime-deps-activity.js";
 import {
+  installBundledRuntimeDeps,
+  installBundledRuntimeDepsAsync,
+  repairBundledRuntimeDepsInstallRootAsync,
+  type BundledRuntimeDepsInstallParams,
+} from "./bundled-runtime-deps-install.js";
+import {
+  formatRuntimeDepsLockTimeoutMessage,
+  shouldRemoveRuntimeDepsLock,
+} from "./bundled-runtime-deps-lock.js";
+import {
   assertBundledRuntimeDepsInstalled,
   ensureNpmInstallExecutionManifest,
 } from "./bundled-runtime-deps-materialization.js";
 import {
-  __testing as bundledRuntimeDepsTesting,
-  BundledRuntimeDepsMissingError,
-  createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
   createBundledRuntimeDepsInstallEnv,
-  createBundledRuntimeDepsPackagePlan,
-  ensureBundledPluginRuntimeDeps,
-  installBundledRuntimeDeps,
-  installBundledRuntimeDepsAsync,
+  resolveBundledRuntimeDepsNpmRunner,
+  resolveBundledRuntimeDepsPnpmRunner,
+} from "./bundled-runtime-deps-package-manager.js";
+import {
   isWritableDirectory,
   pruneUnknownBundledRuntimeDepsRoots,
-  repairBundledRuntimeDepsPackagePlanAsync,
-  repairBundledRuntimeDepsInstallRootAsync,
-  resolveBundledRuntimeDependencyPackageInstallRoot,
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyInstallRootPlan,
-  resolveBundledRuntimeDepsNpmRunner,
-  scanBundledPluginRuntimeDeps,
-  type BundledRuntimeDepsInstallParams,
+  resolveBundledRuntimeDependencyPackageInstallRoot,
+} from "./bundled-runtime-deps-roots.js";
+import {
+  BundledRuntimeDepsMissingError,
+  createBundledRuntimeDependencyAliasMap,
+  createBundledRuntimeDepsPackagePlan,
+  ensureBundledPluginRuntimeDeps,
+  repairBundledRuntimeDepsPackagePlanAsync,
 } from "./bundled-runtime-deps.js";
 import {
   writeBundledPluginRuntimeDepsPackage as writeBundledPluginPackage,
@@ -234,7 +243,7 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     const pnpmCmdPath = "C:\\Program Files\\nodejs\\pnpm.cmd";
 
     expect(
-      bundledRuntimeDepsTesting.resolveBundledRuntimeDepsPnpmRunner({
+      resolveBundledRuntimeDepsPnpmRunner({
         env: {},
         execPath,
         existsSync: (candidate) => candidate === pnpmCmdPath,
@@ -249,7 +258,7 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
     const pnpmExePath = "C:\\Program Files\\nodejs\\pnpm.exe";
 
     expect(
-      bundledRuntimeDepsTesting.resolveBundledRuntimeDepsPnpmRunner({
+      resolveBundledRuntimeDepsPnpmRunner({
         env: {},
         execPath,
         existsSync: (candidate) => candidate === pnpmExePath,
@@ -1079,10 +1088,10 @@ describe("installBundledRuntimeDeps", () => {
   });
 });
 
-describe("scanBundledPluginRuntimeDeps config policy", () => {
+describe("createBundledRuntimeDepsPackagePlan config policy", () => {
   type RuntimeDepsConfigCase = {
     name: string;
-    config: Parameters<typeof scanBundledPluginRuntimeDeps>[0]["config"];
+    config: Parameters<typeof createBundledRuntimeDepsPackagePlan>[0]["config"];
     includeConfiguredChannels: boolean;
     expectedDeps: string[];
   };
@@ -1271,7 +1280,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
   ];
 
   it.each(cases)("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot: setupPolicyPackageRoot(),
       config,
       includeConfiguredChannels,
@@ -1284,7 +1293,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
   it("honors deny and disabled entries when scanning an explicit effective plugin set", () => {
     const packageRoot = setupPolicyPackageRoot();
 
-    const denied = scanBundledPluginRuntimeDeps({
+    const denied = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       pluginIds: ["telegram"],
       config: {
@@ -1292,7 +1301,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
         channels: { telegram: { enabled: true } },
       },
     });
-    const disabled = scanBundledPluginRuntimeDeps({
+    const disabled = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       pluginIds: ["telegram"],
       config: {
@@ -1300,7 +1309,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
         channels: { telegram: { enabled: true } },
       },
     });
-    const allowed = scanBundledPluginRuntimeDeps({
+    const allowed = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       pluginIds: ["telegram"],
       config: {
@@ -1317,7 +1326,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
   });
 
   it("trusts preselected startup plugin ids without reapplying config policy", () => {
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot: setupPolicyPackageRoot(),
       exactPluginIds: ["telegram"],
       config: {
@@ -1333,7 +1342,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
   });
 
   it("does not stage explicitly disabled preselected channel deps", () => {
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot: setupPolicyPackageRoot(),
       exactPluginIds: ["telegram"],
       config: {
@@ -1353,7 +1362,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
     writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       config: {},
       env,
@@ -1384,7 +1393,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
     writeInstalledPackage(installRoot, "alpha-runtime", "0.9.0");
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       config: {},
       env,
@@ -1451,7 +1460,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     const manifestPath = path.join(pluginRoot, "openclaw.plugin.json");
     const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
 
-    scanBundledPluginRuntimeDeps({ packageRoot, config: {} });
+    createBundledRuntimeDepsPackagePlan({ packageRoot, config: {} });
 
     expect(
       readFileSyncSpy.mock.calls.filter((call) => path.resolve(String(call[0])) === manifestPath),
@@ -1481,7 +1490,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       enabledByDefault: true,
     });
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       config: {},
       env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
@@ -1522,7 +1531,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       `import chokidar from "chokidar";\n`,
     );
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       config: {},
       env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
@@ -1561,7 +1570,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       `import chokidar from "chokidar";\n`,
     );
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       exactPluginIds: ["slack"],
       config: {
@@ -1622,7 +1631,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     fs.writeFileSync(path.join(packageRoot, "dist", "redact.js"), `import JSON5 from "json5";\n`);
     fs.writeFileSync(path.join(packageRoot, "dist", "theme.js"), `import chalk from "chalk";\n`);
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       exactPluginIds: ["whatsapp"],
       config: {
@@ -1674,7 +1683,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       channels: ["slack"],
     });
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       exactPluginIds: ["slack"],
       config: {
@@ -1717,7 +1726,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       enabledByDefault: true,
     });
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       config: {},
       env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
@@ -1757,7 +1766,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       "@mariozechner/pi-ai@0.70.5",
     ]);
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       config: {},
       env,
@@ -1798,7 +1807,7 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       "7.15.1",
     );
 
-    const result = scanBundledPluginRuntimeDeps({
+    const result = createBundledRuntimeDepsPackagePlan({
       packageRoot,
       config: {},
       env,
@@ -3003,7 +3012,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
   it("does not expire active runtime-deps install locks by age alone", () => {
     expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      shouldRemoveRuntimeDepsLock(
         { pid: 123, createdAtMs: 0 },
         Number.MAX_SAFE_INTEGER,
         () => true,
@@ -3013,7 +3022,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
   it("expires runtime-deps install locks whose owner PID is dead", () => {
     expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      shouldRemoveRuntimeDepsLock(
         // Conventional non-existent PID for dead-process simulation
         { pid: 99999, createdAtMs: 0 },
         1_000,
@@ -3024,7 +3033,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
   it("expires runtime-deps install locks whose owner PID is dead regardless of age", () => {
     expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      shouldRemoveRuntimeDepsLock(
         // Conventional non-existent PID for dead-process simulation
         { pid: 99999, createdAtMs: Date.now() },
         Date.now(),
@@ -3035,7 +3044,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
   it("treats a PID-alive lock with matching starttime as held by the same incarnation", () => {
     expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      shouldRemoveRuntimeDepsLock(
         { pid: 7, starttime: 1_000, createdAtMs: 2_000 },
         2_500,
         () => true,
@@ -3052,7 +3061,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     // isProcessAlive. Capturing the writer's start-time and comparing it to
     // the live PID's start-time disambiguates incarnations.
     expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      shouldRemoveRuntimeDepsLock(
         { pid: 7, starttime: 1_000, createdAtMs: 2_000 },
         2_500,
         () => true,
@@ -3069,7 +3078,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     // disambiguation path is start-time evidence on both sides; without it
     // we err toward "still held" rather than risk stomping a real install.
     expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      shouldRemoveRuntimeDepsLock(
         { pid: 7, starttime: 1_000, createdAtMs: 0 },
         Number.MAX_SAFE_INTEGER,
         () => true,
@@ -3079,18 +3088,12 @@ describe("ensureBundledPluginRuntimeDeps", () => {
   });
 
   it("does not expire fresh ownerless runtime-deps install locks", () => {
-    expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
-        { lockDirMtimeMs: 1_000 },
-        31_000,
-        () => true,
-      ),
-    ).toBe(false);
+    expect(shouldRemoveRuntimeDepsLock({ lockDirMtimeMs: 1_000 }, 31_000, () => true)).toBe(false);
   });
 
   it("does not expire ownerless runtime-deps install locks when the owner file changed recently", () => {
     expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      shouldRemoveRuntimeDepsLock(
         { lockDirMtimeMs: 1_000, ownerFileMtimeMs: 31_000 },
         61_000,
         () => true,
@@ -3099,18 +3102,12 @@ describe("ensureBundledPluginRuntimeDeps", () => {
   });
 
   it("expires ownerless runtime-deps install locks after the owner write grace window", () => {
-    expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
-        { lockDirMtimeMs: 1_000 },
-        31_001,
-        () => true,
-      ),
-    ).toBe(true);
+    expect(shouldRemoveRuntimeDepsLock({ lockDirMtimeMs: 1_000 }, 31_001, () => true)).toBe(true);
   });
 
   it("expires ownerless runtime-deps install locks when lock and owner file are stale", () => {
     expect(
-      bundledRuntimeDepsTesting.shouldRemoveRuntimeDepsLock(
+      shouldRemoveRuntimeDepsLock(
         { lockDirMtimeMs: 1_000, ownerFileMtimeMs: 2_000 },
         32_001,
         () => true,
@@ -3119,7 +3116,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
   });
 
   it("includes runtime-deps lock owner details in timeout messages", () => {
-    const message = bundledRuntimeDepsTesting.formatRuntimeDepsLockTimeoutMessage({
+    const message = formatRuntimeDepsLockTimeoutMessage({
       lockDir: "/tmp/openclaw-plugin/.openclaw-runtime-deps.lock",
       owner: {
         pid: 0,
@@ -4050,5 +4047,72 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     });
     expect(installCalls).toHaveLength(2);
     expect(fs.existsSync(path.join(pluginRoot, "node_modules", "zod", "package.json"))).toBe(true);
+  });
+
+  it("keeps source-checkout dist external staging scoped to the loaded plugin", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+    fs.mkdirSync(path.join(packageRoot, "extensions"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.27",
+        dependencies: { ajv: "8.20.0" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["ajv"],
+          },
+        },
+      }),
+    );
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "codex");
+    const siblingPluginRoot = path.join(packageRoot, "dist", "extensions", "discord");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.mkdirSync(siblingPluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          zod: "^4.3.6",
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(siblingPluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          ws: "^8.20.0",
+        },
+      }),
+    );
+    const installCalls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+      installDeps: (params) => {
+        installCalls.push(params);
+      },
+      pluginId: "codex",
+      pluginRoot,
+    });
+
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
+    expect(result).toEqual({
+      installedSpecs: ["zod@^4.3.6"],
+    });
+    expect(installCalls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["zod@^4.3.6"],
+        installSpecs: ["zod@^4.3.6"],
+      },
+    ]);
+    expect(installRoot).toContain(stageDir);
+    expect(installRoot).not.toBe(pluginRoot);
   });
 });
