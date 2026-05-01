@@ -1195,7 +1195,7 @@ export const dispatchTelegramMessage = async ({
                             reasoningStreamSink.onToken(payload.text);
                           }
                           if (reasoningLane.stream) {
-                            enqueueDraftLaneEvent(async () => {
+                            void enqueueDraftLaneEvent(async () => {
                               if (splitReasoningOnNextStream) {
                                 reasoningLane.stream?.forceNewMessage();
                                 resetDraftLaneState(reasoningLane);
