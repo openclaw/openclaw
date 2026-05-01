@@ -28,8 +28,8 @@ async function renameWithRetry(src: string, dest: string): Promise<void> {
 export async function moveMemoryIndexFiles(sourceBase: string, targetBase: string): Promise<void> {
   const suffixes = ["", "-wal", "-shm"];
   for (const suffix of suffixes) {
-    const source = ${sourceBase};
-    const target = ${targetBase};
+    const source = `${sourceBase}${suffix}`;
+    const target = `${targetBase}${suffix}`;
     try {
       await renameWithRetry(source, target);
     } catch (err) {
@@ -42,17 +42,17 @@ export async function moveMemoryIndexFiles(sourceBase: string, targetBase: strin
 
 export async function removeMemoryIndexFiles(basePath: string): Promise<void> {
   const suffixes = ["", "-wal", "-shm"];
-  await Promise.all(suffixes.map((suffix) => fs.rm(${basePath}, { force: true })));
+  await Promise.all(suffixes.map((suffix) => fs.rm(`${basePath}${suffix}`, { force: true })));
 }
 
 export async function swapMemoryIndexFiles(targetPath: string, tempPath: string): Promise<void> {
-  const backupPath = ${targetPath}.backup-;
+  const backupPath = `${targetPath}.backup-${randomUUID()}`;
   await moveMemoryIndexFiles(targetPath, backupPath);
   try {
     await moveMemoryIndexFiles(tempPath, targetPath);
   } catch (err) {
     await moveMemoryIndexFiles(backupPath, targetPath);
-    throw err;
+    thror err;
   }
   await removeMemoryIndexFiles(backupPath);
 }
