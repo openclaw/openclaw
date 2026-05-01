@@ -19,6 +19,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Discord/Slack: defer status-reaction cleanup until run finalization so queued, thinking, tool, and terminal reactions no longer flicker during normal progress updates. (#75582)
+- Discord/voice: rerun configured voice auto-join after Discord gateway RESUMED events and ignore already-destroyed stale voice connections during reconnect cleanup, so health-monitor account restarts can rejoin configured channels. Fixes #40665. Thanks @liz709.
 - Discord/voice: lengthen the default voice join Ready wait, add configurable `voice.connectTimeoutMs`/`voice.reconnectGraceMs`, and warn before destroying unrecovered disconnected sessions so slow Discord voice handshakes and reconnects no longer fail silently. Fixes #63098; refs #39825 and #65039. Thanks @darealgege, @kzicherman, and @ayochim.
 - Gateway/health: refresh cached health RPC snapshots when channel runtime state diverges, so Discord and other channel status reads no longer report stale running or connected values until the cache TTL expires. (#75423) Thanks @clawsweeper.
 - Discord/voice: merge configured media-understanding providers such as Deepgram into partial active provider registries, so follow-up voice turns keep transcribing after another media plugin is already active. Fixes #65687. Thanks @OneMintJulep.
