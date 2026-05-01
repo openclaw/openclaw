@@ -252,10 +252,14 @@ type DrainableTui = {
   };
 };
 
+const TUI_SHUTDOWN_DRAIN_MAX_MS = 500;
+const TUI_SHUTDOWN_DRAIN_IDLE_MS = 100;
+const TUI_SHUTDOWN_HARD_EXIT_MS = 2000;
+
 export async function drainAndStopTuiSafely(tui: DrainableTui): Promise<void> {
   if (typeof tui.terminal?.drainInput === "function") {
     try {
-      await tui.terminal.drainInput();
+      await tui.terminal.drainInput(TUI_SHUTDOWN_DRAIN_MAX_MS, TUI_SHUTDOWN_DRAIN_IDLE_MS);
     } catch {
       // Best-effort only. A failed drain should not skip terminal shutdown.
     }
@@ -927,17 +931,30 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let finishTui: (() => void) | null = null;
   const requestExit = (result?: Partial<TuiResult>) => {
     if (exitRequested) {
-      return;
+      console.error("forcing exit");
+      process.exit(130);
     }
     exitRequested = true;
     exitResult = {
       exitReason: result?.exitReason ?? "exit",
       ...(result?.crestodianMessage ? { crestodianMessage: result.crestodianMessage } : {}),
     };
+    const hardExitTimer = setTimeout(() => {
+      console.error("forcing exit");
+      process.exit(130);
+    }, TUI_SHUTDOWN_HARD_EXIT_MS);
+    hardExitTimer.unref?.();
     client.stop();
-    void drainAndStopTuiSafely(tui).then(() => {
-      finishTui?.();
-    });
+    void drainAndStopTuiSafely(tui)
+      .catch((error: unknown) => {
+        console.error(
+          `TUI shutdown failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .then(() => {
+        clearTimeout(hardExitTimer);
+        finishTui?.();
+      });
   };
   const exitAwareClient = client as TuiBackend & {
     setRequestExitHandler?: (handler: () => void) => void;
@@ -997,6 +1014,14 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     void abortActive();
   };
   const handleCtrlC = () => {
+    if (exitRequested) {
+      console.error("forcing exit");
+      process.exit(130);
+    }
+    if (wasDisconnected) {
+      requestExit();
+      return;
+    }
     const now = Date.now();
     const decision = resolveCtrlCAction({
       hasInput: editor.getText().trim().length > 0,
