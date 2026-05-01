@@ -154,6 +154,11 @@ export type HookRunnerLogger = {
 
 export type HookFailurePolicy = "fail-open" | "fail-closed";
 
+type BeforeAgentFinalizeRetry = NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>;
+type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgentFinalizeResult & {
+  retryCandidates?: BeforeAgentFinalizeRetry[];
+};
+
 export type HookRunnerOptions = {
   logger?: HookRunnerLogger;
   /** If true, errors in hooks will be caught and logged instead of thrown */
@@ -321,7 +326,7 @@ export function createHookRunner(
   ): PluginHookBeforeAgentFinalizeResult => {
     const normalizeRetry = (
       retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
-    ): PluginHookBeforeAgentFinalizeResult["retry"] | undefined => {
+    ): BeforeAgentFinalizeRetry | undefined => {
       const instruction = typeof retry?.instruction === "string" ? retry.instruction.trim() : "";
       if (!instruction) {
         return undefined;
@@ -331,6 +336,36 @@ export function createHookRunner(
         instruction,
       };
     };
+    const readRetryCandidates = (
+      result: PluginHookBeforeAgentFinalizeResult | undefined,
+    ): BeforeAgentFinalizeRetry[] => {
+      if (!result || result.action !== "revise") {
+        return [];
+      }
+      const candidateList = (result as BeforeAgentFinalizeResultWithRetryCandidates)
+        .retryCandidates;
+      if (Array.isArray(candidateList) && candidateList.length > 0) {
+        return candidateList
+          .map((retry) => normalizeRetry(retry))
+          .filter((retry): retry is BeforeAgentFinalizeRetry => retry !== undefined);
+      }
+      const retry = normalizeRetry(result.retry);
+      return retry ? [retry] : [];
+    };
+    const attachRetryCandidates = (
+      result: PluginHookBeforeAgentFinalizeResult,
+      candidates: BeforeAgentFinalizeRetry[],
+    ): PluginHookBeforeAgentFinalizeResult => {
+      if (result.action !== "revise" || candidates.length <= 1) {
+        return result;
+      }
+      Object.defineProperty(result, "retryCandidates", {
+        configurable: true,
+        enumerable: false,
+        value: candidates,
+      });
+      return result;
+    };
     if (acc?.action === "finalize") {
       return acc;
     }
@@ -338,15 +373,19 @@ export function createHookRunner(
       return { action: "finalize", reason: next.reason };
     }
     if (acc?.action === "revise" && next.action === "revise") {
-      const retry = normalizeRetry(acc.retry) ?? normalizeRetry(next.retry);
-      return {
-        action: "revise",
-        reason: concatOptionalTextSegments({
-          left: acc.reason,
-          right: next.reason,
-        }),
-        ...(retry ? { retry } : {}),
-      };
+      const retryCandidates = [...readRetryCandidates(acc), ...readRetryCandidates(next)];
+      const retry = retryCandidates[0];
+      return attachRetryCandidates(
+        {
+          action: "revise",
+          reason: concatOptionalTextSegments({
+            left: acc.reason,
+            right: next.reason,
+          }),
+          ...(retry ? { retry } : {}),
+        },
+        retryCandidates,
+      );
     }
     if (acc?.action === "revise") {
       return acc;

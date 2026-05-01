@@ -146,38 +146,65 @@ function normalizeBeforeAgentFinalizeResult(
     return reason ? { action: "finalize", reason } : { action: "finalize" };
   }
   if (result?.action === "revise") {
-    const retryInstruction = normalizeTrimmedString(result.retry?.instruction);
-    if (retryInstruction) {
-      const maxAttempts =
-        typeof result.retry?.maxAttempts === "number" && Number.isFinite(result.retry.maxAttempts)
-          ? Math.max(1, Math.floor(result.retry.maxAttempts))
-          : 1;
-      const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
-      const retryKey =
-        normalizeTrimmedString(result.retry?.idempotencyKey) ||
-        buildFinalizeRetryInstructionKey(retryInstruction);
-      const budget = getFinalizeRetryBudget();
-      const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
-      const nextCount = (runBudget.get(retryKey) ?? 0) + 1;
-      runBudget.delete(retryKey);
-      runBudget.set(retryKey, nextCount);
-      budget.delete(retryRunId);
-      budget.set(retryRunId, runBudget);
-      pruneFinalizeRetryBudget(budget);
-      if (nextCount > maxAttempts) {
-        return { action: "continue" };
-      }
+    const retryCandidates = readBeforeAgentFinalizeRetryCandidates(result);
+    if (retryCandidates.length > 0) {
       const reason = normalizeTrimmedString(result.reason);
-      const revisedReason =
-        reason && reason.includes(retryInstruction)
-          ? reason
-          : [reason, retryInstruction].filter(Boolean).join("\n\n");
-      return { action: "revise", reason: revisedReason };
+      for (const retry of retryCandidates) {
+        const retryInstruction = normalizeTrimmedString(retry.instruction);
+        if (!retryInstruction) {
+          continue;
+        }
+        const maxAttempts =
+          typeof retry.maxAttempts === "number" && Number.isFinite(retry.maxAttempts)
+            ? Math.max(1, Math.floor(retry.maxAttempts))
+            : 1;
+        const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
+        const retryKey =
+          normalizeTrimmedString(retry.idempotencyKey) ||
+          buildFinalizeRetryInstructionKey(retryInstruction);
+        const budget = getFinalizeRetryBudget();
+        const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
+        const nextCount = (runBudget.get(retryKey) ?? 0) + 1;
+        runBudget.delete(retryKey);
+        runBudget.set(retryKey, nextCount);
+        budget.delete(retryRunId);
+        budget.set(retryRunId, runBudget);
+        pruneFinalizeRetryBudget(budget);
+        if (nextCount > maxAttempts) {
+          continue;
+        }
+        const revisedReason =
+          reason && reason.includes(retryInstruction)
+            ? reason
+            : [reason, retryInstruction].filter(Boolean).join("\n\n");
+        return { action: "revise", reason: revisedReason };
+      }
+      return { action: "continue" };
     }
     const reason = normalizeTrimmedString(result.reason);
     return reason ? { action: "revise", reason } : { action: "continue" };
   }
   return { action: "continue" };
+}
+
+function readBeforeAgentFinalizeRetryCandidates(
+  result: PluginHookBeforeAgentFinalizeResult,
+): NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>[] {
+  const candidateList = (
+    result as {
+      retryCandidates?: unknown;
+    }
+  ).retryCandidates;
+  if (Array.isArray(candidateList) && candidateList.length > 0) {
+    return candidateList.filter(isBeforeAgentFinalizeRetry);
+  }
+  return isBeforeAgentFinalizeRetry(result.retry) ? [result.retry] : [];
+}
+
+function isBeforeAgentFinalizeRetry(
+  value: unknown,
+): value is NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeTrimmedString(value: unknown): string | undefined {

@@ -214,6 +214,53 @@ describe("agent harness lifecycle hook helpers", () => {
     });
   });
 
+  it("honors a later finalize retry candidate after an earlier candidate is spent", async () => {
+    const firstRetry = {
+      instruction: "regenerate artifacts",
+      idempotencyKey: "artifacts",
+      maxAttempts: 1,
+    };
+    const secondRetry = {
+      instruction: "rerun focused tests",
+      idempotencyKey: "tests",
+      maxAttempts: 1,
+    };
+    const result = {
+      action: "revise",
+      reason: "retry generated artifacts\n\nretry focused tests",
+      retry: firstRetry,
+    };
+    Object.defineProperty(result, "retryCandidates", {
+      enumerable: false,
+      value: [firstRetry, secondRetry],
+    });
+    const hookRunner = {
+      hasHooks: () => true,
+      runBeforeAgentFinalize: vi.fn().mockResolvedValue(result),
+    };
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      action: "revise",
+      reason: "retry generated artifacts\n\nretry focused tests\n\nregenerate artifacts",
+    });
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      action: "revise",
+      reason: "retry generated artifacts\n\nretry focused tests\n\nrerun focused tests",
+    });
+  });
+
   it("falls back to retry instruction keys when retry idempotency keys are malformed", async () => {
     const hookRunner = {
       hasHooks: () => true,

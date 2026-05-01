@@ -132,6 +132,55 @@ describe("before_agent_finalize hook runner", () => {
     });
   });
 
+  it("preserves multiple valid retry candidates for budget evaluation", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "retry generated artifacts",
+            retry: {
+              instruction: "regenerate artifacts",
+              idempotencyKey: "artifacts",
+              maxAttempts: 1,
+            },
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "retry focused tests",
+            retry: {
+              instruction: "rerun focused tests",
+              idempotencyKey: "tests",
+              maxAttempts: 1,
+            },
+          }),
+        },
+      ]),
+    );
+
+    const result = await runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX);
+
+    expect(result).toEqual({
+      action: "revise",
+      reason: "retry generated artifacts\n\nretry focused tests",
+      retry: {
+        instruction: "regenerate artifacts",
+        idempotencyKey: "artifacts",
+        maxAttempts: 1,
+      },
+    });
+    expect(Object.getOwnPropertyDescriptor(result, "retryCandidates")?.enumerable).toBe(false);
+    expect(
+      (Object.getOwnPropertyDescriptor(result, "retryCandidates")?.value as unknown[])?.map(
+        (retry) => (retry as { idempotencyKey?: string }).idempotencyKey,
+      ),
+    ).toEqual(["artifacts", "tests"]);
+  });
+
   it("lets finalize override earlier revise decisions", async () => {
     const runner = createHookRunner(
       createMockPluginRegistry([
