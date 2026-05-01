@@ -492,6 +492,8 @@ Behavior notes:
   <Accordion title="Logout behavior">
     `openclaw channels logout --channel whatsapp [--account <id>]` clears WhatsApp auth state for that account.
 
+    When a Gateway is reachable, logout first stops the live WhatsApp listener for the selected account so the linked session does not keep receiving messages until the next restart. `openclaw channels remove --channel whatsapp` also stops the live listener before disabling or deleting account config.
+
     In legacy auth directories, `oauth.json` is preserved while Baileys auth files are removed.
 
   </Accordion>
