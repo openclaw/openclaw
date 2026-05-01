@@ -107,6 +107,128 @@ describe("plugin session extension SessionEntry projection", () => {
     }
   });
 
+  it("clears promoted SessionEntry slots when projectors fail", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "failing-promoted-plugin", name: "Failing" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+          sessionEntrySlotSchema: { type: "object" },
+          project: (ctx) => {
+            const state = ctx.state as Record<string, PluginJsonValue>;
+            if (state.fail === "throw") {
+              throw new Error("projection failed");
+            }
+            if (state.fail === "promise") {
+              return Promise.resolve({ state: "async" }) as never;
+            }
+            return { state: state.state ?? null };
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-projector-fail-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const tempConfig = { session: { store: storePath } };
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: tempConfig,
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-id",
+              updatedAt: Date.now(),
+            } as unknown as SessionEntry;
+          });
+
+          await expect(
+            patchPluginSessionExtension({
+              cfg: tempConfig as never,
+              sessionKey: "agent:main:main",
+              pluginId: "failing-promoted-plugin",
+              namespace: "workflow",
+              value: { state: "ready" },
+            }),
+          ).resolves.toMatchObject({ ok: true });
+          expect(
+            (loadSessionStore(storePath, { skipCache: true })["agent:main:main"] as never)
+              .approvalSnapshot,
+          ).toEqual({ state: "ready" });
+
+          await expect(
+            patchPluginSessionExtension({
+              cfg: tempConfig as never,
+              sessionKey: "agent:main:main",
+              pluginId: "failing-promoted-plugin",
+              namespace: "workflow",
+              value: { state: "bad", fail: "throw" },
+            }),
+          ).resolves.toMatchObject({ ok: true });
+          const afterThrow = loadSessionStore(storePath, { skipCache: true })[
+            "agent:main:main"
+          ] as unknown as Record<string, unknown>;
+          expect(afterThrow.approvalSnapshot).toBeUndefined();
+          expect(afterThrow.pluginExtensions).toMatchObject({
+            "failing-promoted-plugin": {
+              workflow: { state: "bad", fail: "throw" },
+            },
+          });
+
+          await expect(
+            patchPluginSessionExtension({
+              cfg: tempConfig as never,
+              sessionKey: "agent:main:main",
+              pluginId: "failing-promoted-plugin",
+              namespace: "workflow",
+              value: { state: "ready-again" },
+            }),
+          ).resolves.toMatchObject({ ok: true });
+          expect(
+            (loadSessionStore(storePath, { skipCache: true })["agent:main:main"] as never)
+              .approvalSnapshot,
+          ).toEqual({ state: "ready-again" });
+
+          await expect(
+            patchPluginSessionExtension({
+              cfg: tempConfig as never,
+              sessionKey: "agent:main:main",
+              pluginId: "failing-promoted-plugin",
+              namespace: "workflow",
+              value: { state: "async-bad", fail: "promise" },
+            }),
+          ).resolves.toMatchObject({ ok: true });
+          const afterPromise = loadSessionStore(storePath, { skipCache: true })[
+            "agent:main:main"
+          ] as unknown as Record<string, unknown>;
+          expect(afterPromise.approvalSnapshot).toBeUndefined();
+          expect(afterPromise.pluginExtensions).toMatchObject({
+            "failing-promoted-plugin": {
+              workflow: { state: "async-bad", fail: "promise" },
+            },
+          });
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects sessionEntrySlotKey values that collide with SessionEntry fields", () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
