@@ -12,10 +12,10 @@ import {
   parseMode,
   parseProvider,
   providerIdFromModelId,
+  providerTimeoutConfigJson,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
-  resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth,
   resolveSnapshot,
   run,
@@ -974,15 +974,18 @@ exit 1`);
   private verifyTurn(): void {
     this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
     const providerId = providerIdFromModelId(this.auth.modelId) || this.options.provider;
-    this.guestExec([
-      guestNode,
-      guestOpenClawEntry,
-      "config",
-      "set",
-      `models.providers.${providerId}.timeoutSeconds`,
-      String(resolveParallelsModelTimeoutSeconds("macos")),
-      "--strict-json",
-    ]);
+    const providerTimeoutConfig = providerTimeoutConfigJson(this.auth.modelId, "macos");
+    if (providerTimeoutConfig) {
+      this.guestExec([
+        guestNode,
+        guestOpenClawEntry,
+        "config",
+        "set",
+        `models.providers.${providerId}`,
+        providerTimeoutConfig,
+        "--strict-json",
+      ]);
+    }
     this.guestExec([
       guestNode,
       guestOpenClawEntry,

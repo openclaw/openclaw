@@ -5,7 +5,7 @@ import {
   windowsModelProviderTimeoutScript,
   windowsOpenClawResolver,
 } from "./powershell.ts";
-import { providerIdFromModelId, resolveParallelsModelTimeoutSeconds } from "./provider-auth.ts";
+import { providerIdFromModelId, providerTimeoutConfigJson } from "./provider-auth.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
 export interface NpmUpdateScriptInput {
@@ -20,12 +20,13 @@ function posixModelProviderTimeoutCommand(
   platform: Platform,
 ): string {
   const providerId = providerIdFromModelId(modelId);
-  if (!providerId) {
+  const configJson = providerTimeoutConfigJson(modelId, platform);
+  if (!providerId || !configJson) {
     return "";
   }
-  return `${command} config set ${shellQuote(
-    `models.providers.${providerId}.timeoutSeconds`,
-  )} ${resolveParallelsModelTimeoutSeconds(platform)} --strict-json`;
+  return `${command} config set ${shellQuote(`models.providers.${providerId}`)} ${shellQuote(
+    configJson,
+  )} --strict-json`;
 }
 
 function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {

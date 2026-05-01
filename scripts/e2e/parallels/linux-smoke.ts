@@ -13,11 +13,11 @@ import {
   parseMode,
   parseProvider,
   providerIdFromModelId,
+  providerTimeoutConfigJson,
   repoRoot,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
-  resolveParallelsModelTimeoutSeconds,
   resolveProviderAuth,
   resolveSnapshot,
   run,
@@ -690,14 +690,17 @@ rm -rf /root/.openclaw/test-bad-plugin`);
   private verifyLocalTurn(): void {
     this.guestExec(["openclaw", "models", "set", this.auth.modelId]);
     const providerId = providerIdFromModelId(this.auth.modelId) || this.options.provider;
-    this.guestExec([
-      "openclaw",
-      "config",
-      "set",
-      `models.providers.${providerId}.timeoutSeconds`,
-      String(resolveParallelsModelTimeoutSeconds("linux")),
-      "--strict-json",
-    ]);
+    const providerTimeoutConfig = providerTimeoutConfigJson(this.auth.modelId, "linux");
+    if (providerTimeoutConfig) {
+      this.guestExec([
+        "openclaw",
+        "config",
+        "set",
+        `models.providers.${providerId}`,
+        providerTimeoutConfig,
+        "--strict-json",
+      ]);
+    }
     this.guestExec([
       "openclaw",
       "config",

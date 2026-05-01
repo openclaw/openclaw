@@ -86,6 +86,30 @@ export function resolveParallelsModelTimeoutSeconds(platform?: Platform): number
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 600;
 }
 
+export function providerTimeoutConfigJson(modelId: string, platform: Platform): string {
+  const providerId = providerIdFromModelId(modelId);
+  if (providerId !== "openai") {
+    return "";
+  }
+  const modelName = modelId.slice("openai/".length).trim();
+  if (!modelName) {
+    return "";
+  }
+  return JSON.stringify({
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    models: [
+      {
+        contextWindow: 1_047_576,
+        id: modelName,
+        maxTokens: 32_768,
+        name: modelName,
+      },
+    ],
+    timeoutSeconds: resolveParallelsModelTimeoutSeconds(platform),
+  });
+}
+
 export function parseProvider(value: string): Provider {
   if (value === "openai" || value === "anthropic" || value === "minimax") {
     return value;
