@@ -244,6 +244,43 @@ describe("server-channels auto restart", () => {
     expect(startAccount).toHaveBeenCalledTimes(1);
   });
 
+  it("does not crash when channelLogs entry is missing for a registered channel (regression for #75168)", async () => {
+    const unhandledRejection = vi.fn();
+    process.on("unhandledRejection", unhandledRejection);
+    try {
+      // Channel exits with an error, which forces the auto-restart .catch handler
+      // to run `log.error?.(...)` — and the channelLogs map is intentionally empty,
+      // so `log` is undefined. Without `log?.error?.(...)`, this throws TypeError
+      // and crashes the gateway with an unhandled rejection.
+      const startAccount = vi.fn(async () => {
+        throw new Error("simulated channel boot failure");
+      });
+      installTestRegistry(createTestPlugin({ startAccount }));
+
+      const log = createSubsystemLogger("gateway/server-channels-test-missing-logs");
+      const runtime = runtimeForLogger(log);
+      const manager = createChannelManager({
+        getRuntimeConfig: () => ({}),
+        // Intentionally empty — exercises the missing-logger race path.
+        channelLogs: {} as Record<ChannelId, SubsystemLogger>,
+        channelRuntimeEnvs: { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>,
+      });
+
+      await manager.startChannels();
+      await vi.advanceTimersByTimeAsync(0);
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(startAccount).toHaveBeenCalled();
+      expect(unhandledRejection).not.toHaveBeenCalled();
+      const snapshot = manager.getRuntimeSnapshot();
+      const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+      expect(account?.lastError).toBe("simulated channel boot failure");
+    } finally {
+      process.off("unhandledRejection", unhandledRejection);
+    }
+  });
+
   it("consumes rejected stop tasks during manual abort", async () => {
     const unhandledRejection = vi.fn();
     process.on("unhandledRejection", unhandledRejection);
