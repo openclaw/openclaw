@@ -13,12 +13,20 @@ import {
 import { loadCommitmentStore } from "./store.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
+const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../agents/pi-embedded.js", () => ({
+  runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+}));
+
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
   const nowMs = Date.parse("2026-04-29T16:00:00.000Z");
 
   afterEach(async () => {
     resetCommitmentExtractionRuntimeForTests();
+    runEmbeddedPiAgentMock.mockReset();
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
     tmpDirs.length = 0;
@@ -143,6 +151,113 @@ describe("commitment extraction runtime", () => {
     ]);
     expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
     expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
+  });
+
+  it("uses the configured agent model for the hidden extractor run", async () => {
+    const cfg = await createConfig();
+    cfg.agents = {
+      defaults: {
+        model: {
+          primary: "openai-codex/gpt-5.5",
+        },
+      },
+    };
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: '{"candidates":[]}' }],
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        disableTools: true,
+      }),
+    );
+  });
+
+  it("backs off hidden extraction after terminal model or auth failures", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(async () => {
+      throw new Error(
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth.',
+      );
+    });
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "I have an interview tomorrow.",
+        assistantText: "Good luck.",
+      }),
+    ).toBe(true);
+
+    await expect(drainCommitmentExtractionQueue()).rejects.toThrow("No API key found");
+    expect(extractBatch).toHaveBeenCalledTimes(1);
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + 1,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "The interview is tomorrow.",
+        assistantText: "I hope it goes well.",
+      }),
+    ).toBe(false);
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + 1,
+        agentId: "other",
+        sessionKey: "agent:other:discord:channel-2",
+        channel: "discord",
+        userText: "The demo is tomorrow.",
+        assistantText: "I hope it goes well.",
+      }),
+    ).toBe(true);
+
+    vi.setSystemTime(nowMs + 16 * 60_000);
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + 16 * 60_000,
+        agentId: "main",
+        sessionKey: "agent:main:discord:channel-1",
+        channel: "discord",
+        userText: "The interview is tomorrow.",
+        assistantText: "I hope it goes well.",
+      }),
+    ).toBe(true);
   });
 
   it("bounds hidden extraction queue growth before spending extractor tokens", async () => {
