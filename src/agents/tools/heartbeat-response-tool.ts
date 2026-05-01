@@ -6,19 +6,18 @@ import {
   normalizeHeartbeatToolResponse,
 } from "../../auto-reply/heartbeat-tool-response.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
+import { optionalStringEnum, stringEnum } from "../schema/string-enum.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, ToolInputError } from "./common.js";
 
 const HeartbeatResponseToolSchema = Type.Object(
   {
-    outcome: Type.Union(HEARTBEAT_TOOL_OUTCOMES.map((value) => Type.Literal(value))),
+    outcome: stringEnum(HEARTBEAT_TOOL_OUTCOMES),
     notify: Type.Boolean(),
     summary: Type.String(),
     notificationText: Type.Optional(Type.String()),
     reason: Type.Optional(Type.String()),
-    priority: Type.Optional(
-      Type.Union(HEARTBEAT_TOOL_PRIORITIES.map((value) => Type.Literal(value))),
-    ),
+    priority: optionalStringEnum(HEARTBEAT_TOOL_PRIORITIES),
     nextCheck: Type.Optional(Type.String()),
   },
   { additionalProperties: false },

@@ -2,7 +2,32 @@ import { describe, expect, it } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
 import { createHeartbeatResponseTool } from "./heartbeat-response-tool.js";
 
+function readSchemaProperty(schema: unknown, key: string): Record<string, unknown> {
+  const root = schema as { properties?: Record<string, unknown> };
+  const property = root.properties?.[key];
+  expect(property).toBeTruthy();
+  return property as Record<string, unknown>;
+}
+
 describe("createHeartbeatResponseTool", () => {
+  it("uses flat enum schemas for provider portability", () => {
+    const tool = createHeartbeatResponseTool();
+
+    const outcome = readSchemaProperty(tool.parameters, "outcome");
+    const priority = readSchemaProperty(tool.parameters, "priority");
+
+    expect(outcome).toMatchObject({
+      type: "string",
+      enum: ["no_change", "progress", "done", "blocked", "needs_attention"],
+    });
+    expect(priority).toMatchObject({
+      type: "string",
+      enum: ["low", "normal", "high"],
+    });
+    expect(outcome).not.toHaveProperty("anyOf");
+    expect(priority).not.toHaveProperty("anyOf");
+  });
+
   it("records a quiet heartbeat outcome", async () => {
     const tool = createHeartbeatResponseTool();
 
