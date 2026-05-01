@@ -87,7 +87,7 @@ export function buildOpenAICodexForwardCompatExpectation(
   };
 }
 
-export const GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL = {
+const GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL = {
   id: "gemini-3-pro-preview",
   name: "Gemini 3 Pro Preview (Cloud Code Assist)",
   provider: "google-gemini-cli",
@@ -100,7 +100,7 @@ export const GOOGLE_GEMINI_CLI_PRO_TEMPLATE_MODEL = {
   maxTokens: 64000,
 };
 
-export const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
+const GOOGLE_GEMINI_CLI_FLASH_TEMPLATE_MODEL = {
   id: "gemini-3-flash-preview",
   name: "Gemini 3 Flash Preview (Cloud Code Assist)",
   provider: "google-gemini-cli",
