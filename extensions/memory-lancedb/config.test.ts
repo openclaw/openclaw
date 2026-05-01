@@ -253,7 +253,7 @@ describe("memory-lancedb config", () => {
 
   it("falls back to undefined for non-finite or negative timeoutMs", () => {
     const nan = memoryConfigSchema.parse({
-      embedding: { apiKey: "sk-test", timeoutMs: NaN },
+      embedding: { apiKey: "sk-test", timeoutMs: Number.NaN },
     });
     expect(nan.embedding.timeoutMs).toBeUndefined();
 
@@ -287,7 +287,7 @@ describe("memory-lancedb config", () => {
     expect(frac.embedding.maxRetries).toBeUndefined();
 
     const nan = memoryConfigSchema.parse({
-      embedding: { apiKey: "sk-test", maxRetries: NaN },
+      embedding: { apiKey: "sk-test", maxRetries: Number.NaN },
     });
     expect(nan.embedding.maxRetries).toBeUndefined();
 
