@@ -3,7 +3,7 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
-  captureCompactionCheckpointSnapshot,
+  captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
   resolveSessionCompactionCheckpointReason,
@@ -115,7 +115,7 @@ export async function compactEmbeddedPiSession(
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         checkpointSnapshot = engineOwnsCompaction
-          ? captureCompactionCheckpointSnapshot({
+          ? await captureCompactionCheckpointSnapshotAsync({
               sessionManager: SessionManager.open(params.sessionFile),
               sessionFile: params.sessionFile,
             })

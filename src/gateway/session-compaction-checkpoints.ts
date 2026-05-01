@@ -60,6 +60,11 @@ export function resolveSessionCompactionCheckpointReason(params: {
   return "auto-threshold";
 }
 
+/**
+ * Synchronous version — kept for callers that cannot be made async.
+ * Prefer captureCompactionCheckpointSnapshotAsync for large transcripts
+ * to avoid blocking the event loop during file copy.
+ */
 export function captureCompactionCheckpointSnapshot(params: {
   sessionManager: Pick<SessionManager, "getLeafId">;
   sessionFile: string;
@@ -102,6 +107,73 @@ export function captureCompactionCheckpointSnapshot(params: {
   } catch {
     try {
       fsSync.unlinkSync(snapshotFile);
+    } catch {
+      // Best-effort cleanup if the copied transcript cannot be reopened.
+    }
+    return null;
+  }
+  const getSessionId =
+    snapshotSession && typeof snapshotSession.getSessionId === "function"
+      ? snapshotSession.getSessionId.bind(snapshotSession)
+      : null;
+  if (!getSessionId) {
+    return null;
+  }
+  return {
+    sessionId: getSessionId(),
+    sessionFile: snapshotFile,
+    leafId,
+  };
+}
+
+/**
+ * Async version of captureCompactionCheckpointSnapshot that uses async file
+ * operations to avoid blocking the event loop. Large transcript files (20MB+)
+ * were observed blocking the event loop for minutes when copied synchronously
+ * (see issue #75414).
+ */
+export async function captureCompactionCheckpointSnapshotAsync(params: {
+  sessionManager: Pick<SessionManager, "getLeafId">;
+  sessionFile: string;
+  maxBytes?: number;
+}): Promise<CapturedCompactionCheckpointSnapshot | null> {
+  const getLeafId =
+    params.sessionManager && typeof params.sessionManager.getLeafId === "function"
+      ? params.sessionManager.getLeafId.bind(params.sessionManager)
+      : null;
+  const sessionFile = params.sessionFile.trim();
+  if (!getLeafId || !sessionFile) {
+    return null;
+  }
+  const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES;
+  try {
+    const stat = await fs.stat(sessionFile);
+    if (!stat.isFile() || stat.size > maxBytes) {
+      return null;
+    }
+  } catch {
+    return null;
+  }
+  const leafId = getLeafId();
+  if (!leafId) {
+    return null;
+  }
+  const parsedSessionFile = path.parse(sessionFile);
+  const snapshotFile = path.join(
+    parsedSessionFile.dir,
+    `${parsedSessionFile.name}.checkpoint.${randomUUID()}${parsedSessionFile.ext || ".jsonl"}`,
+  );
+  try {
+    await fs.copyFile(sessionFile, snapshotFile);
+  } catch {
+    return null;
+  }
+  let snapshotSession: SessionManager;
+  try {
+    snapshotSession = SessionManager.open(snapshotFile, path.dirname(snapshotFile));
+  } catch {
+    try {
+      await fs.unlink(snapshotFile);
     } catch {
       // Best-effort cleanup if the copied transcript cannot be reopened.
     }
