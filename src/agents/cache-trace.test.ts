@@ -171,6 +171,45 @@ describe("createCacheTrace", () => {
     expect(trace).toBeNull();
   });
 
+  it("does not let env overrides re-enable config-disabled content capture", () => {
+    const lines: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+            includeMessages: false,
+            includePrompt: false,
+            includeSystem: false,
+          },
+        },
+      },
+      env: {
+        OPENCLAW_CACHE_TRACE_MESSAGES: "1",
+        OPENCLAW_CACHE_TRACE_PROMPT: "1",
+        OPENCLAW_CACHE_TRACE_SYSTEM: "1",
+      },
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+        flush: async () => undefined,
+      },
+    });
+
+    trace?.recordStage("stream:context", {
+      messages: [{ role: "user", content: "raw message" }] as unknown as [],
+      prompt: "raw prompt",
+      system: "raw system",
+    });
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event).not.toHaveProperty("messages");
+    expect(event).not.toHaveProperty("prompt");
+    expect(event).not.toHaveProperty("system");
+    expect(event.messageCount).toBe(1);
+    expect(event.messageFingerprints).toHaveLength(1);
+  });
+
   it("sanitizes cache-trace payloads before writing", () => {
     const { lines, trace } = createMemoryTraceForTest();
 
