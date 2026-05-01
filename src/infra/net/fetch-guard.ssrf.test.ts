@@ -242,6 +242,34 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(lookupFn).not.toHaveBeenCalled();
   });
 
+  it("blocks metadata dispatcher overrides even when private network access is enabled", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+    const lookupFn = createPublicLookup();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn,
+        policy: { allowPrivateNetwork: true },
+        dispatcherPolicy: {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "public.example",
+            addresses: ["169.254.169.254"],
+          },
+        },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("blocks special-use IPv4 literal URLs before fetch", async () => {
     const fetchImpl = vi.fn();
     await expect(
@@ -321,9 +349,14 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it("allows explicit private proxies only when the SSRF policy allows private network access", async () => {
+    // `.local` (mDNS / Bonjour) is the allowPrivateNetwork-permitted suffix
+    // for LAN proxies. `.internal` stays blocked even with allowPrivateNetwork
+    // because that suffix is reused by cloud instance metadata
+    // (`metadata.google.internal`, `*.compute.internal`); see the
+    // accompanying explicit-`.internal` rejection regression below.
     const lookupFn = vi.fn(async (hostname: string) => [
       {
-        address: hostname === "proxy.internal" ? "127.0.0.1" : "93.184.216.34",
+        address: hostname === "proxy.local" ? "127.0.0.1" : "93.184.216.34",
         family: 4,
       },
     ]) as unknown as LookupFn;
@@ -336,12 +369,42 @@ describe("fetchWithSsrFGuard hardening", () => {
       policy: { allowPrivateNetwork: true },
       dispatcherPolicy: {
         mode: "explicit-proxy",
-        proxyUrl: "http://proxy.internal:7890",
+        proxyUrl: "http://proxy.local:7890",
       },
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await result.release();
+  });
+
+  it("rejects explicit `.internal` proxies even when allowPrivateNetwork is enabled", async () => {
+    // Regression for the SSRF `.internal` hardening (#75523): even when
+    // operators opt into private-network access for legitimate LAN traffic,
+    // a proxy whose URL ends in `.internal` must still be rejected because
+    // that suffix is reused by cloud instance metadata services and
+    // allowPrivateNetwork only widens the IP-private classifier, not the
+    // hostname-suffix policy.
+    const lookupFn = vi.fn(async (hostname: string) => [
+      {
+        address: hostname === "proxy.internal" ? "127.0.0.1" : "93.184.216.34",
+        family: 4,
+      },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn,
+        policy: { allowPrivateNetwork: true },
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://proxy.internal:7890",
+        },
+      }),
+    ).rejects.toThrow(/Blocked/);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("uses runtime undici fetch when attaching a dispatcher", async () => {

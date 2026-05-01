@@ -269,4 +269,25 @@ describe("ssrf pinning", () => {
     ).rejects.toThrow(SsrFBlockedError);
     expect(lookup).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["foo.internal", "bar.compute.internal"])(
+    "rejects `.internal` hostname %s before pinned DNS even with allowPrivateNetwork",
+    async (hostname) => {
+      // Regression for the SSRF `.internal` hardening (#75523): the prior
+      // pre-skip helper only covered exact metadata host/IP forms, so
+      // `foo.internal` plus a public DNS answer could bypass the hostname
+      // classifier under private-network opt-in. The runtime hostname-policy
+      // check now runs before skipPrivateNetworkChecks short-circuits, in
+      // lockstep with the classifier-level coverage in ssrf.test.ts.
+      const lookup = createPublicLookupMock();
+
+      await expect(
+        resolvePinnedHostnameWithPolicy(hostname, {
+          lookupFn: lookup,
+          policy: { allowPrivateNetwork: true },
+        }),
+      ).rejects.toThrow(SsrFBlockedError);
+      expect(lookup).not.toHaveBeenCalled();
+    },
+  );
 });

@@ -362,15 +362,28 @@ function resolveHostnamePolicyChecks(
     throw new SsrFBlockedError(`Blocked hostname (not in allowlist): ${hostname}`);
   }
 
-  // Metadata service destinations remain blocked before any private-network
-  // skip logic, including explicit allowedHostnames/private-network opt-ins.
+  // Hostname-suffix policy and metadata destinations always apply, including
+  // when private-network access is explicitly enabled. `.internal`,
+  // metadata.google.internal, IMDSv2 IPs, and other always-blocked targets
+  // must never bypass classification just because allowPrivateNetwork or
+  // allowedHostnames widened the IP-level checks. The hostname classifier
+  // itself accounts for allowPrivateNetwork (loopback / `.local` /
+  // `.localhost` are permitted there) — only the IP-level private-address
+  // assertion is gated by skipPrivateNetworkChecks below.
+  if (isBlockedHostnameNormalized(normalized, policy)) {
+    throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
+  }
   if (isAlwaysBlockedCloudMetadataHostOrIpNormalized(normalized)) {
     throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
   }
 
   if (!skipPrivateNetworkChecks) {
-    // Fail fast for literal hosts/IPs before any DNS lookup side-effects.
-    assertAllowedHostOrIpOrThrow(normalized, policy);
+    // Fail fast for literal IPs before any DNS lookup side-effects. The
+    // hostname classifier already ran above, so this only adds the
+    // IP-private-address check that allowPrivateNetwork is allowed to skip.
+    if (isPrivateIpAddress(normalized, policy)) {
+      throw new SsrFBlockedError(BLOCKED_HOST_OR_IP_MESSAGE);
+    }
   }
 
   return { normalized, skipPrivateNetworkChecks };
@@ -587,6 +600,7 @@ function resolvePinnedDispatcherLookup(
     address,
     family: address.includes(":") ? 6 : 4,
   }));
+  assertNoAlwaysBlockedResolvedAddressesOrThrow(records);
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
   }
