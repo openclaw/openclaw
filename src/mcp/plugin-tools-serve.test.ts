@@ -57,6 +57,7 @@ describe("plugin tools MCP server", () => {
     resolvePluginToolsMock.mockReturnValue([
       {
         name: "memory_recall",
+        label: "Recall memory",
         description: "Recall stored memory",
         parameters: { type: "object", properties: {} },
         execute: vi.fn(),
