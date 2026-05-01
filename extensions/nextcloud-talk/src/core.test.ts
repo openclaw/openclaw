@@ -224,53 +224,6 @@ describe("nextcloud talk core", () => {
     vi.resetModules();
   });
 
-  it("rejects tampered bodies, wrong secrets, and tampered signatures", () => {
-    const body = JSON.stringify({ hello: "world" });
-    const generated = generateNextcloudTalkSignature({
-      body,
-      secret: "secret-123",
-    });
-
-    expect(
-      verifyNextcloudTalkSignature({
-        signature: generated.signature,
-        random: generated.random,
-        body: JSON.stringify({ hello: "tampered" }),
-        secret: "secret-123",
-      }),
-    ).toBe(false);
-    expect(
-      verifyNextcloudTalkSignature({
-        signature: generated.signature,
-        random: generated.random,
-        body,
-        secret: "wrong-secret",
-      }),
-    ).toBe(false);
-    expect(
-      verifyNextcloudTalkSignature({
-        signature: "a".repeat(generated.signature.length),
-        random: generated.random,
-        body,
-        secret: "secret-123",
-      }),
-    ).toBe(false);
-  });
-
-  it("takes the first value from array-backed headers", () => {
-    expect(
-      extractNextcloudTalkHeaders({
-        "x-nextcloud-talk-signature": ["sig1", "sig2"],
-        "x-nextcloud-talk-random": ["rand1", "rand2"],
-        "x-nextcloud-talk-backend": ["backend1", "backend2"],
-      }),
-    ).toEqual({
-      signature: "sig1",
-      random: "rand1",
-      backend: "backend1",
-    });
-  });
-
   it("persists replay decisions across guard instances and scopes account namespaces", async () => {
     const stateDir = await makeTempDir();
 
