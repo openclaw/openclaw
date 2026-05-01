@@ -890,8 +890,20 @@ Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
 Invoke-OpenClaw config set tools.profile minimal
 if ($LASTEXITCODE -ne 0) { throw "tools profile config set failed" }
-Invoke-OpenClaw config set models.providers.openai ${psSingleQuote('{"baseUrl":"https://api.openai.com/v1","models":[],"timeoutSeconds":300}')} --strict-json
-if ($LASTEXITCODE -ne 0) { throw "openai provider timeout config set failed" }
+$configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if ($null -eq $config.models) {
+  $config | Add-Member -MemberType NoteProperty -Name models -Value ([pscustomobject]@{})
+}
+if ($null -eq $config.models.providers) {
+  $config.models | Add-Member -MemberType NoteProperty -Name providers -Value ([pscustomobject]@{})
+}
+$config.models.providers | Add-Member -Force -MemberType NoteProperty -Name openai -Value ([pscustomobject]@{
+  baseUrl = 'https://api.openai.com/v1'
+  models = @()
+  timeoutSeconds = 300
+})
+$config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $args = ${psArray([
