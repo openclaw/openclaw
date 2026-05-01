@@ -32,7 +32,11 @@ type PackageUpdateStepRunner = (params: {
   env?: NodeJS.ProcessEnv;
 }) => Promise<PackageUpdateStepResult>;
 
-type StagedNpmInstall = {
+export type DeferredStagedNpmSwapResult = PackageUpdateStepResult & {
+  detachedResultPath?: string;
+};
+
+export type StagedNpmInstall = {
   prefix: string;
   layout: NpmGlobalPrefixLayout;
   packageRoot: string;
@@ -296,15 +300,23 @@ export async function runGlobalPackageUpdateSteps(params: {
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
+  deferStagedNpmSwap?: (params: {
+    stage: StagedNpmInstall;
+    installTarget: ResolvedGlobalInstallTarget;
+    packageName: string;
+    afterVersion: string | null;
+  }) => Promise<DeferredStagedNpmSwapResult>;
 }): Promise<{
   steps: PackageUpdateStepResult[];
   verifiedPackageRoot: string | null;
   afterVersion: string | null;
   failedStep: PackageUpdateStepResult | null;
+  detachedResultPath?: string;
 }> {
   const installCwd = params.installCwd === undefined ? {} : { cwd: params.installCwd };
   const installEnv = params.env === undefined ? {} : { env: params.env };
   let stagedInstall: StagedNpmInstall | null = null;
+  let detachedResultPath: string | undefined;
 
   try {
     const preparedInstall = await prepareStagedNpmInstall(params.installTarget, params.packageName);
@@ -414,21 +426,35 @@ export async function runGlobalPackageUpdateSteps(params: {
       }
 
       if (stagedInstall && verificationErrors.length === 0) {
-        const swapStep = await swapStagedNpmInstall({
-          stage: stagedInstall,
-          installTarget: params.installTarget,
-          packageName: params.packageName,
-        });
+        const deferredSwap = params.deferStagedNpmSwap
+          ? await params.deferStagedNpmSwap({
+              stage: stagedInstall,
+              installTarget: params.installTarget,
+              packageName: params.packageName,
+              afterVersion: candidateVersion,
+            })
+          : null;
+        const swapStep =
+          deferredSwap ??
+          (await swapStagedNpmInstall({
+            stage: stagedInstall,
+            installTarget: params.installTarget,
+            packageName: params.packageName,
+          }));
         steps.push(swapStep);
         if (swapStep.exitCode === 0) {
           verifiedPackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
           afterVersion = candidateVersion;
+          if (deferredSwap) {
+            detachedResultPath = deferredSwap.detachedResultPath;
+            stagedInstall = null;
+          }
         }
       }
 
       const failedVerifyOrSwap = steps.find(
         (step) =>
-          (step.name === "global install verify" || step.name === "global install swap") &&
+          (step.name === "global install verify" || step.name.startsWith("global install swap")) &&
           step.exitCode !== 0,
       );
       const postVerifyStep = failedVerifyOrSwap
@@ -454,6 +480,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       verifiedPackageRoot,
       afterVersion,
       failedStep,
+      ...(detachedResultPath ? { detachedResultPath } : {}),
     };
   } finally {
     await cleanupStagedNpmInstall(stagedInstall);

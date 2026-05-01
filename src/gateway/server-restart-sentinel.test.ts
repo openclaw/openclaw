@@ -30,9 +30,13 @@ const mocks = vi.hoisted(() => {
       },
     })),
     removeRestartSentinelFile: vi.fn(async () => undefined),
+    rewriteRestartSentinel: vi.fn(async () => null),
+    finalizeUpdateRestartSentinelRunningVersion: vi.fn(async () => null),
     resolveRestartSentinelPath: vi.fn(() => "/tmp/restart-sentinel.json"),
     formatRestartSentinelMessage: vi.fn(() => "restart message"),
     summarizeRestartSentinel: vi.fn(() => "restart summary"),
+    readDetachedUpdateResult: vi.fn(() => null),
+    removeDetachedUpdateResult: vi.fn(),
     resolveMainSessionKeyFromConfig: vi.fn(() => "agent:main:main"),
     parseSessionThreadInfo: vi.fn(
       (): { baseSessionKey: string | null | undefined; threadId: string | undefined } => ({
@@ -131,9 +135,16 @@ vi.mock("../agents/agent-scope.js", () => ({
 vi.mock("../infra/restart-sentinel.js", () => ({
   readRestartSentinel: mocks.readRestartSentinel,
   removeRestartSentinelFile: mocks.removeRestartSentinelFile,
+  rewriteRestartSentinel: mocks.rewriteRestartSentinel,
+  finalizeUpdateRestartSentinelRunningVersion: mocks.finalizeUpdateRestartSentinelRunningVersion,
   resolveRestartSentinelPath: mocks.resolveRestartSentinelPath,
   formatRestartSentinelMessage: mocks.formatRestartSentinelMessage,
   summarizeRestartSentinel: mocks.summarizeRestartSentinel,
+}));
+
+vi.mock("../infra/update-detached-result.js", () => ({
+  readDetachedUpdateResult: mocks.readDetachedUpdateResult,
+  removeDetachedUpdateResult: mocks.removeDetachedUpdateResult,
 }));
 
 vi.mock("../infra/session-delivery-queue.js", () => ({
@@ -226,7 +237,80 @@ vi.mock("./server-methods/agent-timestamp.js", () => ({
   timestampOptsFromConfig: mocks.timestampOptsFromConfig,
 }));
 
-const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
+const { refreshLatestUpdateRestartSentinel, scheduleRestartSentinelWake } =
+  await import("./server-restart-sentinel.js");
+
+describe("refreshLatestUpdateRestartSentinel", () => {
+  beforeEach(() => {
+    mocks.readRestartSentinel.mockReset();
+    mocks.rewriteRestartSentinel.mockReset();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
+    mocks.readDetachedUpdateResult.mockReset();
+    mocks.removeDetachedUpdateResult.mockClear();
+  });
+
+  it("records detached update failures into the cached restart sentinel", async () => {
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue({
+      version: 1,
+      payload: {
+        kind: "update",
+        status: "ok",
+        ts: 1,
+        stats: {
+          detachedResultPath: "/tmp/detached-result.json",
+          after: { version: "1.0.0" },
+        },
+      },
+    });
+    mocks.readRestartSentinel.mockResolvedValue({
+      version: 1,
+      payload: {
+        kind: "update",
+        status: "ok",
+        ts: 1,
+        stats: {
+          detachedResultPath: "/tmp/detached-result.json",
+          after: { version: "1.0.0" },
+        },
+      },
+    });
+    mocks.readDetachedUpdateResult.mockReturnValue({
+      ok: false,
+      reason: "swap-failed",
+      detail: "EBUSY",
+    });
+    mocks.rewriteRestartSentinel.mockImplementation(async (rewrite) => ({
+      version: 1,
+      payload: rewrite({
+        kind: "update",
+        status: "ok",
+        ts: 1,
+        stats: {
+          detachedResultPath: "/tmp/detached-result.json",
+          after: { version: "1.0.0" },
+        },
+      })!,
+    }));
+
+    const result = await refreshLatestUpdateRestartSentinel();
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        kind: "update",
+        status: "error",
+        stats: expect.objectContaining({
+          reason: "swap-failed",
+          detachedResult: expect.objectContaining({
+            ok: false,
+            reason: "swap-failed",
+            detail: "EBUSY",
+          }),
+        }),
+      }),
+    );
+    expect(mocks.removeDetachedUpdateResult).toHaveBeenCalledWith("/tmp/detached-result.json");
+  });
+});
 
 describe("scheduleRestartSentinelWake", () => {
   afterEach(() => {
@@ -279,6 +363,13 @@ describe("scheduleRestartSentinelWake", () => {
     mocks.drainPendingSessionDeliveries.mockClear();
     mocks.recoverPendingSessionDeliveries.mockClear();
     mocks.removeRestartSentinelFile.mockClear();
+    mocks.rewriteRestartSentinel.mockReset();
+    mocks.rewriteRestartSentinel.mockResolvedValue(null);
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockReset();
+    mocks.finalizeUpdateRestartSentinelRunningVersion.mockResolvedValue(null);
+    mocks.readDetachedUpdateResult.mockReset();
+    mocks.readDetachedUpdateResult.mockReturnValue(null);
+    mocks.removeDetachedUpdateResult.mockClear();
     mocks.injectTimestamp.mockClear();
     mocks.timestampOptsFromConfig.mockClear();
     mocks.recordInboundSessionAndDispatchReply.mockReset();

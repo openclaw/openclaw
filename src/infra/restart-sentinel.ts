@@ -27,6 +27,14 @@ export type RestartSentinelStats = {
   steps?: RestartSentinelStep[];
   reason?: string | null;
   durationMs?: number | null;
+  detachedResultPath?: string;
+  detachedResult?: {
+    ok: boolean;
+    reason?: string;
+    exitCode?: number;
+    afterVersion?: string | null;
+    detail?: string;
+  } | null;
 };
 
 export type RestartSentinelContinuation =
