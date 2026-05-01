@@ -137,6 +137,15 @@ export class MockedFailoverError extends Error {
 }
 
 export const mockedCoerceToFailoverError = vi.fn<MockCoerceToFailoverError>();
+export const mockedCollectErrorChainMessages = vi.fn<(err: unknown) => string[]>((err: unknown) => {
+  if (err instanceof Error && err.message) {
+    return [err.message];
+  }
+  if (typeof err === "string" && err.length > 0) {
+    return [err];
+  }
+  return [];
+});
 export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   (err: unknown): MockFailoverErrorDescription => ({
     message: formatErrorMessage(err),
@@ -171,6 +180,7 @@ export const mockedExtractObservedOverflowTokenCount = vi.fn((msg?: string) => {
 });
 export const mockedFormatAssistantErrorText = vi.fn(() => "");
 export const mockedIsAuthAssistantError = vi.fn(() => false);
+export const mockedIsBillingErrorMessage = vi.fn(() => false);
 export const mockedIsBillingAssistantError = vi.fn(() => false);
 export const mockedIsCompactionFailureError = vi.fn(() => false);
 export const mockedIsFailoverAssistantError = vi.fn(() => false);
@@ -294,6 +304,38 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
 
   mockedCoerceToFailoverError.mockReset();
   mockedCoerceToFailoverError.mockReturnValue(null);
+  mockedCollectErrorChainMessages.mockReset();
+  mockedCollectErrorChainMessages.mockImplementation((err: unknown) => {
+    const out: string[] = [];
+    const seen = new Set<object>();
+    const visit = (value: unknown): void => {
+      if (value !== null && typeof value === "object") {
+        if (seen.has(value)) {
+          return;
+        }
+        seen.add(value);
+      }
+      if (value && typeof value === "object") {
+        const message = (value as { message?: unknown }).message;
+        if (typeof message === "string" && message.length > 0) {
+          out.push(message);
+        }
+        const nested = value as { error?: unknown; cause?: unknown };
+        if ("error" in nested && nested.error !== undefined) {
+          visit(nested.error);
+        }
+        if ("cause" in nested && nested.cause !== undefined) {
+          visit(nested.cause);
+        }
+        return;
+      }
+      if (typeof value === "string" && value.length > 0) {
+        out.push(value);
+      }
+    };
+    visit(err);
+    return out;
+  });
   mockedDescribeFailoverError.mockReset();
   mockedDescribeFailoverError.mockImplementation(
     (err: unknown): MockFailoverErrorDescription => ({
@@ -321,6 +363,8 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedFormatAssistantErrorText.mockReturnValue("");
   mockedIsAuthAssistantError.mockReset();
   mockedIsAuthAssistantError.mockReturnValue(false);
+  mockedIsBillingErrorMessage.mockReset();
+  mockedIsBillingErrorMessage.mockReturnValue(false);
   mockedIsBillingAssistantError.mockReset();
   mockedIsBillingAssistantError.mockReturnValue(false);
   mockedExtractObservedOverflowTokenCount.mockReset();
@@ -466,6 +510,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     extractObservedOverflowTokenCount: mockedExtractObservedOverflowTokenCount,
     formatAssistantErrorText: mockedFormatAssistantErrorText,
     isAuthAssistantError: mockedIsAuthAssistantError,
+    isBillingErrorMessage: mockedIsBillingErrorMessage,
     isBillingAssistantError: mockedIsBillingAssistantError,
     isCompactionFailureError: mockedIsCompactionFailureError,
     isLikelyContextOverflowError: mockedIsLikelyContextOverflowError,
@@ -540,6 +585,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
   vi.doMock("../failover-error.js", () => ({
     FailoverError: MockedFailoverError,
     coerceToFailoverError: mockedCoerceToFailoverError,
+    collectErrorChainMessages: mockedCollectErrorChainMessages,
     describeFailoverError: mockedDescribeFailoverError,
     resolveFailoverStatus: mockedResolveFailoverStatus,
   }));
@@ -566,7 +612,14 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
       if (err instanceof Error) {
         return err.message;
       }
-      return String(err);
+      if (typeof err === "string") {
+        return err;
+      }
+      try {
+        return JSON.stringify(err) ?? "Unknown error";
+      } catch {
+        return "Unknown error";
+      }
     }),
   }));
 

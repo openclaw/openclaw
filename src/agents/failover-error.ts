@@ -1,4 +1,4 @@
-import { readErrorName } from "../infra/errors.js";
+import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import {
   classifyFailoverSignal,
   inferSignalStatus,
@@ -190,6 +190,49 @@ function getErrorMessage(err: unknown): string {
   return findErrorProperty(err, readDirectErrorMessage) ?? "";
 }
 
+/**
+ * Collects non-empty message strings from `err` and nested `.cause` / `.error`
+ * links (depth-first: node, then `error`, then `cause`). By default the
+ * returned strings are redacted because callers often surface them in logs or
+ * user-visible text. Opt into raw strings only for internal-only classifiers.
+ */
+export function collectErrorChainMessages(err: unknown, options?: { redact?: boolean }): string[] {
+  const out: string[] = [];
+  const seen = new Set<object>();
+
+  const visit = (e: unknown): void => {
+    if (e !== null && typeof e === "object") {
+      if (seen.has(e)) {
+        return;
+      }
+      seen.add(e);
+    }
+
+    const direct = readDirectErrorMessage(e);
+    if (direct) {
+      const value = options?.redact === false ? direct : formatErrorMessage(direct);
+      if (value) {
+        out.push(value);
+      }
+    }
+
+    if (!e || typeof e !== "object") {
+      return;
+    }
+
+    const candidate = e as { error?: unknown; cause?: unknown };
+    if ("error" in candidate && candidate.error !== undefined) {
+      visit(candidate.error);
+    }
+    if ("cause" in candidate && candidate.cause !== undefined) {
+      visit(candidate.cause);
+    }
+  };
+
+  visit(err);
+  return out;
+}
+
 function normalizeDirectErrorSignal(err: unknown): FailoverSignal {
   const message = readDirectErrorMessage(err);
   return {
@@ -353,9 +396,14 @@ function resolveFailoverClassificationFromErrorInternal(
   const hasSessionLock = hasSessionWriteLockTimeout(err);
 
   const classification = classifyFailoverSignal(signal);
+  const classificationReason = failoverReasonFromClassification(classification);
   const nestedCandidates = getNestedErrorCandidates(err);
 
-  if (!classification || classification.kind === "context_overflow") {
+  if (
+    !classification ||
+    classification.kind === "context_overflow" ||
+    (classificationReason === "timeout" && !hasExplicitFailoverMetadata)
+  ) {
     for (const candidate of nestedCandidates) {
       const nestedClassification = resolveFailoverClassificationFromErrorInternal(
         candidate,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  collectErrorChainMessages,
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
@@ -971,5 +972,56 @@ describe("failover-error", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
+  });
+
+  it("classifies nested transport .error branches before context overflow causes", () => {
+    const err = {
+      message: "request failed",
+      error: {
+        message: "insufficient credits",
+        cause: new Error("context length exceeded"),
+      },
+    };
+
+    expect(resolveFailoverReasonFromError(err)).toBe("billing");
+    expect(describeFailoverError(err).reason).toBe("billing");
+  });
+
+  describe("collectErrorChainMessages", () => {
+    it("collects outer and cause messages in order", () => {
+      const inner = new Error("context length exceeded");
+      const outer = new Error("request failed", { cause: inner });
+      expect(collectErrorChainMessages(outer)).toEqual([
+        "request failed",
+        "context length exceeded",
+      ]);
+    });
+
+    it("returns only inner text when outer message is empty", () => {
+      const inner = new Error("maximum context length exceeded");
+      const outer = new Error("", { cause: inner });
+      expect(collectErrorChainMessages(outer)).toEqual(["maximum context length exceeded"]);
+    });
+
+    it("reads nested .error for transport-shaped errors", () => {
+      const inner = { message: "prompt is too long" };
+      const outer = { message: "", error: inner };
+      expect(collectErrorChainMessages(outer)).toEqual(["prompt is too long"]);
+    });
+
+    it("redacts nested secrets by default but keeps a raw option for classifier-only callers", () => {
+      const secret = "Authorization: Bearer sk-test-super-secret-token-that-should-never-leak";
+      const inner = new Error(secret);
+      const outer = new Error("request failed", { cause: inner });
+
+      expect(collectErrorChainMessages(outer)).toEqual([
+        "request failed",
+        expect.not.stringContaining("sk-test-super-secret-token-that-should-never-leak"),
+      ]);
+      expect(collectErrorChainMessages(outer, { redact: false })).toEqual([
+        "request failed",
+        secret,
+      ]);
+    });
   });
 });

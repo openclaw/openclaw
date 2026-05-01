@@ -21,6 +21,12 @@ const state = vi.hoisted(() => ({
   isCliProviderMock: vi.fn((_: unknown) => false),
   isInternalMessageChannelMock: vi.fn((_: unknown) => false),
   createBlockReplyDeliveryHandlerMock: vi.fn(),
+  isCompactionFailureErrorMock: vi.fn<(value: string) => boolean>(() => false),
+  isContextOverflowErrorMock: vi.fn<(value: string) => boolean>(() => false),
+  isBillingErrorMessageMock: vi.fn<(value: string) => boolean>(() => false),
+  isLikelyContextOverflowErrorMock: vi.fn<(value: string) => boolean>(() => false),
+  isRateLimitErrorMessageMock: vi.fn<(value: string) => boolean>(() => false),
+  isTransientHttpErrorMock: vi.fn<(value: string) => boolean>(() => false),
 }));
 
 const GENERIC_RUN_FAILURE_TEXT =
@@ -83,13 +89,13 @@ vi.mock("../../agents/pi-embedded-helpers.js", () => ({
     }
     return undefined;
   },
-  isCompactionFailureError: () => false,
-  isContextOverflowError: () => false,
-  isBillingErrorMessage: () => false,
-  isLikelyContextOverflowError: () => false,
   isOverloadedErrorMessage: (message: string) => /overloaded|capacity/i.test(message),
-  isRateLimitErrorMessage: () => false,
-  isTransientHttpError: () => false,
+  isCompactionFailureError: (value: string) => state.isCompactionFailureErrorMock(value),
+  isContextOverflowError: (value: string) => state.isContextOverflowErrorMock(value),
+  isBillingErrorMessage: (value: string) => state.isBillingErrorMessageMock(value),
+  isLikelyContextOverflowError: (value: string) => state.isLikelyContextOverflowErrorMock(value),
+  isRateLimitErrorMessage: (value: string) => state.isRateLimitErrorMessageMock(value),
+  isTransientHttpError: (value: string) => state.isTransientHttpErrorMock(value),
   sanitizeUserFacingText: (text?: string) => text ?? "",
 }));
 
@@ -396,9 +402,21 @@ describe("runAgentTurnWithFallback", () => {
     state.isCliProviderMock.mockReset();
     state.isCliProviderMock.mockReturnValue(false);
     state.isInternalMessageChannelMock.mockReset();
+    state.isCompactionFailureErrorMock.mockReset();
+    state.isContextOverflowErrorMock.mockReset();
+    state.isBillingErrorMessageMock.mockReset();
+    state.isLikelyContextOverflowErrorMock.mockReset();
+    state.isRateLimitErrorMessageMock.mockReset();
+    state.isTransientHttpErrorMock.mockReset();
     state.isInternalMessageChannelMock.mockReturnValue(false);
     state.createBlockReplyDeliveryHandlerMock.mockReset();
     state.createBlockReplyDeliveryHandlerMock.mockReturnValue(undefined);
+    state.isCompactionFailureErrorMock.mockReturnValue(false);
+    state.isContextOverflowErrorMock.mockReturnValue(false);
+    state.isBillingErrorMessageMock.mockReturnValue(false);
+    state.isLikelyContextOverflowErrorMock.mockReturnValue(false);
+    state.isRateLimitErrorMessageMock.mockReturnValue(false);
+    state.isTransientHttpErrorMock.mockReturnValue(false);
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
       result: await params.run("anthropic", "claude"),
       provider: "anthropic",
@@ -2205,6 +2223,47 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("does not surface raw nested secrets in verbose external error replies", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("request failed", {
+        cause: new Error("Authorization: Bearer sk-test-super-secret-token-that-should-never-leak"),
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "on",
+    });
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("⚠️ Agent failed before reply:");
+      expect(result.payload.text).not.toContain(
+        "sk-test-super-secret-token-that-should-never-leak",
+      );
+    }
+  });
+
   it.each(["group", "channel"] as const)(
     "keeps raw runner failure boilerplate out of Discord %s chats",
     async (chatType) => {
@@ -2765,6 +2824,55 @@ describe("runAgentTurnWithFallback", () => {
     expect(followupRun.run.model).toBe("gpt-5.4");
     expect(followupRun.run.authProfileId).toBe("profile-c");
     expect(followupRun.run.authProfileIdSource).toBe("auto");
+  });
+
+  it("keeps wrapped billing errors classified as billing even when inner causes look like overflow", async () => {
+    state.isBillingErrorMessageMock.mockImplementation(
+      (value: string) =>
+        value.length < 200 && value.toLowerCase().includes("credit balance is too low"),
+    );
+    state.isLikelyContextOverflowErrorMock.mockImplementation((value: string) =>
+      value.toLowerCase().includes("request_too_large"),
+    );
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("Your credit balance is too low to access the Anthropic API.", {
+        cause: new Error(
+          `request_too_large: Request size exceeds model context window ${"x".repeat(400)}`,
+        ),
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result).toEqual({
+      kind: "final",
+      payload: {
+        text: "billing",
+      },
+    });
   });
 
   it("does not roll back newer override changes after a failed fallback candidate", async () => {

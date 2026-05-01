@@ -719,6 +719,68 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(1);
   });
 
+  it("rethrows context overflow nested in error cause without trying fallback models", async () => {
+    const cfg = makeCfg();
+    const overflowCause = new Error("context length exceeded");
+    const wrapper = new Error("request failed", { cause: overflowCause });
+    const run = vi.fn().mockRejectedValue(wrapper);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toBe(wrapper);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("rethrows context overflow only in cause when outer message is empty", async () => {
+    const cfg = makeCfg();
+    const overflowCause = new Error("maximum context length exceeded");
+    const wrapper = new Error("", { cause: overflowCause });
+    const run = vi.fn().mockRejectedValue(wrapper);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toBe(wrapper);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves outer billing failover before inner overflow hints", async () => {
+    const overflowCause = new Error("context length exceeded");
+    const wrapper = new Error("Your credit balance is too low to access the Anthropic API.", {
+      cause: overflowCause,
+    });
+
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: wrapper,
+    });
+  });
+
+  it("preserves nested error-branch billing failover before inner overflow hints", async () => {
+    const wrapper = Object.assign(new Error("request failed"), {
+      error: {
+        message: "insufficient credits",
+        cause: new Error("context length exceeded"),
+      },
+    });
+
+    await expectFallsBackToHaiku({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      firstError: wrapper,
+    });
+  });
+
   it("treats LiveSessionModelSwitchError as failover on last candidate (#58496 family)", async () => {
     const cfg = makeCfg();
     const switchError = new LiveSessionModelSwitchError({

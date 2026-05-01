@@ -234,8 +234,8 @@ describe("minimax provider hooks", () => {
       registerProvider() {},
       registerMediaUnderstandingProvider() {},
       registerImageGenerationProvider() {},
-      registerMusicGenerationProvider() {},
       registerVideoGenerationProvider() {},
+      registerMusicGenerationProvider() {},
       registerSpeechProvider() {},
       registerWebSearchProvider(provider: unknown) {
         webSearchProviders.push(provider);
