@@ -110,6 +110,10 @@ vi.mock("../../infra/gateway-lock.js", () => ({
   GatewayLockError: class GatewayLockError extends Error {},
 }));
 
+vi.mock("../../infra/supervisor-markers.js", () => ({
+  detectRespawnSupervisor: () => null,
+}));
+
 vi.mock("../../infra/ports.js", () => ({
   formatPortDiagnostics: () => [],
   inspectPortUsage: async () => ({ status: "free" }),
