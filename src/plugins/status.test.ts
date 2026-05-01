@@ -13,6 +13,7 @@ import {
 const loadConfigMock = vi.fn();
 const loadOpenClawPluginsMock = vi.fn();
 const loadPluginMetadataRegistrySnapshotMock = vi.fn();
+const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
 const applyPluginAutoEnableMock = vi.fn();
@@ -50,6 +51,8 @@ vi.mock("./runtime/metadata-registry-loader.js", () => ({
 }));
 
 vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
+    loadPluginManifestRegistryForPluginRegistryMock(...args),
   loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) =>
     loadPluginRegistrySnapshotWithMetadataMock(...args),
 }));
@@ -186,10 +189,12 @@ function expectMetadataSnapshotLoaderCall(params: {
 }
 
 function expectAutoEnabledStatusLoad(params: { rawConfig: unknown }) {
-  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
-    config: params.rawConfig,
-    env: process.env,
-  });
+  expect(applyPluginAutoEnableMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      config: params.rawConfig,
+      env: process.env,
+    }),
+  );
 }
 
 function createCompatChainFixture() {
@@ -363,6 +368,7 @@ describe("plugin status reports", () => {
     loadConfigMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     loadPluginMetadataRegistrySnapshotMock.mockReset();
+    loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
@@ -375,6 +381,10 @@ describe("plugin status reports", () => {
     loadPluginRegistrySnapshotWithMetadataMock.mockReturnValue({
       snapshot: createInstalledPluginIndexSnapshot([]),
       source: "derived",
+      diagnostics: [],
+    });
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [],
       diagnostics: [],
     });
     loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue({

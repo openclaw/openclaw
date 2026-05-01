@@ -161,6 +161,17 @@ if (mode === "setup-entry-channels") {
   config.plugins = {
     ...config.plugins,
     enabled: true,
+    entries: {
+      ...config.plugins?.entries,
+      feishu: {
+        ...config.plugins?.entries?.feishu,
+        enabled: true,
+      },
+      whatsapp: {
+        ...config.plugins?.entries?.whatsapp,
+        enabled: true,
+      },
+    },
   };
   config.channels = {
     ...config.channels,

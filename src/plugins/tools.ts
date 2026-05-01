@@ -133,7 +133,12 @@ export function resolvePluginTools(params: {
   const runtimeOptions = params.allowGatewaySubagentBinding
     ? { allowGatewaySubagentBinding: true as const }
     : undefined;
-  const loadOptions = buildPluginRuntimeLoadOptions(context, { runtimeOptions });
+  const loadOptions = buildPluginRuntimeLoadOptions(context, {
+    installBundledRuntimeDeps: false,
+    activate: false,
+    toolDiscovery: true,
+    runtimeOptions,
+  });
   const registry = resolvePluginToolRegistry({
     loadOptions,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
