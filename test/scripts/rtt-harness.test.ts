@@ -19,7 +19,8 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(TEST_DIR, "../fixtures/telegram-qa-summary-rtt.json");
 
 describe("RTT harness", () => {
-  it("validates published OpenClaw package specs", () => {
+  it("validates OpenClaw package specs", () => {
+    expect(validateOpenClawPackageSpec("openclaw@main")).toBe("openclaw@main");
     expect(validateOpenClawPackageSpec("openclaw@beta")).toBe("openclaw@beta");
     expect(validateOpenClawPackageSpec("openclaw@latest")).toBe("openclaw@latest");
     expect(validateOpenClawPackageSpec("openclaw@2026.4.30")).toBe("openclaw@2026.4.30");
@@ -165,6 +166,8 @@ describe("RTT harness", () => {
   it("parses CLI options", () => {
     const parsed = cliTesting.parseArgs([
       "openclaw@latest",
+      "--package-tgz",
+      "/tmp/openclaw.tgz",
       "--provider",
       "live-frontier",
       "--runs",
@@ -183,6 +186,7 @@ describe("RTT harness", () => {
 
     expect(parsed.spec).toBe("openclaw@latest");
     expect(parsed.options).toMatchObject({
+      packageTgz: "/tmp/openclaw.tgz",
       providerMode: "live-frontier",
       runs: 3,
       samples: 5,

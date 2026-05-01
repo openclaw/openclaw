@@ -10,6 +10,7 @@ import {
   buildRunId,
   createHarnessEnv,
   readTelegramSummary,
+  resolveMainVersion,
   resolvePublishedVersion,
   runHarness,
   validateOpenClawPackageSpec,
@@ -25,9 +26,10 @@ const DEFAULT_SAMPLE_TIMEOUT_MS = 30_000;
 
 function usage() {
   return [
-    "Usage: pnpm rtt <openclaw@spec> [--provider mock-openai|live-frontier] [--runs N] [--samples N] [--sample-timeout-ms N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
+    "Usage: pnpm rtt <openclaw@spec> [--package-tgz PATH] [--provider mock-openai|live-frontier] [--runs N] [--samples N] [--sample-timeout-ms N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
     "",
     "Examples:",
+    "  pnpm rtt openclaw@main --package-tgz .artifacts/package/openclaw.tgz",
     "  pnpm rtt openclaw@beta",
     "  pnpm rtt openclaw@2026.4.30",
     "  pnpm rtt openclaw@latest --provider live-frontier",
@@ -61,6 +63,7 @@ function resolveHome(input: string) {
 
 function parseArgs(argv: string[]) {
   let spec: string | undefined;
+  let packageTgz: string | undefined;
   let providerMode = DEFAULT_PROVIDER_MODE;
   let runs = 1;
   let samples = DEFAULT_SAMPLES;
@@ -77,6 +80,14 @@ function parseArgs(argv: string[]) {
     }
     if (arg === "--provider") {
       providerMode = parseProviderMode(argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--package-tgz") {
+      const value = argv[++index] ?? "";
+      if (!value.trim()) {
+        throw new Error("--package-tgz requires a path.");
+      }
+      packageTgz = path.resolve(resolveHome(value));
       continue;
     }
     if (arg === "--runs") {
@@ -125,6 +136,7 @@ function parseArgs(argv: string[]) {
   return {
     spec: validateOpenClawPackageSpec(spec),
     options: {
+      packageTgz,
       providerMode,
       runs,
       samples,
@@ -152,6 +164,7 @@ async function runOne(params: {
   const startedAt = new Date();
   const env = createHarnessEnv({
     baseEnv: process.env,
+    packageTgz: params.options.packageTgz,
     providerMode: params.options.providerMode,
     rawOutputDir,
     samples: params.options.samples,
@@ -205,7 +218,13 @@ async function main() {
   assertRequiredEnv(process.env);
   await assertHarnessRoot(options.harnessRoot);
   await assertDockerAvailable();
-  const version = await resolvePublishedVersion(spec);
+  if (spec === "openclaw@main" && !options.packageTgz) {
+    throw new Error("openclaw@main requires --package-tgz.");
+  }
+  const version =
+    spec === "openclaw@main"
+      ? await resolveMainVersion(options.harnessRoot)
+      : await resolvePublishedVersion(spec);
   let failed = false;
   for (let index = 0; index < options.runs; index += 1) {
     const run = await runOne({ index, options, spec, version });
