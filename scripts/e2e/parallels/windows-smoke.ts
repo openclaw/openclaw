@@ -33,7 +33,7 @@ import { WindowsGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { encodePowerShell, psArray, psSingleQuote, windowsOpenClawResolver } from "./powershell.ts";
+import { encodePowerShell, psSingleQuote, windowsOpenClawResolver } from "./powershell.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
 
 interface WindowsOptions {
@@ -891,27 +891,40 @@ Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
 Invoke-OpenClaw config set tools.profile minimal
 if ($LASTEXITCODE -ne 0) { throw "tools profile config set failed" }
-$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-windows-smoke.jsonl'
-Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
-$args = ${psArray([
-        "agent",
-        "--local",
-        "--agent",
-        "main",
-        "--session-id",
-        "parallels-windows-smoke",
-        "--message",
-        "Reply with exact ASCII text OK only.",
-        "--thinking",
-        "minimal",
-        "--json",
-      ])}
-$output = Invoke-OpenClaw @args 2>&1
-if ($null -ne $output) { $output | ForEach-Object { $_ } }
-if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
-if (($output | Out-String) -notmatch '"finalAssistant(Raw|Visible)Text":\\s*"OK"') { throw 'openclaw agent finished without OK response' }`,
+$agentOk = $false
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+  $sessionId = if ($attempt -eq 1) { 'parallels-windows-smoke' } else { "parallels-windows-smoke-retry-$attempt" }
+  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
+  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
+  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
+  $args = @(
+    'agent',
+    '--local',
+    '--agent',
+    'main',
+    '--session-id',
+    $sessionId,
+    '--message',
+    'Reply with exact ASCII text OK only.',
+    '--thinking',
+    'minimal',
+    '--json'
+  )
+  $output = Invoke-OpenClaw @args 2>&1
+  if ($null -ne $output) { $output | ForEach-Object { $_ } }
+  if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
+  if (($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
+    $agentOk = $true
+    break
+  }
+  if ($attempt -lt 2) {
+    Write-Host "agent turn attempt $attempt finished without OK response; retrying"
+    Start-Sleep -Seconds 3
+  }
+}
+if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
       Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 900) * 1000,
     );
   }
