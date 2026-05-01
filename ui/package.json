@@ -12,6 +12,7 @@
     "@codemirror/autocomplete": "^6.18.0",
     "@codemirror/commands": "^6.8.0",
     "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/language": "^6.10.0",
     "@codemirror/lint": "^6.8.0",
     "@codemirror/state": "^6.5.2",
     "@codemirror/view": "^6.36.5",

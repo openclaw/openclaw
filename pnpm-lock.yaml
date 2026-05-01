@@ -1552,6 +1552,9 @@ importers:
       '@codemirror/lang-json':
         specifier: ^6.0.1
         version: 6.0.2
+      '@codemirror/language':
+        specifier: ^6.10.0
+        version: 6.12.3
       '@codemirror/lint':
         specifier: ^6.8.0
         version: 6.9.5
