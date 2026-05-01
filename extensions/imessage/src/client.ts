@@ -103,6 +103,20 @@ export class IMessageRpcClient {
       }
     });
 
+    child.stdin?.on("error", (err) => {
+      const error = err instanceof Error ? err : new Error(String(err));
+      this.failAll(error);
+      if (this.child === child) {
+        this.reader?.close();
+        this.reader = null;
+        if (!child.killed) {
+          child.kill("SIGTERM");
+        }
+        this.child = null;
+        this.closedResolve?.();
+      }
+    });
+
     child.on("error", (err) => {
       this.failAll(err instanceof Error ? err : new Error(String(err)));
       this.closedResolve?.();
@@ -164,8 +178,8 @@ export class IMessageRpcClient {
     const line = `${JSON.stringify(payload)}\n`;
     const timeoutMs = opts?.timeoutMs ?? DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS;
 
+    const key = String(id);
     const response = new Promise<T>((resolve, reject) => {
-      const key = String(id);
       const timer =
         timeoutMs > 0
           ? setTimeout(() => {
@@ -180,7 +194,19 @@ export class IMessageRpcClient {
       });
     });
 
-    this.child.stdin.write(line);
+    try {
+      this.child.stdin.write(line, (err?: Error | null) => {
+        if (!err) {
+          return;
+        }
+        this.rejectPending(key, new Error(`imsg rpc write failed (${method}): ${err.message}`));
+      });
+    } catch (err) {
+      this.rejectPending(
+        key,
+        new Error(`imsg rpc write failed (${method}): ${formatErrorMessage(err)}`),
+      );
+    }
     return await response;
   }
 
@@ -244,6 +270,18 @@ export class IMessageRpcClient {
       pending.reject(err);
       this.pending.delete(key);
     }
+  }
+
+  private rejectPending(key: string, err: Error) {
+    const pending = this.pending.get(key);
+    if (!pending) {
+      return;
+    }
+    if (pending.timer) {
+      clearTimeout(pending.timer);
+    }
+    this.pending.delete(key);
+    pending.reject(err);
   }
 }
 
