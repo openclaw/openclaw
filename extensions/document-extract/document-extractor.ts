@@ -179,8 +179,8 @@ function renderPageWithPdftoppm(
   let tmpDir: string | undefined;
   try {
     tmpDir = FS.mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/openclaw-pdf-`);
-    const pdfPath = path.join(tmpDir, `doc-${rand}.pdf`);
-    const outputBase = path.join(tmpDir, `page-${rand}`);
+    const pdfPath = path.join(tmpDir!, `doc-${rand}.pdf`);
+    const outputBase = path.join(tmpDir!, `page-${rand}`);
 
     FS.writeFileSync(pdfPath, pdfBuffer);
 
@@ -190,8 +190,7 @@ function renderPageWithPdftoppm(
     );
 
     const pngPath = `${outputBase}-${pageNumber}.png`;
-    const pngBuffer = FS.readFileSync(pngPath);
-    return pngBuffer;
+    return FS.readFileSync(pngPath);
   } catch {
     return null;
   } finally {
@@ -199,6 +198,20 @@ function renderPageWithPdftoppm(
       try { FS.rmSync(tmpDir, { recursive: true }); } catch {}
     }
   }
+}
+
+async function renderPageWithCanvas(
+  page: PdfPage,
+  canvasModule: CanvasModule,
+  plan: { scale: number; width: number; height: number; pixels: number },
+): Promise<Buffer> {
+  const scaled = page.getViewport({ scale: plan.scale });
+  const canvas = canvasModule.createCanvas(plan.width, plan.height);
+  await page.render({
+    canvas: canvas as unknown as HTMLCanvasElement,
+    viewport: scaled,
+  }).promise;
+  return canvas.toBuffer("image/png");
 }
 
 async function extractPdfContent(
@@ -237,7 +250,7 @@ async function extractPdfContent(
     return { text, images: [] };
   }
 
-  let canvasModule: CanvasModule;
+  let canvasModule: CanvasModule | undefined;
   let usePdftoppmFallback = false;
   try {
     canvasModule = await loadCanvasModule();
@@ -265,30 +278,20 @@ async function extractPdfContent(
       break;
     }
 
+    let pngBuffer: Buffer | null = null;
+
     if (usePdftoppmFallback) {
-      const pngBuffer = renderPageWithPdftoppm(
-        request.buffer,
-        pageNum,
-        plan.scale,
-        remainingPixels,
-        viewport,
-      );
-      if (!pngBuffer) {
-        break;
-      }
-      images.push({ type: "image", data: pngBuffer.toString("base64"), mimeType: "image/png" });
-      remainingPixels -= plan.pixels;
+      pngBuffer = renderPageWithPdftoppm(request.buffer, pageNum, plan.scale, remainingPixels, viewport);
     } else {
-      const scaled = page.getViewport({ scale: plan.scale });
-      const canvas = canvasModule.createCanvas(plan.width, plan.height);
-      await page.render({
-        canvas: canvas as unknown as HTMLCanvasElement,
-        viewport: scaled,
-      }).promise;
-      const png = canvas.toBuffer("image/png");
-      images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
-      remainingPixels -= plan.pixels;
+      pngBuffer = await renderPageWithCanvas(page, canvasModule!, plan);
     }
+
+    if (!pngBuffer) {
+      break;
+    }
+
+    images.push({ type: "image", data: pngBuffer.toString("base64"), mimeType: "image/png" });
+    remainingPixels -= plan.pixels;
   }
 
   return { text, images };
