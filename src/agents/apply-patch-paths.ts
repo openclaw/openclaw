@@ -58,7 +58,7 @@ function normalizePatchPath(
     return undefined;
   }
   const cwd = options.cwd ?? process.cwd();
-  const normalized = path.normalize(resolveSandboxInputPath(trimmed.replace(/\\/g, "/"), cwd));
+  const normalized = path.normalize(resolveSandboxInputPath(trimmed, cwd));
   return normalized && normalized !== "." ? normalized : undefined;
 }
 

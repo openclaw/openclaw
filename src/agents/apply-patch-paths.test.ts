@@ -107,20 +107,19 @@ describe("extractApplyPatchTargetPaths", () => {
     ]);
   });
 
-  it("normalizes Windows separators to stable POSIX derived paths", () => {
+  it("preserves POSIX backslashes to match apply_patch execution", () => {
     const patch = [
       "*** Begin Patch",
       String.raw`*** Add File: src\windows\path.ts`,
       "+x",
-      String.raw`*** Update File: .\src\windows\..\old.ts`,
-      "@@",
-      "+y",
+      String.raw`*** Add File: safe\evil.ts`,
       "*** End Patch",
     ].join("\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual([
-      cwdPath("src/windows/path.ts"),
-      cwdPath("src/old.ts"),
+      path.resolve(defaultCwd, String.raw`src\windows\path.ts`),
+      path.resolve(defaultCwd, String.raw`safe\evil.ts`),
     ]);
+    expect(extractApplyPatchTargetPaths(patch)).not.toContain(cwdPath("safe", "evil.ts"));
   });
 
   it("handles CRLF line endings", () => {
