@@ -100,6 +100,13 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);
     expect(resolved.qmd?.update.updateTimeoutMs).toBe(120_000);
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(120_000);
+    expect(resolved.qmd?.scope).toEqual({
+      default: "deny",
+      rules: [
+        { action: "allow", match: { chatType: "direct" } },
+        { action: "allow", match: { chatType: "channel" } },
+      ],
+    });
     const names = new Set((resolved.qmd?.collections ?? []).map((collection) => collection.name));
     expect(names.has("memory-root-main")).toBe(true);
     expect(names.has("memory-dir-main")).toBe(true);

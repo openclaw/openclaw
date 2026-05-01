@@ -1189,6 +1189,11 @@ export class QmdMemoryManager implements MemorySearchManager {
   ): Promise<MemorySearchResult[]> {
     if (!this.isScopeAllowed(opts?.sessionKey)) {
       this.logScopeDenied(opts?.sessionKey);
+      opts?.onDebug?.({
+        backend: "qmd",
+        configuredMode: opts?.qmdSearchModeOverride ?? this.qmd.searchMode,
+        fallback: "scope-denied",
+      });
       return [];
     }
     const trimmed = query.trim();

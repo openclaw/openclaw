@@ -4056,13 +4056,24 @@ describe("QmdMemoryManager", () => {
 
     logWarnMock.mockClear();
     const beforeCalls = spawnMock.mock.calls.length;
+    const debug: MemorySearchRuntimeDebug[] = [];
     await expect(
-      manager.search("blocked", { sessionKey: "agent:main:discord:channel:c123" }),
+      manager.search("blocked", {
+        sessionKey: "agent:main:discord:channel:c123",
+        onDebug: (entry) => debug.push(entry),
+      }),
     ).resolves.toEqual([]);
 
     expect(spawnMock.mock.calls.length).toBe(beforeCalls);
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("qmd search denied by scope"));
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("chatType=channel"));
+    expect(debug).toEqual([
+      {
+        backend: "qmd",
+        configuredMode: "search",
+        fallback: "scope-denied",
+      },
+    ]);
 
     await manager.close();
   });

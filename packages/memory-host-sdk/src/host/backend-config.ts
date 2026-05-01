@@ -110,6 +110,10 @@ const DEFAULT_QMD_SCOPE: SessionSendPolicyConfig = {
       action: "allow",
       match: { chatType: "direct" },
     },
+    {
+      action: "allow",
+      match: { chatType: "channel" },
+    },
   ],
 };
 
