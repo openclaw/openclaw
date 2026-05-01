@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 - WhatsApp: stage `qrcode` through root mirrored runtime dependencies so packaged QR pairing can render from staged plugin-runtime-deps installs. Fixes #75394. Thanks @FelipeX2001.
 - Discord/voice: apply per-channel Discord `systemPrompt` overrides to voice transcript turns by forwarding the trusted channel prompt through the voice agent run. Fixes #47095. Thanks @qearlyao.
 - Gateway/agent: reject strict `openclaw agent --deliver` requests with missing delivery targets before starting the agent run, so users do not wait for a completed turn that cannot send anywhere. Thanks @vincentkoc.
+- Setup/import: honor non-interactive `--import-from` onboarding flags by running the migration import path instead of silently completing normal setup without importing anything. Thanks @vincentkoc.
 - Discord/voice: run voice-channel turns under a voice-output policy that hides the agent `tts` tool and asks for spoken reply text, so `/vc join` sessions synthesize and play agent replies instead of ending with `NO_REPLY`. Fixes #61536. Thanks @aounakram.
 - Plugins/runtime-deps: include packaged OpenClaw identity in bundled plugin loader cache keys, so same-path package upgrades stop reusing stale versioned runtime-deps mirrors. Fixes #75045. Thanks @sahilsatralkar.
 - Plugin SDK: restore reply-prefix and reply-pipeline helpers on the deprecated root/compat SDK surface so external plugins still using `openclaw/plugin-sdk` do not fail message dispatch after update. Fixes #75171. Thanks @zhangxiliang.
