@@ -104,7 +104,6 @@ export function createHarnessEnv(params: {
     OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL: `${params.spec} (${params.version})`,
     OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: params.providerMode,
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: params.scenarios.join(","),
-    OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH: "1",
     OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: params.rawOutputDir,
     OPENCLAW_NPM_TELEGRAM_FAST: params.baseEnv.OPENCLAW_NPM_TELEGRAM_FAST ?? "1",
     OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: String(params.timeoutMs),
@@ -120,7 +119,7 @@ export function assertRequiredEnv(env: NodeJS.ProcessEnv) {
 }
 
 export async function assertHarnessRoot(harnessRoot: string) {
-  const scriptPath = path.join(harnessRoot, "scripts/e2e/npm-telegram-live-docker.sh");
+  const scriptPath = path.join(harnessRoot, "scripts/e2e/npm-telegram-rtt-docker.sh");
   try {
     await fs.access(scriptPath);
   } catch {
@@ -164,7 +163,7 @@ export async function appendJsonl(pathname: string, value: unknown) {
 }
 
 export async function runHarness(params: { env: NodeJS.ProcessEnv; harnessRoot: string }) {
-  const scriptPath = path.join(params.harnessRoot, "scripts/e2e/npm-telegram-live-docker.sh");
+  const scriptPath = path.join(params.harnessRoot, "scripts/e2e/npm-telegram-rtt-docker.sh");
   const child = spawn("bash", [scriptPath], {
     cwd: params.harnessRoot,
     env: params.env,
