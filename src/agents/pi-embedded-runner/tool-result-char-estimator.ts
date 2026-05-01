@@ -125,10 +125,15 @@ function estimateMessageChars(msg: AgentMessage): number {
   }
 
   if (isToolResultMessage(msg)) {
+    // NOTE: toolResult.details is stripped before messages are sent to the
+    // model (see stripToolResultDetails in src/agents/compaction.ts), so it
+    // must not count toward the guard's context budget. Counting it here
+    // caused the preemptive overflow guard to fire on long tool loops even
+    // when the real prompt was nowhere near the context window, because verbose
+    // process/exec/gateway `details` payloads are often several times larger
+    // than the `content` text that actually reaches the LLM.
     const content = getToolResultContent(msg);
-    let chars = estimateContentBlockChars(content);
-    const details = (msg as { details?: unknown }).details;
-    chars += estimateUnknownChars(details);
+    const chars = estimateContentBlockChars(content);
     const weightedChars = Math.ceil(
       chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
     );
