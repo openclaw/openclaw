@@ -1,4 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 
 const callGatewayMock = vi.fn();
 const configState = vi.hoisted(() => ({
@@ -27,6 +29,7 @@ describe("gateway tool defaults", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
     configState.value = {};
+    setActivePluginRegistry(createEmptyPluginRegistry());
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
   });
 
@@ -161,6 +164,41 @@ describe("gateway tool defaults", () => {
       expect.objectContaining({
         method: "cron.add",
         scopes: ["operator.admin"],
+      }),
+    );
+  });
+
+  it("derives plugin session action scopes from call params", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ data: { ok: true } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    await callGatewayTool(
+      "plugins.sessionAction",
+      {},
+      {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+        sessionKey: "agent:main:main",
+      },
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "plugins.sessionAction",
+        scopes: ["operator.approvals"],
       }),
     );
   });
