@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/hooks: pass the original event context (rather than a shallow clone) to plugin `registerHook` handlers and restore/delete the per-handler `pluginConfig` injection in `finally`, so mutable `agent:bootstrap` context writes (e.g. pushing to `context.bootstrapFiles`) now propagate to consumers that read the event context after dispatch. Fixes #75245. Thanks @hclsys.
 - Google Meet/Voice Call: defer Twilio dial-in intro speech until after Meet DTMF entry and route delayed speech through the active realtime Voice Call bridge. Thanks @donkeykong91 and @PfanP.
 - Google Meet/Voice Call: make Twilio setup preflight honor explicit `--transport twilio` and fail local/private Voice Call webhook URLs before joins. Thanks @donkeykong91 and @PfanP.
 - Voice Call/Twilio: retry transient 21220 live-call TwiML updates and catch answered-path initial-greeting failures, so a fast answered callback no longer crashes the Gateway or drops the Twilio greeting/listen transition. (#74606) Thanks @Sivan22.
