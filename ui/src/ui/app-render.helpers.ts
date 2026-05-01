@@ -617,8 +617,6 @@ export async function createChatSession(state: AppViewState) {
 
   state.lastError = null;
   const previousSessionKey = state.sessionKey;
-  const preservedDraft = state.chatMessage;
-  const preservedAttachments = state.chatAttachments;
   const parentSessionKey = state.sessionsResult?.sessions.some(
     (row) => row.key === previousSessionKey,
   )
@@ -648,6 +646,8 @@ export async function createChatSession(state: AppViewState) {
     return;
   }
 
+  const preservedDraft = state.chatMessage;
+  const preservedAttachments = state.chatAttachments;
   switchChatSession(state, nextSessionKey);
   state.chatMessage = preservedDraft;
   state.chatAttachments = preservedAttachments;

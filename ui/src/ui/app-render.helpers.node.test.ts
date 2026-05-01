@@ -589,6 +589,29 @@ describe("createChatSession", () => {
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
   });
 
+  it("preserves draft and attachment edits made while session creation is in flight", async () => {
+    const state = createChatSessionState();
+    const updatedAttachments = [
+      { id: "att-2", mimeType: "image/png", dataUrl: "data:image/png;base64,BBB" },
+    ];
+    createSessionAndRefreshMock.mockImplementation(async () => {
+      state.chatMessage = "updated draft";
+      state.chatAttachments = updatedAttachments;
+      return "agent:ops:dashboard:new-chat";
+    });
+    refreshChatAvatarMock.mockResolvedValue(undefined);
+    refreshSlashCommandsMock.mockResolvedValue(undefined);
+    loadChatHistoryMock.mockResolvedValue(undefined);
+    loadSessionsMock.mockResolvedValue(undefined);
+
+    await createChatSession(state);
+
+    expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
+    expect(state.chatMessage).toBe("updated draft");
+    expect(state.chatAttachments).toBe(updatedAttachments);
+    expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
+  });
+
   it("ignores a stale create response after the active session changes", async () => {
     const state = createChatSessionState();
     createSessionAndRefreshMock.mockImplementation(async () => {
