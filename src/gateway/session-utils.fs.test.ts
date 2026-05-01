@@ -8,6 +8,11 @@ import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
+  readRecentSessionUsageFromTranscript,
+  readRecentSessionMessages,
+  readRecentSessionMessagesWithStats,
+  readRecentSessionTranscriptLines,
+  readSessionMessageCount,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -501,6 +506,144 @@ describe("readSessionMessages", () => {
     expect(typeof marker.timestamp).toBe("number");
   });
 
+  test("reads recent messages from the transcript tail without loading the whole file", () => {
+    const sessionId = "test-session-recent-tail";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "middle" } },
+      { message: { role: "user", content: "recent" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    const out = readRecentSessionMessages(sessionId, storePath, undefined, {
+      maxMessages: 2,
+      maxBytes: 1024,
+    });
+
+    expect(out).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "recent",
+        __openclaw: expect.objectContaining({ seq: 3 }),
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "latest",
+        __openclaw: expect.objectContaining({ seq: 4 }),
+      }),
+    ]);
+  });
+
+  test("bounds recent-message reads for large append-only transcripts", () => {
+    const sessionId = "test-session-recent-large";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 2500 }, (_, index) =>
+        JSON.stringify({
+          message: {
+            role: index % 2 === 0 ? "user" : "assistant",
+            content: `message ${index} ${"x".repeat(700)}`,
+          },
+        }),
+      ),
+      JSON.stringify({ message: { role: "assistant", content: "tail" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      const out = readRecentSessionMessages(sessionId, storePath, undefined, {
+        maxMessages: 1,
+        maxBytes: 64 * 1024,
+      });
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ role: "assistant", content: "tail" });
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  test("preserves real sequence metadata for bounded recent-message reads", () => {
+    const sessionId = "test-session-recent-seq";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "middle" } },
+      { message: { role: "user", content: "recent" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    const result = readRecentSessionMessagesWithStats(sessionId, storePath, undefined, {
+      maxMessages: 2,
+      maxBytes: 256,
+    });
+
+    expect(result.totalMessages).toBe(4);
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        content: "recent",
+        __openclaw: expect.objectContaining({ seq: 3 }),
+      }),
+      expect.objectContaining({
+        content: "latest",
+        __openclaw: expect.objectContaining({ seq: 4 }),
+      }),
+    ]);
+  });
+
+  test("counts transcript messages without loading the whole file", () => {
+    const sessionId = "test-session-count-large";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 2500 }, (_, index) =>
+        JSON.stringify({ message: { role: "user", content: `message ${index}` } }),
+      ),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      expect(readSessionMessageCount(sessionId, storePath)).toBe(2500);
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  test("tails transcript lines for manual compaction without loading the whole file", () => {
+    const sessionId = "test-session-line-tail";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 10 }, (_, index) =>
+        JSON.stringify({ message: { role: "user", content: `message ${index}` } }),
+      ),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      const result = readRecentSessionTranscriptLines({
+        sessionId,
+        storePath,
+        maxLines: 3,
+      });
+      expect(result?.totalLines).toBe(11);
+      expect(result?.lines.map((line) => JSON.parse(line).message?.content)).toEqual([
+        "message 7",
+        "message 8",
+        "message 9",
+      ]);
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
   test("reads only the active branch when transcript rewrites abandon older entries", () => {
     const sessionId = "test-session-active-branch";
     const sessionFile = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -884,6 +1027,48 @@ describe("readLatestSessionUsageFromTranscript", () => {
       totalTokensFresh: true,
     });
     expect(snapshot?.costUsd).toBeCloseTo(0.0063, 8);
+  });
+
+  test("bounds recent usage reads for bulk session listing", () => {
+    const sessionId = "usage-recent-large";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 2500 }, (_, index) =>
+        JSON.stringify({
+          message: { role: "user", content: `filler ${index} ${"x".repeat(700)}` },
+        }),
+      ),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 900,
+            output: 100,
+            cost: { total: 0.003 },
+          },
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      expect(
+        readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
+      ).toMatchObject({
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        inputTokens: 900,
+        outputTokens: 100,
+        totalTokens: 900,
+      });
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   test("returns null when the transcript has no assistant usage snapshot", () => {

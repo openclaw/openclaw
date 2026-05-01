@@ -141,6 +141,12 @@ export type GatewayTrustedProxyConfig = {
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * Allow loopback proxy sources (127.0.0.1, ::1) in trusted-proxy mode.
+   * Default false; enable only when a same-host reverse proxy is the intended
+   * trust boundary and direct Gateway access is otherwise locked down.
+   */
+  allowLoopback?: boolean;
 };
 
 export type GatewayAuthConfig = {
@@ -209,8 +215,8 @@ export type GatewayReloadConfig = {
   debounceMs?: number;
   /**
    * Optional maximum time (ms) to wait for in-flight operations to complete
-   * before forcing a restart. Absent or 0 waits indefinitely and logs periodic
-   * still-pending warnings.
+   * before forcing a restart. Absent uses the gateway's default bounded wait;
+   * 0 waits indefinitely and logs periodic still-pending warnings.
    * Lower positive values risk aborting active subagent LLM calls.
    * @see https://github.com/openclaw/openclaw/issues/65485
    */
@@ -447,6 +453,11 @@ export type GatewayConfig = {
   tools?: GatewayToolsConfig;
   /** WebChat display/history settings. */
   webchat?: GatewayWebchatConfig;
+  /**
+   * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
+   * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.
+   */
+  handshakeTimeoutMs?: number;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

@@ -4,9 +4,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { resolveAgentWorkspaceDir } from "../../../../src/agents/agent-scope-config.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
+import type { OpenClawConfig } from "./config-utils.js";
 
 type ResolvedMemoryBackendConfig = ReturnType<typeof resolveMemoryBackendConfig>;
 
@@ -94,6 +93,9 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.command).toBe("qmd");
     expect(resolved.qmd?.searchMode).toBe("search");
     expect(resolved.qmd?.update.intervalMs).toBeGreaterThan(0);
+    expect(resolved.qmd?.update.onBoot).toBe(true);
+    expect(resolved.qmd?.update.startup).toBe("off");
+    expect(resolved.qmd?.update.startupDelayMs).toBe(120_000);
     expect(resolved.qmd?.update.waitForBootSync).toBe(false);
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(30_000);
     expect(resolved.qmd?.update.updateTimeoutMs).toBe(120_000);
@@ -170,8 +172,7 @@ describe("resolveMemoryBackendConfig", () => {
     const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
     const custom = resolved.qmd?.collections.find((c) => c.name.startsWith("custom-notes"));
     expect(custom).toBeDefined();
-    const workspaceRoot = resolveAgentWorkspaceDir(cfg, "main");
-    expect(custom?.path).toBe(path.resolve(workspaceRoot, "notes"));
+    expect(custom?.path).toBe(path.resolve("/workspace/root", "notes"));
   });
 
   it("scopes qmd collection names per agent", () => {
@@ -351,6 +352,25 @@ describe("resolveMemoryBackendConfig", () => {
     expect(resolved.qmd?.update.commandTimeoutMs).toBe(12_000);
     expect(resolved.qmd?.update.updateTimeoutMs).toBe(480_000);
     expect(resolved.qmd?.update.embedTimeoutMs).toBe(360_000);
+  });
+
+  it("resolves qmd startup refresh overrides", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          update: {
+            startup: "idle",
+            startupDelayMs: 45_000,
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    expect(resolved.qmd?.update.startup).toBe("idle");
+    expect(resolved.qmd?.update.startupDelayMs).toBe(45_000);
+    expect(resolved.qmd?.update.onBoot).toBe(true);
   });
 
   it("resolves qmd search mode override", () => {

@@ -1,6 +1,9 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness";
-import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  HEARTBEAT_RESPONSE_TOOL_NAME,
+  wrapToolWithBeforeToolCallHook,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -209,6 +212,38 @@ describe("createCodexDynamicToolBridge", () => {
       messagingToolSentTexts: [],
       messagingToolSentMediaUrls: [],
       messagingToolSentTargets: [],
+    });
+  });
+
+  it("records heartbeat response tool outcomes", async () => {
+    const bridge = createBridgeWithToolResult(
+      HEARTBEAT_RESPONSE_TOOL_NAME,
+      textToolResult("Recorded.", {
+        status: "recorded",
+        outcome: "needs_attention",
+        notify: true,
+        summary: "Build is blocked.",
+        notificationText: "Build is blocked on missing credentials.",
+        priority: "high",
+      }),
+    );
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+      arguments: {},
+    });
+
+    expect(result).toEqual(expectInputText("Recorded."));
+    expect(bridge.telemetry.heartbeatToolResponse).toEqual({
+      outcome: "needs_attention",
+      notify: true,
+      summary: "Build is blocked.",
+      notificationText: "Build is blocked on missing credentials.",
+      priority: "high",
     });
   });
 
@@ -672,6 +707,43 @@ describe("createCodexDynamicToolBridge", () => {
         }),
       );
     });
+  });
+
+  it("passes per-call abort signals into dynamic tool execution", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let resolveTool: ((result: AgentToolResult<unknown>) => void) | undefined;
+    const execute = vi.fn(
+      async (_callId: string, _args: Record<string, unknown>, signal: AbortSignal) =>
+        await new Promise<AgentToolResult<unknown>>((resolve) => {
+          capturedSignal = signal;
+          resolveTool = resolve;
+        }),
+    );
+    const runController = new AbortController();
+    const callController = new AbortController();
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: runController.signal,
+    });
+
+    const result = bridge.handleToolCall(
+      {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-signal",
+        namespace: null,
+        tool: "exec",
+        arguments: { command: "sleep" },
+      },
+      { signal: callController.signal },
+    );
+    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+
+    callController.abort(new Error("deadline"));
+    expect(capturedSignal?.aborted).toBe(true);
+    resolveTool?.(textToolResult("done"));
+
+    await expect(result).resolves.toEqual(expectInputText("done"));
   });
 
   it("does not double-wrap dynamic tools that already have before_tool_call", async () => {

@@ -1,15 +1,11 @@
-import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import type { BundledRuntimeDepsInstallParams } from "../plugins/bundled-runtime-deps-install.js";
 import {
-  createBundledRuntimeDepsWritableInstallSpecs,
-  repairBundledRuntimeDepsInstallRootAsync,
-  resolveBundledRuntimeDependencyPackageInstallRootPlan,
-  scanBundledPluginRuntimeDeps,
-  type BundledRuntimeDepsInstallParams,
+  createBundledRuntimeDepsPackagePlan,
+  repairBundledRuntimeDepsPackagePlanAsync,
 } from "../plugins/bundled-runtime-deps.js";
-import { resolveEffectivePluginIds } from "../plugins/effective-plugin-ids.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -54,25 +50,14 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   }
 
   const env = params.env ?? process.env;
-  const bundledPluginsDir = path.join(packageRoot, "dist", "extensions");
-  const effectivePluginIds = params.config
-    ? resolveEffectivePluginIds({
-        config: params.config,
-        env: {
-          ...env,
-          OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
-        },
-      })
-    : undefined;
-  const { deps, missing, conflicts } = scanBundledPluginRuntimeDeps({
+  const plan = createBundledRuntimeDepsPackagePlan({
     packageRoot,
     config: params.config,
-    pluginIds: effectivePluginIds,
     includeConfiguredChannels: params.includeConfiguredChannels,
     env,
   });
-  if (conflicts.length > 0) {
-    const conflictLines = conflicts.flatMap((conflict) =>
+  if (plan.conflicts.length > 0) {
+    const conflictLines = plan.conflicts.flatMap((conflict) =>
       [`- ${conflict.name}: ${conflict.versions.join(", ")}`].concat(
         conflict.versions.flatMap((version) => {
           const pluginIds = conflict.pluginIdsByVersion.get(version) ?? [];
@@ -90,23 +75,16 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     );
   }
 
-  if (missing.length === 0) {
+  if (plan.missing.length === 0) {
     return;
   }
 
-  const missingSpecs = missing.map((dep) => `${dep.name}@${dep.version}`);
-  const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(packageRoot, {
-    env,
-  });
-  const installSpecs = createBundledRuntimeDepsWritableInstallSpecs({
-    deps,
-    searchRoots: installRootPlan.searchRoots,
-    installRoot: installRootPlan.installRoot,
-  });
   note(
     [
-      "Bundled plugin runtime deps are missing.",
-      ...missing.map((dep) => `- ${dep.name}@${dep.version} (used by ${dep.pluginIds.join(", ")})`),
+      "Bundled plugin runtime deps need staging.",
+      ...plan.missing.map(
+        (dep) => `- ${dep.name}@${dep.version} (used by ${dep.pluginIds.join(", ")})`,
+      ),
       `Fix: run ${formatCliCommand("openclaw doctor --fix")} to install them.`,
     ].join("\n"),
     "Bundled plugins",
@@ -114,11 +92,11 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
 
   const shouldRepair =
     params.prompter.shouldRepair ||
-    params.prompter.repairMode.nonInteractive ||
-    (await params.prompter.confirmAutoFix({
-      message: "Install missing bundled plugin runtime deps now?",
-      initialValue: true,
-    }));
+    (!params.prompter.repairMode.nonInteractive &&
+      (await params.prompter.confirmAutoFix({
+        message: "Install missing bundled plugin runtime deps now?",
+        initialValue: true,
+      })));
   if (!shouldRepair) {
     return;
   }
@@ -128,14 +106,14 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
   try {
     const { createCliProgress } = await import("../cli/progress.js");
     progress = createCliProgress({
-      label: `Installing bundled plugin runtime deps (${missingSpecs.length})`,
+      label: `Installing bundled plugin runtime deps (${plan.installSpecs.length})`,
       indeterminate: true,
       enabled: process.env.VITEST !== "true" || process.env.OPENCLAW_TEST_RUNTIME_LOG === "1",
     });
     const installStartedAt = Date.now();
     logRuntimeDepsInstallProgress(
       params.runtime,
-      `Installing bundled plugin runtime deps (${missingSpecs.length} missing, ${installSpecs.length} install specs): ${missingSpecs.join(", ")}`,
+      `Installing bundled plugin runtime deps (${plan.installSpecs.length} specs): ${plan.installSpecs.join(", ")}`,
     );
     heartbeat = setInterval(() => {
       logRuntimeDepsInstallProgress(
@@ -144,10 +122,10 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
       );
     }, RUNTIME_DEPS_INSTALL_HEARTBEAT_MS);
     heartbeat.unref?.();
-    const result = await repairBundledRuntimeDepsInstallRootAsync({
-      installRoot: installRootPlan.installRoot,
-      missingSpecs,
-      installSpecs,
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: params.config,
+      includeConfiguredChannels: params.includeConfiguredChannels,
       env: params.env ?? process.env,
       installDeps: params.installDeps
         ? async (installParams) => {
@@ -159,9 +137,16 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     });
     logRuntimeDepsInstallProgress(
       params.runtime,
-      `Installed bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.installSpecs.join(", ")}`,
+      result.reusedSpecs && result.reusedSpecs.length > 0
+        ? `Reused bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.reusedSpecs.join(", ")}`
+        : `Installed bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.repairedSpecs.join(", ")}`,
     );
-    note(`Installed bundled plugin deps: ${result.installSpecs.join(", ")}`, "Bundled plugins");
+    note(
+      result.reusedSpecs && result.reusedSpecs.length > 0
+        ? `Reused bundled plugin deps: ${result.reusedSpecs.join(", ")}`
+        : `Installed bundled plugin deps: ${result.repairedSpecs.join(", ")}`,
+      "Bundled plugins",
+    );
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
     throw error instanceof Error ? error : new Error(String(error));

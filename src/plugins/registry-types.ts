@@ -9,6 +9,7 @@ import type {
   AgentToolResultMiddlewareRuntime,
 } from "./agent-tool-result-middleware-types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
@@ -229,6 +230,15 @@ export type PluginNodeHostCommandRegistration = {
   rootDir?: string;
 };
 
+export type PluginNodeInvokePolicyRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  policy: import("./types.js").OpenClawPluginNodeInvokePolicy;
+  pluginConfig?: Record<string, unknown>;
+  source: string;
+  rootDir?: string;
+};
+
 export type PluginSecurityAuditCollectorRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -328,6 +338,7 @@ export type PluginRecord = {
   explicitlyEnabled?: boolean;
   activated?: boolean;
   imported?: boolean;
+  compat?: readonly PluginCompatCode[];
   activationSource?: PluginActivationSource;
   activationReason?: string;
   status: "loaded" | "disabled" | "error";
@@ -397,6 +408,7 @@ export type PluginRegistry = {
   cliRegistrars: PluginCliRegistration[];
   reloads?: PluginReloadRegistration[];
   nodeHostCommands?: PluginNodeHostCommandRegistration[];
+  nodeInvokePolicies?: PluginNodeInvokePolicyRegistration[];
   securityAuditCollectors?: PluginSecurityAuditCollectorRegistration[];
   services: PluginServiceRegistration[];
   gatewayDiscoveryServices: PluginGatewayDiscoveryServiceRegistration[];

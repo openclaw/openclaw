@@ -262,6 +262,7 @@ async function buildModelsJsonFingerprint(params: {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index">;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
+  providerDiscoveryEntriesOnly?: boolean;
 }): Promise<string> {
   // Use a content-based hash for auth-profiles instead of mtime so OAuth
   // token rotation doesn't invalidate the cache.  models.json drift is
@@ -291,6 +292,7 @@ async function buildModelsJsonFingerprint(params: {
     pluginMetadataSnapshotIndexFingerprint,
     providerDiscoveryProviderIds: params.providerDiscoveryProviderIds,
     providerDiscoveryTimeoutMs: params.providerDiscoveryTimeoutMs,
+    providerDiscoveryEntriesOnly: params.providerDiscoveryEntriesOnly === true,
   });
   return createHash("sha256").update(canonical).digest("hex");
 }
@@ -413,6 +415,7 @@ export async function ensureOpenClawModelsJson(
     workspaceDir?: string;
     providerDiscoveryProviderIds?: readonly string[];
     providerDiscoveryTimeoutMs?: number;
+    providerDiscoveryEntriesOnly?: boolean;
   } = {},
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const resolved = resolveModelsConfigInput(config);
@@ -441,6 +444,9 @@ export async function ensureOpenClawModelsJson(
       : {}),
     ...(options.providerDiscoveryTimeoutMs !== undefined
       ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+      : {}),
+    ...(options.providerDiscoveryEntriesOnly === true
+      ? { providerDiscoveryEntriesOnly: true }
       : {}),
   });
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
@@ -481,6 +487,9 @@ export async function ensureOpenClawModelsJson(
       ...(options.providerDiscoveryTimeoutMs !== undefined
         ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
         : {}),
+      ...(options.providerDiscoveryEntriesOnly === true
+        ? { providerDiscoveryEntriesOnly: true }
+        : {}),
     });
 
     if (plan.action === "skip") {
@@ -518,6 +527,9 @@ export async function ensureOpenClawModelsJson(
         : {}),
       ...(options.providerDiscoveryTimeoutMs !== undefined
         ? { providerDiscoveryTimeoutMs: options.providerDiscoveryTimeoutMs }
+        : {}),
+      ...(options.providerDiscoveryEntriesOnly === true
+        ? { providerDiscoveryEntriesOnly: true }
         : {}),
     });
     const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);

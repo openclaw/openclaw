@@ -214,6 +214,7 @@ describe("buildGatewayReloadPlan", () => {
     );
     expect(expected.size).toBeGreaterThan(0);
     expect(plan.restartChannels).toEqual(expected);
+    expect(plan.planPluginRuntimeDeps).toBe(true);
   });
 
   it("refreshes channel reload rules when only the tracked channel registry changes", () => {
@@ -240,15 +241,25 @@ describe("buildGatewayReloadPlan", () => {
     ]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.planPluginRuntimeDeps).toBe(true);
     expect(plan.hotReasons).toEqual(
       expect.arrayContaining(["models.providers.openai.models", "agents.defaults.model"]),
     );
+  });
+
+  it("requires restart when model pricing bootstrap changes", () => {
+    const plan = buildGatewayReloadPlan(["models.pricing.enabled"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("models.pricing.enabled");
+    expect(plan.restartHeartbeat).toBe(false);
+    expect(plan.hotReasons).toEqual([]);
   });
 
   it("restarts heartbeat when agents.defaults.models allowlist changes", () => {
     const plan = buildGatewayReloadPlan(["agents.defaults.models"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.planPluginRuntimeDeps).toBe(true);
     expect(plan.hotReasons).toContain("agents.defaults.models");
     expect(plan.noopPaths).toEqual([]);
   });
@@ -257,6 +268,7 @@ describe("buildGatewayReloadPlan", () => {
     const plan = buildGatewayReloadPlan(["agents.list"]);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartHeartbeat).toBe(true);
+    expect(plan.planPluginRuntimeDeps).toBe(true);
     expect(plan.hotReasons).toContain("agents.list");
     expect(plan.noopPaths).toEqual([]);
   });
@@ -267,6 +279,7 @@ describe("buildGatewayReloadPlan", () => {
       "plugins.installs.lossless-claw.installedAt",
     ]);
     expect(plan.restartGateway).toBe(false);
+    expect(plan.planPluginRuntimeDeps).toBe(false);
     expect(plan.noopPaths).toEqual([
       "plugins.installs.lossless-claw.resolvedAt",
       "plugins.installs.lossless-claw.installedAt",
@@ -338,6 +351,7 @@ describe("buildGatewayReloadPlan", () => {
   it("treats secrets config changes as no-op for gateway restart planning", () => {
     const plan = buildGatewayReloadPlan(["secrets.providers.default.path"]);
     expect(plan.restartGateway).toBe(false);
+    expect(plan.planPluginRuntimeDeps).toBe(false);
     expect(plan.noopPaths).toContain("secrets.providers.default.path");
   });
 
@@ -740,7 +754,7 @@ describe("startGatewayConfigReloader", () => {
       "valid-config",
     );
     expect(log.warn).toHaveBeenCalledWith(
-      "config reload restored last-known-good config after invalid-config",
+      "config reload restored last-known-good config after invalid-config; Rejected validation details: gateway.mode: Expected string.",
     );
 
     await reloader.stop();

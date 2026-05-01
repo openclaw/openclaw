@@ -1,3 +1,4 @@
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecElevatedDefaults } from "../bash-tools.js";
@@ -20,10 +21,12 @@ export type EmbeddedCompactionRuntimeContext = {
   senderId?: string;
   provider?: string;
   model?: string;
+  modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
 };
 
@@ -85,10 +88,12 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   senderId?: string | null;
   provider?: string | null;
   modelId?: string | null;
+  modelFallbacksOverride?: string[];
   thinkLevel?: ThinkLevel;
   reasoningLevel?: ReasoningLevel;
   bashElevated?: ExecElevatedDefaults;
   extraSystemPrompt?: string;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   ownerNumbers?: string[];
 }): EmbeddedCompactionRuntimeContext {
   const resolved = resolveEmbeddedCompactionTarget({
@@ -114,10 +119,12 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     senderId: params.senderId ?? undefined,
     provider: resolved.provider,
     model: resolved.model,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     thinkLevel: params.thinkLevel,
     reasoningLevel: params.reasoningLevel,
     bashElevated: params.bashElevated,
     extraSystemPrompt: params.extraSystemPrompt,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     ownerNumbers: params.ownerNumbers,
   };
 }

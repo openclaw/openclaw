@@ -7,6 +7,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
 import { callGateway } from "../gateway/call.js";
 import { getAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
@@ -55,6 +56,7 @@ import {
 } from "./subagent-registry-queries.js";
 import {
   createSubagentRunManager,
+  markSubagentRunPausedAfterYield,
   type RegisterSubagentRunParams,
 } from "./subagent-registry-run-manager.js";
 import {
@@ -96,7 +98,10 @@ type SubagentRegistryDeps = {
   runSubagentAnnounceFlow: SubagentAnnounceModule["runSubagentAnnounceFlow"];
   ensureContextEnginesInitialized?: () => void;
   ensureRuntimePluginsLoaded?: typeof ensureRuntimePluginsLoadedFn;
-  resolveContextEngine?: (cfg: OpenClawConfig) => Promise<ContextEngine>;
+  resolveContextEngine?: (
+    cfg?: OpenClawConfig,
+    options?: ResolveContextEngineOptions,
+  ) => Promise<ContextEngine>;
 };
 
 let subagentAnnouncePromise: Promise<SubagentAnnounceModule> | null = null;
@@ -139,7 +144,10 @@ type ContextEngineInitModule = Pick<
 >;
 type ContextEngineRegistryModule = Pick<
   {
-    resolveContextEngine: (cfg: OpenClawConfig) => Promise<ContextEngine>;
+    resolveContextEngine: (
+      cfg?: OpenClawConfig,
+      options?: ResolveContextEngineOptions,
+    ) => Promise<ContextEngine>;
   },
   "resolveContextEngine"
 >;
@@ -307,7 +315,10 @@ async function ensureSubagentRegistryPluginRuntimeLoaded(params: {
   (await loadRuntimePluginsModule()).ensureRuntimePluginsLoaded(params);
 }
 
-async function resolveSubagentRegistryContextEngine(cfg: OpenClawConfig) {
+async function resolveSubagentRegistryContextEngine(
+  cfg: OpenClawConfig,
+  options?: ResolveContextEngineOptions,
+) {
   const initModule = await loadContextEngineInitModule();
   const registryModule = await loadContextEngineRegistryModule();
   const ensureContextEnginesInitialized =
@@ -316,7 +327,7 @@ async function resolveSubagentRegistryContextEngine(cfg: OpenClawConfig) {
   const resolveContextEngine =
     subagentRegistryDeps.resolveContextEngine ?? registryModule.resolveContextEngine;
   ensureContextEnginesInitialized();
-  return await resolveContextEngine(cfg);
+  return await resolveContextEngine(cfg, options);
 }
 
 function persistSubagentRuns() {
@@ -468,6 +479,7 @@ function schedulePendingLifecycleTimeout(params: { runId: string; endedAt: numbe
 async function notifyContextEngineSubagentEnded(params: {
   childSessionKey: string;
   reason: SubagentEndReason;
+  agentDir?: string;
   workspaceDir?: string;
 }) {
   try {
@@ -477,7 +489,10 @@ async function notifyContextEngineSubagentEnded(params: {
       workspaceDir: params.workspaceDir,
       allowGatewaySubagentBinding: true,
     });
-    const engine = await resolveSubagentRegistryContextEngine(cfg);
+    const engine = await resolveSubagentRegistryContextEngine(cfg, {
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    });
     if (!engine.onSubagentEnded) {
       return;
     }
@@ -576,6 +591,9 @@ function resumeSubagentRun(runId: string) {
     return;
   }
   if (entry.cleanupCompletedAt) {
+    return;
+  }
+  if (entry.pauseReason === "sessions_yield") {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
@@ -808,6 +826,7 @@ async function sweepSubagentRuns() {
           void notifyContextEngineSubagentEnded({
             childSessionKey: entry.childSessionKey,
             reason: "swept",
+            agentDir: entry.agentDir,
             workspaceDir: entry.workspaceDir,
           });
           subagentRuns.delete(runId);
@@ -847,6 +866,7 @@ async function sweepSubagentRuns() {
       void notifyContextEngineSubagentEnded({
         childSessionKey: entry.childSessionKey,
         reason: "swept",
+        agentDir: entry.agentDir,
         workspaceDir: entry.workspaceDir,
       });
     }
@@ -922,6 +942,19 @@ function ensureListener() {
           runId: evt.runId,
           endedAt,
         });
+        return;
+      }
+      if (evt.data?.yielded === true) {
+        if (
+          markSubagentRunPausedAfterYield({
+            entry,
+            endedAt,
+            startedAt:
+              typeof evt.data?.startedAt === "number" ? evt.data.startedAt : entry.startedAt,
+          })
+        ) {
+          persistSubagentRuns();
+        }
         return;
       }
       clearPendingLifecycleError(evt.runId);
