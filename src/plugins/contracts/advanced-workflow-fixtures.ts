@@ -93,7 +93,11 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
     },
   });
   api.on("inbound_claim", (event, ctx) => {
+    if (!ctx.config) {
+      return undefined;
+    }
     const approval = getPluginSessionExtensionSync<{ status?: string }>({
+      cfg: ctx.config,
       pluginId: APPROVAL_PLUGIN_ID,
       sessionKey: ctx.sessionKey ?? event.sessionKey,
       namespace: "approval",

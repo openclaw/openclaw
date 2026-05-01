@@ -148,8 +148,10 @@ describe("before_tool_call terminal block semantics", () => {
       },
     ]);
     const runner = createHookRunner(registry);
+    const config = {};
 
     const result = await runner.runBeforeToolCall(toolEvent, {
+      config,
       toolName: "bash",
       sessionKey: "agent:main:main",
     });
@@ -160,6 +162,10 @@ describe("before_tool_call terminal block semantics", () => {
     expect(getPluginSessionExtensionSync.mock.calls.map(([params]) => params.namespace)).toEqual([
       "settings",
       "other",
+    ]);
+    expect(getPluginSessionExtensionSync.mock.calls.map(([params]) => params.cfg)).toEqual([
+      config,
+      config,
     ]);
   });
 

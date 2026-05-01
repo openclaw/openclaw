@@ -1,8 +1,10 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import type { PluginConversationBinding } from "./conversation-binding.types.js";
 
 export type PluginHookMessageContext = {
   channelId: string;
+  config?: OpenClawConfig;
   accountId?: string;
   conversationId?: string;
   sessionKey?: string;

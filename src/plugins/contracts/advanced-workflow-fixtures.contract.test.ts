@@ -246,7 +246,7 @@ describe("advanced workflow plugin contract fixtures", () => {
             sessionKey: "agent:main:main",
             isGroup: false,
           },
-          { channelId: "telegram" },
+          { channelId: "telegram", config },
         ),
       ).resolves.toEqual({
         handled: true,
@@ -314,7 +314,7 @@ describe("advanced workflow plugin contract fixtures", () => {
             sessionKey: "agent:main:main",
             isGroup: false,
           },
-          { channelId: "telegram" },
+          { channelId: "telegram", config },
         ),
       ).resolves.toBeUndefined();
 
@@ -369,7 +369,7 @@ describe("advanced workflow plugin contract fixtures", () => {
 
       const policy = await runTrustedToolPolicies(
         { toolName: "mutating_tool", params: {} },
-        { toolName: "mutating_tool", sessionKey: "agent:main:main" },
+        { config, toolName: "mutating_tool", sessionKey: "agent:main:main" },
       );
       expect(policy).toEqual({
         block: true,
@@ -379,7 +379,7 @@ describe("advanced workflow plugin contract fixtures", () => {
       if (!policy?.block) {
         await createHookRunner(registry.registry).runBeforeToolCall(
           { toolName: "mutating_tool", params: {} },
-          { toolName: "mutating_tool", sessionKey: "agent:main:main" },
+          { config, toolName: "mutating_tool", sessionKey: "agent:main:main" },
         );
       }
       expect(normalHookCalls).toEqual([]);
