@@ -1194,17 +1194,16 @@ export const dispatchTelegramMessage = async ({
                           if (payload.text && reasoningStreamSink) {
                             reasoningStreamSink.onToken(payload.text);
                           }
-                          if (!reasoningLane.stream) {
-                            return;
+                          if (reasoningLane.stream) {
+                            enqueueDraftLaneEvent(async () => {
+                              if (splitReasoningOnNextStream) {
+                                reasoningLane.stream?.forceNewMessage();
+                                resetDraftLaneState(reasoningLane);
+                                splitReasoningOnNextStream = false;
+                              }
+                              await ingestDraftLaneSegments(payload.text);
+                            });
                           }
-                          return enqueueDraftLaneEvent(async () => {
-                            if (splitReasoningOnNextStream) {
-                              reasoningLane.stream?.forceNewMessage();
-                              resetDraftLaneState(reasoningLane);
-                              splitReasoningOnNextStream = false;
-                            }
-                            await ingestDraftLaneSegments(payload.text);
-                          });
                         }
                       : undefined,
                   onAssistantMessageStart: answerLane.stream
