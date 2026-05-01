@@ -340,6 +340,19 @@ describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
     expect(stripTrailingAnthropicAssistantPrefillWhenThinking(toolCallsPayload)).toBe(0);
   });
 
+  it("removes trailing assistant text turns for OpenAI-compatible reasoning payloads", () => {
+    const payload = {
+      reasoning: { effort: "high" },
+      messages: [
+        { role: "user", content: "Return JSON." },
+        { role: "assistant", content: "{" },
+      ],
+    };
+
+    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(1);
+    expect(payload.messages).toEqual([{ role: "user", content: "Return JSON." }]);
+  });
+
   it("keeps assistant prefill when Anthropic thinking is disabled", () => {
     const payload = {
       thinking: { type: "disabled" },

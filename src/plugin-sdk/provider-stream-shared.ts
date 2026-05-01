@@ -156,10 +156,14 @@ export function createPayloadPatchStreamWrapper(
 
 function isAnthropicThinkingEnabled(payload: Record<string, unknown>): boolean {
   const thinking = payload.thinking;
-  if (!thinking || typeof thinking !== "object") {
-    return false;
+  if (thinking && typeof thinking === "object") {
+    return (thinking as { type?: unknown }).type !== "disabled";
   }
-  return (thinking as { type?: unknown }).type !== "disabled";
+  // OpenAI-compatible Anthropic proxy routes (for example OpenRouter) express
+  // extended thinking as `reasoning`/`reasoning_effort` instead of Anthropic's
+  // native `thinking` field, but the upstream Anthropic validation still
+  // rejects trailing assistant-prefill messages.
+  return Boolean(payload.reasoning || payload.reasoning_effort);
 }
 
 function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {

@@ -253,6 +253,30 @@ describe("buildProviderStreamFamilyHooks", () => {
       reasoning: { effort: "high" },
     });
 
+    payloadSeed = {
+      messages: [
+        { role: "user", content: "hello" },
+        { role: "assistant", content: "prefill" },
+      ],
+    };
+    capturedPayload = undefined;
+    void requireStreamFn(
+      requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        thinkingLevel: "high",
+        modelId: "anthropic/claude-opus-4.6",
+      } as never),
+    )(
+      { provider: "openrouter", id: "anthropic/claude-opus-4.6" } as never,
+      {} as never,
+      {},
+    );
+    expect(capturedPayload).toMatchObject({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
+      reasoning: { effort: "high" },
+    });
+    expect(capturedPayload?.messages).toEqual([{ role: "user", content: "hello" }]);
+
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
         streamFn: baseStreamFn,

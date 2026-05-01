@@ -2,6 +2,7 @@ import type { StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { isProxyReasoningUnsupportedModelHint } from "../../plugin-sdk/provider-model-shared.js";
+import { stripTrailingAnthropicAssistantPrefillWhenThinking } from "../../plugin-sdk/provider-stream-shared.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
 import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
@@ -102,6 +103,9 @@ export function createOpenRouterWrapper(
       },
       (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
+        if (isAnthropicModelRef(readStringValue(model.id))) {
+          stripTrailingAnthropicAssistantPrefillWhenThinking(payload);
+        }
       },
     );
   };
