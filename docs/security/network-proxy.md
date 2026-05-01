@@ -148,7 +148,7 @@ Use `--json` for automation. The JSON output contains the overall result, the ef
   "ok": true,
   "config": {
     "enabled": true,
-    "proxyUrl": "http://127.0.0.1:3128",
+    "proxyUrl": "http://127.0.0.1:3128/",
     "source": "override",
     "errors": []
   },
