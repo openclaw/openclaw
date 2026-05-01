@@ -166,7 +166,10 @@ health such as `inCall`, `manualActionRequired`, `providerConnected`,
 timestamps, byte counters, and bridge closed state. If a safe Meet page prompt
 appears, browser automation handles it when it can. Login, host admission, and
 browser/OS permission prompts are reported as manual action with a reason and
-message for the agent to relay.
+message for the agent to relay. Managed Chrome sessions only emit the intro or
+test phrase after browser health reports `inCall: true`; otherwise status reports
+`speechReady: false` and the speech attempt is blocked instead of pretending the
+agent spoke into the meeting.
 
 Local Chrome joins through the signed-in OpenClaw browser profile. Realtime mode
 requires `BlackHole 2ch` for the microphone/speaker path used by OpenClaw. For
@@ -1006,6 +1009,9 @@ a session ended.
 - `manualActionRequired` / `manualActionReason` / `manualActionMessage`: the
   browser profile needs manual login, Meet host admission, permissions, or
   browser-control repair before speech can work
+- `speechReady` / `speechBlockedReason` / `speechBlockedMessage`: whether
+  managed Chrome speech is allowed now. `speechReady: false` means OpenClaw did
+  not send the intro/test phrase into the audio bridge.
 - `providerConnected` / `realtimeReady`: realtime voice bridge state
 - `lastInputAt` / `lastOutputAt`: last audio seen from or sent to the bridge
 
@@ -1261,7 +1267,7 @@ Also verify:
 `googlemeet doctor [session-id]` prints the session, node, in-call state,
 manual action reason, realtime provider connection, `realtimeReady`, audio
 input/output activity, last audio timestamps, byte counters, and browser URL.
-Use `googlemeet status [session-id]` when you need the raw JSON. Use
+Use `googlemeet status [session-id] --json` when you need the raw JSON. Use
 `googlemeet doctor --oauth` when you need to verify Google Meet OAuth refresh
 without exposing tokens; add `--meeting` or `--create-space` when you need a
 Google Meet API proof as well.

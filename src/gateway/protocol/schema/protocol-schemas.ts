@@ -50,6 +50,15 @@ import {
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 import {
+  ArtifactSummarySchema,
+  ArtifactsDownloadParamsSchema,
+  ArtifactsDownloadResultSchema,
+  ArtifactsGetParamsSchema,
+  ArtifactsGetResultSchema,
+  ArtifactsListParamsSchema,
+  ArtifactsListResultSchema,
+} from "./artifacts.js";
+import {
   ChannelsStartParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
@@ -333,6 +342,13 @@ export const ProtocolSchemas = {
   AgentsFilesGetResult: AgentsFilesGetResultSchema,
   AgentsFilesSetParams: AgentsFilesSetParamsSchema,
   AgentsFilesSetResult: AgentsFilesSetResultSchema,
+  ArtifactSummary: ArtifactSummarySchema,
+  ArtifactsListParams: ArtifactsListParamsSchema,
+  ArtifactsListResult: ArtifactsListResultSchema,
+  ArtifactsGetParams: ArtifactsGetParamsSchema,
+  ArtifactsGetResult: ArtifactsGetResultSchema,
+  ArtifactsDownloadParams: ArtifactsDownloadParamsSchema,
+  ArtifactsDownloadResult: ArtifactsDownloadResultSchema,
   AgentsListParams: AgentsListParamsSchema,
   AgentsListResult: AgentsListResultSchema,
   ModelChoice: ModelChoiceSchema,

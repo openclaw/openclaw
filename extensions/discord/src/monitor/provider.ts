@@ -47,9 +47,9 @@ import {
   type GetPluginCommandSpecs,
 } from "./provider.commands.js";
 import { logDiscordResolvedConfig } from "./provider.config-log.js";
+import { formatDiscordDeployErrorDetails } from "./provider.deploy-errors.js";
 import {
   clearDiscordNativeCommands,
-  formatDiscordDeployErrorDetails,
   runDiscordCommandDeployInBackground,
 } from "./provider.deploy.js";
 import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
@@ -317,7 +317,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     phase: "fetch-application-id:start",
     startAt: startupStartedAt,
   });
-  const parsedApplicationId = parseApplicationIdFromToken(token);
+  const configuredApplicationId =
+    typeof discordCfg.applicationId === "string" && discordCfg.applicationId.trim()
+      ? discordCfg.applicationId.trim()
+      : undefined;
+  const parsedApplicationId = configuredApplicationId ?? parseApplicationIdFromToken(token);
   const applicationId =
     parsedApplicationId ??
     (await (fetchDiscordApplicationIdForTesting ?? fetchDiscordApplicationId)(

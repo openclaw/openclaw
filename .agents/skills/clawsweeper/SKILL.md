@@ -1,6 +1,6 @@
 ---
 name: clawsweeper
-description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, commit-review reports, repair jobs, cloud fix PRs, comment commands, trusted ClawSweeper-reviewed automerge, GitHub Actions monitoring, permissions, gates, and manual backfills."
+description: "Use for all ClawSweeper work: OpenClaw issue/PR sweep reports, commit-review reports, repair jobs, cloud fix PRs, @clawsweeper maintainer mention commands, trusted ClawSweeper-reviewed autofix/automerge, GitHub Actions monitoring, permissions, gates, and manual backfills."
 ---
 
 # ClawSweeper
@@ -187,25 +187,25 @@ Important gates:
 - `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE`: lets scheduled comment routing
   post replies and dispatch repair.
 
-## Comment Commands
+## Maintainer Mentions
 
-Maintainers can use:
+Prefer `@clawsweeper` comments for all maintainer-facing control. Slash
+commands still parse as compatibility aliases, but examples and live guidance
+should use mentions.
 
 ```text
-/review
-/clawsweeper status
-/clawsweeper re-review
-/clawsweeper fix ci
-/clawsweeper address review
-/clawsweeper rebase
-/clawsweeper automerge
-/clawsweeper approve
-/clawsweeper explain
-/clawsweeper stop
-/automerge
-/autoclose <maintainer close reason>
+@clawsweeper status
 @clawsweeper re-review
 @clawsweeper review
+@clawsweeper fix ci
+@clawsweeper address review
+@clawsweeper rebase
+@clawsweeper autofix
+@clawsweeper automerge
+@clawsweeper approve
+@clawsweeper explain
+@clawsweeper stop
+@clawsweeper <question or safe action request>
 @clawsweeper[bot] re-review
 @openclaw-clawsweeper fix ci
 @openclaw-clawsweeper[bot] fix ci
@@ -216,7 +216,16 @@ Accepted aliases: `review`, `re-review`, `rereview`, `review again`,
 ClawSweeper issue/PR review without starting repair. `fix ci`,
 `address review`, and `rebase` dispatch the
 repair worker only for ClawSweeper PRs or PRs opted into
-`clawsweeper:automerge`.
+`clawsweeper:autofix` or `clawsweeper:automerge`. `autofix` runs the bounded
+review/fix loop without merging. `automerge` runs the bounded review/fix/merge
+loop, but draft PRs stay fix-only until GitHub marks them ready for review.
+
+Freeform maintainer mentions such as `@clawsweeper why did automerge stop?`
+or `@clawsweeper: can you explain this failure?` dispatch a read-only assist
+review with the mention text as one-off instructions. The answer lands in the
+next public ClawSweeper review comment. Action-looking prose does not directly
+mutate GitHub; it must map to existing structured recommendations and pass the
+normal deterministic gates.
 
 Default accepted maintainers: `OWNER`, `MEMBER`, `COLLABORATOR`; fallback
 repository permission accepts `admin`, `maintain`, or `write`. Contributor
@@ -232,39 +241,61 @@ pnpm run repair:comment-router -- --repo openclaw/openclaw --execute --wait-for-
 Scheduled routing stays dry unless
 `CLAWSWEEPER_COMMENT_ROUTER_EXECUTE=1`.
 
-## Trusted Automerge
+## Trusted Autofix And Automerge
 
-`/clawsweeper automerge` opts an existing PR into the bounded loop. The router:
+`@clawsweeper autofix` opts an existing PR into the bounded review/fix loop.
+`@clawsweeper automerge` opts an existing PR into the bounded review/fix/merge
+loop. The router:
 
 - verifies maintainer authorization;
-- labels the PR `clawsweeper:automerge`;
+- labels the PR `clawsweeper:autofix` or `clawsweeper:automerge`;
 - dispatches ClawSweeper review for the current head SHA;
 - creates or reuses a durable adopted job;
 - repairs at most the configured caps;
-- merges only when ClawSweeper passed the exact current head, checks are green,
-  GitHub says mergeable, no human-review label is present, and both merge gates
-  are open.
+- never merges autofix PRs or draft PRs;
+- merges automerge PRs only when ClawSweeper passed the exact current head,
+  checks are green, GitHub says mergeable, no human-review label is present,
+  the PR is not draft, required user-facing OpenClaw changelog entries are
+  present, and both merge gates are open.
 
 If ClawSweeper passes while merge gates are closed, it labels
-`clawsweeper:merge-ready` and comments instead of merging. `/clawsweeper stop`
+`clawsweeper:merge-ready` and comments instead of merging. `@clawsweeper stop`
 adds `clawsweeper:human-review`.
+
+When Peter asks Codex to create a PR and enable ClawSweeper automerge, do not
+leave his local OpenClaw checkout on the PR branch. After the PR is created,
+pushed, and the `@clawsweeper automerge` request is posted or otherwise
+confirmed, return the local checkout to `main` and fast-forward it when the
+working tree is clean:
+
+```bash
+git switch main
+git pull --ff-only
+```
+
+If unrelated local edits or an in-progress rebase prevent switching, report the
+blocker instead of stashing, deleting, or overwriting work.
 
 Repair caps:
 
 ```bash
-CLAWSWEEPER_MAX_REPAIRS_PER_PR=5
+CLAWSWEEPER_MAX_REPAIRS_PER_PR=10
 CLAWSWEEPER_MAX_REPAIRS_PER_HEAD=1
 ```
 
 ## Security Boundary
 
-Do not stage security-sensitive work for ClawSweeper Repair. Route vulnerability
-reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys, plaintext secret
-storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege escalation, and sensitive
-data exposure to central OpenClaw security handling.
+Do not stage unapproved security-sensitive work for ClawSweeper Repair. Route
+vulnerability reports, CVE/GHSA/advisory work, leaked secrets/tokens/keys,
+plaintext secret storage, SSRF, XSS, CSRF, RCE, auth bypass, privilege
+escalation, and sensitive data exposure to central OpenClaw security handling.
 
-For adopted automerge jobs, trust deterministic ClawSweeper security markers,
-labels, and job frontmatter; do not infer security handling from vague prose.
+For PRs explicitly opted into `clawsweeper:autofix` or
+`clawsweeper:automerge`, security-sensitive review findings may dispatch
+bounded repair, but merge remains blocked until a later exact-head review is
+clean and the normal merge gates pass. Trust deterministic ClawSweeper security
+markers, labels, and job frontmatter; do not infer security handling from vague
+prose.
 
 ## Monitoring
 

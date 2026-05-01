@@ -29,7 +29,7 @@ on:
       release_profile:
         description: Release coverage profile for live/Docker/provider breadth
         required: false
-        default: full
+        default: stable
         type: choice
         options:
           - minimum
@@ -88,7 +88,7 @@ permissions:
 
 concurrency:
   group: full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -222,6 +222,14 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            cancel_child() {
+              if [[ -n "${run_id:-}" ]]; then
+                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
+                gh run cancel "$run_id" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cancel_child EXIT INT TERM
+
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
               if [[ "$status" == "completed" ]]; then
@@ -306,6 +314,14 @@ jobs:
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+            cancel_child() {
+              if [[ -n "${run_id:-}" ]]; then
+                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
+                gh run cancel "$run_id" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cancel_child EXIT INT TERM
 
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -396,6 +412,14 @@ jobs:
 
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+            cancel_child() {
+              if [[ -n "${run_id:-}" ]]; then
+                echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
+                gh run cancel "$run_id" >/dev/null 2>&1 || true
+              fi
+            }
+            trap cancel_child EXIT INT TERM
 
             while true; do
               status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -500,6 +524,14 @@ jobs:
 
           echo "Dispatched npm-telegram-beta-e2e.yml: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
           echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+          cancel_child() {
+            if [[ -n "${run_id:-}" ]]; then
+              echo "Cancelling child workflow npm-telegram-beta-e2e.yml: ${run_id}" >&2
+              gh run cancel "$run_id" >/dev/null 2>&1 || true
+            fi
+          }
+          trap cancel_child EXIT INT TERM
 
           while true; do
             status="$(gh run view "$run_id" --json status --jq '.status')"
@@ -610,18 +642,62 @@ jobs:
               return 1
             fi
 
-            local status conclusion url attempt
-            status="$(gh run view "$run_id" --json status --jq '.status')"
-            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view "$run_id" --json url --jq '.url')"
-            attempt="$(gh run view "$run_id" --json attempt --jq '.attempt')"
+            local run_json status conclusion url attempt
+            run_json="$(gh run view "$run_id" --json status,conclusion,url,attempt,jobs)"
+            status="$(jq -r '.status' <<< "$run_json")"
+            conclusion="$(jq -r '.conclusion' <<< "$run_json")"
+            url="$(jq -r '.url' <<< "$run_json")"
+            attempt="$(jq -r '.attempt' <<< "$run_json")"
             echo "${label}: ${status}/${conclusion} attempt ${attempt}: ${url}"
 
             if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
               echo "::error::${label} child run ended with ${status}/${conclusion}: ${url}"
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, status, conclusion, url}' || true
+              jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, status, conclusion, url}' <<< "$run_json" || true
               return 1
             fi
+          }
+
+          append_child_overview() {
+            {
+              echo
+              echo "### Child workflow overview"
+              echo
+              echo "| Child | Result | Minutes | Run |"
+              echo "| --- | --- | ---: | --- |"
+            } >> "$GITHUB_STEP_SUMMARY"
+
+            append_child_row() {
+              local label="$1"
+              local run_id="$2"
+              local result="$3"
+
+              if [[ -z "${run_id// }" ]]; then
+                echo "| \`${label}\` | \`${result}\` |  | skipped |" >> "$GITHUB_STEP_SUMMARY"
+                return 0
+              fi
+
+              local run_json row
+              run_json="$(gh run view "$run_id" --json status,conclusion,url,createdAt,updatedAt)"
+              row="$(
+                jq -r --arg label "$label" '
+                  def ts: fromdateiso8601;
+                  . as $run |
+                  ($run.createdAt // "") as $created |
+                  ($run.updatedAt // "") as $updated |
+                  (if ($created | length) > 0 and ($updated | length) > 0
+                    then (((($updated | ts) - ($created | ts)) / 60) * 10 | round / 10 | tostring)
+                    else ""
+                  end) as $minutes |
+                  "| `" + $label + "` | `" + ($run.status // "") + "/" + ($run.conclusion // "") + "` | " + $minutes + " | [run](" + ($run.url // "") + ") |"
+                ' <<< "$run_json"
+              )"
+              echo "$row" >> "$GITHUB_STEP_SUMMARY"
+            }
+
+            append_child_row "normal_ci" "$NORMAL_CI_RUN_ID" "$NORMAL_CI_RESULT"
+            append_child_row "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID" "$PLUGIN_PRERELEASE_RESULT"
+            append_child_row "release_checks" "$RELEASE_CHECKS_RUN_ID" "$RELEASE_CHECKS_RESULT"
+            append_child_row "npm_telegram" "$NPM_TELEGRAM_RUN_ID" "$NPM_TELEGRAM_RESULT"
           }
 
           summarize_child_timing() {
@@ -652,16 +728,15 @@ jobs:
               echo
               echo "### Longest queues: ${label}"
               echo
-              gh run view "$run_id" --json createdAt,jobs --jq '
+              gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100" --jq ".jobs[] | @json" | jq -sr '
                 def ts: fromdateiso8601;
-                .createdAt as $createdAt |
                 "| Job | Result | Queue minutes | Run minutes |",
                 "| --- | --- | ---: | ---: |",
-                ([.jobs[]
-                  | select(.startedAt != "0001-01-01T00:00:00Z")
+                ([.[]
+                  | select(.created_at != null and .started_at != null)
                   | . + {
-                      queueMin: ((((.startedAt | ts) - ($createdAt | ts)) / 60) * 10 | round / 10),
-                      durationMin: (if .completedAt == "0001-01-01T00:00:00Z" then null else ((((.completedAt | ts) - (.startedAt | ts)) / 60) * 10 | round / 10) end)
+                      queueMin: ((((.started_at | ts) - (.created_at | ts)) / 60) * 10 | round / 10),
+                      durationMin: (if .completed_at == null then null else ((((.completed_at | ts) - (.started_at | ts)) / 60) * 10 | round / 10) end)
                     }
                   | select(.queueMin > 0)
                   | {name, conclusion, queueMin, durationMin}]
@@ -675,6 +750,8 @@ jobs:
           }
 
           failed=0
+
+          append_child_overview
 
           if [[ "$NORMAL_CI_RESULT" == "skipped" && -z "${NORMAL_CI_RUN_ID// }" ]]; then
             check_child "normal_ci" "" 0 || failed=1

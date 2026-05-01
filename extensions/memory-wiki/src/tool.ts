@@ -40,11 +40,14 @@ const WikiGetSchema = Type.Object(
 );
 const WikiClaimEvidenceSchema = Type.Object(
   {
+    kind: Type.Optional(Type.String({ minLength: 1 })),
     sourceId: Type.Optional(Type.String({ minLength: 1 })),
     path: Type.Optional(Type.String({ minLength: 1 })),
     lines: Type.Optional(Type.String({ minLength: 1 })),
     weight: Type.Optional(Type.Number({ minimum: 0 })),
     note: Type.Optional(Type.String({ minLength: 1 })),
+    confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+    privacyTier: Type.Optional(Type.String({ minLength: 1 })),
     updatedAt: Type.Optional(Type.String({ minLength: 1 })),
   },
   { additionalProperties: false },

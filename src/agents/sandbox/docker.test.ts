@@ -118,12 +118,14 @@ describe("ensureDockerImage", () => {
     ]);
   });
 
-  it("returns when the Docker daemon is unavailable during image inspection", async () => {
+  it("throws when the Docker daemon is unavailable during image inspection", async () => {
     spawnState.imageExists = false;
     spawnState.inspectError =
       "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?";
 
-    await ensureDockerImage(DEFAULT_SANDBOX_IMAGE);
+    await expect(ensureDockerImage(DEFAULT_SANDBOX_IMAGE)).rejects.toThrow(
+      "Docker daemon is not available",
+    );
 
     expect(spawnState.calls).toEqual([
       {

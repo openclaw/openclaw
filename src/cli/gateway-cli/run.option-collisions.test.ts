@@ -317,9 +317,7 @@ describe("gateway run option collisions", () => {
     });
     startGatewayServer.mockRejectedValueOnce(err);
 
-    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
-      "__exit__:0",
-    );
+    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
   });
@@ -410,7 +408,7 @@ describe("gateway run option collisions", () => {
       },
     });
     expect(gatewayLogMessages).toContain(
-      "gateway: restored invalid effective config from last-known-good backup: /tmp/openclaw-test-missing-config.json",
+      "gateway: restored invalid effective config from last-known-good backup: /tmp/openclaw-test-missing-config.json; Rejected validation details: <root>: JSON5 parse failed.",
     );
     expect(startGatewayServer).toHaveBeenCalledWith(
       19170,

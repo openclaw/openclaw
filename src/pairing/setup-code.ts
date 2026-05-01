@@ -285,10 +285,11 @@ async function resolveGatewayUrl(
   }
 
   const remoteUrlRaw = cfg.gateway?.remote?.url;
-  const remoteUrl =
-    typeof remoteUrlRaw === "string" && remoteUrlRaw.trim()
-      ? normalizeUrl(remoteUrlRaw, scheme)
-      : null;
+  const hasRemoteUrl = typeof remoteUrlRaw === "string" && remoteUrlRaw.trim();
+  const remoteUrl = hasRemoteUrl ? normalizeUrl(remoteUrlRaw, scheme) : null;
+  if (hasRemoteUrl && !remoteUrl) {
+    return { error: "Configured gateway.remote.url is invalid." };
+  }
   if (opts.preferRemoteUrl && remoteUrl) {
     return { url: remoteUrl, source: "gateway.remote.url" };
   }

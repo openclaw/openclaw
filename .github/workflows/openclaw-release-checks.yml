@@ -33,7 +33,7 @@ on:
       release_profile:
         description: Release coverage profile for live/Docker/provider breadth
         required: false
-        default: full
+        default: stable
         type: choice
         options:
           - minimum
@@ -240,11 +240,12 @@ jobs:
   prepare_release_package:
     name: Prepare release package artifact
     needs: [resolve_target]
-    if: contains(fromJSON('["all","cross-os","live-e2e","package"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","cross-os","package"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
+      packages: write
     outputs:
       artifact_name: ${{ steps.artifact.outputs.name }}
       package_sha256: ${{ steps.package.outputs.sha256 }}
@@ -311,6 +312,7 @@ jobs:
     if: contains(fromJSON('["all","install-smoke"]'), needs.resolve_target.outputs.rerun_group)
     permissions:
       contents: read
+      packages: write
     uses: ./.github/workflows/install-smoke.yml
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
@@ -405,7 +407,7 @@ jobs:
   docker_e2e_release_checks:
     name: Run Docker release-path validation
     needs: [resolve_target, prepare_release_package]
-    if: contains(fromJSON('["all","live-e2e"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","live-e2e"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.live_suite_filter == ''
     permissions:
       actions: read
       contents: read

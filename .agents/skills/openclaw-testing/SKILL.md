@@ -149,9 +149,9 @@ Use `release_profile=minimum|stable|full` to control live/provider breadth:
 `minimum` keeps the fastest OpenAI/core release-critical set, `stable` adds the
 stable provider/backend set, and `full` adds the broad advisory provider/media
 matrix. Do not make `full` faster by silently dropping suites; optimize setup,
-artifact reuse, and sharding instead. The parent verifier job appends
-slowest-job tables for child runs; rerun only that verifier after a child rerun
-turns green.
+artifact reuse, and sharding instead. The parent verifier job appends a child
+overview plus slowest-job tables for child runs; rerun only that verifier after
+a child rerun turns green.
 
 Standalone manual `CI` dispatches do not run the plugin prerelease suite, the
 extension batch sweep, or the release-only `agentic-plugins` Vitest shard. Those
@@ -244,6 +244,13 @@ release checks, release-path Docker live/E2E checks, and Package Acceptance.
 When `Full Release Validation` dispatches release checks, it passes the requested
 branch/tag plus an `expected_sha` so branch/tag refs resolve through the fast
 remote-ref path while the package and QA jobs still validate the exact SHA.
+
+The full install-smoke child is split on purpose: one job prepares or reuses the
+target-SHA GHCR root Dockerfile smoke image, QR package install runs in its own
+job, root Dockerfile/gateway smokes pull the prepared image, and installer/Bun
+smokes pull the same image while building only their small installer images.
+If install-smoke gets slow again, first check whether the root image was reused
+or rebuilt before adding/removing coverage.
 
 The full-profile native live media shards use the prebuilt
 `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04` container so

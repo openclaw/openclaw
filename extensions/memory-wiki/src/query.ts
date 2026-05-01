@@ -12,6 +12,7 @@ import {
   toWikiPageSummary,
   type WikiClaim,
   type WikiPageSummary,
+  type WikiRelationship,
 } from "./markdown.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -21,6 +22,55 @@ const CLAIMS_DIGEST_PATH = ".openclaw-wiki/cache/claims.jsonl";
 const RELATED_BLOCK_PATTERN =
   /<!-- openclaw:wiki:related:start -->[\s\S]*?<!-- openclaw:wiki:related:end -->/g;
 const MARKDOWN_FRONTMATTER_PATTERN = /^\s*---\r?\n[\s\S]*?\r?\n---\r?\n?/;
+const ROUTE_QUESTION_STOP_WORDS = new Set([
+  "a",
+  "about",
+  "am",
+  "an",
+  "are",
+  "ask",
+  "asking",
+  "be",
+  "been",
+  "being",
+  "can",
+  "could",
+  "did",
+  "do",
+  "does",
+  "for",
+  "help",
+  "how",
+  "i",
+  "in",
+  "is",
+  "know",
+  "knows",
+  "me",
+  "my",
+  "need",
+  "needs",
+  "of",
+  "on",
+  "or",
+  "our",
+  "question",
+  "questions",
+  "should",
+  "the",
+  "to",
+  "us",
+  "we",
+  "what",
+  "when",
+  "where",
+  "who",
+  "whom",
+  "whose",
+  "why",
+  "with",
+  "would",
+]);
 
 export const WIKI_SEARCH_MODES = [
   "auto",
@@ -49,6 +99,7 @@ type QueryDigestPage = {
   bestUsedFor?: string[];
   notEnoughFor?: string[];
   relationshipCount?: number;
+  topRelationships?: WikiRelationship[];
 };
 
 type QueryDigestClaim = {
@@ -309,6 +360,12 @@ function buildQueryTokens(queryLower: string): string[] {
   ];
 }
 
+function buildRouteQuestionTokens(queryLower: string): string[] {
+  const tokens = buildQueryTokens(queryLower);
+  const routedTokens = tokens.filter((token) => !ROUTE_QUESTION_STOP_WORDS.has(token));
+  return routedTokens.length > 0 ? routedTokens : tokens;
+}
+
 function lineMatchesQuery(lineLower: string, queryLower: string, queryTokens: string[]): boolean {
   if (queryLower.length > 0 && lineLower.includes(queryLower)) {
     return true;
@@ -341,6 +398,16 @@ function buildDigestPageSearchText(page: QueryDigestPage, claims: QueryDigestCla
     page.personCard?.avoidAskingFor.join(" ") ?? "",
     page.personCard?.bestUsedFor.join(" ") ?? "",
     page.personCard?.notEnoughFor.join(" ") ?? "",
+    page.topRelationships
+      ?.flatMap((relationship) => [
+        relationship.targetId ?? "",
+        relationship.targetPath ?? "",
+        relationship.targetTitle ?? "",
+        relationship.kind ?? "",
+        relationship.evidenceKind ?? "",
+        relationship.note ?? "",
+      ])
+      .join(" ") ?? "",
     claims.map((claim) => claim.text).join(" "),
     claims.map((claim) => claim.id ?? "").join(" "),
     claims.map((claim) => claim.evidenceKinds?.join(" ") ?? "").join(" "),
@@ -469,6 +536,44 @@ function hasAnyQueryMatch(
   return values.some((value) => hasQueryMatch(value, queryLower, queryTokens));
 }
 
+function buildPageRouteQuestionFields(page: QueryableWikiPage): string[] {
+  return [
+    page.personCard?.lane,
+    ...(page.personCard?.askFor ?? []),
+    ...(page.personCard?.avoidAskingFor ?? []),
+    ...page.bestUsedFor,
+    ...page.notEnoughFor,
+    ...(page.personCard?.bestUsedFor ?? []),
+    ...(page.personCard?.notEnoughFor ?? []),
+    ...page.relationships.flatMap((relationship) => [
+      relationship.kind,
+      relationship.targetTitle,
+      relationship.note,
+    ]),
+  ].filter((value): value is string => Boolean(value));
+}
+
+function buildDigestRouteQuestionFields(page: QueryDigestPage): string[] {
+  return [
+    page.personCard?.lane,
+    ...(page.personCard?.askFor ?? []),
+    ...(page.personCard?.avoidAskingFor ?? []),
+    ...(page.bestUsedFor ?? []),
+    ...(page.notEnoughFor ?? []),
+    ...(page.personCard?.bestUsedFor ?? []),
+    ...(page.personCard?.notEnoughFor ?? []),
+    ...(page.topRelationships?.flatMap((relationship) => [
+      relationship.kind,
+      relationship.targetTitle,
+      relationship.note,
+    ]) ?? []),
+  ].filter((value): value is string => Boolean(value));
+}
+
+function hasRouteQuestionMatch(values: readonly string[], queryLower: string): boolean {
+  return hasAnyQueryMatch(values, queryLower, buildRouteQuestionTokens(queryLower));
+}
+
 function isPersonLikeSummary(
   page: Pick<WikiPageSummary, "entityType" | "pageType" | "personCard">,
 ): boolean {
@@ -516,26 +621,7 @@ function scorePageSearchModeBoost(params: {
     }
     case "route-question": {
       let score = isPersonLikeSummary(page) ? 14 : 0;
-      if (
-        hasAnyQueryMatch(
-          [
-            page.personCard?.lane,
-            ...(page.personCard?.askFor ?? []),
-            ...(page.personCard?.avoidAskingFor ?? []),
-            ...page.bestUsedFor,
-            ...page.notEnoughFor,
-            ...(page.personCard?.bestUsedFor ?? []),
-            ...(page.personCard?.notEnoughFor ?? []),
-            ...page.relationships.flatMap((relationship) => [
-              relationship.kind,
-              relationship.targetTitle,
-              relationship.note,
-            ]),
-          ],
-          queryLower,
-          queryTokens,
-        )
-      ) {
+      if (hasRouteQuestionMatch(buildPageRouteQuestionFields(page), queryLower)) {
         score += 32;
       }
       score += Math.min(8, page.relationships.length * 2);
@@ -569,6 +655,7 @@ function scorePageSearchModeBoost(params: {
     case "raw-claim":
       return params.matchingClaims.length > 0 ? 42 : 0;
   }
+  return 0;
 }
 
 function scoreDigestSearchModeBoost(params: {
@@ -605,21 +692,7 @@ function scoreDigestSearchModeBoost(params: {
     }
     case "route-question": {
       let score = isPersonLikeSummary(page) ? 14 : 0;
-      if (
-        hasAnyQueryMatch(
-          [
-            page.personCard?.lane,
-            ...(page.personCard?.askFor ?? []),
-            ...(page.personCard?.avoidAskingFor ?? []),
-            ...(page.bestUsedFor ?? []),
-            ...(page.notEnoughFor ?? []),
-            ...(page.personCard?.bestUsedFor ?? []),
-            ...(page.personCard?.notEnoughFor ?? []),
-          ],
-          queryLower,
-          queryTokens,
-        )
-      ) {
+      if (hasRouteQuestionMatch(buildDigestRouteQuestionFields(page), queryLower)) {
         score += 32;
       }
       score += Math.min(8, (page.relationshipCount ?? 0) * 2);
@@ -648,6 +721,7 @@ function scoreDigestSearchModeBoost(params: {
     case "raw-claim":
       return params.matchingClaims.length > 0 ? 42 : 0;
   }
+  return 0;
 }
 
 function buildDigestCandidatePaths(params: {
@@ -671,7 +745,13 @@ function buildDigestCandidatePaths(params: {
       const metadataLower = normalizeLowercaseStringOrEmpty(
         buildDigestPageSearchText(page, claims),
       );
-      if (!metadataLower.includes(queryLower)) {
+      if (
+        !metadataLower.includes(queryLower) &&
+        !(
+          params.mode === "route-question" &&
+          hasRouteQuestionMatch(buildDigestRouteQuestionFields(page), queryLower)
+        )
+      ) {
         return { path: page.path, score: 0 };
       }
       let score =
@@ -777,7 +857,10 @@ function scorePage(page: QueryableWikiPage, query: string, mode: WikiSearchMode)
     rawLower.includes(queryLower);
   const hasAllTokens =
     queryTokens.length > 0 && queryTokens.every((token) => combinedLower.includes(token));
-  if (!hasExactMatch && !hasAllTokens) {
+  const hasModeMatch =
+    mode === "route-question" &&
+    hasRouteQuestionMatch(buildPageRouteQuestionFields(page), queryLower);
+  if (!hasExactMatch && !hasAllTokens && !hasModeMatch) {
     return 0;
   }
 

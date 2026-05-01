@@ -387,11 +387,19 @@ export function registerVoiceCallCli(params: {
   root
     .command("status")
     .description("Show call status")
-    .requiredOption("--call-id <id>", "Call ID")
-    .action(async (options: { callId: string }) => {
+    .option("--call-id <id>", "Call ID")
+    .option("--json", "Print machine-readable JSON")
+    .action(async (options: { callId?: string; json?: boolean }) => {
       const rt = await ensureRuntime();
-      const call = rt.manager.getCall(options.callId);
-      writeStdoutJson(call ?? { found: false });
+      if (options.callId) {
+        const call = rt.manager.getCall(options.callId);
+        writeStdoutJson(call ?? { found: false });
+        return;
+      }
+      writeStdoutJson({
+        found: true,
+        calls: rt.manager.getActiveCalls(),
+      });
     });
 
   root
