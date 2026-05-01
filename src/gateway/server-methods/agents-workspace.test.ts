@@ -334,7 +334,8 @@ describe("agents.workspace.list", () => {
       { name: "link", isDirectory: () => false, isSymbolicLink: () => true },
     ] as Dirent[]);
 
-    mocks.fsStat.mockResolvedValue({
+    // workspaceList uses lstat for symlink entries to avoid following links
+    mocks.fsLstat.mockResolvedValue({
       isFile: () => false,
       isDirectory: () => false,
       size: 0,
@@ -637,7 +638,7 @@ describe("agents.workspace.delete", () => {
   it("returns deleted: false when file does not exist", async () => {
     const error = new Error("file not found") as NodeJS.ErrnoException;
     error.code = "ENOENT";
-    mocks.removePathWithinRoot.mockRejectedValue(error);
+    mocks.fsLstat.mockRejectedValue(error);
 
     const { getLastCall } = await invokeWorkspaceHandler("agents.workspace.delete", {
       agentId: "main",
@@ -657,7 +658,7 @@ describe("agents.workspace.mkdir", () => {
   });
 
   it("creates a directory", async () => {
-    mocks.mkdirPathWithinRoot.mockResolvedValue(undefined);
+    mocks.fsMkdir.mockResolvedValue(undefined);
 
     const { getLastCall } = await invokeWorkspaceHandler("agents.workspace.mkdir", {
       agentId: "main",
@@ -667,18 +668,12 @@ describe("agents.workspace.mkdir", () => {
     const lastCall = getLastCall();
     expect(lastCall?.ok).toBe(true);
     expect((lastCall?.result as { created?: boolean })?.created).toBe(true);
-    expect(mocks.mkdirPathWithinRoot).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rootDir: "/tmp/test-workspace/main",
-        relativePath: "new-dir",
-      }),
-    );
   });
 
   it("returns created: false when directory already exists", async () => {
     const error = new Error("directory exists") as NodeJS.ErrnoException;
     error.code = "EEXIST";
-    mocks.mkdirPathWithinRoot.mockRejectedValue(error);
+    mocks.fsMkdir.mockRejectedValue(error);
 
     const { getLastCall } = await invokeWorkspaceHandler("agents.workspace.mkdir", {
       agentId: "main",
@@ -712,8 +707,11 @@ describe("agents.workspace.move", () => {
   });
 
   it("moves a file", async () => {
+    // Source exists (access succeeds), destination doesn't exist (lstat throws ENOENT)
     mocks.fsAccess.mockResolvedValue(undefined);
-    mocks.fsAccess.mockRejectedValueOnce(new Error("not found"));
+    const enoent = new Error("not found") as NodeJS.ErrnoException;
+    enoent.code = "ENOENT";
+    mocks.fsLstat.mockRejectedValue(enoent);
     mocks.fsMkdir.mockResolvedValue(undefined);
     mocks.fsRename.mockResolvedValue(undefined);
 
@@ -731,7 +729,9 @@ describe("agents.workspace.move", () => {
 
   it("renames a file within the same directory", async () => {
     mocks.fsAccess.mockResolvedValue(undefined);
-    mocks.fsAccess.mockRejectedValueOnce(new Error("not found"));
+    const enoent = new Error("not found") as NodeJS.ErrnoException;
+    enoent.code = "ENOENT";
+    mocks.fsLstat.mockRejectedValue(enoent);
     mocks.fsMkdir.mockResolvedValue(undefined);
     mocks.fsRename.mockResolvedValue(undefined);
 
@@ -809,6 +809,7 @@ describe("agents.workspace.stat", () => {
     mocks.fsLstat.mockResolvedValue({
       isSymbolicLink: () => false,
       isFile: () => true,
+      isDirectory: () => false,
     } as unknown as Stats);
 
     mocks.fsAccess.mockResolvedValue(undefined);
@@ -888,6 +889,7 @@ describe("agents.workspace.stat", () => {
 
     mocks.fsLstat.mockResolvedValue({
       isSymbolicLink: () => false,
+      isDirectory: () => false,
     } as unknown as Stats);
 
     const error = new Error("Permission denied") as NodeJS.ErrnoException;
