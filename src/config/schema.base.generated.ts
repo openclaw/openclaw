@@ -10100,7 +10100,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                     type: "boolean",
                     title: "Async Media Completion Direct Send",
                     description:
-                      "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+                      "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
                   },
                 },
                 additionalProperties: false,
@@ -25135,7 +25135,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "tools.media.asyncCompletion.directSend": {
       label: "Async Media Completion Direct Send",
-      help: "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+      help: "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
       tags: ["storage", "media", "tools"],
     },
     "tools.media.audio.enabled": {
