@@ -118,6 +118,7 @@ function resolveImageToolMaxTokens(modelMaxTokens: number | undefined, requested
 export function resolveImageModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  workspaceDir?: string;
   authStore?: AuthProfileStore;
 }): ImageModelConfig | null {
   // Note: We intentionally do NOT gate based on primarySupportsImages here.
@@ -144,6 +145,7 @@ export function resolveImageModelConfigForTool(params: {
     }
     const providerDefault = imageToolProviderDeps.resolveDefaultMediaModel({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerId: primary.provider,
       capability: "image",
     });
@@ -159,11 +161,13 @@ export function resolveImageModelConfigForTool(params: {
   const autoCandidates = imageToolProviderDeps
     .resolveAutoMediaKeyProviders({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       capability: "image",
     })
     .map((providerId) => {
       const modelId = imageToolProviderDeps.resolveDefaultMediaModel({
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         providerId,
         capability: "image",
       });
@@ -387,6 +391,7 @@ export function createImageTool(options?: {
   const imageModelConfig = resolveImageModelConfigForTool({
     cfg: options?.config,
     agentDir,
+    workspaceDir: options?.workspaceDir,
     authStore: options?.authProfileStore,
   });
   if (!imageModelConfig) {

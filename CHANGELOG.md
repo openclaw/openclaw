@@ -159,6 +159,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/tools: route media and generation capability lookups through the Gateway plugin metadata snapshot during reply tool registration, avoiding repeated manifest registry reloads on the live reply path. Thanks @shakkernerd.
 - Agents/tools: reuse the auth profile store already loaded for the active run when deciding media and generation tool availability, avoiding repeated provider-auth runtime discovery during reply startup. Thanks @shakkernerd.
 - Agents/tools: keep image, video, and music generation tool registration on manifest/auth control-plane checks instead of loading runtime provider registries during reply startup, reducing live-path tool-prep blocking while leaving provider runtime resolution for execution and list actions. Thanks @shakkernerd.
 - fix: block workspace CLOUDSDK_PYTHON override and always set trusted interpreter for gcloud. (#74492) Thanks @pgondhi987.

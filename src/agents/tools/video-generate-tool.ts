@@ -811,6 +811,7 @@ export function createVideoGenerateTool(options?: {
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
       modelConfig: cfg.agents?.defaults?.videoGenerationModel,
       providerKey: "videoGenerationProviders",

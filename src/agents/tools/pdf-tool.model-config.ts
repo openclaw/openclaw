@@ -17,10 +17,15 @@ import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 function resolveImageCandidateRefs(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  workspaceDir?: string;
   authStore?: AuthProfileStore;
   filter?: (providerId: string) => boolean;
 }): string[] {
-  return resolveAutoMediaKeyProviders({ capability: "image", cfg: params.cfg })
+  return resolveAutoMediaKeyProviders({
+    capability: "image",
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+  })
     .filter((providerId) => !params.filter || params.filter(providerId))
     .filter((providerId) =>
       hasAuthForProvider({
@@ -37,6 +42,7 @@ function resolveImageCandidateRefs(params: {
         })?.split("/")[1] ??
         resolveDefaultMediaModel({
           cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
           providerId,
           capability: "image",
         });
@@ -48,6 +54,7 @@ function resolveImageCandidateRefs(params: {
 export function resolvePdfModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir: string;
+  workspaceDir?: string;
   authStore?: AuthProfileStore;
 }): ImageModelConfig | null {
   const explicitPdf = coercePdfModelConfig(params.cfg);
@@ -96,22 +103,31 @@ export function resolvePdfModelConfigForTool(params: {
     providerVision?.split("/")[1] ??
     resolveDefaultMediaModel({
       cfg: params.cfg,
+      workspaceDir: params.workspaceDir,
       providerId: primary.provider,
       capability: "image",
     });
   const primarySupportsNativePdf = providerSupportsNativePdfDocument({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     providerId: primary.provider,
   });
   const nativePdfCandidates = resolveImageCandidateRefs({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     authStore: params.authStore,
-    filter: (providerId) => providerSupportsNativePdfDocument({ cfg: params.cfg, providerId }),
+    filter: (providerId) =>
+      providerSupportsNativePdfDocument({
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
+        providerId,
+      }),
   });
   const genericImageCandidates = resolveImageCandidateRefs({
     cfg: params.cfg,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     authStore: params.authStore,
   });
 

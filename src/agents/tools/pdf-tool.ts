@@ -262,6 +262,7 @@ export function createPdfTool(options?: {
   const pdfModelConfig = resolvePdfModelConfigForTool({
     cfg: options?.config,
     agentDir,
+    workspaceDir: options?.workspaceDir,
     authStore: options?.authProfileStore,
   });
   if (!pdfModelConfig) {

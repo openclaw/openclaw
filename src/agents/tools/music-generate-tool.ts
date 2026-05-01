@@ -504,6 +504,7 @@ export function createMusicGenerateTool(options?: {
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
       modelConfig: cfg.agents?.defaults?.musicGenerationModel,
       providerKey: "musicGenerationProviders",

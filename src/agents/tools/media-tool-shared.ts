@@ -296,6 +296,7 @@ export function resolveCapabilityModelConfigForTool(params: {
 export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
@@ -319,6 +320,7 @@ export function hasGenerationToolAvailability(params: {
   return resolveBundledCapabilityProviderIds({
     key: params.providerKey,
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
   }).some((providerId) =>
     hasAuthForProvider({
       provider: providerId,

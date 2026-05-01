@@ -5,6 +5,7 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
   resolvePluginRegistryLoadCacheKey,
   resolveRuntimePluginRegistry,
@@ -72,16 +73,25 @@ function shouldSkipCapabilityResolution(params: {
 function resolveBundledCapabilityCompatPluginIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   providerId?: string;
 }): string[] {
   const env = process.env;
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
-  return loadPluginManifestRegistryForPluginRegistry({
+  const snapshot = getCurrentPluginMetadataSnapshot({
     config: params.cfg,
-    env,
-    includeDisabled: true,
-  })
-    .plugins.filter(
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+  const plugins =
+    snapshot?.plugins ??
+    loadPluginManifestRegistryForPluginRegistry({
+      config: params.cfg,
+      env,
+      includeDisabled: true,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }).plugins;
+  return plugins
+    .filter(
       (plugin) =>
         plugin.origin === "bundled" &&
         (plugin.contracts?.[contractKey]?.length ?? 0) > 0 &&
@@ -94,16 +104,25 @@ function resolveBundledCapabilityCompatPluginIds(params: {
 export function resolveBundledCapabilityProviderIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
 }): string[] {
   const env = process.env;
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
+  const snapshot = getCurrentPluginMetadataSnapshot({
+    config: params.cfg,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
+  const plugins =
+    snapshot?.plugins ??
+    loadPluginManifestRegistryForPluginRegistry({
+      config: params.cfg,
+      env,
+      includeDisabled: true,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    }).plugins;
   return [
     ...new Set(
-      loadPluginManifestRegistryForPluginRegistry({
-        config: params.cfg,
-        env,
-        includeDisabled: true,
-      }).plugins.flatMap((plugin) =>
+      plugins.flatMap((plugin) =>
         plugin.origin === "bundled" ? (plugin.contracts?.[contractKey] ?? []) : [],
       ),
     ),
@@ -113,6 +132,7 @@ export function resolveBundledCapabilityProviderIds(params: {
 function resolveCapabilityProviderConfig(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   pluginIds?: string[];
 }) {
   const pluginIds = params.pluginIds ?? resolveBundledCapabilityCompatPluginIds(params);

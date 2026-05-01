@@ -84,6 +84,9 @@ vi.mock("./bundled-compat.js", () => ({
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
 let resolvePluginCapabilityProvider: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProvider;
+let resolveBundledCapabilityProviderIds: typeof import("./capability-provider-runtime.js").resolveBundledCapabilityProviderIds;
+let clearCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").clearCurrentPluginMetadataSnapshot;
+let setCurrentPluginMetadataSnapshot: typeof import("./current-plugin-metadata-snapshot.js").setCurrentPluginMetadataSnapshot;
 
 function expectResolvedCapabilityProviderIds(providers: Array<{ id: string }>, expected: string[]) {
   expect(providers.map((provider) => provider.id)).toEqual(expected);
@@ -192,11 +195,17 @@ function expectCompatChainApplied(params: {
 
 describe("resolvePluginCapabilityProviders", () => {
   beforeAll(async () => {
-    ({ resolvePluginCapabilityProvider, resolvePluginCapabilityProviders } =
-      await import("./capability-provider-runtime.js"));
+    ({
+      resolveBundledCapabilityProviderIds,
+      resolvePluginCapabilityProvider,
+      resolvePluginCapabilityProviders,
+    } = await import("./capability-provider-runtime.js"));
+    ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
+      await import("./current-plugin-metadata-snapshot.js"));
   });
 
   beforeEach(() => {
+    clearCurrentPluginMetadataSnapshot();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.resolvePluginRegistryLoadCacheKey.mockReset();
@@ -224,6 +233,52 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.withBundledPluginEnablementCompat.mockImplementation(({ config }) => config);
     mocks.withBundledPluginVitestCompat.mockReset();
     mocks.withBundledPluginVitestCompat.mockImplementation(({ config }) => config);
+  });
+
+  it("resolves bundled capability ids from the current metadata snapshot", () => {
+    setCurrentPluginMetadataSnapshot({
+      policyHash: "policy",
+      workspaceDir: "/workspace",
+      index: { plugins: [] },
+      registryDiagnostics: [],
+      manifestRegistry: { plugins: [], diagnostics: [] },
+      plugins: [
+        {
+          id: "fal",
+          origin: "bundled",
+          contracts: { imageGenerationProviders: ["fal"] },
+        },
+      ],
+      diagnostics: [],
+      byPluginId: new Map(),
+      normalizePluginId: (id: string) => id,
+      owners: {
+        channels: new Map(),
+        channelConfigs: new Map(),
+        providers: new Map(),
+        modelCatalogProviders: new Map(),
+        cliBackends: new Map(),
+        setupProviders: new Map(),
+        commandAliases: new Map(),
+        contracts: new Map(),
+      },
+      metrics: {
+        registrySnapshotMs: 0,
+        manifestRegistryMs: 0,
+        ownerMapsMs: 0,
+        totalMs: 0,
+        indexPluginCount: 0,
+        manifestPluginCount: 1,
+      },
+    } as never);
+
+    expect(
+      resolveBundledCapabilityProviderIds({
+        key: "imageGenerationProviders",
+        workspaceDir: "/workspace",
+      }),
+    ).toEqual(["fal"]);
+    expect(mocks.loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
   it("uses the active registry when capability providers are already loaded", () => {

@@ -576,6 +576,7 @@ export function createImageGenerateTool(options?: {
     !hasGenerationToolAvailability({
       cfg,
       agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
       authStore: options?.authProfileStore,
       modelConfig: cfg.agents?.defaults?.imageGenerationModel,
       providerKey: "imageGenerationProviders",
