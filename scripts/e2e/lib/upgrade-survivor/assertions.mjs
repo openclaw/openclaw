@@ -49,6 +49,10 @@ function acceptsIntent(coverage, id) {
   return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
+function hasCoverage(coverage) {
+  return !!coverage;
+}
+
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
@@ -91,6 +95,8 @@ function seedState() {
     agents: ["main", "ops"],
     discordGuild: "222222222222222222",
     discordChannel: "333333333333333333",
+    telegramGroup: "-1001234567890",
+    whatsappGroup: "120363000000000000@g.us",
     workspaceIdentity: path.join(workspace, "IDENTITY.md"),
   });
 }
@@ -121,7 +127,14 @@ function assertConfigSurvived() {
       agents.some((agent) => agent?.id === "ops"),
       "ops agent missing",
     );
-    assert(config.agents?.defaults?.contextTokens === 64000, "default contextTokens changed");
+    if (hasCoverage(coverage)) {
+      assert(config.agents?.defaults?.contextTokens === 64000, "default contextTokens changed");
+    } else {
+      assert(
+        agents.find((agent) => agent?.id === "main")?.contextTokens === 64000,
+        "main agent contextTokens changed",
+      );
+    }
     assert(
       agents.find((agent) => agent?.id === "ops")?.fastModeDefault === true,
       "ops fastModeDefault changed",
@@ -130,6 +143,13 @@ function assertConfigSurvived() {
 
   if (acceptsIntent(coverage, "skills")) {
     assert(config.skills?.allowBundled?.includes("memory"), "memory skill allowlist changed");
+  }
+
+  if (acceptsIntent(coverage, "plugins")) {
+    const pluginAllow = config.plugins?.allow ?? [];
+    assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
+    assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
+    assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
   }
 
   if (acceptsIntent(coverage, "discord-channel")) {
@@ -162,10 +182,15 @@ function assertConfigSurvived() {
   if (acceptsIntent(coverage, "whatsapp-channel")) {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "whatsapp enabled flag changed");
-    assert(
-      whatsapp.groups?.["120363000000000000@g.us"]?.requireMention === true,
-      "whatsapp group policy changed",
-    );
+    const whatsappGroup = whatsapp.groups?.["120363000000000000@g.us"];
+    if (hasCoverage(coverage)) {
+      assert(whatsappGroup?.requireMention === true, "whatsapp group policy changed");
+    } else {
+      assert(
+        whatsappGroup?.systemPrompt === "Use the existing WhatsApp group prompt.",
+        "whatsapp group policy changed",
+      );
+    }
   }
 }
 

@@ -133,6 +133,7 @@ function scenarioConfig(scenario, options = {}) {
             },
             thinkingDefault: "low",
             skills: ["memory"],
+            contextTokens: 64000,
           },
           {
             id: "ops",
@@ -154,9 +155,11 @@ function scenarioConfig(scenario, options = {}) {
       },
       plugins: {
         enabled: true,
-        allow: ["discord", "memory"],
+        allow: ["discord", "telegram", "whatsapp", "memory"],
         entries: {
           discord: { enabled: true },
+          telegram: { enabled: true },
+          whatsapp: { enabled: true },
         },
       },
       channels: {
@@ -186,6 +189,28 @@ function scenarioConfig(scenario, options = {}) {
           threadBindings: {
             enabled: true,
             idleHours: 72,
+          },
+        },
+        telegram: {
+          enabled: true,
+          botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+          dmPolicy: "allowlist",
+          allowFrom: ["123456789"],
+          groups: {
+            "-1001234567890": {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "allowlist",
+          allowFrom: ["+15555550123"],
+          groups: {
+            "120363000000000000@g.us": {
+              systemPrompt: "Use the existing WhatsApp group prompt.",
+            },
           },
         },
       },
@@ -422,7 +447,8 @@ OPENCLAW_TEST_STATE_JSON
         "thinkingDefault": "low",
         "skills": [
           "memory"
-        ]
+        ],
+        "contextTokens": 64000
       },
       {
         "id": "ops",
@@ -449,10 +475,18 @@ OPENCLAW_TEST_STATE_JSON
     "enabled": true,
     "allow": [
       "discord",
+      "telegram",
+      "whatsapp",
       "memory"
     ],
     "entries": {
       "discord": {
+        "enabled": true
+      },
+      "telegram": {
+        "enabled": true
+      },
+      "whatsapp": {
         "enabled": true
       }
     }
@@ -494,6 +528,36 @@ OPENCLAW_TEST_STATE_JSON
       "threadBindings": {
         "enabled": true,
         "idleHours": 72
+      }
+    },
+    "telegram": {
+      "enabled": true,
+      "botToken": {
+        "source": "env",
+        "provider": "default",
+        "id": "TELEGRAM_BOT_TOKEN"
+      },
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "123456789"
+      ],
+      "groups": {
+        "-1001234567890": {
+          "enabled": true,
+          "requireMention": true
+        }
+      }
+    },
+    "whatsapp": {
+      "enabled": true,
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "+15555550123"
+      ],
+      "groups": {
+        "120363000000000000@g.us": {
+          "systemPrompt": "Use the existing WhatsApp group prompt."
+        }
       }
     }
   }
