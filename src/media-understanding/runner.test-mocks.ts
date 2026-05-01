@@ -1,23 +1,11 @@
 import { vi } from "vitest";
 
-export function createAvailableModelAuthMockModule() {
+export async function createAvailableModelAuthMockModule() {
+  const actual =
+    await vi.importActual<typeof import("../agents/model-auth.js")>("../agents/model-auth.js");
   return {
     hasAvailableAuthForProvider: vi.fn(() => true),
-    isLocalBaseUrl: vi.fn((baseUrl: string) => {
-      try {
-        const host = new URL(baseUrl).hostname.toLowerCase();
-        return (
-          host === "localhost" ||
-          host === "127.0.0.1" ||
-          host === "0.0.0.0" ||
-          host === "[::1]" ||
-          host === "[::ffff:7f00:1]" ||
-          host === "[::ffff:127.0.0.1]"
-        );
-      } catch {
-        return false;
-      }
-    }),
+    isLocalBaseUrl: vi.fn(actual.isLocalBaseUrl),
     resolveApiKeyForProvider: vi.fn(async () => ({
       apiKey: "test-key",
       source: "test",
