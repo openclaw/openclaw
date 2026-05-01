@@ -27,6 +27,15 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  return {
+    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      release: async () => {},
+    }),
+  };
+});
+
 let ensureOggOpus: typeof import("./voice-message.js").ensureOggOpus;
 let sendDiscordVoiceMessage: typeof import("./voice-message.js").sendDiscordVoiceMessage;
 

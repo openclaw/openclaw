@@ -22,6 +22,7 @@ import {
 import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-runtime";
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
@@ -297,7 +298,7 @@ async function requestVoiceUploadUrl(params: {
   fileSize: number;
 }): Promise<UploadUrlResponse> {
   const url = `${params.rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${params.channelId}/attachments`;
-  const uploadUrlRequest = new Request(url, {
+  const uploadUrlInit: RequestInit = {
     method: "POST",
     headers: {
       Authorization: `Bot ${params.botToken}`,
@@ -306,28 +307,44 @@ async function requestVoiceUploadUrl(params: {
     body: JSON.stringify({
       files: [{ filename: params.filename, file_size: params.fileSize, id: "0" }],
     }),
+  };
+  const { response: res, release } = await fetchWithSsrFGuard({
+    url,
+    init: uploadUrlInit,
+    auditContext: "discord.voice.upload-url",
   });
-  const res = await fetch(uploadUrlRequest);
-  if (!res.ok) {
-    throw await createVoiceRequestError(res, "Upload URL request failed");
+  try {
+    if (!res.ok) {
+      throw await createVoiceRequestError(res, "Upload URL request failed");
+    }
+    return (await res.json()) as UploadUrlResponse;
+  } finally {
+    await release();
   }
-  return (await res.json()) as UploadUrlResponse;
 }
 
 async function uploadVoiceAttachment(params: {
   uploadUrl: string;
   audioBuffer: Buffer;
 }): Promise<void> {
-  const uploadResponse = await fetch(params.uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "audio/ogg",
+  const { response: uploadResponse, release } = await fetchWithSsrFGuard({
+    url: params.uploadUrl,
+    init: {
+      method: "PUT",
+      headers: {
+        "Content-Type": "audio/ogg",
+      },
+      body: new Uint8Array(params.audioBuffer),
     },
-    body: new Uint8Array(params.audioBuffer),
+    auditContext: "discord.voice.attachment-upload",
   });
 
-  if (!uploadResponse.ok) {
-    throw await createVoiceRequestError(uploadResponse, "Failed to upload voice message");
+  try {
+    if (!uploadResponse.ok) {
+      throw await createVoiceRequestError(uploadResponse, "Failed to upload voice message");
+    }
+  } finally {
+    await release();
   }
 }
 
@@ -353,10 +370,8 @@ export async function sendDiscordVoiceMessage(
   const fileSize = audioBuffer.byteLength;
 
   // Step 1: Request upload URL from Discord
-  // Must use fetch() directly instead of rest.post() because ./internal/discord.js's
-  // RequestClient auto-converts requests to multipart/form-data when the body
-  // contains a "files" key. Discord's /attachments endpoint expects JSON, so
-  // the auto-conversion causes HTTP 400 "Expected Content-Type application/json".
+  // RequestClient auto-converts "files" bodies to multipart/form-data, but Discord's
+  // /attachments endpoint expects JSON, so this path uses a guarded raw HTTP call.
   const botToken = token;
   if (!botToken) {
     throw new Error("Discord bot token is required for voice message upload");
