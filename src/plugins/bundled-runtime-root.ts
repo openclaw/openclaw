@@ -328,6 +328,7 @@ function prepareBundledPluginRuntimeDistMirror(params: {
     });
   }
   ensureOpenClawPluginSdkAlias(mirrorDistRoot);
+  ensureBundledRuntimeDistNodeModulesLink(mirrorDistRoot, params.installRoot);
   return mirrorExtensionsRoot;
 }
 
@@ -420,6 +421,7 @@ function mirrorCanonicalBundledRuntimeDistRoot(params: {
     });
   }
   ensureOpenClawPluginSdkAlias(targetCanonicalDistRoot);
+  ensureBundledRuntimeDistNodeModulesLink(targetCanonicalDistRoot, params.installRoot);
 
   const pluginId = path.basename(params.pluginRoot);
   const sourceCanonicalPluginRoot = path.join(sourceCanonicalDistRoot, "extensions", pluginId);
@@ -454,6 +456,44 @@ function precomputeCanonicalBundledRuntimeDistPluginMetadata(params: {
     return undefined;
   }
   return precomputeBundledRuntimeMirrorMetadata({ sourceRoot: sourceCanonicalPluginRoot });
+}
+
+function ensureBundledRuntimeDistNodeModulesLink(
+  mirrorDistRoot: string,
+  installRoot: string,
+): void {
+  const installNodeModules = path.join(installRoot, "node_modules");
+  const distNodeModules = path.join(mirrorDistRoot, "node_modules");
+  if (path.resolve(installNodeModules) === path.resolve(distNodeModules)) {
+    return;
+  }
+  try {
+    const stat = fs.lstatSync(distNodeModules);
+    if (stat.isSymbolicLink()) {
+      // Already linked — verify target matches.
+      const existingTarget = fs.realpathSync(distNodeModules);
+      if (existingTarget === fs.realpathSync(installNodeModules)) {
+        return;
+      }
+      fs.unlinkSync(distNodeModules);
+    } else {
+      // Non-symlink entry exists (unexpected); leave it alone.
+      return;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      return;
+    }
+  }
+  if (!fs.existsSync(installNodeModules)) {
+    return;
+  }
+  try {
+    fs.symlinkSync(installNodeModules, distNodeModules, "dir");
+  } catch {
+    // Best-effort: if symlink fails (e.g. permissions), ESM resolution can still
+    // walk up to <installRoot>/node_modules via parent directory traversal.
+  }
 }
 
 function ensureBundledRuntimeDistPackageJson(mirrorDistRoot: string): void {

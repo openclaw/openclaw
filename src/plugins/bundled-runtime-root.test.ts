@@ -790,4 +790,59 @@ describe("prepareBundledPluginRuntimeRoot", () => {
     expect(refreshedStat.mtimeMs).toBeGreaterThan(initialStat.mtimeMs);
     expect(fs.readFileSync(mirrorEntry, "utf8")).toContain("v2");
   });
+
+  it("creates node_modules symlink in mirrored dist root for ESM resolution", () => {
+    const packageRoot = makeTempRoot();
+    const stageDir = makeTempRoot();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "slack");
+    const env = { ...process.env, OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.29", type: "module" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginRoot, "index.js"), "export default {};\n", "utf8");
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/slack",
+        version: "1.0.0",
+        type: "module",
+        dependencies: { json5: "^2.2.3" },
+        openclaw: { extensions: ["./index.js"] },
+      }),
+      "utf8",
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    fs.mkdirSync(path.join(installRoot, "node_modules", "json5", "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(installRoot, "node_modules", "json5", "package.json"),
+      JSON.stringify({ name: "json5", version: "2.2.3", main: "lib/index.js" }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(installRoot, "node_modules", "json5", "lib", "index.js"),
+      "module.exports = {};\n",
+      "utf8",
+    );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["json5@^2.2.3"]);
+
+    prepareBundledPluginRuntimeRoot({
+      pluginId: "slack",
+      pluginRoot,
+      modulePath: path.join(pluginRoot, "index.js"),
+      env,
+    });
+
+    // The mirrored dist root should have a node_modules symlink pointing to installRoot/node_modules
+    const mirrorDistRoot = path.join(installRoot, "dist");
+    const distNodeModules = path.join(mirrorDistRoot, "node_modules");
+    expect(fs.existsSync(distNodeModules)).toBe(true);
+    expect(fs.lstatSync(distNodeModules).isSymbolicLink()).toBe(true);
+    // The symlink target should resolve to the installRoot's node_modules
+    expect(fs.realpathSync(distNodeModules)).toBe(
+      fs.realpathSync(path.join(installRoot, "node_modules")),
+    );
+  });
 });
