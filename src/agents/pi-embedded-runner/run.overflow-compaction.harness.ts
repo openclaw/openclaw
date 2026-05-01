@@ -146,6 +146,8 @@ export const mockedDescribeFailoverError = vi.fn<MockDescribeFailoverError>(
   }),
 );
 export const mockedResolveFailoverStatus = vi.fn<MockResolveFailoverStatus>();
+let realHandleAssistantFailover: ((params: unknown) => Promise<unknown>) | undefined;
+export const mockedHandleAssistantFailover = vi.fn<(params: unknown) => Promise<unknown>>();
 
 export const mockedLog: {
   debug: Mock<(...args: unknown[]) => void>;
@@ -217,6 +219,9 @@ export const mockedGetApiKeyForModel = vi.fn(
     source: "test",
     mode: "api-key" as const,
   }),
+);
+export const mockedMarkAuthProfileFailure = vi.fn(
+  async (_params: { profileId?: string; reason?: string; modelId?: string } = {}) => {},
 );
 export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
@@ -386,6 +391,12 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
       mode: "api-key",
     }),
   );
+  mockedMarkAuthProfileFailure.mockReset();
+  mockedMarkAuthProfileFailure.mockResolvedValue(undefined);
+  mockedHandleAssistantFailover.mockReset();
+  if (realHandleAssistantFailover) {
+    mockedHandleAssistantFailover.mockImplementation(realHandleAssistantFailover);
+  }
   mockedResolveAuthProfileOrder.mockReset();
   mockedResolveAuthProfileOrder.mockReturnValue([]);
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
@@ -429,7 +440,7 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
 
   vi.doMock("../auth-profiles.js", () => ({
     isProfileInCooldown: vi.fn(() => false),
-    markAuthProfileFailure: vi.fn(async () => {}),
+    markAuthProfileFailure: mockedMarkAuthProfileFailure,
     markAuthProfileGood: vi.fn(async () => {}),
     markAuthProfileUsed: vi.fn(async () => {}),
     resolveProfilesUnavailableReason: vi.fn(() => undefined),
@@ -543,6 +554,20 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     describeFailoverError: mockedDescribeFailoverError,
     resolveFailoverStatus: mockedResolveFailoverStatus,
   }));
+
+  vi.doMock("./run/assistant-failover.js", async () => {
+    const actual = await vi.importActual<typeof import("./run/assistant-failover.js")>(
+      "./run/assistant-failover.js",
+    );
+    realHandleAssistantFailover = actual.handleAssistantFailover as unknown as (
+      params: unknown,
+    ) => Promise<unknown>;
+    mockedHandleAssistantFailover.mockImplementation(realHandleAssistantFailover);
+    return {
+      ...actual,
+      handleAssistantFailover: mockedHandleAssistantFailover,
+    };
+  });
 
   vi.doMock("./lanes.js", () => ({
     resolveSessionLane: vi.fn(() => "session-lane"),
