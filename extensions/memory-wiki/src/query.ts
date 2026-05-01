@@ -1115,6 +1115,32 @@ function toMemoryWikiSearchResult(
   };
 }
 
+type SearchableMemoryManager = {
+  search: (query: string, options: { maxResults: number }) => Promise<MemorySearchResult[]>;
+};
+
+function hasMemorySearch(manager: unknown): manager is SearchableMemoryManager {
+  return typeof (manager as { search?: unknown } | null)?.search === "function";
+}
+
+async function searchSharedMemoryCorpus(params: {
+  manager: unknown;
+  query: string;
+  maxResults: number;
+  mode: WikiSearchMode;
+}): Promise<WikiSearchResult[]> {
+  if (!hasMemorySearch(params.manager)) {
+    return [];
+  }
+  try {
+    return (await params.manager.search(params.query, { maxResults: params.maxResults })).map(
+      (result) => toMemoryWikiSearchResult(result, params.mode),
+    );
+  } catch {
+    return [];
+  }
+}
+
 async function searchWikiCorpus(params: {
   rootDir: string;
   query: string;
@@ -1213,11 +1239,12 @@ export async function searchMemoryWiki(params: {
         agentSessionKey: params.agentSessionKey,
       })
     : null;
-  const memoryResults = sharedMemoryManager
-    ? (await sharedMemoryManager.search(params.query, { maxResults })).map((result) =>
-        toMemoryWikiSearchResult(result, mode),
-      )
-    : [];
+  const memoryResults = await searchSharedMemoryCorpus({
+    manager: sharedMemoryManager,
+    query: params.query,
+    maxResults,
+    mode,
+  });
 
   return [...wikiResults, ...memoryResults]
     .toSorted((left, right) => {
