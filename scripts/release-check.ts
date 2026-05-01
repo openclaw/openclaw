@@ -147,10 +147,6 @@ function collectBundledExtensions(): BundledExtension[] {
 function checkBundledExtensionMetadata() {
   const extensions = collectBundledExtensions();
   const manifestErrors = collectBundledExtensionManifestErrors(extensions);
-  const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
-    dependencies?: Record<string, string>;
-    optionalDependencies?: Record<string, string>;
-  };
   const bundledRuntimeDependencySpecs = collectBundledPluginRuntimeDependencySpecs(
     resolve("extensions"),
   );
