@@ -5,7 +5,6 @@ import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
 } from "../../plugins/jiti-loader-cache.js";
-export { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 
@@ -21,17 +20,7 @@ function loadModule(modulePath: string, tryNative?: boolean) {
   });
 }
 
-export function resolveCompiledBundledModulePath(modulePath: string): string {
-  const compiledDistModulePath = modulePath.replace(
-    `${path.sep}dist-runtime${path.sep}`,
-    `${path.sep}dist${path.sep}`,
-  );
-  return compiledDistModulePath !== modulePath && fs.existsSync(compiledDistModulePath)
-    ? compiledDistModulePath
-    : modulePath;
-}
-
-export function resolvePluginModuleCandidates(rootDir: string, specifier: string): string[] {
+function resolvePluginModuleCandidates(rootDir: string, specifier: string): string[] {
   const normalizedSpecifier = specifier.replace(/\\/g, "/");
   const resolvedPath = path.resolve(rootDir, normalizedSpecifier);
   const ext = path.extname(resolvedPath);

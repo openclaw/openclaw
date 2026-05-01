@@ -3,12 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  isJavaScriptModulePath,
-  resolveCompiledBundledModulePath,
-  resolveExistingPluginModulePath,
-  resolvePluginModuleCandidates,
-} from "./module-loader.js";
+import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
+import { resolveExistingPluginModulePath } from "./module-loader.js";
 
 const tempDirs: string[] = [];
 
@@ -27,38 +23,12 @@ function createTempDir(): string {
 }
 
 describe("channel plugin module loader helpers", () => {
-  it("prefers compiled bundled dist output when present", () => {
-    const rootDir = createTempDir();
-    const runtimePath = path.join(rootDir, "dist-runtime", "entry.js");
-    const compiledPath = path.join(rootDir, "dist", "entry.js");
-    fs.mkdirSync(path.dirname(compiledPath), { recursive: true });
-    fs.writeFileSync(compiledPath, "export {};\n", "utf8");
-
-    expect(resolveCompiledBundledModulePath(runtimePath)).toBe(compiledPath);
-  });
-
-  it("keeps dist-runtime path when compiled bundled output is absent", () => {
-    const rootDir = createTempDir();
-    const runtimePath = path.join(rootDir, "dist-runtime", "entry.js");
-
-    expect(resolveCompiledBundledModulePath(runtimePath)).toBe(runtimePath);
-  });
-
-  it("resolves plugin module candidates and picks the first existing extension", () => {
+  it("resolves extensionless plugin module specifiers to the first existing extension", () => {
     const rootDir = createTempDir();
     const expectedPath = path.join(rootDir, "src", "checker.mts");
     fs.mkdirSync(path.dirname(expectedPath), { recursive: true });
     fs.writeFileSync(expectedPath, "export const ok = true;\n", "utf8");
 
-    expect(resolvePluginModuleCandidates(rootDir, "./src/checker")).toEqual([
-      path.join(rootDir, "src", "checker"),
-      path.join(rootDir, "src", "checker.ts"),
-      path.join(rootDir, "src", "checker.mts"),
-      path.join(rootDir, "src", "checker.js"),
-      path.join(rootDir, "src", "checker.mjs"),
-      path.join(rootDir, "src", "checker.cts"),
-      path.join(rootDir, "src", "checker.cjs"),
-    ]);
     expect(resolveExistingPluginModulePath(rootDir, "./src/checker")).toBe(expectedPath);
   });
 

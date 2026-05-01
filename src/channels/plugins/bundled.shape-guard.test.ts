@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
@@ -92,6 +91,19 @@ function collectBundledChannelEntrypointOffenders(
   return offenders;
 }
 
+function listSourceBundledPluginRoots(): string[] {
+  const extensionsDir = path.resolve("extensions");
+  return fs
+    .readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(extensionsDir, entry.name))
+    .filter(
+      (entryPath) =>
+        fs.existsSync(path.join(entryPath, "package.json")) ||
+        fs.existsSync(path.join(entryPath, "openclaw.plugin.json")),
+    );
+}
+
 afterEach(() => {
   vi.resetModules();
   vi.doUnmock("../../plugins/bundled-channel-runtime.js");
@@ -104,9 +116,7 @@ afterEach(() => {
 });
 
 describe("bundled channel entry shape guards", () => {
-  const bundledPluginRoots = loadPluginManifestRegistry({ config: {} })
-    .plugins.filter((plugin) => plugin.origin === "bundled")
-    .map((plugin) => plugin.rootDir);
+  const bundledPluginRoots = listSourceBundledPluginRoots();
 
   it("treats missing bundled discovery results as empty", async () => {
     vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
