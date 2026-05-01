@@ -202,6 +202,7 @@ const resolveRoutedPolicyConversationType = (
     return undefined;
   }
   if (
+    ctx.TrustedThreadSessionKey === true ||
     isTrustedStructuredThreadSessionKey({
       sessionKey: ctx.SessionKey,
       threadId: ctx.MessageThreadId,

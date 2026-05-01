@@ -3032,6 +3032,54 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("passes trusted DM-topic silent-reply context into buffered dispatch", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:direct:123:thread:123:777",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+      cfg: {
+        agents: {
+          defaults: {
+            silentReply: {
+              direct: "disallow",
+              group: "allow",
+              internal: "allow",
+            },
+            silentReplyRewrite: {
+              direct: true,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+    });
+
+    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          SessionKey: "agent:main:telegram:direct:123:thread:123:777",
+          TrustedThreadSessionKey: true,
+        }),
+        dispatcherOptions: expect.objectContaining({
+          silentReplyContext: expect.objectContaining({
+            sessionKey: "agent:main:telegram:direct:123:thread:123:777",
+            surface: "telegram",
+            conversationType: "internal",
+            trustThreadSessionKey: true,
+          }),
+        }),
+      }),
+    );
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("rewrites no-visible-response DM thread turns when the thread suffix is mismatched", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);

@@ -40,10 +40,11 @@ function resolveDispatcherSilentReplyContext(
     finalized.CommandTargetSessionKey !== finalized.SessionKey;
   const hasTrustedThreadSessionKey =
     !isNativeCrossSession &&
-    isTrustedStructuredThreadSessionKey({
-      sessionKey: policySessionKey,
-      threadId: finalized.MessageThreadId,
-    });
+    (finalized.TrustedThreadSessionKey === true ||
+      isTrustedStructuredThreadSessionKey({
+        sessionKey: policySessionKey,
+        threadId: finalized.MessageThreadId,
+      }));
   const chatType = normalizeChatType(finalized.ChatType);
   const conversationType: SilentReplyConversationType | undefined = isNativeCrossSession
     ? undefined

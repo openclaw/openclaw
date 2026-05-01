@@ -117,6 +117,39 @@ describe("createReplyDispatcher", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("drops exact NO_REPLY final payloads for trusted chat-scoped thread sessions", async () => {
+    const deliver = vi.fn().mockResolvedValue(undefined);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          silentReply: {
+            direct: "disallow",
+            group: "allow",
+            internal: "allow",
+          },
+          silentReplyRewrite: {
+            direct: true,
+          },
+        },
+      },
+    };
+    const dispatcher = createReplyDispatcher({
+      deliver,
+      silentReplyContext: {
+        cfg,
+        sessionKey: "agent:main:telegram:direct:123:thread:123:42",
+        surface: "telegram",
+        conversationType: "internal",
+        trustThreadSessionKey: true,
+      },
+    });
+
+    expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+
+    await dispatcher.waitForIdle();
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("strips heartbeat tokens and applies responsePrefix", async () => {
     const deliver = vi.fn().mockResolvedValue(undefined);
     const onHeartbeatStrip = vi.fn();

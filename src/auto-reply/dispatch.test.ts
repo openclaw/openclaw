@@ -349,6 +349,42 @@ describe("withReplyDispatcher", () => {
     );
   });
 
+  it("uses provider-verified thread trust for silent-reply dispatcher context", async () => {
+    hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
+      dispatcher: createDispatcher([]),
+      replyOptions: {},
+      markDispatchIdle: vi.fn(),
+      markRunComplete: vi.fn(),
+    });
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({ text: "ok" });
+
+    await dispatchInboundMessageWithBufferedDispatcher({
+      ctx: buildTestCtx({
+        SessionKey: "agent:test:telegram:direct:123:thread:123:42",
+        MessageThreadId: "42",
+        TrustedThreadSessionKey: true,
+        ChatType: "direct",
+        Surface: "telegram",
+      }),
+      cfg: {} as OpenClawConfig,
+      dispatcherOptions: {
+        deliver: async () => undefined,
+      },
+      replyResolver: async () => ({ text: "ok" }),
+    });
+
+    expect(hoisted.createReplyDispatcherWithTypingMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        silentReplyContext: expect.objectContaining({
+          sessionKey: "agent:test:telegram:direct:123:thread:123:42",
+          surface: "telegram",
+          conversationType: "internal",
+          trustThreadSessionKey: true,
+        }),
+      }),
+    );
+  });
+
   it("does not copy source conversation type onto cross-session native silent-reply targets", async () => {
     hoisted.createReplyDispatcherWithTypingMock.mockReturnValueOnce({
       dispatcher: createDispatcher([]),

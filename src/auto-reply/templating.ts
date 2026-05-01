@@ -202,6 +202,12 @@ export type MsgContext = {
   ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;
+  /**
+   * Trusted runtime assertion that the structured thread suffix in SessionKey
+   * refers to this provider turn. Use when the provider's canonical
+   * MessageThreadId differs from the session-key suffix shape.
+   */
+  TrustedThreadSessionKey?: boolean;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
   /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */

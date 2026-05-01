@@ -1287,6 +1287,40 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("routes provider-verified chat-scoped thread replies with internal policy context", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:123",
+      ExplicitDeliverRoute: true,
+      MessageThreadId: "42",
+      TrustedThreadSessionKey: true,
+      SessionKey: "agent:main:telegram:direct:123:thread:123:42",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        policyConversationType: "internal",
+        policySessionKey: "agent:main:telegram:direct:123:thread:123:42",
+        to: "telegram:123",
+      }),
+    );
+  });
+
   it("routes mismatched threaded replies with parent direct policy context", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

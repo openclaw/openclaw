@@ -671,6 +671,18 @@ export const dispatchTelegramMessage = async ({
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
+  const policySessionKey =
+    ctxPayload.CommandSource === "native"
+      ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
+      : ctxPayload.SessionKey;
+  const trustPolicyThreadSessionKey = isTrustedTelegramPolicyThreadSessionKey({
+    sessionKey: policySessionKey,
+    chatId,
+    thread: threadSpec,
+  });
+  const dispatchCtxPayload = trustPolicyThreadSessionKey
+    ? { ...ctxPayload, TrustedThreadSessionKey: true }
+    : ctxPayload;
   let queuedFinal = false;
   let hadErrorReplyFailureOrSkip = false;
   let isFirstTurnInSession = false;
@@ -870,10 +882,21 @@ export const dispatchTelegramMessage = async ({
             record: context.turn.record,
             runDispatch: () =>
               telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
-                ctx: ctxPayload,
+                ctx: dispatchCtxPayload,
                 cfg,
                 dispatcherOptions: {
                   ...replyPipeline,
+                  ...(trustPolicyThreadSessionKey
+                    ? {
+                        silentReplyContext: {
+                          cfg,
+                          sessionKey: policySessionKey,
+                          surface: "telegram",
+                          conversationType: "internal" as const,
+                          trustThreadSessionKey: true,
+                        },
+                      }
+                    : {}),
                   beforeDeliver: async (payload) => payload,
                   deliver: async (payload, info) => {
                     if (isDispatchSuperseded()) {
@@ -1308,15 +1331,6 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (!queuedFinal && !sentFallback && !dispatchError && !deliverySummary.delivered) {
-    const policySessionKey =
-      ctxPayload.CommandSource === "native"
-        ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
-        : ctxPayload.SessionKey;
-    const trustPolicyThreadSessionKey = isTrustedTelegramPolicyThreadSessionKey({
-      sessionKey: policySessionKey,
-      chatId,
-      thread: threadSpec,
-    });
     const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
       createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
         cfg,

@@ -94,6 +94,16 @@ describe("resolvePromptSilentReplyConversationType", () => {
     ).toBe("internal");
     expect(
       resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyCtx({
+          ChatType: "direct",
+          MessageThreadId: "300118",
+          TrustedThreadSessionKey: true,
+          SessionKey: "agent:main:telegram:direct:435427284:thread:435427284:300118",
+        }),
+      }),
+    ).toBe("internal");
+    expect(
+      resolvePromptSilentReplyConversationType({
         ctx: buildGetReplyGroupCtx({
           ChatType: "group",
           MessageThreadId: "456",

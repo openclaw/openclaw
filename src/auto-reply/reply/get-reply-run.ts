@@ -80,7 +80,12 @@ type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node"
 export function resolvePromptSilentReplyConversationType(params: {
   ctx: Pick<
     MsgContext,
-    "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "MessageThreadId" | "SessionKey"
+    | "ChatType"
+    | "CommandSource"
+    | "CommandTargetSessionKey"
+    | "MessageThreadId"
+    | "SessionKey"
+    | "TrustedThreadSessionKey"
   >;
   inboundSessionKey?: string;
 }): SilentReplyConversationType | undefined {
@@ -93,6 +98,7 @@ export function resolvePromptSilentReplyConversationType(params: {
     return undefined;
   }
   if (
+    params.ctx.TrustedThreadSessionKey === true ||
     isTrustedStructuredThreadSessionKey({
       sessionKey: sourceSessionKey,
       threadId: params.ctx.MessageThreadId,
@@ -419,15 +425,18 @@ export async function runPreparedReply(
     ctx: promptSessionCtx,
     inboundSessionKey: ctx.SessionKey,
   });
+  const hasTrustedThreadSessionKey =
+    promptSessionCtx.TrustedThreadSessionKey === true ||
+    isTrustedStructuredThreadSessionKey({
+      sessionKey: runtimePolicySessionKey,
+      threadId: promptSessionCtx.MessageThreadId,
+    });
   const silentReplySettings = resolveSilentReplySettings({
     cfg,
     sessionKey: runtimePolicySessionKey,
     surface: promptSessionCtx.Surface ?? promptSessionCtx.Provider,
     conversationType: silentReplyConversationType,
-    trustThreadSessionKey: isTrustedStructuredThreadSessionKey({
-      sessionKey: runtimePolicySessionKey,
-      threadId: promptSessionCtx.MessageThreadId,
-    }),
+    trustThreadSessionKey: hasTrustedThreadSessionKey,
   });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,
