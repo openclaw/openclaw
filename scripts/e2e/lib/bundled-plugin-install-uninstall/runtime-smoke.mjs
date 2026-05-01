@@ -109,24 +109,8 @@ function buildPluginPlan(manifest) {
     ? contracts.speechProviders.filter(isNonEmptyString)
     : [];
   const tools = Array.isArray(contracts.tools) ? contracts.tools.filter(isNonEmptyString) : [];
-  const hasRuntimeContractSurface =
-    channels.length > 0 ||
-    speechProviders.length > 0 ||
-    tools.length > 0 ||
-    (Array.isArray(manifest.providers) && manifest.providers.length > 0) ||
-    (Array.isArray(manifest.cliBackends) && manifest.cliBackends.length > 0) ||
-    (Array.isArray(contracts.mediaUnderstandingProviders) &&
-      contracts.mediaUnderstandingProviders.length > 0) ||
-    (Array.isArray(contracts.migrationProviders) && contracts.migrationProviders.length > 0);
-  const legacyImplicitStartupSidecar =
-    manifest.activation?.onStartup === undefined &&
-    channels.length === 0 &&
-    !hasRuntimeContractSurface;
   const activeInThisProbe =
-    manifest.activation?.onStartup === true ||
-    legacyImplicitStartupSidecar ||
-    channels.length > 0 ||
-    speechProviders.length > 0;
+    manifest.activation?.onStartup === true || channels.length > 0 || speechProviders.length > 0;
   return {
     channels,
     speechProviders,
