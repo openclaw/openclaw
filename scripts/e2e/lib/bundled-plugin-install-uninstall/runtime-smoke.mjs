@@ -142,7 +142,7 @@ function startGateway(params) {
         ...process.env,
         ...params.env,
         OPENCLAW_NO_ONBOARD: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
+        ...(params.skipChannels ? { OPENCLAW_SKIP_CHANNELS: "1" } : {}),
       },
       stdio: ["ignore", log, log],
       detached: false,
@@ -289,7 +289,13 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
   writeConfig(config);
 
   const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-${pluginId}.log`;
-  const child = startGateway({ entrypoint, port, logPath, env: process.env });
+  const child = startGateway({
+    entrypoint,
+    port,
+    logPath,
+    env: process.env,
+    skipChannels: plan.channels.length === 0,
+  });
   try {
     await waitForReady({ child, port, logPath });
     await assertBaseGatewayProbes({ entrypoint, port, env: process.env });
@@ -537,7 +543,7 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex)
     env,
   );
   const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-${pluginId}-tts-disabled.log`;
-  const child = startGateway({ entrypoint, port, logPath, env });
+  const child = startGateway({ entrypoint, port, logPath, env, skipChannels: true });
   try {
     await waitForReady({ child, port, logPath });
     await assertBaseGatewayProbes({ entrypoint, port, env });
@@ -600,7 +606,7 @@ async function smokeOpenAiTts(pluginIndex) {
     env,
   );
   const logPath = `/tmp/openclaw-plugin-runtime-${pluginIndex}-openai-tts-live.log`;
-  const child = startGateway({ entrypoint, port, logPath, env });
+  const child = startGateway({ entrypoint, port, logPath, env, skipChannels: true });
   try {
     await waitForReady({ child, port, logPath });
     await assertBaseGatewayProbes({ entrypoint, port, env });
