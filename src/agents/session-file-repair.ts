@@ -136,7 +136,18 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
   };
 }
 
-function isAssistantMessageEntry(entry: unknown): boolean {
+function isToolCallBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return type === "toolCall" || type === "toolUse" || type === "functionCall";
+}
+
+/** Trailing assistant without tool calls — safe to trim from disk.
+ * Assistant turns with tool calls are kept so transcript repair can
+ * synthesize missing tool results (mirrors the outbound guard). */
+function isTrimmableTrailingAssistantEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== "object") {
     return false;
   }
@@ -144,7 +155,15 @@ function isAssistantMessageEntry(entry: unknown): boolean {
   if (record.type !== "message" || !record.message || typeof record.message !== "object") {
     return false;
   }
-  return (record.message as { role?: unknown }).role === "assistant";
+  const message = record.message as { role?: unknown; content?: unknown };
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const content = message.content;
+  if (Array.isArray(content) && content.some(isToolCallBlock)) {
+    return false;
+  }
+  return true;
 }
 
 function buildRepairSummaryParts(params: {
@@ -252,7 +271,7 @@ export async function repairSessionFileIfNeeded(params: {
   // thinking is enabled. The outbound path strips per-request, but leaving
   // the file corrupted causes repeated reject cycles across restarts.
   let trimmedTrailingAssistantMessages = 0;
-  while (entries.length > 1 && isAssistantMessageEntry(entries[entries.length - 1])) {
+  while (entries.length > 1 && isTrimmableTrailingAssistantEntry(entries[entries.length - 1])) {
     entries.pop();
     trimmedTrailingAssistantMessages += 1;
   }

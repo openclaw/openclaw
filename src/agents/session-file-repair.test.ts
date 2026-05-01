@@ -409,6 +409,73 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.trimmedTrailingAssistantMessages ?? 0).toBe(0);
   });
 
+  it("preserves trailing assistant messages that contain tool calls", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-tc",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Let me check that." },
+          { type: "toolCall", id: "call_1", name: "read", input: { path: "/tmp/test" } },
+        ],
+        stopReason: "toolUse",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(false);
+    expect(result.trimmedTrailingAssistantMessages ?? 0).toBe(0);
+    const after = await fs.readFile(file, "utf-8");
+    expect(after).toBe(original);
+  });
+
+  it("trims non-tool-call assistant but stops at tool-call assistant", async () => {
+    const { file } = await createTempSessionPath();
+    const { header, message } = buildSessionHeaderAndMessage();
+    const toolCallAssistant = {
+      type: "message",
+      id: "msg-asst-tc",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "call_1", name: "read" }],
+        stopReason: "toolUse",
+      },
+    };
+    const plainAssistant = {
+      type: "message",
+      id: "msg-asst-plain",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "stale" }],
+        stopReason: "stop",
+      },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(plainAssistant)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.trimmedTrailingAssistantMessages).toBe(1);
+
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedLines = repaired.trim().split("\n");
+    expect(repairedLines).toHaveLength(3);
+    expect(JSON.parse(repairedLines[2]).id).toBe("msg-asst-tc");
+  });
+
   it("never trims below the session header", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();
