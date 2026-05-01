@@ -175,12 +175,77 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `qaRunners`                          | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                                                    |
 | `contracts`                          | No       | `object`                         | Static bundled capability snapshot for external auth hooks, speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
 | `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`         | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                                          |
+| `imageGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap image-generation auth metadata for provider ids declared in `contracts.imageGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                |
+| `videoGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap video-generation auth metadata for provider ids declared in `contracts.videoGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                |
+| `musicGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap music-generation auth metadata for provider ids declared in `contracts.musicGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                |
 | `channelConfigs`                     | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                        |
 | `skills`                             | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                                           |
 | `name`                               | No       | `string`                         | Human-readable plugin name.                                                                                                                                                                                                       |
 | `description`                        | No       | `string`                         | Short summary shown in plugin surfaces.                                                                                                                                                                                           |
 | `version`                            | No       | `string`                         | Informational plugin version.                                                                                                                                                                                                     |
 | `uiHints`                            | No       | `Record<string, object>`         | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                 |
+
+## Generation provider metadata reference
+
+The generation provider metadata fields describe static auth signals for
+providers declared in the matching `contracts.*GenerationProviders` list.
+OpenClaw reads these fields before provider runtime loads so core tools can
+decide whether a generation provider is available without importing every
+provider plugin.
+
+Use these fields only for cheap, declarative facts. Transport, request
+transforms, token refresh, credential validation, and actual generation behavior
+stay in the plugin runtime.
+
+```json
+{
+  "contracts": {
+    "imageGenerationProviders": ["example-image"]
+  },
+  "imageGenerationProviderMetadata": {
+    "example-image": {
+      "aliases": ["example-image-oauth"],
+      "authProviders": ["example-image"],
+      "authSignals": [
+        {
+          "provider": "example-image"
+        },
+        {
+          "provider": "example-image-oauth",
+          "providerBaseUrl": {
+            "provider": "example-image",
+            "defaultBaseUrl": "https://api.example.com/v1",
+            "allowedBaseUrls": ["https://api.example.com/v1"]
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Each metadata entry supports:
+
+| Field           | Required | Type       | What it means                                                                                                                   |
+| --------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `aliases`       | No       | `string[]` | Additional provider ids that should count as static auth aliases for the generation provider.                                   |
+| `authProviders` | No       | `string[]` | Provider ids whose configured auth profiles should count as auth for this generation provider.                                  |
+| `authSignals`   | No       | `object[]` | Explicit auth signals. When present, these replace the default signal set from the provider id, `aliases`, and `authProviders`. |
+
+Each `authSignals` entry supports:
+
+| Field             | Required | Type     | What it means                                                                                                                                                                 |
+| ----------------- | -------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`        | Yes      | `string` | Provider id to check in configured auth profiles.                                                                                                                             |
+| `providerBaseUrl` | No       | `object` | Optional guard that makes the signal count only when the referenced configured provider uses an allowed base URL. Use this when an auth alias is valid only for certain APIs. |
+
+Each `providerBaseUrl` guard supports:
+
+| Field             | Required | Type       | What it means                                                                                                                                        |
+| ----------------- | -------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider`        | Yes      | `string`   | Provider config id whose `baseUrl` should be checked.                                                                                                |
+| `defaultBaseUrl`  | No       | `string`   | Base URL to assume when the provider config omits `baseUrl`.                                                                                         |
+| `allowedBaseUrls` | Yes      | `string[]` | Allowed base URLs for this auth signal. The signal is ignored when the configured or default base URL does not match one of these normalized values. |
 
 ## providerAuthChoices reference
 
