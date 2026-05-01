@@ -27,7 +27,7 @@ function writeJson(file, value) {
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-function manifestPath(pluginDir, env = process.env) {
+function manifestPath(pluginDir) {
   return path.join(process.cwd(), "dist", "extensions", pluginDir, "openclaw.plugin.json");
 }
 
@@ -58,7 +58,7 @@ function ensureGatewayConfig(config, port) {
   return {
     ...config,
     gateway: {
-      ...(config.gateway ?? {}),
+      ...config.gateway,
       port,
       bind: "loopback",
       auth: {
@@ -66,7 +66,7 @@ function ensureGatewayConfig(config, port) {
         token: TOKEN,
       },
       controlUi: {
-        ...(config.gateway?.controlUi ?? {}),
+        ...config.gateway?.controlUi,
         enabled: false,
       },
     },
@@ -238,7 +238,7 @@ function parseJsonOutput(stdout) {
     }
     const jsonLine = trimmed
       .split(/\r?\n/u)
-      .reverse()
+      .toReversed()
       .find((line) => line.trim().startsWith("{"));
     if (!jsonLine) {
       throw new Error(`gateway call JSON output was not parseable:\n${trimmed}`);
@@ -270,18 +270,18 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
   const config = ensureGatewayConfig(readConfig(), port);
   for (const channel of plan.channels) {
     config.channels = {
-      ...(config.channels ?? {}),
+      ...config.channels,
       [channel]: {
-        ...(config.channels?.[channel] ?? {}),
+        ...config.channels?.[channel],
         enabled: true,
       },
     };
   }
   if (plan.speechProviders[0]) {
     config.messages = {
-      ...(config.messages ?? {}),
+      ...config.messages,
       tts: {
-        ...(config.messages?.tts ?? {}),
+        ...config.messages?.tts,
         provider: plan.speechProviders[0],
       },
     };
