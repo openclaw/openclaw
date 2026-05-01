@@ -146,10 +146,6 @@ function resolveRenderPlan(
   return best;
 }
 
-/**
- * Check if pdftoppm (from poppler-utils) is available on the system.
- * Used as fallback when @napi-rs/canvas is not installed.
- */
 function isPdftoppmAvailable(): boolean {
   try {
     execSync("pdftoppm -v", { stdio: "ignore" });
@@ -167,11 +163,6 @@ const FS = /* #__PURE__ */ (() => {
   }
 })();
 
-/**
- * Render a single PDF page to PNG using pdftoppm.
- * Returns PNG image data as a Buffer, or null if rendering failed.
- * Uses a temp file approach since pdftoppm doesn't support stdin reliably.
- */
 function renderPageWithPdftoppm(
   pdfBuffer: Buffer,
   pageNumber: number,
