@@ -1063,6 +1063,7 @@ Notes:
 - `voice.tts` overrides `messages.tts` for voice playback only.
 - `voice.model` overrides the LLM used for Discord voice channel responses only. Leave it unset to inherit the routed agent model.
 - STT uses `tools.media.audio`; `voice.model` does not affect transcription.
+- Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable voice runtime and the `GuildVoiceStates` gateway intent.
 - `channels.discord.intents.voiceStates` can explicitly override voice-state intent subscription. Leave it unset for the intent to follow `voice.enabled`.

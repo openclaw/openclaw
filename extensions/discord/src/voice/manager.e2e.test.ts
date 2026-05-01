@@ -574,6 +574,44 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("passes per-channel system prompt overrides to voice agent runs", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                systemPrompt: "  Use short voice replies.  ",
+              },
+            },
+          },
+        },
+      },
+      client,
+      {
+        commands: { useAccessGroups: false },
+      },
+    );
+    await processVoiceSegment(manager, "u-guest");
+
+    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+      | { extraSystemPrompt?: string }
+      | undefined;
+
+    expect(commandArgs?.extraSystemPrompt).toBe("Use short voice replies.");
+  });
+
   it("reuses speaker context cache for repeated segments from the same speaker", async () => {
     const client = createClient();
     client.fetchMember.mockResolvedValue({
