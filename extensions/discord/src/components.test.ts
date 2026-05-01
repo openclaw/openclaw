@@ -1,5 +1,9 @@
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 let clearDiscordComponentEntries: typeof import("./components-registry.js").clearDiscordComponentEntries;
 let registerDiscordComponentEntries: typeof import("./components-registry.js").registerDiscordComponentEntries;
@@ -8,6 +12,7 @@ let resolveDiscordModalEntry: typeof import("./components-registry.js").resolveD
 let buildDiscordComponentMessage: typeof import("./components.js").buildDiscordComponentMessage;
 let buildDiscordComponentMessageFlags: typeof import("./components.js").buildDiscordComponentMessageFlags;
 let readDiscordComponentSpec: typeof import("./components.js").readDiscordComponentSpec;
+const ORIGINAL_HOME = process.env.HOME;
 
 beforeAll(async () => {
   ({
@@ -82,8 +87,34 @@ describe("discord components", () => {
 });
 
 describe("discord component registry", () => {
+  const registryDirCleanup = new Set<string>();
+
+  function clearRegistryStores() {
+    resolveGlobalMap<string, unknown>(Symbol.for("openclaw.discord.componentEntries")).clear();
+    resolveGlobalMap<string, unknown>(Symbol.for("openclaw.discord.modalEntries")).clear();
+  }
+
+  async function waitForPersist() {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+
   beforeEach(() => {
     clearDiscordComponentEntries();
+    clearRegistryStores();
+  });
+
+  afterEach(() => {
+    delete process.env.OPENCLAW_DISCORD_COMPONENT_REGISTRY_FILE;
+    if (ORIGINAL_HOME === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = ORIGINAL_HOME;
+    }
+    clearRegistryStores();
+    for (const dir of registryDirCleanup) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+    registryDirCleanup.clear();
   });
 
   const componentsRegistryModuleUrl = new URL("./components-registry.ts", import.meta.url).href;
@@ -135,5 +166,174 @@ describe("discord component registry", () => {
     );
 
     second.clearDiscordComponentEntries();
+  });
+
+  it("reloads persisted route overrides, allowlists, and custom TTL values", async () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "openclaw-registry-home-"));
+    registryDirCleanup.add(tempHome);
+    process.env.HOME = tempHome;
+    const registryFile = join(
+      tempHome,
+      ".openclaw",
+      "cache",
+      "discord-component-registry.json",
+    );
+    process.env.OPENCLAW_DISCORD_COMPONENT_REGISTRY_FILE = registryFile;
+    const first = (await import(
+      `${componentsRegistryModuleUrl}?t=persist-first-${Date.now()}`
+    )) as typeof import("./components-registry.js");
+    const second = (await import(
+      `${componentsRegistryModuleUrl}?t=persist-second-${Date.now()}`
+    )) as typeof import("./components-registry.js");
+
+    first.registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "btn_persist",
+          kind: "button",
+          label: "Persisted",
+          sessionKey: "agent:main:discord:channel:c1",
+          agentId: "main",
+          accountId: "discord-default",
+          allowedUsers: ["discord:user-1"],
+        },
+      ],
+      modals: [
+        {
+          id: "mdl_persist",
+          title: "Persisted modal",
+          sessionKey: "agent:main:discord:channel:c1",
+          agentId: "main",
+          accountId: "discord-default",
+          allowedUsers: ["discord:user-1"],
+          fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+        },
+      ],
+      ttlMs: 3 * 60 * 60 * 1000,
+      messageId: "msg_persist",
+    });
+    const beforeReload = first.resolveDiscordComponentEntry({ id: "btn_persist", consume: false });
+    expect(beforeReload?.expiresAt).toBeDefined();
+
+    await waitForPersist();
+    clearRegistryStores();
+
+    const reloaded = second.resolveDiscordComponentEntry({ id: "btn_persist", consume: false });
+    const reloadedModal = second.resolveDiscordModalEntry({ id: "mdl_persist", consume: false });
+
+    expect(reloaded).toMatchObject({
+      id: "btn_persist",
+      sessionKey: "agent:main:discord:channel:c1",
+      agentId: "main",
+      accountId: "discord-default",
+      allowedUsers: ["discord:user-1"],
+      messageId: "msg_persist",
+    });
+    expect(reloaded?.expiresAt).toBe(beforeReload?.expiresAt);
+    expect(reloadedModal).toMatchObject({
+      id: "mdl_persist",
+      sessionKey: "agent:main:discord:channel:c1",
+      agentId: "main",
+      accountId: "discord-default",
+      allowedUsers: ["discord:user-1"],
+      messageId: "msg_persist",
+    });
+    expect(reloadedModal?.expiresAt).toBeDefined();
+    expect(existsSync(registryFile)).toBe(true);
+  });
+
+  it("drops persisted entries with invalid runtime field types while keeping valid ones", async () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "openclaw-registry-home-"));
+    registryDirCleanup.add(tempHome);
+    process.env.HOME = tempHome;
+    const registryDir = join(tempHome, ".openclaw", "cache");
+    const registryFile = join(registryDir, "discord-component-registry.json");
+    process.env.OPENCLAW_DISCORD_COMPONENT_REGISTRY_FILE = registryFile;
+    mkdirSync(registryDir, { recursive: true });
+    writeFileSync(
+      registryFile,
+      `${JSON.stringify({
+        version: 1,
+        components: [
+          {
+            id: "btn_valid",
+            kind: "button",
+            label: "Valid",
+            callbackData: "codex:ok",
+            allowedUsers: ["discord:user-1"],
+            messageId: "msg_valid",
+          },
+          {
+            id: "btn_invalid",
+            kind: "button",
+            label: "Invalid",
+            callbackData: 123,
+            allowedUsers: {},
+          },
+        ],
+        modals: [
+          {
+            id: "mdl_valid",
+            title: "Valid modal",
+            callbackData: "codex:modal",
+            allowedUsers: ["discord:user-1"],
+            fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+          },
+          {
+            id: "mdl_invalid",
+            title: "Invalid modal",
+            callbackData: 123,
+            allowedUsers: {},
+            fields: [{ id: "fld_1", name: "name", label: "Name", type: "text" }],
+          },
+        ],
+      })}\n`,
+    );
+
+    const registry = (await import(
+      `${componentsRegistryModuleUrl}?t=invalid-runtime-fields-${Date.now()}`
+    )) as typeof import("./components-registry.js");
+
+    expect(registry.resolveDiscordComponentEntry({ id: "btn_valid", consume: false })).toMatchObject(
+      {
+        id: "btn_valid",
+        callbackData: "codex:ok",
+        allowedUsers: ["discord:user-1"],
+        messageId: "msg_valid",
+      },
+    );
+    expect(registry.resolveDiscordComponentEntry({ id: "btn_invalid", consume: false })).toBeNull();
+    expect(registry.resolveDiscordModalEntry({ id: "mdl_valid", consume: false })).toMatchObject({
+      id: "mdl_valid",
+      callbackData: "codex:modal",
+      allowedUsers: ["discord:user-1"],
+    });
+    expect(registry.resolveDiscordModalEntry({ id: "mdl_invalid", consume: false })).toBeNull();
+  });
+
+  it("treats invalid registry paths as best-effort instead of throwing", async () => {
+    const tempHome = mkdtempSync(join(tmpdir(), "openclaw-registry-home-"));
+    registryDirCleanup.add(tempHome);
+    process.env.HOME = tempHome;
+    process.env.OPENCLAW_DISCORD_COMPONENT_REGISTRY_FILE = join(tempHome, "..", "outside-registry.json");
+    const registry = (await import(
+      `${componentsRegistryModuleUrl}?t=invalid-path-${Date.now()}`
+    )) as typeof import("./components-registry.js");
+
+    expect(() =>
+      registry.registerDiscordComponentEntries({
+        entries: [{ id: "btn_invalid", kind: "button", label: "Still works" }],
+        modals: [],
+      }),
+    ).not.toThrow();
+    await waitForPersist();
+
+    expect(registry.resolveDiscordComponentEntry({ id: "btn_invalid", consume: false })).toMatchObject(
+      {
+        id: "btn_invalid",
+        label: "Still works",
+      },
+    );
+    expect(() => registry.clearDiscordComponentEntries()).not.toThrow();
   });
 });
