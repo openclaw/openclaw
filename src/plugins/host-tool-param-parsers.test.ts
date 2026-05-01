@@ -62,6 +62,45 @@ describe("deriveToolParams", () => {
     });
   });
 
+  it("preserves apply_patch marker payload bytes after the executor header trim", () => {
+    const patch = ["*** Begin Patch", "*** Add File:  src/new.ts", "+x", "*** End Patch"].join(
+      "\n",
+    );
+    expect(deriveToolParams("apply_patch", { input: patch })).toEqual({
+      derivedPaths: [path.resolve(defaultCwd, " src/new.ts")],
+    });
+  });
+
+  it("resolves sandboxed apply_patch paths through the execution bridge", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: /workspace/src/new.ts",
+      "+x",
+      "*** End Patch",
+    ].join("\n");
+    expect(
+      deriveToolParams(
+        "apply_patch",
+        { input: patch },
+        {
+          cwd: "/workspace",
+          sandbox: {
+            root: "/workspace",
+            bridge: {
+              resolvePath: ({ filePath }: { filePath: string }) => ({
+                containerPath: filePath,
+                hostPath: "/host/sandbox/src/new.ts",
+                relativePath: "src/new.ts",
+              }),
+            } as never,
+          },
+        },
+      ),
+    ).toEqual({
+      derivedPaths: ["/host/sandbox/src/new.ts"],
+    });
+  });
+
   it("returns an empty object when apply_patch input has no recognised paths", () => {
     expect(deriveToolParams("apply_patch", { input: "not a patch" })).toEqual({});
     expect(deriveToolParams("apply_patch", {})).toEqual({});
