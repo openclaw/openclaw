@@ -23,7 +23,9 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - fix: block workspace CLOUDSDK_PYTHON override and always set trusted interpreter for gcloud. (#74492) Thanks @pgondhi987.
+- fix(infra): block ambient Homebrew env vars from brew resolution. (#74463) Thanks @pgondhi987.
 - Thinking/providers: resolve bundled provider thinking profiles through lightweight provider policy artifacts when startup-lazy providers are not active, so OpenAI Codex GPT-5.x keeps xhigh available in Gateway session validation. Fixes #74796. Thanks @maxschachere.
+- Security/Windows: ignore workspace `.env` system-path variables and resolve stale-process `taskkill.exe` from the validated Windows install root, preventing repository-local env files from redirecting cleanup helpers. Thanks @pgondhi987.
 - Plugins/TTS: keep bundled speech-provider discovery available on cold package Gateway paths and add bundled plugin matrix runtime probes for health, readiness, RPC, TTS discovery, and post-ready runtime-deps watchdog coverage. Refs #75283. Thanks @vincentkoc.
 - Google Meet/Twilio: show delegated voice call ID, DTMF, and intro-greeting state in `googlemeet doctor`, and avoid claiming DTMF was sent when no Meet PIN sequence was configured. Refs #72478. Thanks @DougButdorf.
 - Voice Call/Twilio: send notify-mode initial TwiML directly in the outbound create-call request while keeping conversation and pre-connect DTMF calls webhook-driven, so one-shot notify calls do not depend on a first-answer webhook fetch. Supersedes #72758. Thanks @tyshepps.
@@ -501,6 +503,7 @@ Docs: https://docs.openclaw.ai
 - Plugin SDK/models: move BytePlus and Volcano Engine standard and plan-provider catalogs into plugin manifest `modelCatalog` rows and remove the now-unused Volcengine-family shared catalog SDK subpath. Thanks @shakkernerd.
 - CLI/models: move Fireworks and Together AI fixed provider catalogs into plugin manifest `modelCatalog` rows so provider-filtered listing can use manifest-backed static rows. Thanks @shakkernerd.
 - CLI/models: move Groq's fixed text model catalog into the Groq plugin manifest and declare its setup auth env metadata so provider-filtered listing can use manifest-backed rows without deprecated auth metadata. Thanks @shakkernerd.
+- CLI/models: move Venice's 41-row seed catalog into the Venice plugin manifest, derive runtime fallback rows from that manifest, and keep Venice API discovery as refreshable runtime work instead of a second hard-coded catalog. Thanks @shakkernerd.
 - Channels/Yuanbao: register the Tencent Yuanbao external channel plugin (`openclaw-plugin-yuanbao`) in the official channel catalog, contract suites, and community plugin docs, with a new `docs/channels/yuanbao.md` quick-start guide for WebSocket bot DMs and group chats. (#72756) Thanks @loongfay.
 - Channels/QQBot: add full group chat support (history tracking, @-mention gating, activation modes, per-group config, FIFO message queue with deliver debounce), C2C `stream_messages` streaming with a `StreamingController` lifecycle manager, unified `sendMedia` with chunked upload for large files, and refactor the engine into pipeline stages, focused outbound submodules, builtin slash-command modules, and explicit DI ports via `createEngineAdapters()`. (#70624) Thanks @cxyhhhhh.
 - Plugins/startup: migrate bundled plugin manifests to explicit `activation.onStartup` declarations so Gateway startup imports only the bundled plugins that intentionally register startup-time runtime surfaces. Thanks @shakkernerd.
