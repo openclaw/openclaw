@@ -99,6 +99,19 @@ describe("extractApplyPatchTargetPaths", () => {
     ]);
   });
 
+  it("normalizes Windows separators to stable POSIX derived paths", () => {
+    const patch = [
+      "*** Begin Patch",
+      String.raw`*** Add File: src\windows\path.ts`,
+      "+x",
+      String.raw`*** Update File: .\src\windows\..\old.ts`,
+      "@@",
+      "+y",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual(["src/windows/path.ts", "src/old.ts"]);
+  });
+
   it("handles CRLF line endings", () => {
     const patch = ["*** Begin Patch", "*** Add File: crlf.ts", "+x", "*** End Patch"].join("\r\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual(["crlf.ts"]);
@@ -123,6 +136,17 @@ describe("extractApplyPatchTargetPaths", () => {
       "src/old.ts",
       "src/renamed.ts",
     ]);
+  });
+
+  it("matches single-space-indented top-level headers the same way as the executor", () => {
+    const patch = [
+      "*** Begin Patch",
+      " *** Add File: src/new.ts",
+      "+x",
+      " *** Delete File: src/dead.ts",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual(["src/new.ts", "src/dead.ts"]);
   });
 
   it("finds indented markers after an update hunk", () => {
