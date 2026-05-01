@@ -14,7 +14,6 @@ import {
   installPluginFromMarketplace,
   installPluginFromNpmSpec,
   installPluginFromPath,
-  loadPluginManifestRegistry,
   loadConfig,
   loadPluginManifestRegistry,
   readConfigFileSnapshot,
