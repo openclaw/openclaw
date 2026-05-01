@@ -1010,10 +1010,24 @@ export function createOllamaStreamFn(
   baseUrl: string,
   defaultHeaders?: Record<string, string>,
 ): StreamFn {
-  const chatUrl = resolveOllamaChatUrl(baseUrl);
-  const ssrfPolicy = buildOllamaBaseUrlSsrFPolicy(chatUrl);
+  const defaultChatUrl = resolveOllamaChatUrl(baseUrl);
+  const defaultSsrfPolicy = buildOllamaBaseUrlSsrFPolicy(defaultChatUrl);
 
   return (model, context, options) => {
+    // Per-request URL override: when the runtime model carries a baseUrl
+    // (set by createConfiguredOllamaStreamFn from the provider config),
+    // recompute the chat URL and SSRF policy for this specific request.
+    // This fixes the api-registry first-write-wins bug where multiple
+    // ollama-compat providers (e.g. cloud "ollama" + LAN "remote-ollama")
+    // share api="ollama" and would otherwise all route to whichever URL
+    // was baked into the first-registered streamFn closure.
+    const modelBaseUrl =
+      typeof (model as { baseUrl?: string }).baseUrl === "string" &&
+      (model as { baseUrl: string }).baseUrl.trim()
+        ? (model as { baseUrl: string }).baseUrl.trim()
+        : null;
+    const chatUrl = modelBaseUrl ? resolveOllamaChatUrl(modelBaseUrl) : defaultChatUrl;
+    const ssrfPolicy = modelBaseUrl ? buildOllamaBaseUrlSsrFPolicy(chatUrl) : defaultSsrfPolicy;
     const stream = createAssistantMessageEventStream();
 
     const run = async () => {
@@ -1301,11 +1315,25 @@ export function createConfiguredOllamaStreamFn(params: {
   model: { baseUrl?: string; headers?: unknown };
   providerBaseUrl?: string;
 }): StreamFn {
-  return createOllamaStreamFn(
-    resolveOllamaBaseUrlForRun({
-      modelBaseUrl: readStringValue(params.model.baseUrl),
-      providerBaseUrl: params.providerBaseUrl,
-    }),
-    resolveOllamaModelHeaders(params.model),
-  );
+  const resolvedBaseUrl = resolveOllamaBaseUrlForRun({
+    modelBaseUrl: readStringValue(params.model.baseUrl),
+    providerBaseUrl: params.providerBaseUrl,
+  });
+  const inner = createOllamaStreamFn(resolvedBaseUrl, resolveOllamaModelHeaders(params.model));
+  // Stamp the resolved baseUrl onto the runtime model so that
+  // createOllamaStreamFn can route per-request even when multiple
+  // ollama-compat providers share api="ollama" in the api-registry
+  // (first-write-wins workaround).
+  // Prefer the runtime model's own baseUrl when present (set by
+  // pi-embedded-runner from the provider config), so a later provider
+  // entering the first-registered wrapper still routes correctly.
+  return (model, context, options) => {
+    const effectiveBaseUrl =
+      typeof (model as { baseUrl?: string }).baseUrl === "string" &&
+      (model as { baseUrl: string }).baseUrl.trim()
+        ? (model as { baseUrl: string }).baseUrl.trim()
+        : resolvedBaseUrl;
+    const modelWithBaseUrl = { ...model, baseUrl: effectiveBaseUrl };
+    return inner(modelWithBaseUrl, context, options);
+  };
 }
