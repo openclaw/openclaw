@@ -108,6 +108,11 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  if (params.disableTools === true && backendResolved.nativeToolMode === "always-on") {
+    throw new Error(
+      `CLI backend ${backendResolved.id} cannot run with tools disabled because it exposes native tools`,
+    );
+  }
   const agentDir = resolveOpenClawAgentDir();
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   const effectiveAuthProfileId =
@@ -169,10 +174,9 @@ export async function prepareCliRunContext(
     config: params.config,
     agentId: params.agentId,
   });
-  let mcpLoopbackRuntime = backendResolved.bundleMcp
-    ? prepareDeps.getActiveMcpLoopbackRuntime()
-    : undefined;
-  if (backendResolved.bundleMcp && !mcpLoopbackRuntime) {
+  const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
+  let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
+  if (bundleMcpEnabled && !mcpLoopbackRuntime) {
     try {
       await prepareDeps.ensureMcpLoopbackServer();
     } catch (error) {
@@ -181,7 +185,7 @@ export async function prepareCliRunContext(
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
   const preparedBackend = await prepareCliBundleMcpConfig({
-    enabled: backendResolved.bundleMcp,
+    enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
     backend: backendResolved.config,
     workspaceDir,

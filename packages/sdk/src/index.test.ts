@@ -263,6 +263,65 @@ describe("OpenClaw SDK", () => {
     ).rejects.toThrow("timeoutMs must be a finite non-negative number");
   });
 
+  it("calls artifact Gateway RPCs", async () => {
+    const transport = new FakeTransport({
+      "artifacts.list": { artifacts: [{ id: "artifact_123", type: "image", title: "demo.png" }] },
+      "artifacts.get": { artifact: { id: "artifact_123", type: "image", title: "demo.png" } },
+      "artifacts.download": {
+        artifact: { id: "artifact_123", type: "image", title: "demo.png" },
+        encoding: "base64",
+        data: "aGVsbG8=",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.artifacts.list({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
+      artifacts: [{ id: "artifact_123" }],
+    });
+    await expect(
+      oc.artifacts.get("artifact_123", { sessionKey: "agent:main:main" }),
+    ).resolves.toMatchObject({
+      artifact: { id: "artifact_123" },
+    });
+    await expect(
+      oc.artifacts.download("artifact_123", { sessionKey: "agent:main:main" }),
+    ).resolves.toMatchObject({
+      encoding: "base64",
+      data: "aGVsbG8=",
+    });
+
+    expect(transport.calls).toMatchObject([
+      {
+        method: "artifacts.list",
+        params: { sessionKey: "agent:main:main" },
+      },
+      {
+        method: "artifacts.get",
+        params: { artifactId: "artifact_123", sessionKey: "agent:main:main" },
+      },
+      {
+        method: "artifacts.download",
+        params: { artifactId: "artifact_123", sessionKey: "agent:main:main" },
+      },
+    ]);
+  });
+
+  it("requires artifact query scope before calling Gateway", async () => {
+    const transport = new FakeTransport({});
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.artifacts.list(undefined as never)).rejects.toThrow(
+      "oc.artifacts.list requires one of sessionKey, runId, or taskId",
+    );
+    await expect(oc.artifacts.get("artifact_123", undefined as never)).rejects.toThrow(
+      "oc.artifacts.get requires one of sessionKey, runId, or taskId",
+    );
+    await expect(oc.artifacts.download("artifact_123", undefined as never)).rejects.toThrow(
+      "oc.artifacts.download requires one of sessionKey, runId, or taskId",
+    );
+    expect(transport.calls).toEqual([]);
+  });
+
   it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
     const transport = new FakeTransport({});
     const oc = new OpenClaw({ transport });
@@ -278,15 +337,6 @@ describe("OpenClaw SDK", () => {
     );
     await expect(oc.tools.invoke("demo")).rejects.toThrow(
       "oc.tools.invoke is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.artifacts.list()).rejects.toThrow(
-      "oc.artifacts.list is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.artifacts.get("artifact_123")).rejects.toThrow(
-      "oc.artifacts.get is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.artifacts.download("artifact_123")).rejects.toThrow(
-      "oc.artifacts.download is not supported by the current OpenClaw Gateway yet",
     );
     await expect(oc.environments.list()).rejects.toThrow(
       "oc.environments.list is not supported by the current OpenClaw Gateway yet",
