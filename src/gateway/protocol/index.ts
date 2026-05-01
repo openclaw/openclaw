@@ -53,6 +53,10 @@ import {
   AgentsListParamsSchema,
   type AgentsListResult,
   AgentsListResultSchema,
+  type AgentCapabilitiesParams,
+  AgentCapabilitiesParamsSchema,
+  type AgentCapabilitiesResult,
+  AgentCapabilitiesResultSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
   type ChannelsStartParams,
@@ -530,6 +534,9 @@ export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
 );
 export const validateModelsListParams = ajv.compile<ModelsListParams>(ModelsListParamsSchema);
 export const validateSkillsStatusParams = ajv.compile<SkillsStatusParams>(SkillsStatusParamsSchema);
+export const validateAgentCapabilitiesParams = ajv.compile<AgentCapabilitiesParams>(
+  AgentCapabilitiesParamsSchema,
+);
 export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsCatalogParamsSchema);
 export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
   ToolsEffectiveParamsSchema,
@@ -755,6 +762,8 @@ export {
   AgentsFilesSetResultSchema,
   AgentsListParamsSchema,
   AgentsListResultSchema,
+  AgentCapabilitiesParamsSchema,
+  AgentCapabilitiesResultSchema,
   CommandsListParamsSchema,
   CommandsListResultSchema,
   PluginsUiDescriptorsParamsSchema,
@@ -875,6 +884,8 @@ export type {
   ArtifactsDownloadResult,
   AgentsListParams,
   AgentsListResult,
+  AgentCapabilitiesParams,
+  AgentCapabilitiesResult,
   CommandsListParams,
   CommandsListResult,
   CommandEntry,
