@@ -2266,6 +2266,7 @@ describe("host-hook fixture plugin contract", () => {
 
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
     let releaseToolHandler: (() => void) | undefined;
+    let delayedToolHandlerSawContext: unknown;
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
@@ -2279,9 +2280,11 @@ describe("host-hook fixture plugin contract", () => {
           id: "delayed",
           streams: ["tool"],
           async handle(_event, ctx) {
+            ctx.setRunContext("before-terminal", { visible: true });
             await new Promise<void>((resolve) => {
               releaseToolHandler = resolve;
             });
+            delayedToolHandlerSawContext = ctx.getRunContext("before-terminal");
             ctx.setRunContext("late", { resurrected: true });
           },
         });
@@ -2301,9 +2304,19 @@ describe("host-hook fixture plugin contract", () => {
       stream: "lifecycle",
       data: { phase: "end" },
     });
+    await Promise.resolve();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "delayed-subscription",
+        get: { runId: "run-delayed-subscription", namespace: "before-terminal" },
+      }),
+    ).toEqual({ visible: true });
+
     releaseToolHandler?.();
     await waitForPluginEventHandlers();
 
+    expect(delayedToolHandlerSawContext).toEqual({ visible: true });
     expect(
       getPluginRunContext({
         pluginId: "delayed-subscription",

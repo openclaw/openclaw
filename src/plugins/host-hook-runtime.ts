@@ -302,7 +302,10 @@ export function dispatchPluginAgentEventSubscriptions(params: {
   }
   if (isTerminalEvent) {
     markPluginRunClosed(params.event.runId);
-    void waitForTerminalEventHandlers(new Set(pendingHandlers)).then(() => {
+    const pendingForRun =
+      getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.get(params.event.runId) ??
+      new Set(pendingHandlers);
+    void waitForTerminalEventHandlers(new Set(pendingForRun)).then(() => {
       clearPluginRunContext({ runId: params.event.runId });
     });
   }
