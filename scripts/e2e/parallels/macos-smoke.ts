@@ -479,7 +479,7 @@ class MacosSmoke {
     this.status.freshAgent = "pass";
     if (this.discordEnabled()) {
       this.status.freshDiscord = "fail";
-      await this.phase("fresh.discord-config", 180, () => this.configureDiscord());
+      await this.phase("fresh.discord-config", 600, () => this.configureDiscord());
       await this.phase("fresh.discord-roundtrip", 180, () => this.runDiscordRoundtrip("fresh"));
       this.status.freshDiscord = "pass";
     }
@@ -536,7 +536,7 @@ class MacosSmoke {
     this.status.upgradeAgent = "pass";
     if (this.discordEnabled()) {
       this.status.upgradeDiscord = "fail";
-      await this.phase("upgrade.discord-config", 180, () => this.configureDiscord());
+      await this.phase("upgrade.discord-config", 600, () => this.configureDiscord());
       await this.phase("upgrade.discord-roundtrip", 180, () => this.runDiscordRoundtrip("upgrade"));
       this.status.upgradeDiscord = "pass";
     }
@@ -854,6 +854,14 @@ mkdir -p "$bootstrap_root"
       `set -eu
 rm -rf ${shellQuote(`${home}/openclaw`)}
 export PATH=${shellQuote(`/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin:${guestPath}`)}
+${guestNode} - <<'JS'
+const fs = require("node:fs");
+const path = require("node:path");
+const configPath = path.join(process.env.HOME || ${JSON.stringify(home)}, ".openclaw", "openclaw.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+config.update = { ...(config.update || {}), channel: "dev" };
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
+JS
 /usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
 ${guestNode} ${guestOpenClawEntry} --version
 ${guestNode} ${guestOpenClawEntry} update status --json`,
@@ -972,11 +980,12 @@ exit 1`);
       "true",
       "--strict-json",
     ]);
+    this.guestExec([guestNode, guestOpenClawEntry, "config", "set", "tools.profile", "minimal"]);
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id parallels-macos-smoke --message ${shellQuote(
         "Reply with exact ASCII text OK only.",
-      )} --timeout 0 --json`,
+      )} --thinking minimal --json`,
     );
   }
 

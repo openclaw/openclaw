@@ -5,14 +5,6 @@ import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 
 export { createDedupeCache, rawDataToString };
 
-export type ResponsePrefixContext = {
-  model?: string;
-  modelFull?: string;
-  provider?: string;
-  thinkingLevel?: string;
-  identityName?: string;
-};
-
 export const formatInboundFromLabel = formatInboundFromLabelShared;
 
 export function resolveThreadSessionKeys(params: {
