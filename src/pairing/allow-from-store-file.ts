@@ -272,7 +272,7 @@ export function readAllowFromFileSyncWithExists(params: {
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code !== "ENOENT") {
-      return { entries: [], exists: false };
+      throw err;
     }
   }
 
