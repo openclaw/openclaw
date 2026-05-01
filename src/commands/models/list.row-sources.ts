@@ -106,6 +106,27 @@ export async function appendAllModelRowSources(
     skipSuppression: Boolean(params.modelRegistry),
   });
 
+  // Surface configured entries whose model id is missing from the registry when
+  // a provider filter is active. The pre-#75517 non-`--all` path always called
+  // appendConfiguredRows; without this, a configured default/fallback that the
+  // registry doesn't return disappears under `models list --provider X` when
+  // the source plan resolves to `kind: "registry"` (e.g. supplemental-manifest
+  // providers). Plain `--all` (no provider filter) keeps the prior order.
+  if (params.context.filter.provider && params.entries && params.entries.length > 0) {
+    const missingEntries = params.entries.filter((entry) => !seenKeys.has(entry.key));
+    if (missingEntries.length > 0) {
+      await appendConfiguredRows({
+        rows: params.rows,
+        entries: missingEntries,
+        modelRegistry: params.modelRegistry,
+        context: params.context,
+      });
+      for (const entry of missingEntries) {
+        seenKeys.add(entry.key);
+      }
+    }
+  }
+
   await appendConfiguredProviderRows({
     rows: params.rows,
     context: params.context,
