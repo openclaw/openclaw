@@ -138,6 +138,10 @@ inter-session user turns that only have provenance metadata.
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (Gemini-style turn alternation).
 - Google turn ordering fixup (prepend a tiny user bootstrap if history starts with assistant).
+- Missing assistant tool-call `thoughtSignature` values are repaired with
+  Google's documented `skip_thought_signature_validator` sentinel during
+  same-provider replay. Real signatures are preserved; the sentinel is only a
+  last-resort repair for persisted unsigned tool calls.
 - Antigravity Claude: normalize thinking signatures; drop unsigned thinking blocks.
 
 **Anthropic / Minimax (Anthropic-compatible)**

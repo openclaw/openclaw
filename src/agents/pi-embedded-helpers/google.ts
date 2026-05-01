@@ -4,6 +4,13 @@ import { sanitizeGoogleTurnOrdering } from "./bootstrap.js";
 
 export const GOOGLE_THOUGHT_SIGNATURE_SENTINEL = "skip_thought_signature_validator";
 
+type AssistantAgentMessage = Extract<AgentMessage, { role: "assistant" }>;
+type AssistantContentBlock = AssistantAgentMessage["content"][number];
+type GoogleToolCallBlock = AssistantContentBlock & {
+  type: "toolCall";
+  thoughtSignature?: unknown;
+};
+
 export function isGoogleModelApi(api?: string | null): boolean {
   return api === "google-gemini-cli" || api === "google-generative-ai";
 }
@@ -13,6 +20,10 @@ export function isGemma4ModelRequiringReasoningStrip(modelId?: string | null): b
 }
 
 export { sanitizeGoogleTurnOrdering };
+
+function isGoogleToolCallBlock(block: AssistantContentBlock): block is GoogleToolCallBlock {
+  return typeof block === "object" && block !== null && block.type === "toolCall";
+}
 
 export function ensureGoogleToolCallThoughtSignatures(messages: AgentMessage[]): AgentMessage[] {
   if (!Array.isArray(messages) || messages.length === 0) {
@@ -28,22 +39,18 @@ export function ensureGoogleToolCallThoughtSignatures(messages: AgentMessage[]):
       return msg;
     }
     let contentChanged = false;
-    const nextContent = assistant.content.map((block) => {
-      if (!block || typeof block !== "object") {
-        return block;
-      }
-      const record = block as { type?: unknown; thoughtSignature?: unknown };
-      if (record.type !== "toolCall") {
+    const nextContent: AssistantAgentMessage["content"] = assistant.content.map((block) => {
+      if (!isGoogleToolCallBlock(block)) {
         return block;
       }
       const signature =
-        typeof record.thoughtSignature === "string" ? record.thoughtSignature.trim() : "";
+        typeof block.thoughtSignature === "string" ? block.thoughtSignature.trim() : "";
       if (signature) {
         return block;
       }
       contentChanged = true;
       return {
-        ...(record as Record<string, unknown>),
+        ...block,
         thoughtSignature: GOOGLE_THOUGHT_SIGNATURE_SENTINEL,
       };
     });
