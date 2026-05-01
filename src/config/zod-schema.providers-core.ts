@@ -371,7 +371,16 @@ export const TelegramAccountSchemaBase = z
     autoTopicLabel: AutoTopicLabelSchema,
     reasoningStreamSink: z
       .object({
-        url: z.string().url(),
+        url: z
+          .string()
+          .url()
+          .refine(
+            (v) => {
+              const p = new URL(v).protocol;
+              return p === "http:" || p === "https:";
+            },
+            "Expected http:// or https:// URL",
+          ),
         secret: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
         timeoutMs: z.number().int().positive().optional(),
