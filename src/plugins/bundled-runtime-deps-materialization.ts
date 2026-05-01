@@ -89,13 +89,114 @@ function hasRuntimeDepEntryFile(packageDir: string, rawEntry: string): boolean {
   );
 }
 
+function isJsonObject(value: unknown): value is JsonObject {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isRuntimeDepExportTarget(value: string): boolean {
+  return value.trim().startsWith("./");
+}
+
+function collectRuntimeDepExportTargets(rawExports: unknown): string[] {
+  const targets = new Set<string>();
+  const queue: unknown[] = [rawExports];
+  while (queue.length > 0) {
+    const value = queue.shift();
+    if (typeof value === "string") {
+      const target = value.trim();
+      if (isRuntimeDepExportTarget(target)) {
+        targets.add(target);
+      }
+      continue;
+    }
+    if (Array.isArray(value)) {
+      queue.push(...value);
+      continue;
+    }
+    if (isJsonObject(value)) {
+      queue.push(...Object.values(value));
+    }
+  }
+  return [...targets].toSorted();
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function isPathInsideRuntimeDepPackage(packageDir: string, entryPath: string): boolean {
+  return entryPath === packageDir || entryPath.startsWith(`${packageDir}${path.sep}`);
+}
+
+function hasRuntimeDepExportPatternFile(packageDir: string, rawTarget: string): boolean {
+  const target = rawTarget.trim();
+  const packageRelativeTarget = target.slice("./".length);
+  const firstWildcardIndex = packageRelativeTarget.indexOf("*");
+  if (firstWildcardIndex === -1) {
+    return hasRuntimeDepEntryFile(packageDir, target);
+  }
+
+  const fixedPrefix = packageRelativeTarget.slice(0, firstWildcardIndex);
+  const searchRelativeDir = fixedPrefix.endsWith("/")
+    ? fixedPrefix
+    : path.posix.dirname(fixedPrefix);
+  const searchDir = path.resolve(
+    packageDir,
+    ...(searchRelativeDir === "." ? [] : searchRelativeDir.split("/")),
+  );
+  if (!isPathInsideRuntimeDepPackage(packageDir, searchDir)) {
+    return false;
+  }
+
+  const pattern = new RegExp(`^${packageRelativeTarget.split("*").map(escapeRegExp).join(".*")}$`);
+  const pending = [searchDir];
+  while (pending.length > 0) {
+    const currentDir = pending.pop();
+    if (!currentDir) {
+      continue;
+    }
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(currentDir, entry.name);
+      if (!isPathInsideRuntimeDepPackage(packageDir, entryPath)) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        pending.push(entryPath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const relativePath = path.relative(packageDir, entryPath).split(path.sep).join("/");
+      if (pattern.test(relativePath)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function hasInstalledRuntimeDepExportFiles(packageDir: string, rawExports: unknown): boolean {
+  const targets = collectRuntimeDepExportTargets(rawExports);
+  if (targets.length === 0) {
+    return hasRuntimeDepEntryFile(packageDir, "index");
+  }
+  return targets.every((target) => hasRuntimeDepExportPatternFile(packageDir, target));
+}
+
 function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonObject): boolean {
   const main = packageJson.main;
   if (typeof main === "string") {
     return hasRuntimeDepEntryFile(packageDir, main);
   }
   if (packageJson.exports !== undefined) {
-    return true;
+    return hasInstalledRuntimeDepExportFiles(packageDir, packageJson.exports);
   }
   return hasRuntimeDepEntryFile(packageDir, "index");
 }

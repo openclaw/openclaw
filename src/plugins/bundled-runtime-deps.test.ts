@@ -1458,6 +1458,80 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     ).not.toThrow();
   });
 
+  it("accepts staged runtime deps with exported package entry files", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "alpha-runtime",
+        version: "1.0.0",
+        exports: {
+          ".": {
+            import: "./dist/index.mjs",
+            require: "./dist/index.cjs",
+          },
+          "./package.json": "./package.json",
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageDir, "dist", "index.mjs"), "export {};\n", "utf8");
+    fs.writeFileSync(path.join(packageDir, "dist", "index.cjs"), "module.exports = {};\n", "utf8");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(true);
+    expect(() =>
+      assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"]),
+    ).not.toThrow();
+  });
+
+  it("accepts staged runtime deps with exported package entry patterns", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(path.join(packageDir, "features"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "alpha-runtime",
+        version: "1.0.0",
+        exports: {
+          "./features/*": "./features/*.js",
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageDir, "features", "one.js"), "export {};\n", "utf8");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(true);
+    expect(() =>
+      assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"]),
+    ).not.toThrow();
+  });
+
+  it("reports staged runtime deps as missing when exported package entry files are absent", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "alpha-runtime",
+        version: "1.0.0",
+        exports: "./dist/index.js",
+      }),
+      "utf8",
+    );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(false);
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"])).toThrow(
+      /alpha-runtime@1\.0\.0/,
+    );
+  });
+
   it("reports staged runtime deps as missing when the default package entry is absent", () => {
     const installRoot = makeTempDir();
     const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
