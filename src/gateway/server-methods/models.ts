@@ -36,7 +36,7 @@ async function loadModelsListCatalog(
   });
   try {
     const result = await Promise.race([
-      context.loadGatewayModelCatalog().catch(() => [] as GatewayModelCatalog),
+      context.loadGatewayModelCatalog(),
       timeoutPromise,
     ]);
     if (result === timedOut) {

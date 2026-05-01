@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ErrorCodes } from "../protocol/index.js";
 import { modelsHandlers } from "./models.js";
 
 type Deferred<T> = {
@@ -118,5 +119,38 @@ describe("models.list", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("reports catalog load failures instead of falling back to an empty successful response", async () => {
+    const respond = vi.fn();
+
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-catalog-failure",
+        method: "models.list",
+        params: { view: "configured" },
+      },
+      params: { view: "configured" },
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => ({}) as OpenClawConfig,
+        loadGatewayModelCatalog: vi.fn(() => Promise.reject(new Error("catalog failed"))),
+        logGateway: {
+          debug: vi.fn(),
+        },
+      } as never,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.UNAVAILABLE,
+        message: "Error: catalog failed",
+      }),
+    );
   });
 });
