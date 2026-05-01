@@ -1,4 +1,4 @@
-import { lstat } from "node:fs/promises";
+import { lstat, readFile } from "node:fs/promises";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -106,8 +106,12 @@ async function validateAttachmentFiles(
     if (!info?.isFile()) {
       return { error: `attachment file not found: ${filePath}` };
     }
+    if (info.size > maxBytes) {
+      return { error: `attachment file exceeds ${maxBytes} bytes: ${filePath}` };
+    }
     if (options?.forceDocumentMime) {
-      const detectedMime = normalizeMimeType(await detectMime({ filePath }));
+      const fileBuffer = await readFile(filePath);
+      const detectedMime = normalizeMimeType(await detectMime({ buffer: fileBuffer }));
       if (detectedMime !== options.forceDocumentMime) {
         return {
           error:
@@ -115,9 +119,6 @@ async function validateAttachmentFiles(
             `expected ${options.forceDocumentMime}, got ${detectedMime ?? "unknown"}`,
         };
       }
-    }
-    if (info.size > maxBytes) {
-      return { error: `attachment file exceeds ${maxBytes} bytes: ${filePath}` };
     }
     totalBytes += info.size;
     if (totalBytes > maxBytes) {
@@ -186,7 +187,7 @@ export async function sendPluginSessionAttachment(
       mediaUrls: validated,
       forceDocument:
         params.forceDocument ?? (resolvedDelivery.forceDocumentMime ? true : undefined),
-      bestEffort: true,
+      bestEffort: false,
       ...(resolvedDelivery.parseMode ? { parseMode: resolvedDelivery.parseMode } : {}),
       ...(resolvedDelivery.disableNotification !== undefined
         ? { silent: resolvedDelivery.disableNotification }

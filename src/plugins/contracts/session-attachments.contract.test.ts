@@ -161,9 +161,48 @@ describe("plugin session attachments", () => {
         accountId: "default",
         threadId: 42,
         mediaUrls: [filePath],
-        bestEffort: true,
+        bestEffort: false,
         silent: true,
         parseMode: "HTML",
+      });
+    });
+  });
+
+  it("does not use best-effort mode for attachment batches", async () => {
+    await withSessionStore(async ({ storePath, stateDir }) => {
+      const first = path.join(stateDir, "first.txt");
+      const second = path.join(stateDir, "second.txt");
+      await fs.writeFile(first, "1", "utf8");
+      await fs.writeFile(second, "2", "utf8");
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      workflowMocks.sendMessage.mockImplementation(async (params: Record<string, unknown>) => ({
+        channel: params.channel,
+        to: params.to,
+        via: "direct" as const,
+        mediaUrl: null,
+        result: { channel: params.channel, messageId: "attachment-1" },
+      }));
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: first }, { path: second }],
+        }),
+      ).resolves.toMatchObject({ ok: true, channel: "telegram", count: 2 });
+      expect(workflowMocks.sendMessage.mock.calls[0]?.[0]).toMatchObject({
+        mediaUrls: [first, second],
+        bestEffort: false,
       });
     });
   });
@@ -387,7 +426,20 @@ describe("plugin session attachments", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: `attachment file MIME mismatch for ${filePath}: expected application/pdf, got text/plain`,
+        error: `attachment file MIME mismatch for ${filePath}: expected application/pdf, got unknown`,
+      });
+      const fakePdfPath = path.join(stateDir, "fake.pdf");
+      await fs.writeFile(fakePdfPath, "not a pdf", "utf8");
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: fakePdfPath }],
+          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: `attachment file MIME mismatch for ${fakePdfPath}: expected application/pdf, got unknown`,
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
     });
