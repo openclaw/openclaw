@@ -98,6 +98,10 @@ async function loadWebGuardedFetch(): Promise<
   return (await webGuardedFetchPromise).fetchWithWebToolsNetworkGuard;
 }
 
+export async function prepareWebFetchToolRuntime(): Promise<void> {
+  await Promise.all([loadWebFetchRuntime(), loadWebGuardedFetch()]);
+}
+
 function resolveFetchConfig(cfg?: OpenClawConfig): WebFetchConfig {
   return resolveWebProviderConfig(cfg, "fetch") as NonNullable<WebFetchConfig> | undefined;
 }

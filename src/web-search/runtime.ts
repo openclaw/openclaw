@@ -477,10 +477,12 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
 
   for (const candidate of candidates) {
     try {
-      const definition = candidate.createTool({
+      const definition = resolveWebSearchDefinition({
         config,
-        searchConfig: search as Record<string, unknown> | undefined,
-        runtimeMetadata: runtimeWebSearch,
+        providerId: candidate.id,
+        sandboxed: params.sandboxed,
+        preferRuntimeProviders: params.preferRuntimeProviders ?? true,
+        runtimeWebSearch,
       });
       if (!definition) {
         if (!allowFallback) {
@@ -489,7 +491,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         sawUnavailableProvider = true;
         continue;
       }
-      const executed = await definition.execute(params.args);
+      const executed = await definition.definition.execute(params.args);
       if (allowFallback && isStructuredAvailabilityError(executed)) {
         lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
         continue;

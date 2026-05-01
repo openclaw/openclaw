@@ -56,6 +56,8 @@ const hoisted = vi.hoisted(() => ({
   prepareWebSearchDefinition: vi.fn(() => null),
   prepareWebFetchDefinition: vi.fn(() => null),
   prepareWebContentExtractors: vi.fn(async () => undefined),
+  prepareOpenClawToolsRuntime: vi.fn(async () => undefined),
+  prepareWebFetchToolRuntime: vi.fn(async () => undefined),
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
@@ -100,6 +102,14 @@ vi.mock("../plugins/providers.js", async (importOriginal) => {
 
 vi.mock("../agents/simple-completion-runtime.js", () => ({
   prepareSimpleCompletionModel: hoisted.prepareSimpleCompletionModel,
+}));
+
+vi.mock("../agents/openclaw-tools.runtime.js", () => ({
+  prepareOpenClawToolsRuntime: hoisted.prepareOpenClawToolsRuntime,
+}));
+
+vi.mock("../agents/tools/web-fetch.js", () => ({
+  prepareWebFetchToolRuntime: hoisted.prepareWebFetchToolRuntime,
 }));
 
 vi.mock("../config/sessions/paths.js", () => ({
@@ -446,6 +456,16 @@ describe("reply-runtime readiness", () => {
     );
     expect(hoisted.prepareSimpleCompletionModel).toHaveBeenNthCalledWith(
       2,
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        workspaceDir: "/tmp/openclaw-workspace",
+        skipPiDiscovery: true,
+        primeReplyRuntimeCache: true,
+      }),
+    );
+    expect(hoisted.prepareSimpleCompletionModel).toHaveBeenNthCalledWith(
+      3,
       expect.objectContaining({
         provider: "openai",
         modelId: "gpt-5.4",

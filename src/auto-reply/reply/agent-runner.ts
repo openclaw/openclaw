@@ -1130,7 +1130,9 @@ export async function runReplyAgent(params: {
   let preflightCompactionApplied = false;
 
   try {
-    await typingSignals.signalRunStart();
+    void typingSignals.signalRunStart().catch((err) => {
+      logVerbose(`typing signal failed: ${String(err)}`);
+    });
 
     activeSessionEntry = await runPreflightCompactionIfNeeded({
       cfg,

@@ -51,7 +51,7 @@ export const handleBtwCommand: CommandHandler = async (params, allowTextCommands
   }
 
   try {
-    await params.typing?.startTypingLoop();
+    void params.typing?.startTypingLoop();
     const reply = await runBtwSideQuestion({
       cfg: params.cfg,
       agentDir,

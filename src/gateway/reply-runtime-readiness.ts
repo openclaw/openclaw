@@ -23,9 +23,12 @@ import {
   resolvePersistedSelectedModelRef,
 } from "../agents/model-selection.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { prepareOpenClawToolsRuntime } from "../agents/openclaw-tools.runtime.js";
+import { preparePreparedPiRunBootstrapState } from "../agents/pi-embedded-runner/prepared-bootstrap-state.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
 import { prepareSimpleCompletionModel } from "../agents/simple-completion-runtime.js";
+import { prepareWebFetchToolRuntime } from "../agents/tools/web-fetch.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
@@ -509,6 +512,26 @@ export async function prepareReplyRuntimeForChannels(params: {
           if ("error" in prepared) {
             throw new Error(prepared.error);
           }
+          const dynamicPrepared = await prepareSimpleCompletionModel({
+            cfg: params.cfg,
+            provider: target.provider,
+            modelId: target.model,
+            agentDir: target.agentDir,
+            workspaceDir: target.workspaceDir,
+            allowMissingApiKeyModes: ["aws-sdk"],
+            skipPiDiscovery: true,
+            primeReplyRuntimeCache: true,
+          });
+          if ("error" in dynamicPrepared) {
+            throw new Error(dynamicPrepared.error);
+          }
+          preparePreparedPiRunBootstrapState({
+            config: params.cfg,
+            agentDir: target.agentDir,
+            workspaceDir: target.workspaceDir,
+            provider: target.provider,
+            modelId: target.model,
+          });
           for (const profileId of resolvePiReplyRuntimeProfileCandidates({
             cfg: params.cfg,
             agentDir: target.agentDir,
@@ -549,6 +572,8 @@ export async function prepareReplyRuntimeForChannels(params: {
       "tool-contracts",
       `prepared stable core and plugin tool contracts for ${warmAgents.size} agent(s)`,
       async () => {
+        await prepareOpenClawToolsRuntime();
+        await prepareWebFetchToolRuntime();
         for (const [agentId, warmAgent] of warmAgents) {
           createOpenClawTools({
             config: params.cfg,
