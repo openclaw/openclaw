@@ -976,15 +976,11 @@ exit 1`);
     const providerId = providerIdFromModelId(this.auth.modelId) || this.options.provider;
     const providerTimeoutConfig = providerTimeoutConfigJson(this.auth.modelId, "macos");
     if (providerTimeoutConfig) {
-      this.guestExec([
-        guestNode,
-        guestOpenClawEntry,
-        "config",
-        "set",
-        `models.providers.${providerId}`,
-        providerTimeoutConfig,
-        "--strict-json",
-      ]);
+      this.guestSh(
+        `${shellQuote(guestNode)} ${shellQuote(guestOpenClawEntry)} config set ${shellQuote(
+          `models.providers.${providerId}`,
+        )} ${shellQuote(providerTimeoutConfig)} --strict-json`,
+      );
     }
     this.guestExec([
       guestNode,
