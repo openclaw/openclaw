@@ -23,6 +23,19 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).not.toContain("img-src 'self' data: blob: https:");
   });
 
+  it("allows wss: for cross-origin gateway WebSocket but blocks blanket ws: scheme", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).toContain("connect-src 'self' wss:");
+    expect(csp).not.toMatch(/connect-src[^;]*\bws:/);
+  });
+
+  it("appends extra connect-src origins when provided", () => {
+    const csp = buildControlUiCspHeader({
+      extraConnectSrc: ["https://remote-gateway.example"],
+    });
+    expect(csp).toContain("connect-src 'self' wss: https://remote-gateway.example");
+  });
+
   it("includes inline script hashes in script-src when provided", () => {
     const csp = buildControlUiCspHeader({
       inlineScriptHashes: ["sha256-abc123"],
