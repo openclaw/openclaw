@@ -1491,13 +1491,24 @@ async function processOpenAICompletionsStream(
     if (!choice.delta) {
       continue;
     }
-    if (choice.delta.content) {
-      if (currentBlock?.type === "toolCall") {
-        queuePostToolCallDelta({ kind: "text", text: choice.delta.content });
-      } else {
-        appendTextDelta(choice.delta.content);
+    if (choice.delta.content !== undefined && choice.delta.content !== null) {
+      const normalized = normalizeStructuredContentDelta(choice.delta.content);
+      if (normalized.length > 0) {
+        for (const part of normalized) {
+          if (currentBlock?.type === "toolCall") {
+            queuePostToolCallDelta(
+              part.kind === "thinking"
+                ? { kind: "thinking", signature: part.signature, text: part.text }
+                : { kind: "text", text: part.text },
+            );
+          } else if (part.kind === "thinking") {
+            appendThinkingDelta({ signature: part.signature, text: part.text });
+          } else {
+            appendTextDelta(part.text);
+          }
+        }
+        continue;
       }
-      continue;
     }
     const reasoningDeltas = getCompletionsReasoningDeltas(
       choice.delta as Record<string, unknown>,
@@ -1586,6 +1597,58 @@ async function processOpenAICompletionsStream(
   }
 }
 
+type StructuredContentDeltaPart =
+  | { kind: "text"; text: string }
+  | { kind: "thinking"; signature: string; text: string };
+
+/**
+ * Normalize an OpenAI-compatible streaming `delta.content` value into
+ * uniform text/thinking parts. The OpenAI baseline ships `delta.content` as
+ * a string; some compatible providers (notably Mistral with native reasoning
+ * enabled — see https://docs.mistral.ai/studio-api/conversations/reasoning/native)
+ * ship it as an array of typed blocks like
+ * `[{ type: "thinking", thinking: "..." }, { type: "text", text: "..." }]`.
+ *
+ * If we pass a non-string straight to `appendTextDelta`, downstream string
+ * concatenation produces `[object Object]` in user-visible text and corrupts
+ * memory/transcript files (#75268, related to closed #70806).
+ */
+function normalizeStructuredContentDelta(value: unknown): StructuredContentDeltaPart[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+  if (typeof value === "string") {
+    return value.length > 0 ? [{ kind: "text", text: value }] : [];
+  }
+  if (Array.isArray(value)) {
+    const parts: StructuredContentDeltaPart[] = [];
+    for (const item of value) {
+      parts.push(...normalizeStructuredContentDelta(item));
+    }
+    return parts;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const type = typeof record.type === "string" ? record.type : undefined;
+    const candidateText =
+      typeof record.text === "string"
+        ? record.text
+        : typeof record.thinking === "string"
+          ? record.thinking
+          : typeof record.content === "string"
+            ? record.content
+            : undefined;
+    if (!candidateText || candidateText.length === 0) {
+      return [];
+    }
+    if (type === "thinking" || type === "reasoning" || type === "reasoning.text") {
+      return [{ kind: "thinking", signature: type, text: candidateText }];
+    }
+    return [{ kind: "text", text: candidateText }];
+  }
+  return [];
+}
+
 type CompletionsReasoningDelta =
   | {
       kind: "thinking";
@@ -1644,6 +1707,24 @@ function getCompletionsReasoningDeltas(
       if (typeof value === "string" && value.length > 0) {
         pushDelta({ kind: "thinking", signature: field, text: value });
         break;
+      }
+      // Mistral-family providers may emit reasoning_content as an array of
+      // typed blocks instead of a flat string. Reuse the structured-content
+      // normalizer so the array of `{type, text|content|thinking}` entries
+      // becomes uniform thinking deltas instead of falling through to
+      // downstream `[object Object]` coercion.
+      if (value !== undefined && value !== null && typeof value !== "string") {
+        const parts = normalizeStructuredContentDelta(value);
+        if (parts.length > 0) {
+          for (const part of parts) {
+            if (part.kind === "thinking") {
+              pushDelta({ kind: "thinking", signature: field, text: part.text });
+            } else {
+              pushDelta({ kind: "thinking", signature: field, text: part.text });
+            }
+          }
+          break;
+        }
       }
     }
   }
@@ -2009,4 +2090,5 @@ export const __testing = {
   sanitizeOpenAICodexResponsesParams,
   buildOpenAICompletionsClientConfig,
   processOpenAICompletionsStream,
+  normalizeStructuredContentDelta,
 };
