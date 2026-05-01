@@ -837,6 +837,19 @@ function resolvePluginRegistrationPlan(params: {
   };
 }
 
+function applyManifestSnapshotMetadata(
+  record: PluginRecord,
+  manifestRecord: PluginManifestRecord,
+): void {
+  record.channelIds = [...(manifestRecord.channels ?? [])];
+  record.providerIds = [...(manifestRecord.providers ?? [])];
+  record.cliBackendIds = [
+    ...(manifestRecord.cliBackends ?? []),
+    ...(manifestRecord.setup?.cliBackends ?? []),
+  ];
+  record.commands = [...(manifestRecord.commandAliases ?? []).map((alias) => alias.name)];
+}
+
 function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const env = options.env ?? process.env;
   const cfg = applyTestPluginDefaults(options.config ?? {}, env);
@@ -1677,6 +1690,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (!shouldLoadModules) {
+        applyManifestSnapshotMetadata(record, manifestRecord);
         registry.plugins.push(record);
         seenIds.set(pluginId, candidate.origin);
         continue;
