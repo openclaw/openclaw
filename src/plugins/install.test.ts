@@ -618,6 +618,29 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
+  it("runs npm for package archive runtime dependencies", async () => {
+    const result = await installArchivePackageAndReturnResult({
+      packageJson: {
+        name: "archive-with-deps",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: { "left-pad": "1.3.0" },
+      },
+      outName: "archive-with-deps.tgz",
+      withDistIndex: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
+      "npm",
+      "install",
+      "--omit=dev",
+      "--loglevel=error",
+      "--ignore-scripts",
+    ]);
+  });
+
   it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const archiveV1 = await ensureDynamicArchiveTemplate({
