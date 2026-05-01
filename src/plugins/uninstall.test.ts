@@ -1061,6 +1061,37 @@ describe("uninstallPlugin", () => {
     });
     await expect(fs.access(installPath)).rejects.toThrow();
   });
+
+  it("does not delete symlinked git install targets that resolve outside the managed git root", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const linkParentDir = path.join(stateDir, "git", "git-abc123");
+    const installPath = path.join(linkParentDir, "repo");
+    const outsideDir = path.join(tempDir, "outside");
+    await fs.mkdir(linkParentDir, { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.writeFile(path.join(outsideDir, "index.js"), "// keep me");
+    await fs.symlink(outsideDir, installPath, "dir");
+
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries(),
+        installs: {
+          "my-plugin": createGitInstallRecord("my-plugin", installPath),
+        },
+      }),
+      pluginId: "my-plugin",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expectSuccessfulUninstallActions(result, {
+      directory: false,
+    });
+    await expect(fs.access(outsideDir)).resolves.toBeUndefined();
+    const linkStat = await fs.lstat(installPath);
+    expect(linkStat.isSymbolicLink()).toBe(true);
+  });
 });
 
 describe("resolveUninstallDirectoryTarget", () => {
