@@ -137,6 +137,30 @@ describe("startGatewayService", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
+  it("returns already-running without calling restart when the service is already up (issue #60087)", async () => {
+    const readCommand = vi.fn(async () => ({
+      programArguments: ["openclaw", "gateway", "run"],
+    }));
+    const isLoaded = vi.fn<GatewayService["isLoaded"]>().mockResolvedValue(true);
+    const readRuntime = vi
+      .fn<GatewayService["readRuntime"]>()
+      .mockResolvedValue({ status: "running" });
+    const service = createService({
+      readCommand,
+      isLoaded,
+      readRuntime,
+    });
+
+    const result = await startGatewayService(service, {
+      env: {},
+      stdout: process.stdout,
+    });
+
+    expect(result.outcome).toBe("already-running");
+    expect(service.restart).not.toHaveBeenCalled();
+    expect(result.state.running).toBe(true);
+  });
+
   it("restarts stopped installed services and returns post-start state", async () => {
     const readCommand = vi.fn(async () => ({
       programArguments: ["openclaw", "gateway", "run"],

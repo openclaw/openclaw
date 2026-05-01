@@ -124,6 +124,19 @@ export async function startGatewayService(
     };
   }
 
+  // Idempotency guard for issue #60087: when `~/.profile` contains
+  // `openclaw gateway start` (added by setup), every login-shell PATH probe
+  // re-invoked this code path and triggered a systemd restart of the running
+  // gateway, SIGTERM-ing in-flight exec tool calls and dropping WebSocket
+  // connections. `start` should mean "ensure running"; use `restart` to force
+  // a cycle.
+  if (state.running) {
+    return {
+      outcome: "already-running",
+      state,
+    };
+  }
+
   try {
     const restartResult = await service.restart({ ...args, env: state.env });
     const nextState = await readGatewayServiceState(service, { env: state.env });

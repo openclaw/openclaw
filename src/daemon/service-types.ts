@@ -51,6 +51,7 @@ export type GatewayServiceState = {
 export type GatewayServiceStartResult =
   | { outcome: "started"; state: GatewayServiceState }
   | { outcome: "scheduled"; state: GatewayServiceState }
+  | { outcome: "already-running"; state: GatewayServiceState }
   | { outcome: "missing-install"; state: GatewayServiceState };
 
 export type GatewayServiceRenderArgs = {
