@@ -164,12 +164,6 @@ function assertSafeInstalledDistPath(relativePath, params) {
   return candidatePath;
 }
 
-function isStagedRuntimeDependencyPath(relativePath) {
-  return /^dist\/extensions\/[^/]+\/(?:node_modules|\.openclaw-install-stage(?:-[^/]+)?)(?:\/|$)/u.test(
-    normalizeRelativePath(relativePath),
-  );
-}
-
 function listInstalledDistFiles(params = {}) {
   const readDir = params.readdirSync ?? readdirSync;
   const distRoot = resolveInstalledDistRoot(params);
@@ -182,10 +176,6 @@ function listInstalledDistFiles(params = {}) {
   while (pending.length > 0) {
     const currentDir = pending.pop();
     if (!currentDir) {
-      continue;
-    }
-    const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
-    if (isStagedRuntimeDependencyPath(relativeCurrentDir)) {
       continue;
     }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
@@ -223,10 +213,6 @@ function pruneEmptyDistDirectories(params = {}) {
   const pathLstat = params.lstatSync ?? lstatSync;
 
   function prune(currentDir) {
-    const relativeCurrentDir = normalizeRelativePath(relative(packageRoot, currentDir));
-    if (isStagedRuntimeDependencyPath(relativeCurrentDir)) {
-      return;
-    }
     for (const entry of readDir(currentDir, { withFileTypes: true })) {
       if (entry.isSymbolicLink()) {
         throw new Error(
@@ -259,6 +245,57 @@ function pruneEmptyDistDirectories(params = {}) {
   }
 
   prune(distRoot.distDir);
+}
+
+function isLegacyInstalledPluginDependencyDirName(name) {
+  return name === "node_modules" || /^\.openclaw-install-stage(?:-[^/]+)?$/iu.test(name);
+}
+
+function pruneLegacyInstalledPluginDependencyDirs(params) {
+  const readDir = params.readdirSync ?? readdirSync;
+  const removePath = params.rmSync ?? rmSync;
+  const packageRoot = params.packageRoot ?? DEFAULT_PACKAGE_ROOT;
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  const removed = [];
+  let pluginEntries;
+  try {
+    pluginEntries = readDir(extensionsDir, { withFileTypes: true });
+  } catch {
+    return removed;
+  }
+
+  for (const pluginEntry of pluginEntries) {
+    if (!pluginEntry.isDirectory() || pluginEntry.isSymbolicLink()) {
+      continue;
+    }
+    const pluginDir = join(extensionsDir, pluginEntry.name);
+    let pluginChildren;
+    try {
+      pluginChildren = readDir(pluginDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const childEntry of pluginChildren) {
+      if (!isLegacyInstalledPluginDependencyDirName(childEntry.name)) {
+        continue;
+      }
+      const safePluginDir = assertSafeInstalledDistPath(
+        normalizeRelativePath(relative(packageRoot, pluginDir)),
+        {
+          packageRoot,
+          distDirReal: params.distDirReal,
+          realpathSync: params.realpathSync,
+        },
+      );
+      const relativePath = normalizeRelativePath(
+        relative(packageRoot, join(pluginDir, childEntry.name)),
+      );
+      removePath(join(safePluginDir, childEntry.name), { recursive: true, force: true });
+      removed.push(relativePath);
+    }
+  }
+
+  return removed;
 }
 
 const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
@@ -400,6 +437,13 @@ export function pruneInstalledPackageDist(params = {}) {
   if (distRoot === null) {
     return [];
   }
+  const removedLegacyDependencyDirs = pruneLegacyInstalledPluginDependencyDirs({
+    packageRoot,
+    distDirReal: distRoot.distDirReal,
+    realpathSync: params.realpathSync,
+    readdirSync: params.readdirSync,
+    rmSync: params.rmSync,
+  });
   let expectedFiles = params.expectedFiles ?? null;
   if (expectedFiles === null) {
     try {
@@ -443,6 +487,11 @@ export function pruneInstalledPackageDist(params = {}) {
 
   if (removed.length > 0) {
     log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
+  }
+  if (removedLegacyDependencyDirs.length > 0) {
+    log.log(
+      `[postinstall] pruned legacy plugin dependency dirs: ${removedLegacyDependencyDirs.join(", ")}`,
+    );
   }
   return removed;
 }

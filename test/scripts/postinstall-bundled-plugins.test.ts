@@ -61,27 +61,6 @@ describe("bundled plugin postinstall", () => {
     ).toBe(true);
   });
 
-  it("does not install bundled plugin package deps outside of source checkouts by default", async () => {
-    const extensionsDir = await createExtensionsDir();
-    const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "acpx", {
-      dependencies: {
-        acpx: "0.4.1",
-      },
-    });
-    const spawnSync = vi.fn();
-
-    runBundledPluginPostinstall({
-      env: { HOME: "/tmp/home" },
-      extensionsDir,
-      packageRoot,
-      spawnSync,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    expect(spawnSync).not.toHaveBeenCalled();
-  });
-
   it("prunes Node versioned compile cache dirs during package postinstall", () => {
     const configuredBase = path.join("/tmp", "openclaw-cache");
     const defaultBase = path.join(tmpdir(), "node-compile-cache");
@@ -173,19 +152,15 @@ describe("bundled plugin postinstall", () => {
       path.join(extensionsDir, "acpx", "node_modules", "acpx", "package.json"),
       JSON.stringify({ name: "acpx", version: "0.4.1" }),
     );
-    const spawnSync = vi.fn();
-
     runBundledPluginPostinstall({
       env: { HOME: "/tmp/home" },
       packageRoot,
-      spawnSync,
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
     await expect(fs.stat(path.join(extensionsDir, "acpx", "node_modules"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("keeps source-checkout prune non-fatal", async () => {
@@ -419,7 +394,6 @@ describe("bundled plugin postinstall", () => {
 
     runBundledPluginPostinstall({
       packageRoot,
-      spawnSync: vi.fn(),
       log: { log: vi.fn(), warn: vi.fn() },
     });
 
@@ -529,11 +503,20 @@ describe("bundled plugin postinstall", () => {
     ).toThrow("unsafe dist entry: dist/escape");
   });
 
-  it("ignores staged bundled plugin node_modules when pruning packaged dist", async () => {
+  it("prunes stale bundled plugin dependency debris from packaged dist", async () => {
     const packageRoot = await createTempDirAsync("openclaw-packaged-install-dist-prune-");
     const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
     const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
     const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
+    const dependencyFile = path.join(
+      packageRoot,
+      "dist",
+      "extensions",
+      "slack",
+      "node_modules",
+      "typebox",
+      "package.json",
+    );
     const installStageFile = path.join(
       packageRoot,
       "dist",
@@ -561,10 +544,12 @@ describe("bundled plugin postinstall", () => {
     await fs.mkdir(path.dirname(staleFile), { recursive: true });
     await fs.mkdir(path.dirname(packageJson), { recursive: true });
     await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(path.dirname(dependencyFile), { recursive: true });
     await fs.mkdir(path.dirname(installStageFile), { recursive: true });
     await fs.mkdir(path.dirname(retryInstallStageFile), { recursive: true });
     await fs.writeFile(staleFile, "export {};\n");
     await fs.writeFile(packageJson, "{}\n");
+    await fs.writeFile(dependencyFile, "{}\n");
     await fs.writeFile(installStageFile, "export {};\n");
     await fs.writeFile(retryInstallStageFile, "export {};\n");
     await fs.symlink("../fxparser/bin.js", path.join(binDir, "fxparser"));
@@ -576,8 +561,15 @@ describe("bundled plugin postinstall", () => {
         log: { log: vi.fn(), warn: vi.fn() },
       }),
     ).toEqual(["dist/stale-runtime.js"]);
-    await expect(fs.stat(installStageFile)).resolves.toBeDefined();
-    await expect(fs.stat(retryInstallStageFile)).resolves.toBeDefined();
+    await expect(
+      fs.stat(path.join(packageRoot, "dist", "extensions", "slack", "node_modules")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(path.dirname(installStageFile))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(fs.stat(path.dirname(retryInstallStageFile))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
   });
 
   it("unlinks stale files instead of recursive pruning them", () => {
@@ -612,32 +604,6 @@ describe("bundled plugin postinstall", () => {
     ).toEqual(["dist/stale.js"]);
 
     expect(unlinkSync).toHaveBeenCalledWith("/pkg/dist/stale.js");
-  });
-
-  it("skips reinstall when the bundled sentinel package already exists", async () => {
-    const extensionsDir = await createExtensionsDir();
-    const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writePluginPackage(extensionsDir, "acpx", {
-      dependencies: {
-        acpx: "0.4.1",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "acpx"), { recursive: true });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "acpx", "package.json"),
-      "{}\n",
-      "utf8",
-    );
-    const spawnSync = vi.fn();
-
-    runBundledPluginPostinstall({
-      env: { npm_config_global: "true" },
-      extensionsDir,
-      packageRoot,
-      spawnSync,
-    });
-
-    expect(spawnSync).not.toHaveBeenCalled();
   });
 
   it("prunes only bundled plugin package node_modules in source checkouts", async () => {

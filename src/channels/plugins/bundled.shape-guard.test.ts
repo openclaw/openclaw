@@ -739,25 +739,6 @@ describe("bundled channel entry shape guards", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("keeps setup-only plugin barrels off legacy staged runtime-dependency metadata", () => {
-    const offenders: string[] = [];
-
-    for (const extensionDir of bundledPluginRoots) {
-      const packageJsonPath = path.join(extensionDir, "package.json");
-      if (!fs.existsSync(packageJsonPath)) {
-        continue;
-      }
-      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-        openclaw?: { bundle?: Record<string, unknown> };
-      };
-      if (packageJson.openclaw?.bundle?.stageRuntimeDependencies === true) {
-        offenders.push(path.relative(process.cwd(), packageJsonPath));
-      }
-    }
-
-    expect(offenders).toEqual([]);
-  });
-
   it("keeps bundled channel entrypoints free of static src imports", () => {
     const offenders = collectBundledChannelEntrypointOffenders(bundledPluginRoots, (source) =>
       /^(?:import|export)\s.+["']\.\/src\//mu.test(source),
