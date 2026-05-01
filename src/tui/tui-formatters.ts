@@ -385,6 +385,33 @@ export function formatTokens(total?: number | null, context?: number | null) {
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
 }
 
+export function formatCompactTokens(total?: number | null, context?: number | null) {
+  const totalLabel = total == null ? "?" : formatTokenCount(total);
+  const contextLabel = context == null ? "?" : formatTokenCount(context);
+  return `${totalLabel}/${contextLabel}`;
+}
+
+export function formatCompactPercent(total?: number | null, context?: number | null) {
+  if (typeof total !== "number" || typeof context !== "number" || context <= 0) {
+    return "?%";
+  }
+  return `${Math.min(999, Math.round((total / context) * 100))}%`;
+}
+
+export function renderCompactProgressBar(percent?: number | null, width = 12) {
+  const pct =
+    typeof percent === "number" && Number.isFinite(percent)
+      ? Math.max(0, Math.min(100, percent))
+      : 0;
+  const filled = Math.max(0, Math.min(width, Math.round((pct / 100) * width)));
+  return {
+    filled,
+    empty: Math.max(0, width - filled),
+    width,
+    percent: pct,
+  };
+}
+
 export function formatContextUsageLine(params: {
   total?: number | null;
   context?: number | null;
