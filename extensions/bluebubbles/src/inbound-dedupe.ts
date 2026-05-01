@@ -113,6 +113,27 @@ function sanitizeGuid(guid: string | undefined | null): string | null {
   return trimmed;
 }
 
+type DedupeMessageInput = Pick<
+  NormalizedWebhookMessage,
+  "messageId" | "balloonBundleId" | "associatedMessageGuid" | "eventType" | "attachments"
+>;
+
+/**
+ * Resolve the underlying "base" dedupe key for a BlueBubbles inbound message,
+ * without the `:updated` suffix that distinguishes follow-up webhooks. Used
+ * both by `resolveBlueBubblesInboundDedupeKey` (which appends the suffix when
+ * appropriate) and the `updated-message` short-circuit inside
+ * `claimBlueBubblesInboundMessage`.
+ */
+function resolveBaseDedupeKey(message: DedupeMessageInput): string | undefined {
+  const balloonBundleId = message.balloonBundleId?.trim();
+  const associatedMessageGuid = message.associatedMessageGuid?.trim();
+  if (balloonBundleId && associatedMessageGuid) {
+    return associatedMessageGuid;
+  }
+  return message.messageId?.trim() || undefined;
+}
+
 /**
  * Resolve the canonical dedupe key for a BlueBubbles inbound message.
  *
@@ -134,25 +155,19 @@ function sanitizeGuid(guid: string | undefined | null): string | null {
  * reply against the same parent GUID and silently drop real messages.
  */
 export function resolveBlueBubblesInboundDedupeKey(
-  message: Pick<
-    NormalizedWebhookMessage,
-    "messageId" | "balloonBundleId" | "associatedMessageGuid" | "eventType"
-  >,
+  message: DedupeMessageInput,
 ): string | undefined {
-  const balloonBundleId = message.balloonBundleId?.trim();
-  const associatedMessageGuid = message.associatedMessageGuid?.trim();
-  let base: string | undefined;
-  if (balloonBundleId && associatedMessageGuid) {
-    base = associatedMessageGuid;
-  } else {
-    base = message.messageId?.trim() || undefined;
-  }
+  const base = resolveBaseDedupeKey(message);
   if (!base) {
     return undefined;
   }
   // `updated-message` events get a distinct key so they are not rejected as
   // duplicates of the already-committed `new-message` for the same GUID.
-  // This lets attachment-carrying follow-up webhooks through. (#65430, #52277)
+  // This lets attachment-carrying follow-up webhooks through when the original
+  // text-only event was processed without media (#65430, #52277). The
+  // no-attachment `updated-message` short-circuit inside
+  // `claimBlueBubblesInboundMessage` re-collapses the suffixed key onto the
+  // base only for replay noise — see that helper for the reasoning.
   if (message.eventType === "updated-message") {
     return `${base}:updated`;
   }
@@ -166,7 +181,7 @@ type InboundDedupeClaim =
   | { kind: "skip" };
 
 /**
- * Attempt to claim an inbound BlueBubbles message GUID.
+ * Attempt to claim an inbound BlueBubbles message for processing.
  *
  * - `claimed`: caller should process the message, then call `finalize()` on
  *   success (persists the GUID) or `release()` on failure (lets a later
@@ -176,15 +191,39 @@ type InboundDedupeClaim =
  *   rather than race.
  * - `skip`: GUID was missing or invalid — caller should continue processing
  *   without dedup (no finalize/release needed).
+ *
+ * For no-attachment `updated-message` events specifically: when the
+ * underlying base GUID has already been committed (the `new-message` was
+ * processed and the agent replied), the follow-up is recognized as a duplicate
+ * even though the `:updated`-suffixed dedupe key has never been seen. This
+ * stops replay-only follow-ups from re-triggering a reply, especially when the
+ * follow-up payload arrives stripped of group chat context and would otherwise
+ * route into the sender's DM session. Attachment-bearing updates still keep the
+ * suffixed key so late media indexing remains processable.
  */
 export async function claimBlueBubblesInboundMessage(params: {
-  guid: string | undefined | null;
+  message: DedupeMessageInput;
   accountId: string;
   onDiskError?: (error: unknown) => void;
 }): Promise<InboundDedupeClaim> {
-  const normalized = sanitizeGuid(params.guid);
+  const dedupeKey = resolveBlueBubblesInboundDedupeKey(params.message);
+  const normalized = sanitizeGuid(dedupeKey);
   if (!normalized) {
     return { kind: "skip" };
+  }
+  const hasAttachments = (params.message.attachments?.length ?? 0) > 0;
+  if (params.message.eventType === "updated-message" && !hasAttachments) {
+    const baseKey = resolveBaseDedupeKey(params.message);
+    const baseSanitized = baseKey ? sanitizeGuid(baseKey) : null;
+    if (baseSanitized && baseSanitized !== normalized) {
+      const baseAlreadyCommitted = await impl.hasRecent(baseSanitized, {
+        namespace: params.accountId,
+        onDiskError: params.onDiskError,
+      });
+      if (baseAlreadyCommitted) {
+        return { kind: "duplicate" };
+      }
+    }
   }
   const claim = await impl.claim(normalized, {
     namespace: params.accountId,
