@@ -499,6 +499,14 @@ Two ways to start an ACP session:
     - `--cwd <absolute-path>`
     - `--label <name>`
 
+    After the backend creates the runtime session, OpenClaw runs an
+    immediate status check before it binds or persists the spawned
+    session. If the backend reports the session as unavailable, such as
+    `dead` or `no-session`, or the Gateway connection is already stale,
+    the spawn fails and OpenClaw cleans up the partial session instead
+    of leaving the conversation bound to a broken ACP runtime. Run
+    `/acp doctor` when this happens repeatedly.
+
     See [Slash commands](/tools/slash-commands).
 
   </Tab>
