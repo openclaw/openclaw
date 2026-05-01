@@ -236,8 +236,10 @@ export async function executePreparedCliRun(
     isNewSession: isNew,
     systemPrompt: context.systemPrompt,
   });
+  const isForkResume =
+    useResume && (backend.resumeArgs ?? backend.args ?? []).includes("--fork-session");
   const systemPromptFile =
-    !useResume && systemPromptArg
+    (!useResume || isForkResume) && systemPromptArg
       ? await writeCliSystemPromptFile({
           backend,
           systemPrompt: systemPromptArg,

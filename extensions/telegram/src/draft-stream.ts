@@ -117,13 +117,6 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   let textBaseOffset = 0;
-  const requestedPreviewTransport = params.previewTransport ?? "auto";
-  const prefersDraftTransport =
-    requestedPreviewTransport === "draft"
-      ? true
-      : requestedPreviewTransport === "message"
-        ? false
-        : params.thread?.scope === "dm";
   const threadParams = buildTelegramThreadParams(params.thread);
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
@@ -450,3 +443,7 @@ export function createTelegramDraftStream(params: {
     sendMayHaveLanded: () => messageSendAttempted && typeof streamMessageId !== "number",
   };
 }
+
+export const __testing = {
+  resetTelegramDraftStreamForTests: () => {},
+};

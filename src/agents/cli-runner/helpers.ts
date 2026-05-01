@@ -385,7 +385,7 @@ export function buildCliArgs(params: {
   const isForkResume = params.useResume && params.baseArgs.includes("--fork-session");
   const needsSystemPrompt = !params.useResume || isForkResume;
   if (
-    !params.useResume &&
+    needsSystemPrompt &&
     params.systemPrompt &&
     params.systemPromptFilePath &&
     params.backend.systemPromptFileArg
