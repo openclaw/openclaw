@@ -25,6 +25,15 @@ export function windowsModelProviderTimeoutScript(modelId: string): string {
       path: `models.providers.${providerId}`,
       value: JSON.parse(configJson) as unknown,
     },
+    {
+      path: `agents.defaults.models.${modelId}`,
+      value: {
+        alias: "GPT",
+        params: {
+          transport: "sse",
+        },
+      },
+    },
   ]);
   return `$providerTimeoutBatchPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-provider-timeout.batch.json'
 @'

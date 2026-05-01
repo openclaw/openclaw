@@ -484,6 +484,8 @@ console.log(JSON.stringify(result));
     expect(powershell).toContain("windowsOpenClawResolver");
     expect(powershell).toContain("providerTimeoutConfigJson");
     expect(powershell).toContain("models.providers.${providerId}");
+    expect(powershell).toContain("agents.defaults.models.${modelId}");
+    expect(powershell).toContain('transport: "sse"');
     expect(powershell).toContain("Resolve-OpenClawCommand");
     expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
     expect(powershell).toContain("$ErrorActionPreference = 'Continue'");
