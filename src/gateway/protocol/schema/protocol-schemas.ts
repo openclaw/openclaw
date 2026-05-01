@@ -53,16 +53,6 @@ import {
   ToolsInvokeResultSchema,
 } from "./agents-models-skills.js";
 import {
-  ArtifactSummarySchema,
-  ArtifactsDownloadParamsSchema,
-  ArtifactsDownloadResultSchema,
-  ArtifactsGetParamsSchema,
-  ArtifactsGetResultSchema,
-  ArtifactsListParamsSchema,
-  ArtifactsListResultSchema,
-} from "./artifacts.js";
-import {
-  ChannelsStartParamsSchema,
   AgentsWorkspaceDeleteParamsSchema,
   AgentsWorkspaceDeleteResultSchema,
   AgentsWorkspaceGetParamsSchema,
@@ -80,6 +70,16 @@ import {
   WorkspaceEntrySchema,
 } from "./agents-workspace.js";
 import {
+  ArtifactSummarySchema,
+  ArtifactsDownloadParamsSchema,
+  ArtifactsDownloadResultSchema,
+  ArtifactsGetParamsSchema,
+  ArtifactsGetResultSchema,
+  ArtifactsListParamsSchema,
+  ArtifactsListResultSchema,
+} from "./artifacts.js";
+import {
+  ChannelsStartParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
