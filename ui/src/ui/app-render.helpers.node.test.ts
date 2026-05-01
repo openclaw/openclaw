@@ -618,6 +618,22 @@ describe("createChatSession", () => {
       "Start a new session after the active run or queued messages finish.",
     );
   });
+
+  it("shows feedback instead of clearing errors when session loading blocks creation", async () => {
+    const state = createChatSessionState({
+      sessionsLoading: true,
+      lastError: "previous error",
+    });
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).not.toHaveBeenCalled();
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.lastError).toBe(
+      "Session list is still refreshing. Try New Chat again in a moment.",
+    );
+  });
 });
 
 describe("switchChatSession", () => {

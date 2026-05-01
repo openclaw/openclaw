@@ -128,6 +128,11 @@ function canSwitchToNewChatSession(state: AppViewState): boolean {
   );
 }
 
+const NEW_CHAT_ACTIVE_RUN_MESSAGE =
+  "Start a new session after the active run or queued messages finish.";
+const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
+  "Session list is still refreshing. Try New Chat again in a moment.";
+
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
   const isActive = state.tab === tab;
@@ -602,7 +607,11 @@ export async function createChatSession(state: AppViewState) {
     return;
   }
   if (!canSwitchToNewChatSession(state)) {
-    state.lastError = "Start a new session after the active run or queued messages finish.";
+    state.lastError = NEW_CHAT_ACTIVE_RUN_MESSAGE;
+    return;
+  }
+  if (state.sessionsLoading) {
+    state.lastError = NEW_CHAT_SESSIONS_LOADING_MESSAGE;
     return;
   }
 
@@ -633,8 +642,8 @@ export async function createChatSession(state: AppViewState) {
     state.sessionKey !== previousSessionKey ||
     !canSwitchToNewChatSession(state)
   ) {
-    if (!nextSessionKey && state.sessionsError) {
-      state.lastError = state.sessionsError;
+    if (!nextSessionKey) {
+      state.lastError = state.sessionsError ?? NEW_CHAT_SESSIONS_LOADING_MESSAGE;
     }
     return;
   }
