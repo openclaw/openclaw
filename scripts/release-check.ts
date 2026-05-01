@@ -25,7 +25,7 @@ import {
 import {
   resolveBundledRuntimeDependencyInstallRoot,
   resolveBundledRuntimeDependencyPackageInstallRoot,
-} from "../src/plugins/bundled-runtime-deps.ts";
+} from "../src/plugins/bundled-runtime-deps-roots.ts";
 import { checkCliBootstrapExternalImports } from "./check-cli-bootstrap-imports.mjs";
 import {
   collectBundledExtensionManifestErrors,

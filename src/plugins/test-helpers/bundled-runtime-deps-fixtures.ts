@@ -13,6 +13,7 @@ export function writeInstalledRuntimeDepPackage(
     JSON.stringify({ name: packageName, version }),
     "utf8",
   );
+  fs.writeFileSync(path.join(packageDir, "index.js"), "export {};\n", "utf8");
 }
 
 export function writeGeneratedRuntimeDepsManifest(rootDir: string, specs: readonly string[]): void {
