@@ -732,6 +732,28 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     ).toBe(true);
   });
 
+  it("uses the caller context window for tool-heavy idle bypass thresholds", () => {
+    const toolOnlySlice = [
+      { role: "user", content: "<b>HEARTBEAT_OK</b>" },
+      {
+        role: "toolResult",
+        toolCallId: "t1",
+        toolName: "exec",
+        content: [{ type: "text", text: "checked" }],
+      },
+    ] as AgentMessage[];
+
+    expect(
+      compactTesting.shouldSkipCompactionForNoRealConversation({
+        messages: toolOnlySlice,
+        observedTokenCount: 236_000,
+        contextWindowTokens: 1_000_000,
+        callerContextWindowTokens: 200_000,
+        reserveTokens: 0,
+      }),
+    ).toBe(false);
+  });
+
   it("registers the Ollama api provider before compaction", async () => {
     const streamFn = vi.fn();
     registerProviderStreamForModelMock.mockReturnValue(streamFn);

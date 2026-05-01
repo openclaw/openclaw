@@ -37,6 +37,8 @@ export type CompactEmbeddedPiSessionParams = {
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
+  /** Optional active/caller session context window used for threshold decisions. */
+  callerContextTokenBudget?: number;
   workspaceDir: string;
   agentDir?: string;
   config?: OpenClawConfig;

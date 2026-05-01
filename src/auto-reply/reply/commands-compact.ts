@@ -155,6 +155,7 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     customInstructions,
     trigger: "manual",
     currentTokenCount,
+    callerContextTokenBudget: targetSessionEntry.contextTokens,
     senderIsOwner: params.command.senderIsOwner,
     ownerNumbers: params.command.ownerList.length > 0 ? params.command.ownerList : undefined,
   });
