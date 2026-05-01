@@ -1,30 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
+import { ToolsWebSearchSchema } from "./zod-schema.agent-runtime.js";
 
 describe("web search Codex native config validation", () => {
   it("accepts tools.web.search.openaiCodex", async () => {
-    const result = validateConfigObjectRaw({
-      tools: {
-        web: {
-          search: {
-            enabled: true,
-            openaiCodex: {
-              enabled: true,
-              mode: "cached",
-              allowedDomains: ["example.com"],
-              contextSize: "medium",
-              userLocation: {
-                country: "US",
-                city: "New York",
-                timezone: "America/New_York",
-              },
-            },
-          },
+    const result = ToolsWebSearchSchema.safeParse({
+      enabled: true,
+      openaiCodex: {
+        enabled: true,
+        mode: "cached",
+        allowedDomains: ["example.com"],
+        contextSize: "medium",
+        userLocation: {
+          country: "US",
+          city: "New York",
+          timezone: "America/New_York",
         },
       },
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.success).toBe(true);
   });
 
   it("rejects invalid openaiCodex.mode", () => {
