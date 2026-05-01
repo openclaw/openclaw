@@ -1,0 +1,42 @@
+name: openclaw-codeql-local-shell-runtime-boundary-critical-security
+
+disable-default-queries: true
+
+queries:
+  - uses: security-extended
+
+query-filters:
+  - include:
+      precision:
+        - high
+        - very-high
+  - exclude:
+      problem.severity:
+        - recommendation
+        - warning
+
+paths:
+  - src/tui/tui-local-shell.ts
+  - src/tui/tui.ts
+  - src/process/exec.ts
+  - packages/memory-host-sdk/src/host/windows-spawn.ts
+  - packages/memory-host-sdk/src/host/qmd-process.ts
+  - extensions/bonjour/src/advertiser.ts
+
+paths-ignore:
+  - "**/node_modules"
+  - "**/coverage"
+  - "**/*.generated.ts"
+  - "**/*.bundle.js"
+  - "**/*-runtime.js"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"
+  - "**/*.spec.tsx"
+  - "**/*.e2e.test.ts"
+  - "**/*.e2e.test.tsx"
+  - "**/*test-support*"
+  - "**/*test-helper*"
+  - "**/*mock*"
+  - "**/*fixture*"
+  - "**/*bench*"

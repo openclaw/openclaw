@@ -328,6 +328,8 @@ Do not put the PR landing path behind `Parity gate` unless the change actually t
 
 The `CodeQL` workflow is intentionally a narrow first-pass security scanner, not the full repository sweep. Daily, manual, and non-draft pull request guard runs scan Actions workflow code plus the highest-risk JavaScript/TypeScript surfaces with high-confidence security queries filtered to high/critical `security-severity`.
 
+Manual dispatch accepts `profile=all|security|local-shell`. The `local-shell` profile is a manual-only teaching and validation shard for shell/command-exec boundaries that is not yet part of the scheduled or pull request baseline.
+
 The pull request guard stays light: it only starts for changes under `.github/actions`, `.github/codeql`, `.github/workflows`, `packages`, or `src`, and it runs the same high-confidence security matrix as the scheduled workflow. Android and macOS CodeQL stay out of PR defaults.
 
 ### Security categories
@@ -339,6 +341,7 @@ The pull request guard stays light: it only starts for changes under `.github/ac
 | `/codeql-security-high/network-ssrf-boundary`     | Core SSRF, IP parsing, network guard, web-fetch, and Plugin SDK SSRF policy surfaces                                                   |
 | `/codeql-security-high/mcp-process-tool-boundary` | MCP servers, process execution helpers, outbound delivery, and agent tool-execution gates                                              |
 | `/codeql-security-high/plugin-trust-boundary`     | Plugin install, loader, manifest, registry, runtime-dependency staging, source-loading, and Plugin SDK package contract trust surfaces |
+| `/codeql-security-high/local-shell-runtime-boundary` | Local TUI shell runner, Windows spawn fallback helpers, qmd spawn wrappers, and the Bonjour Windows shell bridge                         |
 
 ### Platform-specific security shards
 
