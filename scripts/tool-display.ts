@@ -25,7 +25,7 @@ if (!shouldCheck && !shouldWrite) {
   process.exit(1);
 }
 
-const expected = `${JSON.stringify(TOOL_DISPLAY_CONFIG, null, 2)}\n`;
+const expected = serializeToolDisplayConfig();
 ensureCoreToolCoverage();
 
 if (shouldWrite) {
