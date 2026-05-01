@@ -90,6 +90,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     expect(workflow).toContain("plan_docker_lane_groups:");
+    expect(workflow).toContain("targeted_docker_lane_group_size:");
     expect(workflow).toContain("Docker E2E targeted lanes (${{ matrix.group.label }})");
     expect(workflow).toContain("LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
@@ -142,6 +143,9 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       'add_profile_suite native-live-src-gateway-core "minimum stable full"',
     );
+    expect(workflow).toContain('add_profile_suite live-gateway-docker "minimum stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
     expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
@@ -169,6 +173,9 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain(
       "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,opencode-go,openrouter,xai,zai",
     );
+    expect(workflow).toContain("suite_id: live-gateway-anthropic-docker");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2");
+    expect(workflow).toContain("timeout --foreground --kill-after=30s 25m");
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
     expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
@@ -220,19 +227,19 @@ describe("package artifact reuse", () => {
     const stage = readFileSync("scripts/lib/live-docker-stage.sh", "utf8");
 
     expect(workflow).toContain(
-      'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-models-docker.sh',
+      'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-gateway-models-docker.sh',
+      "command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-cli-backend-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-acp-bind-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-codex-harness-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
     expect(scenarios).toContain("function liveDockerScriptCommand");
     expect(scenarios).toContain(
@@ -385,8 +392,10 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("child_rerun_group=all");
     expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
     expect(workflow).toContain('args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")');
-    expect(workflow).toContain("cancel-in-progress: false");
-    expect(workflow).not.toContain("gh run cancel");
+    expect(workflow).toContain(
+      "cancel-in-progress: ${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}",
+    );
+    expect(workflow).toContain("gh run cancel");
     expect(workflow).not.toContain("force-cancel");
     expect(workflow).toContain("NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}");
     expect(workflow).not.toContain("workflow_ref:");
