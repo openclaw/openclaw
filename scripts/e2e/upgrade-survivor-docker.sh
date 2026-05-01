@@ -41,6 +41,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
   fi
 
   mkdir -p "$ARTIFACT_DIR"
+  chmod -R a+rwX "$ARTIFACT_DIR" || true
 
   DOCKER_E2E_PACKAGE_ARGS=()
   CANDIDATE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE:-current}"
@@ -98,6 +99,7 @@ PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz upgrade-survivor "${OPENCLAW_CURRE
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(docker_e2e_test_state_shell_b64 upgrade-survivor upgrade-survivor)"
 mkdir -p "$ARTIFACT_DIR"
+chmod -R a+rwX "$ARTIFACT_DIR" || true
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
 
