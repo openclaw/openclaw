@@ -106,7 +106,6 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config: {} as never,
-      installBundledRuntimeDeps: false,
       onlyPluginIds: ["telegram"],
       workspaceDir: "/tmp/workspace",
       runtimeOptions: {
@@ -140,7 +139,6 @@ describe("ensureRuntimePluginsLoaded", () => {
 
     expect(hoisted.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
       config,
-      installBundledRuntimeDeps: false,
       onlyPluginIds: ["telegram"],
       workspaceDir: "/tmp/workspace",
       runtimeOptions: {

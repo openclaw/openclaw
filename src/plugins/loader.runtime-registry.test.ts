@@ -161,7 +161,6 @@ describe("getCompatibleActivePluginRegistry", () => {
       __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         activate: false,
-        installBundledRuntimeDeps: false,
         toolDiscovery: true,
       }),
     ).toBe(registry);
@@ -189,7 +188,6 @@ describe("getCompatibleActivePluginRegistry", () => {
       __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         onlyPluginIds: ["demo"],
-        installBundledRuntimeDeps: false,
       }),
     ).toBe(registry);
   });
@@ -217,7 +215,6 @@ describe("getCompatibleActivePluginRegistry", () => {
         ...loadOptions,
         workspaceDir: "/tmp/workspace-b",
         onlyPluginIds: ["demo"],
-        installBundledRuntimeDeps: false,
       }),
     ).toBeUndefined();
     expect(
@@ -230,14 +227,12 @@ describe("getCompatibleActivePluginRegistry", () => {
           },
         },
         onlyPluginIds: ["demo"],
-        installBundledRuntimeDeps: false,
       }),
     ).toBeUndefined();
     expect(
       __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         onlyPluginIds: ["missing"],
-        installBundledRuntimeDeps: false,
       }),
     ).toBeUndefined();
   });
@@ -260,7 +255,6 @@ describe("getCompatibleActivePluginRegistry", () => {
       __testing.getCompatibleActivePluginRegistry({
         ...loadOptions,
         activate: false,
-        installBundledRuntimeDeps: false,
         runtimeOptions: {
           allowGatewaySubagentBinding: true,
         },
