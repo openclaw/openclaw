@@ -187,6 +187,14 @@ function copyModuleImportGraphWithoutNodeModules(params: {
     copiedModulePath: path.join(isolatedRoot, relativeModulePath),
     cleanup: () => {
       fs.rmSync(isolatedRoot, { recursive: true, force: true });
+      try {
+        fs.rmdirSync(tempParent);
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT" && code !== "ENOTEMPTY") {
+          throw error;
+        }
+      }
     },
   };
 }
