@@ -292,8 +292,8 @@ export class ConfigEditor extends LitElement {
     // JSON5 format: "... at 3:5"
     const lc = message.match(/at\s+(\d+):(\d+)/i);
     if (lc) {
-      const line = parseInt(lc[1], 10);
-      const col = parseInt(lc[2], 10);
+      const line = Number.parseInt(lc[1], 10);
+      const col = Number.parseInt(lc[2], 10);
       const lines = doc.split("\n");
       let offset = 0;
       for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
@@ -305,7 +305,7 @@ export class ConfigEditor extends LitElement {
     // JSON format: "... at position 42"
     const pos = message.match(/position\s+(\d+)/i);
     if (pos) {
-      return parseInt(pos[1], 10);
+      return Number.parseInt(pos[1], 10);
     }
 
     return 0;
