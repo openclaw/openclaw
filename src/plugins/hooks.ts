@@ -325,6 +325,18 @@ export function createHookRunner(
     acc: PluginHookBeforeAgentFinalizeResult | undefined,
     next: PluginHookBeforeAgentFinalizeResult,
   ): PluginHookBeforeAgentFinalizeResult => {
+    const normalizeRetry = (
+      retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
+    ): PluginHookBeforeAgentFinalizeResult["retry"] | undefined => {
+      const instruction = retry?.instruction.trim();
+      if (!instruction) {
+        return undefined;
+      }
+      return {
+        ...retry,
+        instruction,
+      };
+    };
     if (acc?.action === "finalize") {
       return acc;
     }
@@ -332,23 +344,25 @@ export function createHookRunner(
       return { action: "finalize", reason: next.reason };
     }
     if (acc?.action === "revise" && next.action === "revise") {
+      const retry = normalizeRetry(acc.retry) ?? normalizeRetry(next.retry);
       return {
         action: "revise",
         reason: concatOptionalTextSegments({
           left: acc.reason,
           right: next.reason,
         }),
-        ...((acc.retry ?? next.retry) ? { retry: acc.retry ?? next.retry } : {}),
+        ...(retry ? { retry } : {}),
       };
     }
     if (acc?.action === "revise") {
       return acc;
     }
     if (next.action === "revise") {
+      const retry = normalizeRetry(next.retry);
       return {
         action: "revise",
         reason: next.reason,
-        ...(next.retry ? { retry: next.retry } : {}),
+        ...(retry ? { retry } : {}),
       };
     }
     return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);

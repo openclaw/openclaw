@@ -101,6 +101,53 @@ describe("getCompatibleActivePluginRegistry", () => {
     ).toBeUndefined();
   });
 
+  it("does not reuse a skip-runtime-deps registry for an explicit install request", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const { cacheKey: skipInstallCacheKey } = __testing.resolvePluginLoadCacheContext({
+      ...loadOptions,
+      installBundledRuntimeDeps: false,
+    });
+    setActivePluginRegistry(registry, skipInstallCacheKey);
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        installBundledRuntimeDeps: true,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("allows a skip-runtime-deps caller to reuse an active install-capable registry", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const { cacheKey: installCacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, installCacheKey);
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        installBundledRuntimeDeps: false,
+      }),
+    ).toBe(registry);
+  });
+
   it("does not embed activation secrets in the loader cache key", () => {
     const { cacheKey } = __testing.resolvePluginLoadCacheContext({
       config: {

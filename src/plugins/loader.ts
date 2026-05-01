@@ -706,7 +706,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.forceSetupOnlyChannelPlugins === true ||
     options.requireSetupEntryForSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
-    options.installBundledRuntimeDeps === false ||
+    options.installBundledRuntimeDeps !== undefined ||
     options.loadModules === false
   );
 }
@@ -990,12 +990,14 @@ function resolvePluginLoadCompatibilityCacheKeys(
   exactCacheKey?: string,
 ): Set<string> {
   const keys = new Set<string>([exactCacheKey ?? resolvePluginLoadCacheContext(options).cacheKey]);
-  keys.add(
-    resolvePluginLoadCacheContext({
-      ...options,
-      installBundledRuntimeDeps: options.installBundledRuntimeDeps === false ? undefined : false,
-    }).cacheKey,
-  );
+  if (options.installBundledRuntimeDeps === false) {
+    keys.add(
+      resolvePluginLoadCacheContext({
+        ...options,
+        installBundledRuntimeDeps: undefined,
+      }).cacheKey,
+    );
+  }
   return keys;
 }
 

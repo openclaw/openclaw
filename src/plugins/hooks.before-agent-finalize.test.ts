@@ -60,6 +60,43 @@ describe("before_agent_finalize hook runner", () => {
     });
   });
 
+  it("skips empty retry instructions when merging revise decisions", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "needs a retry but forgot the instruction",
+            retry: { instruction: "   ", idempotencyKey: "empty-retry" },
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "rerun the focused tests",
+            retry: {
+              instruction: " rerun the focused tests ",
+              idempotencyKey: "valid-retry",
+              maxAttempts: 1,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
+      action: "revise",
+      reason: "needs a retry but forgot the instruction\n\nrerun the focused tests",
+      retry: {
+        instruction: "rerun the focused tests",
+        idempotencyKey: "valid-retry",
+        maxAttempts: 1,
+      },
+    });
+  });
+
   it("lets finalize override earlier revise decisions", async () => {
     const runner = createHookRunner(
       createMockPluginRegistry([
