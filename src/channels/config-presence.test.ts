@@ -11,22 +11,16 @@ import {
   listPotentialConfiguredChannelIds,
 } from "./config-presence.js";
 
-vi.mock("./plugins/bundled-ids.js", () => ({
-  listBundledChannelPluginIds: () => ["matrix"],
-}));
-
-vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
-  listBundledChannelIdsWithPersistedAuthState: () => ["matrix"],
-  hasBundledChannelPersistedAuthState: ({
-    channelId,
-    env,
-  }: {
-    channelId: string;
-    env?: NodeJS.ProcessEnv;
-  }) => channelId === "matrix" && env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix"),
-}));
-
 const tempDirs: string[] = [];
+
+const matrixPresenceOptions = {
+  channelIds: ["matrix"],
+  persistedAuthStateProbe: {
+    listChannelIds: () => ["matrix"],
+    hasState: ({ channelId, env }: { channelId: string; env?: NodeJS.ProcessEnv }) =>
+      channelId === "matrix" && Boolean(env?.OPENCLAW_STATE_DIR?.includes("persisted-matrix")),
+  },
+};
 
 function makeTempStateDir() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-config-presence-"));
@@ -41,7 +35,7 @@ function expectPotentialConfiguredChannelCase(params: {
   expectedConfigured: boolean;
   options?: Parameters<typeof listPotentialConfiguredChannelIds>[2];
 }) {
-  const options = params.options ?? {};
+  const options = params.options ?? matrixPresenceOptions;
   expect(listPotentialConfiguredChannelIds(params.cfg, params.env, options)).toEqual(
     params.expectedIds,
   );
