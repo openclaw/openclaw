@@ -114,7 +114,7 @@ openclaw pairing approve whatsapp <CODE>
 
     Inbound depends on your `dmPolicy`:
 
-    - `pairing` (default): message the linked assistant number from any phone. First contact triggers a pairing code that you approve via `openclaw pairing approve whatsapp <code>`.
+    - `pairing` (default): message the linked assistant number from any phone. First contact triggers a pairing code that you approve via `openclaw pairing approve whatsapp <CODE>`.
     - `allowlist`: message from a sender included in `allowFrom`. Senders outside the list are dropped.
     - `open`: any sender can message and is routed.
     - `disabled`: inbound DMs are ignored. Use the outbound CLI path below to verify.

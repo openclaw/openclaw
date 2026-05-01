@@ -474,7 +474,7 @@ function describeWhatsAppInboundLine(policy: DmPolicy): string | undefined {
     case "disabled":
       return undefined;
     case "pairing":
-      return "Inbound: message the linked assistant number; first contact from a new sender will trigger a pairing code you approve via `openclaw pairing approve whatsapp <code>`.";
+      return "Inbound: message the linked assistant number; first contact from a new sender will trigger a pairing code you approve via `openclaw pairing approve whatsapp <CODE>`.";
     case "allowlist":
       return "Inbound: message the linked assistant number from a sender included in your `allowFrom` list to verify routing.";
     case "open":
