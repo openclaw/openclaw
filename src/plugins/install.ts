@@ -553,7 +553,7 @@ async function detectNativePackageInstallSource(packageDir: string): Promise<boo
 }
 
 /**
- * After the staged plugin tree has been scanned, symlink the host openclaw
+ * After the installed package tree has been scanned, symlink the host openclaw
  * package for plugins that declare it as a peer dependency.
  */
 async function linkOpenClawPeerDependencies(params: {
@@ -767,7 +767,7 @@ async function validatePackagePluginInstallSource(params: {
 async function scanAndLinkInstalledPackage(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   installedDir: string;
-  dependencyTreeRootDir?: string;
+  dependencyScanRootDir?: string;
   pluginId: string;
   peerDependencies: Record<string, string>;
   logger: PluginInstallLogger;
@@ -777,7 +777,7 @@ async function scanAndLinkInstalledPackage(params: {
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
         logger: params.logger,
-        packageDir: params.dependencyTreeRootDir ?? params.installedDir,
+        packageDir: params.dependencyScanRootDir ?? params.installedDir,
         pluginId: params.pluginId,
       }),
   });
@@ -795,7 +795,7 @@ async function scanAndLinkInstalledPackage(params: {
 export async function installPluginFromInstalledPackageDir(
   params: {
     packageDir: string;
-    dependencyTreeRootDir?: string;
+    dependencyScanRootDir?: string;
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -816,7 +816,7 @@ export async function installPluginFromInstalledPackageDir(
   const postInstallError = await scanAndLinkInstalledPackage({
     runtime,
     installedDir: params.packageDir,
-    dependencyTreeRootDir: params.dependencyTreeRootDir,
+    dependencyScanRootDir: params.dependencyScanRootDir,
     pluginId: validated.plugin.pluginId,
     peerDependencies: validated.plugin.peerDependencies,
     logger,
@@ -1202,7 +1202,7 @@ export async function installPluginFromNpmSpec(
   const result = await installPluginFromInstalledPackageDir({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     packageDir: installRoot,
-    dependencyTreeRootDir: npmRoot,
+    dependencyScanRootDir: npmRoot,
     logger,
     expectedPluginId,
     mode: effectiveMode,
