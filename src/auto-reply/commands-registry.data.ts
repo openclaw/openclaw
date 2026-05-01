@@ -25,8 +25,6 @@ function defineDockCommand(plugin: ChannelPlugin): ChatCommandDefinition {
 
 let cachedCommands: ChatCommandDefinition[] | null = null;
 let cachedRegistryVersion = -1;
-let cachedNativeCommandSurfaces: Set<string> | null = null;
-let cachedNativeRegistryVersion = -1;
 
 function buildChatCommands(): ChatCommandDefinition[] {
   const commands: ChatCommandDefinition[] = [
@@ -48,20 +46,5 @@ export function getChatCommands(): ChatCommandDefinition[] {
   const commands = buildChatCommands();
   cachedCommands = commands;
   cachedRegistryVersion = registryVersion;
-  cachedNativeCommandSurfaces = null;
   return commands;
-}
-
-export function getNativeCommandSurfaces(): Set<string> {
-  const registryVersion = getActivePluginChannelRegistryVersionFromState();
-  if (cachedNativeCommandSurfaces && registryVersion === cachedNativeRegistryVersion) {
-    return cachedNativeCommandSurfaces;
-  }
-  cachedNativeCommandSurfaces = new Set(
-    listLoadedChannelPlugins()
-      .filter(supportsNativeCommands)
-      .map((plugin) => plugin.id),
-  );
-  cachedNativeRegistryVersion = registryVersion;
-  return cachedNativeCommandSurfaces;
 }

@@ -4,7 +4,7 @@ import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
 export type SendPolicyOverride = "allow" | "deny";
 
-export function normalizeSendPolicyOverride(raw?: string | null): SendPolicyOverride | undefined {
+function normalizeSendPolicyOverride(raw?: string | null): SendPolicyOverride | undefined {
   const value = normalizeOptionalLowercaseString(raw);
   if (!value) {
     return undefined;
