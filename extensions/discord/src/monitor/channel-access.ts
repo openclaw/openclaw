@@ -28,6 +28,35 @@ function resolveDiscordChannelNumberPropertySafe(
   return typeof value === "number" ? value : undefined;
 }
 
+// Discord's gateway/REST payloads expose some fields in snake_case while the
+// discord.js channel objects expose them in camelCase. Threads in particular
+// can surface `owner_id` / `parent_id` directly or nested in a `rawData`
+// payload. Resolution priority is camelCase → direct snake_case → rawData.
+const DISCORD_CHANNEL_SNAKE_CASE_ALIASES: Record<string, string> = {
+  ownerId: "owner_id",
+  parentId: "parent_id",
+};
+
+function resolveDiscordChannelStringWithAliasSafe(
+  channel: unknown,
+  camelKey: string,
+): string | undefined {
+  const camelValue = resolveDiscordChannelStringPropertySafe(channel, camelKey);
+  if (camelValue !== undefined) {
+    return camelValue;
+  }
+  const snakeKey = DISCORD_CHANNEL_SNAKE_CASE_ALIASES[camelKey];
+  if (!snakeKey) {
+    return undefined;
+  }
+  const directSnake = resolveDiscordChannelStringPropertySafe(channel, snakeKey);
+  if (directSnake !== undefined) {
+    return directSnake;
+  }
+  const rawData = readDiscordChannelPropertySafe(channel, "rawData");
+  return resolveDiscordChannelStringPropertySafe(rawData, snakeKey);
+}
+
 export type DiscordChannelInfoSafe = {
   name?: string;
   topic?: string;
@@ -50,7 +79,11 @@ export function resolveDiscordChannelTopicSafe(channel: unknown): string | undef
 }
 
 export function resolveDiscordChannelParentIdSafe(channel: unknown): string | undefined {
-  return resolveDiscordChannelStringPropertySafe(channel, "parentId");
+  return resolveDiscordChannelStringWithAliasSafe(channel, "parentId");
+}
+
+export function resolveDiscordChannelOwnerIdSafe(channel: unknown): string | undefined {
+  return resolveDiscordChannelStringWithAliasSafe(channel, "ownerId");
 }
 
 export function resolveDiscordChannelParentSafe(channel: unknown): unknown {
@@ -63,8 +96,8 @@ export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelI
     name: resolveDiscordChannelNameSafe(channel),
     topic: resolveDiscordChannelTopicSafe(channel),
     type: resolveDiscordChannelNumberPropertySafe(channel, "type"),
-    parentId: resolveDiscordChannelStringPropertySafe(channel, "parentId"),
-    ownerId: resolveDiscordChannelStringPropertySafe(channel, "ownerId"),
+    parentId: resolveDiscordChannelParentIdSafe(channel),
+    ownerId: resolveDiscordChannelOwnerIdSafe(channel),
     parentName: resolveDiscordChannelNameSafe(parent),
   };
 }
