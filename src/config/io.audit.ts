@@ -227,6 +227,8 @@ export type ConfigObserveAuditRecord = {
   clobberedPath: string | null;
   restoredFromBackup: boolean;
   restoredBackupPath: string | null;
+  restoreErrorCode: string | null;
+  restoreErrorMessage: string | null;
 };
 
 export type ConfigAuditRecord = ConfigWriteAuditRecord | ConfigObserveAuditRecord;

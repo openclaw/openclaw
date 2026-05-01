@@ -278,6 +278,82 @@ describe("config observe recovery", () => {
     });
   });
 
+  it("records copyFile failure instead of falsely claiming restore succeeded", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      const failingFs: ObserveRecoveryDeps["fs"] = {
+        ...deps.fs,
+        promises: {
+          ...deps.fs.promises,
+          copyFile: () => Promise.reject(copyError),
+        },
+      };
+      const recovered = await maybeRecoverSuspiciousConfigRead({
+        deps: { ...deps, fs: failingFs },
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+      });
+
+      expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Config auto-restore from backup failed:"),
+      );
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("Config auto-restored from backup:"),
+      );
+
+      const observe = await readLastObserveEvent(auditPath);
+      expect(observe?.restoredFromBackup).toBe(false);
+      expect(observe?.valid).toBe(false);
+      expect(observe?.restoreErrorCode).toBe("EACCES");
+      expect(observe?.restoreErrorMessage).toBe("EACCES: permission denied");
+    });
+  });
+
+  it("sync recovery records copyFileSync failure instead of falsely claiming restore succeeded", async () => {
+    await withSuiteHome(async (home) => {
+      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      await seedConfigBackup(configPath, recoverableTelegramConfig);
+      const clobbered = await writeClobberedUpdateChannel(configPath);
+
+      const copyError = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+      const failingFs: ObserveRecoveryDeps["fs"] = {
+        ...deps.fs,
+        copyFileSync: () => {
+          throw copyError;
+        },
+      };
+      const recovered = maybeRecoverSuspiciousConfigReadSync({
+        deps: { ...deps, fs: failingFs },
+        configPath,
+        raw: clobbered.raw,
+        parsed: clobbered.parsed,
+      });
+
+      expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
+      await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Config auto-restore from backup failed:"),
+      );
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("EACCES: permission denied"));
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("Config auto-restored from backup:"),
+      );
+
+      const observe = await readLastObserveEvent(auditPath);
+      expect(observe?.restoredFromBackup).toBe(false);
+      expect(observe?.valid).toBe(false);
+      expect(observe?.restoreErrorCode).toBe("EACCES");
+      expect(observe?.restoreErrorMessage).toBe("EACCES: permission denied");
+    });
+  });
+
   it("dedupes repeated suspicious hashes", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath, auditPath } = makeDeps(home);
