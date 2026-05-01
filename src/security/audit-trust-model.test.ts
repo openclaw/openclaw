@@ -225,6 +225,32 @@ describe("security audit trust model findings", () => {
           );
         },
       },
+      {
+        name: "fires when a per-account groupAllowFrom contains a wildcard",
+        cfg: {
+          channels: {
+            discord: {
+              accounts: {
+                pepper: {
+                  groupPolicy: "allowlist",
+                  groupAllowFrom: ["*"],
+                },
+              },
+            },
+          },
+          tools: { elevated: { enabled: false } },
+        } satisfies OpenClawConfig,
+        assert: () => {
+          const findings = audit(cases[9].cfg);
+          const finding = findings.find(
+            (entry) => entry.checkId === "security.trust_model.multi_user_heuristic",
+          );
+          expect(finding?.severity).toBe("warn");
+          expect(finding?.detail).toContain(
+            'channels.discord.accounts.pepper.groupAllowFrom includes "*"',
+          );
+        },
+      },
     ] as const;
 
     for (const testCase of cases) {
