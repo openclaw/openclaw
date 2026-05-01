@@ -502,6 +502,10 @@ async function assertNoPackageManagerChildren(pid) {
       );
     }
   } catch (error) {
+    if (error?.code === "ENOENT") {
+      console.log("Runtime deps child-process watchdog skipped: pgrep unavailable");
+      return;
+    }
     if (error instanceof Error && error.message.includes("failed with 1")) {
       return;
     }
