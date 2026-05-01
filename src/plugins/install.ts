@@ -1082,7 +1082,7 @@ export async function installPluginFromNpmSpec(
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const { logger, timeoutMs, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -1148,6 +1148,19 @@ export async function installPluginFromNpmSpec(
 
   const npmRoot = params.npmDir ? resolveUserPath(params.npmDir) : resolveDefaultPluginNpmDir();
   const installRoot = path.join(npmRoot, "node_modules", parsedSpec.name);
+  const effectiveMode = await resolveEffectiveInstallMode({
+    runtime,
+    requestedMode: mode,
+    targetPath: installRoot,
+  });
+  const availability = await ensureInstallTargetAvailableForMode({
+    runtime,
+    targetPath: installRoot,
+    mode: effectiveMode,
+  });
+  if (!availability.ok) {
+    return availability;
+  }
   if (dryRun) {
     return {
       ok: true,
@@ -1192,6 +1205,7 @@ export async function installPluginFromNpmSpec(
     dependencyTreeRootDir: npmRoot,
     logger,
     expectedPluginId,
+    mode: effectiveMode,
     installPolicyRequest: {
       kind: "plugin-npm",
       requestedSpecifier: spec,

@@ -4,7 +4,11 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveDefaultPluginNpmDir, resolvePluginInstallDir } from "./install-paths.js";
+import {
+  resolveDefaultPluginGitDir,
+  resolveDefaultPluginNpmDir,
+  resolvePluginInstallDir,
+} from "./install-paths.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type UninstallActions = {
@@ -121,6 +125,13 @@ export function resolveUninstallDirectoryTarget(params: {
   if (npmManagedPath) {
     return npmManagedPath;
   }
+  const gitManagedPath = resolveGitManagedInstallPath({
+    installRecord: params.installRecord,
+    extensionsDir: params.extensionsDir,
+  });
+  if (gitManagedPath) {
+    return gitManagedPath;
+  }
 
   let defaultPath: string;
   try {
@@ -175,6 +186,32 @@ function resolveNpmManagedInstallPath(params: {
     if (
       isPathInsideOrEqual(nodeModulesRoot, installPath) &&
       resolveComparablePath(nodeModulesRoot) !== resolveComparablePath(installPath)
+    ) {
+      return installPath;
+    }
+  }
+  return null;
+}
+
+function resolveGitManagedInstallPath(params: {
+  installRecord?: PluginInstallRecord;
+  extensionsDir?: string;
+}): string | null {
+  const installPath = params.installRecord?.installPath?.trim();
+  if (params.installRecord?.source !== "git" || !installPath) {
+    return null;
+  }
+
+  const gitRoots = new Set<string>();
+  if (params.extensionsDir) {
+    gitRoots.add(path.join(path.dirname(path.resolve(params.extensionsDir)), "git"));
+  }
+  gitRoots.add(resolveDefaultPluginGitDir());
+
+  for (const gitRoot of gitRoots) {
+    if (
+      isPathInsideOrEqual(gitRoot, installPath) &&
+      resolveComparablePath(gitRoot) !== resolveComparablePath(installPath)
     ) {
       return installPath;
     }

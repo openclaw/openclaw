@@ -1,4 +1,9 @@
+import { createHash } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 
 const runCommandWithTimeoutMock = vi.fn();
 const installPluginFromInstalledPackageDirMock = vi.fn();
@@ -19,6 +24,14 @@ vi.mock("./install.js", async () => {
 vi.resetModules();
 
 const { installPluginFromGitSpec, parseGitPluginSpec } = await import("./git-install.js");
+
+function expectedGitRepoDir(params: { gitDir: string; normalizedSpec: string }): string {
+  const hash = createHash("sha256")
+    .update(redactSensitiveUrlLikeString(params.normalizedSpec))
+    .digest("hex")
+    .slice(0, 16);
+  return path.join(params.gitDir, `git-${hash}`, "repo");
+}
 
 describe("parseGitPluginSpec", () => {
   it("normalizes GitHub shorthand and ref selectors", () => {
@@ -55,13 +68,18 @@ describe("installPluginFromGitSpec", () => {
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-    installPluginFromInstalledPackageDirMock.mockResolvedValue({
-      ok: true,
-      pluginId: "demo",
-      targetDir: "/tmp/git-root/repo",
-      version: "1.2.3",
-      extensions: ["index.js"],
-    });
+    installPluginFromInstalledPackageDirMock.mockImplementation(
+      async (params: { packageDir: string }) => {
+        await fs.mkdir(params.packageDir, { recursive: true });
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          version: "1.2.3",
+          extensions: ["index.js"],
+        };
+      },
+    );
 
     const result = await installPluginFromGitSpec({
       spec: "git:github.com/acme/demo@v1.2.3",
@@ -115,13 +133,18 @@ describe("installPluginFromGitSpec", () => {
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
-    installPluginFromInstalledPackageDirMock.mockResolvedValue({
-      ok: true,
-      pluginId: "demo",
-      targetDir: "/tmp/git-root/repo",
-      version: "1.2.3",
-      extensions: ["index.js"],
-    });
+    installPluginFromInstalledPackageDirMock.mockImplementation(
+      async (params: { packageDir: string }) => {
+        await fs.mkdir(params.packageDir, { recursive: true });
+        return {
+          ok: true,
+          pluginId: "demo",
+          targetDir: params.packageDir,
+          version: "1.2.3",
+          extensions: ["index.js"],
+        };
+      },
+    );
 
     await installPluginFromGitSpec({ spec: "git:github.com/acme/demo" });
 
@@ -133,5 +156,77 @@ describe("installPluginFromGitSpec", () => {
       "https://github.com/acme/demo.git",
       expect.stringContaining("/repo"),
     ]);
+  });
+
+  it("uses a credential-free managed repo path for authenticated git URLs", async () => {
+    const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-path-"));
+    try {
+      runCommandWithTimeoutMock
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+      installPluginFromInstalledPackageDirMock.mockImplementation(
+        async (params: { packageDir: string }) => {
+          await fs.mkdir(params.packageDir, { recursive: true });
+          return {
+            ok: true,
+            pluginId: "demo",
+            targetDir: params.packageDir,
+            version: "1.2.3",
+            extensions: ["index.js"],
+          };
+        },
+      );
+
+      const result = await installPluginFromGitSpec({
+        spec: "git:https://token@github.com/acme/demo.git",
+        gitDir,
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      expect(result.targetDir).toBe(
+        expectedGitRepoDir({
+          gitDir,
+          normalizedSpec: "git:https://token@github.com/acme/demo.git",
+        }),
+      );
+      expect(result.targetDir).not.toContain("token");
+      expect(result.targetDir).not.toContain("github.com");
+    } finally {
+      await fs.rm(gitDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the existing managed repo when replacement install fails", async () => {
+    const gitDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-install-preserve-"));
+    const normalizedSpec = "git:https://github.com/acme/demo.git";
+    const existingRepoDir = expectedGitRepoDir({ gitDir, normalizedSpec });
+    const markerPath = path.join(existingRepoDir, "existing.txt");
+    try {
+      await fs.mkdir(existingRepoDir, { recursive: true });
+      await fs.writeFile(markerPath, "keep");
+      runCommandWithTimeoutMock
+        .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
+        .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+        .mockResolvedValueOnce({ code: 1, stdout: "", stderr: "npm failed" });
+
+      const result = await installPluginFromGitSpec({
+        spec: "git:https://github.com/acme/demo.git",
+        gitDir,
+        mode: "update",
+      });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error).toContain("npm install failed");
+      }
+      await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("keep");
+      expect(installPluginFromInstalledPackageDirMock).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(gitDir, { recursive: true, force: true });
+    }
   });
 });

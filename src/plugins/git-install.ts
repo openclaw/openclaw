@@ -1,6 +1,6 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { withTempDir } from "../infra/install-source-utils.js";
 import {
   createSafeNpmInstallArgs,
@@ -183,7 +183,50 @@ function resolveGitInstallRepoDir(params: {
   source: ParsedGitPluginSpec;
 }): string {
   const gitRoot = params.gitDir ? resolveUserPath(params.gitDir) : resolveDefaultPluginGitDir();
-  return path.join(gitRoot, safePathSegmentHashed(params.source.normalizedSpec), "repo");
+  const redactedSpec = redactSensitiveUrlLikeString(params.source.normalizedSpec);
+  const hash = createHash("sha256").update(redactedSpec).digest("hex").slice(0, 16);
+  return path.join(gitRoot, `git-${hash}`, "repo");
+}
+
+async function replaceManagedGitRepo(params: {
+  stagedRepoDir: string;
+  persistentRepoDir: string;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const parentDir = path.dirname(params.persistentRepoDir);
+  const backupDir = path.join(parentDir, `.repo-backup-${process.pid}-${Date.now()}`);
+  let backupCreated = false;
+
+  try {
+    await fs.mkdir(parentDir, { recursive: true });
+    try {
+      await fs.rename(params.persistentRepoDir, backupDir);
+      backupCreated = true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+
+    try {
+      await fs.rename(params.stagedRepoDir, params.persistentRepoDir);
+    } catch (err) {
+      if (backupCreated) {
+        await fs.rename(backupDir, params.persistentRepoDir);
+        backupCreated = false;
+      }
+      throw err;
+    }
+
+    if (backupCreated) {
+      await fs.rm(backupDir, { recursive: true, force: true });
+    }
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `failed to replace managed git plugin repository: ${String(err)}`,
+    };
+  }
 }
 
 function formatGitCommandFailure(params: {
@@ -244,11 +287,7 @@ export async function installPluginFromGitSpec(
 
   const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
   return await withTempDir("openclaw-git-plugin-", async (tmpDir) => {
-    const repoDir = params.dryRun ? path.join(tmpDir, "repo") : persistentRepoDir;
-    if (!params.dryRun) {
-      await fs.rm(repoDir, { recursive: true, force: true });
-      await fs.mkdir(path.dirname(repoDir), { recursive: true });
-    }
+    const repoDir = path.join(tmpDir, "repo");
     params.logger?.info?.(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
     );
@@ -330,9 +369,19 @@ export async function installPluginFromGitSpec(
     if (!result.ok) {
       return result;
     }
+    if (!params.dryRun) {
+      const replaceResult = await replaceManagedGitRepo({
+        stagedRepoDir: repoDir,
+        persistentRepoDir,
+      });
+      if (!replaceResult.ok) {
+        return replaceResult;
+      }
+    }
 
     return {
       ...result,
+      targetDir: params.dryRun ? result.targetDir : persistentRepoDir,
       git: {
         url: parsed.url,
         ref: parsed.ref,

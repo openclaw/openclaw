@@ -269,6 +269,36 @@ describe("installPluginFromNpmSpec", () => {
     }
   });
 
+  it("rejects duplicate npm installs unless update mode is requested", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const installRoot = path.join(npmRoot, "node_modules", "@openclaw", "voice-call");
+    fs.mkdirSync(installRoot, { recursive: true });
+    mockNpmViewMetadataResult(runCommandWithTimeoutMock, {
+      name: "@openclaw/voice-call",
+      version: "0.0.1",
+      integrity: "sha512-plugin-test",
+      shasum: "pluginshasum",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/voice-call@0.0.1",
+      npmDir: npmRoot,
+      mode: "install",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("plugin already exists");
+      expect(result.error).toContain(installRoot);
+    }
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(
+        (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
+      ),
+    ).toBe(false);
+  });
+
   it("aborts when integrity drift callback rejects the fetched artifact", async () => {
     mockNpmViewMetadataResult(runCommandWithTimeoutMock, {
       name: "@openclaw/voice-call",

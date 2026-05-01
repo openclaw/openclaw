@@ -115,6 +115,16 @@ function createNpmInstallRecord(pluginId = "my-plugin", installPath?: string): P
   };
 }
 
+function createGitInstallRecord(pluginId = "my-plugin", installPath?: string): PluginInstallRecord {
+  return {
+    source: "git",
+    spec: `git:https://github.com/acme/${pluginId}.git`,
+    gitUrl: `https://github.com/acme/${pluginId}.git`,
+    gitCommit: "abc123",
+    ...(installPath ? { installPath } : {}),
+  };
+}
+
 function createPathInstallRecord(
   installPath = "/path/to/plugin",
   sourcePath = installPath,
@@ -905,6 +915,31 @@ describe("uninstallPlugin", () => {
     });
     await expect(fs.access(installPath)).rejects.toThrow();
   });
+
+  it("deletes managed git install repos outside the extensions directory", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const installPath = path.join(stateDir, "git", "git-abc123", "repo");
+    await fs.mkdir(installPath, { recursive: true });
+    await fs.writeFile(path.join(installPath, "index.js"), "// git plugin");
+
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries(),
+        installs: {
+          "my-plugin": createGitInstallRecord("my-plugin", installPath),
+        },
+      }),
+      pluginId: "my-plugin",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expectSuccessfulUninstallActions(result, {
+      directory: true,
+    });
+    await expect(fs.access(installPath)).rejects.toThrow();
+  });
 });
 
 describe("resolveUninstallDirectoryTarget", () => {
@@ -991,6 +1026,38 @@ describe("resolveUninstallDirectoryTarget", () => {
         extensionsDir,
       }),
     ).toBe(installPath);
+  });
+
+  it("uses configured installPath when git installed it under the managed git root", () => {
+    const stateDir = path.join(os.tmpdir(), "openclaw-uninstall-safe");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const installPath = path.join(stateDir, "git", "git-abc123", "repo");
+
+    expect(
+      resolveUninstallDirectoryTarget({
+        pluginId: "my-plugin",
+        hasInstall: true,
+        installRecord: createGitInstallRecord("my-plugin", installPath),
+        extensionsDir,
+      }),
+    ).toBe(installPath);
+  });
+
+  it("does not trust git install paths outside the managed git root", () => {
+    const stateDir = path.join(os.tmpdir(), "openclaw-uninstall-safe");
+    const extensionsDir = path.join(stateDir, "extensions");
+
+    expect(
+      resolveUninstallDirectoryTarget({
+        pluginId: "my-plugin",
+        hasInstall: true,
+        installRecord: createGitInstallRecord(
+          "my-plugin",
+          path.join(os.tmpdir(), "git", "git-abc123", "repo"),
+        ),
+        extensionsDir,
+      }),
+    ).toBe(resolvePluginInstallDir("my-plugin", extensionsDir));
   });
 
   it("does not trust npm install paths outside the managed npm root", () => {
