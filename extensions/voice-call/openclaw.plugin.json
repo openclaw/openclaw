@@ -1,7 +1,9 @@
 {
   "id": "voice-call",
+  "commandAliases": [{ "name": "voicecall" }],
   "activation": {
-    "onStartup": true
+    "onStartup": true,
+    "onCommands": ["voicecall"]
   },
   "channelEnvVars": {
     "voice-call": [
