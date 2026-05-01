@@ -23,6 +23,7 @@ import { createGatewayTool } from "./tools/gateway-tool.js";
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
+import { memoizeToolFactory } from "./tools/memoize-tool-factory.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
@@ -147,58 +148,136 @@ export function createOpenClawTools(
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
   const imageTool = options?.agentDir?.trim()
-    ? createImageTool({
+    ? memoizeToolFactory({
+        label: "createImageTool",
+        refs: [options?.config, options?.sandboxFsBridge],
+        scalars: [
+          options.agentDir,
+          workspaceDir,
+          options?.sandboxRoot ?? null,
+          options?.fsPolicy?.workspaceOnly === true,
+          !!options?.modelHasVision,
+        ],
+        factory: () =>
+          createImageTool({
+            config: options?.config,
+            agentDir: options.agentDir,
+            workspaceDir,
+            sandbox,
+            fsPolicy: options?.fsPolicy,
+            modelHasVision: options?.modelHasVision,
+          }),
+      })
+    : null;
+  const imageGenerateTool = memoizeToolFactory({
+    label: "createImageGenerateTool",
+    refs: [options?.config, options?.sandboxFsBridge],
+    scalars: [
+      options?.agentDir,
+      workspaceDir,
+      options?.sandboxRoot ?? null,
+      options?.fsPolicy?.workspaceOnly === true,
+    ],
+    factory: () =>
+      createImageGenerateTool({
         config: options?.config,
-        agentDir: options.agentDir,
+        agentDir: options?.agentDir,
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
-        modelHasVision: options?.modelHasVision,
-      })
-    : null;
-  const imageGenerateTool = createImageGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
+      }),
   });
-  const videoGenerateTool = createVideoGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    agentSessionKey: options?.agentSessionKey,
-    requesterOrigin: deliveryContext ?? undefined,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
+  const videoGenerateTool = memoizeToolFactory({
+    label: "createVideoGenerateTool",
+    refs: [options?.config, options?.sandboxFsBridge],
+    scalars: [
+      options?.agentDir,
+      options?.agentSessionKey,
+      workspaceDir,
+      options?.sandboxRoot ?? null,
+      options?.fsPolicy?.workspaceOnly === true,
+      options?.agentChannel ?? null,
+      options?.agentTo ?? null,
+      options?.agentAccountId ?? null,
+      options?.agentThreadId ?? null,
+    ],
+    factory: () =>
+      createVideoGenerateTool({
+        config: options?.config,
+        agentDir: options?.agentDir,
+        agentSessionKey: options?.agentSessionKey,
+        requesterOrigin: deliveryContext ?? undefined,
+        workspaceDir,
+        sandbox,
+        fsPolicy: options?.fsPolicy,
+      }),
   });
-  const musicGenerateTool = createMusicGenerateTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    agentSessionKey: options?.agentSessionKey,
-    requesterOrigin: deliveryContext ?? undefined,
-    workspaceDir,
-    sandbox,
-    fsPolicy: options?.fsPolicy,
+  const musicGenerateTool = memoizeToolFactory({
+    label: "createMusicGenerateTool",
+    refs: [options?.config, options?.sandboxFsBridge],
+    scalars: [
+      options?.agentDir,
+      options?.agentSessionKey,
+      workspaceDir,
+      options?.sandboxRoot ?? null,
+      options?.fsPolicy?.workspaceOnly === true,
+      options?.agentChannel ?? null,
+      options?.agentTo ?? null,
+      options?.agentAccountId ?? null,
+      options?.agentThreadId ?? null,
+    ],
+    factory: () =>
+      createMusicGenerateTool({
+        config: options?.config,
+        agentDir: options?.agentDir,
+        agentSessionKey: options?.agentSessionKey,
+        requesterOrigin: deliveryContext ?? undefined,
+        workspaceDir,
+        sandbox,
+        fsPolicy: options?.fsPolicy,
+      }),
   });
   const pdfTool = options?.agentDir?.trim()
-    ? createPdfTool({
-        config: options?.config,
-        agentDir: options.agentDir,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
+    ? memoizeToolFactory({
+        label: "createPdfTool",
+        refs: [options?.config, options?.sandboxFsBridge],
+        scalars: [
+          options.agentDir,
+          workspaceDir,
+          options?.sandboxRoot ?? null,
+          options?.fsPolicy?.workspaceOnly === true,
+        ],
+        factory: () =>
+          createPdfTool({
+            config: options?.config,
+            agentDir: options.agentDir,
+            workspaceDir,
+            sandbox,
+            fsPolicy: options?.fsPolicy,
+          }),
       })
     : null;
-  const webSearchTool = createWebSearchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-    runtimeWebSearch: runtimeWebTools?.search,
+  const webSearchTool = memoizeToolFactory({
+    label: "createWebSearchTool",
+    refs: [options?.config, runtimeWebTools],
+    scalars: [!!options?.sandboxed],
+    factory: () =>
+      createWebSearchTool({
+        config: options?.config,
+        sandboxed: options?.sandboxed,
+        runtimeWebSearch: runtimeWebTools?.search,
+      }),
   });
-  const webFetchTool = createWebFetchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-    runtimeWebFetch: runtimeWebTools?.fetch,
+  const webFetchTool = memoizeToolFactory({
+    label: "createWebFetchTool",
+    refs: [options?.config, runtimeWebTools],
+    scalars: [!!options?.sandboxed],
+    factory: () =>
+      createWebFetchTool({
+        config: options?.config,
+        sandboxed: options?.sandboxed,
+        runtimeWebFetch: runtimeWebTools?.fetch,
+      }),
   });
   const messageTool = options?.disableMessageTool
     ? null
