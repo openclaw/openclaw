@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- fix(message): normalize GPT-5.4/5.5 default-filled parameters in poll and Discord component paths. GPT-5.4/5.5 sends all optional tool parameters with default values on every `message.send` call, causing false poll detection (`pollDurationHours:24` alone triggered poll mode) and Discord modal throws (`components:{modal:{fields:[]}}` threw instead of being treated as absent). Poll intent now requires a non-empty `pollQuestion` or `pollOption`; Discord `readDiscordComponentSpec` returns `null` for all-empty-defaults objects. Refs #52757. Thanks @Bartok9.
 - fix: block workspace CLOUDSDK_PYTHON override and always set trusted interpreter for gcloud. (#74492) Thanks @pgondhi987.
 - Providers/Z.AI: move the bundled GLM catalog and auth env metadata into the plugin manifest, so `models list --all --provider zai` shows the full known catalog without duplicated runtime seed data. Thanks @shakkernerd.
 - fix(infra): block ambient Homebrew env vars from brew resolution. (#74463) Thanks @pgondhi987.
