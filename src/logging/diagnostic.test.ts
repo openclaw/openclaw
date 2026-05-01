@@ -25,6 +25,7 @@ import {
 import {
   logSessionStateChange,
   logMessageQueued,
+  markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
   resolveStuckSessionWarnMs,
   startDiagnosticHeartbeat,
@@ -200,6 +201,63 @@ describe("stuck session diagnostics threshold", () => {
       ageMs: expect.any(Number),
       queueDepth: 1,
     });
+  });
+
+  it("does not warn while a processing session continues reporting progress", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat({
+        diagnostics: {
+          enabled: true,
+          stuckSessionWarnMs: 30_000,
+        },
+      });
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      vi.advanceTimersByTime(45_000);
+      markDiagnosticSessionProgress({ sessionId: "s1", sessionKey: "main" });
+      vi.advanceTimersByTime(16_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "session.stalled")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "session.long_running")).toHaveLength(0);
+  });
+
+  it("backs off repeated stuck warnings while a session remains unchanged", () => {
+    const events: Array<{ ageMs?: number }> = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      if (event.type === "session.stuck") {
+        events.push({ ageMs: event.ageMs });
+      }
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      vi.advanceTimersByTime(91_000);
+      expect(events).toHaveLength(1);
+      expect(recoverStuckSession).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(30_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(events.map((event) => event.ageMs)).toEqual([60_000, 120_000]);
+    expect(recoverStuckSession).toHaveBeenCalledTimes(2);
   });
 
   it("reports active sessions as stalled instead of stuck when active work stops progressing", () => {

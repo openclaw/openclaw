@@ -416,6 +416,7 @@ export function logMessageQueued(params: {
   const state = getDiagnosticSessionState(params);
   state.queueDepth += 1;
   state.lastActivity = Date.now();
+  state.lastStuckWarnAgeMs = undefined;
   if (diag.isEnabled("debug")) {
     diag.debug(
       `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
@@ -494,6 +495,7 @@ export function logSessionStateChange(
   const prevState = state.state;
   state.state = params.state;
   state.lastActivity = Date.now();
+  state.lastStuckWarnAgeMs = undefined;
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
   }
@@ -515,6 +517,16 @@ export function logSessionStateChange(
     reason: params.reason,
     queueDepth: state.queueDepth,
   });
+  markActivity();
+}
+
+export function markDiagnosticSessionProgress(params: SessionRef) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  const state = getDiagnosticSessionState(params);
+  state.lastActivity = Date.now();
+  state.lastStuckWarnAgeMs = undefined;
   markActivity();
 }
 
@@ -562,6 +574,16 @@ export function logSessionAttention(
     activity,
     staleMs: params.thresholdMs,
   });
+  if (classification.eventType === "session.stuck") {
+    const nextWarnAgeMs =
+      state.lastStuckWarnAgeMs === undefined
+        ? params.thresholdMs
+        : Math.max(state.lastStuckWarnAgeMs + params.thresholdMs, state.lastStuckWarnAgeMs * 2);
+    if (params.ageMs < nextWarnAgeMs) {
+      return undefined;
+    }
+    state.lastStuckWarnAgeMs = params.ageMs;
+  }
   const label =
     classification.eventType === "session.stuck"
       ? "stuck session"
