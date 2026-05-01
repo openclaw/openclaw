@@ -3187,6 +3187,23 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(result).toEqual({ installedSpecs: [] });
   });
 
+  it("accepts package.json runtime-deps supersets when generated metadata is absent", () => {
+    const installRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(installRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw-bundled-runtime-deps",
+        dependencies: {
+          "alpha-runtime": "1.0.0",
+          tokenjuice: "0.7.0",
+        },
+      }),
+    );
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(true);
+  });
+
   it("drops stale package versions from the next package-level plan", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
