@@ -22,7 +22,6 @@ import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.j
 export type LoadSessionStoreOptions = {
   skipCache?: boolean;
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
-  runMaintenance?: boolean;
   clone?: boolean;
 };
 
@@ -130,32 +129,57 @@ export function loadSessionStore(
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (migrated || normalized) {
-    serializedFromDisk = undefined;
+    // PATCH: Write normalized/migrated store back to disk so the on-disk
+    // sessions.json stays compact and the serialized cache is populated.
+    // Without this, every load re-normalizes entries and the cache
+    // operates without a serialized copy (clone via JSON.stringify).
+    try {
+      const compacted = JSON.stringify(store);
+      fs.writeFileSync(storePath, compacted, "utf-8");
+      serializedFromDisk = compacted;
+      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
+      mtimeMs = fileStat?.mtimeMs;
+    } catch (err) {
+      serializedFromDisk = undefined;
+      log.warn(`session store normalization write-back failed: ${String(err)}`);
+    }
   }
-  if (opts.runMaintenance) {
-    const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
-    const beforeCount = Object.keys(store).length;
-    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
-      const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
-      const countAfterPrune = Object.keys(store).length;
-      const capped = shouldRunSessionEntryMaintenance({
-        entryCount: countAfterPrune,
-        maxEntries: maintenance.maxEntries,
-      })
-        ? capEntryCount(store, maintenance.maxEntries, { log: false })
-        : 0;
-      const afterCount = Object.keys(store).length;
-      if (pruned > 0 || capped > 0) {
+  const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
+  const beforeCount = Object.keys(store).length;
+  if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+    const pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, { log: false });
+    const countAfterPrune = Object.keys(store).length;
+    const capped = shouldRunSessionEntryMaintenance({
+      entryCount: countAfterPrune,
+      maxEntries: maintenance.maxEntries,
+    })
+      ? capEntryCount(store, maintenance.maxEntries, { log: false })
+      : 0;
+    const afterCount = Object.keys(store).length;
+    if (pruned > 0 || capped > 0) {
+      // PATCH: Persist maintenance results back to disk so the on-disk
+      // sessions.json does not grow unbounded. Without this write-back,
+      // every cache miss re-reads the original oversized file, triggering
+      // expensive parsing and maintenance on every load (see GH issues
+      // #64867, #52231, #65517).
+      try {
+        const compacted = JSON.stringify(store);
+        fs.writeFileSync(storePath, compacted, "utf-8");
+        serializedFromDisk = compacted;
+        fileStat = getFileStatSnapshot(storePath) ?? fileStat;
+        mtimeMs = fileStat?.mtimeMs;
+      } catch (err) {
         serializedFromDisk = undefined;
-        log.info("applied load-time maintenance to oversized session store", {
-          storePath,
-          before: beforeCount,
-          after: afterCount,
-          pruned,
-          capped,
-          maxEntries: maintenance.maxEntries,
-        });
+        log.warn(`session store maintenance write-back failed: ${String(err)}`);
       }
+      log.info("applied load-time maintenance to oversized session store", {
+        storePath,
+        before: beforeCount,
+        after: afterCount,
+        pruned,
+        capped,
+        maxEntries: maintenance.maxEntries,
+      });
     }
   }
 
