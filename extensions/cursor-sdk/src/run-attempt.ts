@@ -30,6 +30,8 @@ function resolvePluginConfig(raw: unknown): CursorSdkPluginConfig {
   return {};
 }
 
+// Only captures final assistant text — tool calls (file edits, terminal,
+// subagents) are intentionally excluded, consistent with the Codex harness.
 function collectAssistantText(event: { type: string }): string {
   if (event.type !== "assistant") {
     return "";
