@@ -513,6 +513,8 @@ const DiscordVoiceSchema = z
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
     daveEncryption: z.boolean().optional(),
     decryptionFailureTolerance: z.number().int().min(0).optional(),
+    connectTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    reconnectGraceMs: z.number().int().positive().max(120_000).optional(),
     tts: TtsConfigSchema.optional(),
   })
   .strict()
@@ -527,7 +529,9 @@ export const DiscordAccountSchema = z
     commands: ProviderCommandsSchema,
     configWrites: z.boolean().optional(),
     token: SecretInputSchema.optional().register(sensitive),
+    applicationId: DiscordIdSchema.optional(),
     proxy: z.string().optional(),
+    gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
@@ -613,6 +617,7 @@ export const DiscordAccountSchema = z
       .object({
         presence: z.boolean().optional(),
         guildMembers: z.boolean().optional(),
+        voiceStates: z.boolean().optional(),
       })
       .strict()
       .optional(),

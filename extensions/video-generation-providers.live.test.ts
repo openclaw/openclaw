@@ -16,15 +16,15 @@ import {
   encodePngRgba,
   fillPixel,
   getShellEnvAppliedKeys,
+  isAuthErrorMessage,
+  isBillingErrorMessage,
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   isModelNotFoundErrorMessage,
-  isTruthyEnvValue,
-  isAuthErrorMessage,
-  isBillingErrorMessage,
   isOverloadedErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
+  isTruthyEnvValue,
   normalizeVideoGenerationDuration,
   parseCsvFilter,
   parseProviderModelMap,
@@ -77,7 +77,7 @@ const LIVE_VIDEO_OPERATION_TIMEOUT_MS = readPositiveIntegerEnv(
 const LIVE_VIDEO_TEST_TIMEOUT_MS =
   (RUN_FULL_VIDEO_MODES ? 3 : 1) * LIVE_VIDEO_OPERATION_TIMEOUT_MS + 30_000;
 const LIVE_VIDEO_SMOKE_PROMPT =
-  "A one-second low-motion video of a lobster walking across wet sand, no text.";
+  "A one-second low-motion video of a blue cube sliding across a clean studio floor.";
 
 type LiveProviderCase = {
   plugin: Parameters<typeof registerProviderPlugin>[0]["plugin"];
@@ -247,6 +247,9 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   ) {
     return "provider timeout";
   }
+  if (/operation was aborted/i.test(message)) {
+    return "provider timeout";
+  }
   if (isOverloadedErrorMessage(message) || isServerErrorMessage(message)) {
     return "provider outage";
   }
@@ -259,6 +262,12 @@ function resolveLiveVideoSkipReason(message: string): string | null {
   }
   if (/access denied|not authorized|not enabled|permission denied/i.test(message)) {
     return "provider/model drift";
+  }
+  if (/response missing job details/i.test(message)) {
+    return "provider endpoint drift";
+  }
+  if (/blocked by (?:our )?moderation system|content policy|policy violation/i.test(message)) {
+    return "provider policy drift";
   }
   return null;
 }

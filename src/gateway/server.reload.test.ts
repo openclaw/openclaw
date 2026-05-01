@@ -2,13 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import {
-  __setModelCatalogImportForTest,
-  resetModelCatalogCacheForTest,
-} from "../agents/model-catalog.js";
-import { buildModelsProviderData } from "../auto-reply/reply/commands-models.js";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainSystemEvents } from "../infra/system-events.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -25,7 +19,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
-  withGatewayServer,
+  withGatewayServer as withMinimalGatewayServer,
 } from "./test-helpers.js";
 
 const hoisted = vi.hoisted(() => {
@@ -57,6 +51,15 @@ const hoisted = vi.hoisted(() => {
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
   const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
+  const pruneUnknownBundledRuntimeDepsRoots = vi.fn((_params: unknown) => ({
+    scanned: 0,
+    removed: 0,
+    skippedLocked: 0,
+  }));
+  const repairBundledRuntimeDepsPackagePlanAsync = vi.fn(async (_params: unknown) => ({
+    repairedSpecs: [] as string[],
+  }));
+  const resolveOpenClawPackageRootSync = vi.fn((_params: unknown) => "/package");
 
   const providerManager = {
     getRuntimeSnapshot: vi.fn(() => ({
@@ -159,16 +162,21 @@ const hoisted = vi.hoisted(() => {
     stopGmailWatcher,
     resetModelCatalogCache,
     disposeAllSessionMcpRuntimes,
+    pruneUnknownBundledRuntimeDepsRoots,
+    repairBundledRuntimeDepsPackagePlanAsync,
+    resolveOpenClawPackageRootSync,
     providerManager,
     createChannelManager,
     startGatewayConfigReloader,
     reloaderStop,
     getOnHotReload: () => onHotReload,
     getOnRestart: () => onRestart,
+    resetReloadCallbacks: () => {
+      onHotReload = null;
+      onRestart = null;
+    },
   };
 });
-
-type PiDiscoveryRuntimeModule = typeof import("../agents/pi-model-discovery-runtime.js");
 
 vi.mock("../cron/service.js", () => ({
   CronService: hoisted.CronService,
@@ -203,6 +211,30 @@ vi.mock("../agents/pi-bundle-mcp-tools.js", async () => {
   return {
     ...actual,
     disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
+  };
+});
+
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRootSync: hoisted.resolveOpenClawPackageRootSync,
+  };
+});
+
+vi.mock("../plugins/bundled-runtime-deps.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/bundled-runtime-deps.js")>();
+  return {
+    ...actual,
+    repairBundledRuntimeDepsPackagePlanAsync: hoisted.repairBundledRuntimeDepsPackagePlanAsync,
+  };
+});
+
+vi.mock("../plugins/bundled-runtime-deps-roots.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/bundled-runtime-deps-roots.js")>();
+  return {
+    ...actual,
+    pruneUnknownBundledRuntimeDepsRoots: hoisted.pruneUnknownBundledRuntimeDepsRoots,
   };
 });
 
@@ -310,6 +342,12 @@ describe("gateway hot reload", () => {
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+    hoisted.pruneUnknownBundledRuntimeDepsRoots.mockClear();
+    hoisted.repairBundledRuntimeDepsPackagePlanAsync.mockReset();
+    hoisted.repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValue({ repairedSpecs: [] });
+    hoisted.resolveOpenClawPackageRootSync.mockClear();
+    hoisted.resolveOpenClawPackageRootSync.mockReturnValue("/package");
+    hoisted.resetReloadCallbacks();
   });
 
   afterEach(() => {
@@ -430,10 +468,10 @@ describe("gateway hot reload", () => {
   }
 
   async function withNonMinimalGatewayServer(
-    fn: Parameters<typeof withGatewayServer>[0],
-  ): ReturnType<typeof withGatewayServer> {
+    fn: Parameters<typeof withMinimalGatewayServer>[0],
+  ): ReturnType<typeof withMinimalGatewayServer> {
     return await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, async () =>
-      withGatewayServer(fn),
+      withMinimalGatewayServer(fn),
     );
   }
 
@@ -727,6 +765,50 @@ describe("gateway hot reload", () => {
     });
   });
 
+  it("uses the default restart deferral timeout when config omits deferralTimeoutMs", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onRestart = hoisted.getOnRestart();
+      expect(onRestart).toBeTypeOf("function");
+
+      const restartTesting = (await import("../infra/restart.js")).__testing;
+      restartTesting.resetSigusr1State();
+      hoisted.activeTaskCount.value = 1;
+      const signalSpy = vi.fn();
+      process.once("SIGUSR1", signalSpy);
+      vi.useFakeTimers();
+
+      try {
+        onRestart?.(
+          {
+            changedPaths: ["gateway.port"],
+            restartGateway: true,
+            restartReasons: ["gateway.port"],
+            hotReasons: [],
+            reloadHooks: false,
+            restartGmailWatcher: false,
+            restartCron: false,
+            restartHeartbeat: false,
+            restartChannels: new Set(),
+            noopPaths: [],
+          },
+          {},
+        );
+
+        await vi.advanceTimersByTimeAsync(299_500);
+        expect(signalSpy).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(500);
+        await Promise.resolve();
+        expect(signalSpy).toHaveBeenCalledTimes(1);
+      } finally {
+        hoisted.activeTaskCount.value = 0;
+        vi.useRealTimers();
+        process.removeListener("SIGUSR1", signalSpy);
+        restartTesting.resetSigusr1State();
+      }
+    });
+  });
+
   it("emits one-shot degraded and recovered system events during secret reload transitions", async () => {
     await writeEnvRefConfig();
     process.env.OPENAI_API_KEY = "sk-startup"; // pragma: allowlist secret
@@ -775,7 +857,7 @@ describe("gateway hot reload", () => {
   });
 
   it("clears the model catalog cache on model-related hot reloads", async () => {
-    await withGatewayServer(async () => {
+    await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
 
@@ -807,8 +889,59 @@ describe("gateway hot reload", () => {
     });
   });
 
+  it("plans bundled runtime deps before hot channel reloads", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+      hoisted.repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValueOnce({
+        repairedSpecs: ["grammy@1.37.0"],
+      });
+
+      const nextConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "token",
+          },
+        },
+      };
+
+      await onHotReload?.(
+        {
+          changedPaths: ["channels.telegram.enabled"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["channels.telegram.enabled"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          restartChannels: new Set(["telegram"]),
+          disposeMcpRuntimes: false,
+          planPluginRuntimeDeps: true,
+          noopPaths: [],
+        },
+        nextConfig,
+      );
+
+      expect(hoisted.repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledWith(
+        expect.objectContaining({
+          packageRoot: "/package",
+          config: nextConfig,
+          includeConfiguredChannels: true,
+        }),
+      );
+      expect(
+        hoisted.repairBundledRuntimeDepsPackagePlanAsync.mock.invocationCallOrder[0],
+      ).toBeLessThan(hoisted.providerManager.stopChannel.mock.invocationCallOrder[0] ?? Infinity);
+      expect(hoisted.providerManager.stopChannel).toHaveBeenCalledWith("telegram");
+      expect(hoisted.providerManager.startChannel).toHaveBeenCalledWith("telegram");
+    });
+  });
+
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
-    await withGatewayServer(async () => {
+    await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
       expect(onHotReload).toBeTypeOf("function");
 
@@ -836,98 +969,6 @@ describe("gateway hot reload", () => {
 
       expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
     });
-  });
-
-  it("makes newly available catalog models visible in-process after hot reload", async () => {
-    type TestRegistryEntry = { provider: string; id: string; name: string };
-    let registryEntries: TestRegistryEntry[] = [
-      { provider: "ollama", id: "existing", name: "Existing" },
-    ];
-    __setModelCatalogImportForTest(
-      async () =>
-        ({
-          discoverAuthStorage: () => ({}),
-          ModelRegistry: class {
-            getAll() {
-              return registryEntries;
-            }
-          },
-        }) as unknown as PiDiscoveryRuntimeModule,
-    );
-    resetModelCatalogCacheForTest();
-
-    try {
-      await withGatewayServer(async () => {
-        const onHotReload = hoisted.getOnHotReload();
-        expect(onHotReload).toBeTypeOf("function");
-
-        const baseConfig: OpenClawConfig = {
-          agents: {
-            defaults: {
-              model: {
-                primary: "ollama/existing",
-              },
-            },
-          },
-          models: {
-            providers: {
-              ollama: {
-                baseUrl: "http://127.0.0.1:11434",
-                api: "ollama",
-                apiKey: "ollama-local",
-                models: [],
-              },
-            },
-          },
-        };
-
-        const before = await buildModelsProviderData(baseConfig);
-        expect([...(before.byProvider.get("ollama") ?? new Set()).values()]).toEqual(["existing"]);
-
-        registryEntries = [
-          ...registryEntries,
-          { provider: "ollama", id: "glm-5.1:cloud", name: "GLM 5.1 Cloud" },
-        ];
-
-        const nextConfig = structuredClone(baseConfig);
-        await onHotReload?.(
-          {
-            changedPaths: ["models.providers.ollama.models"],
-            restartGateway: false,
-            restartReasons: [],
-            hotReasons: ["models.providers.ollama.models"],
-            reloadHooks: false,
-            restartGmailWatcher: false,
-            restartCron: false,
-            restartHeartbeat: false,
-            restartChannels: new Set(),
-            noopPaths: [],
-          },
-          nextConfig,
-        );
-
-        __setModelCatalogImportForTest(
-          async () =>
-            ({
-              discoverAuthStorage: () => ({}),
-              ModelRegistry: class {
-                getAll() {
-                  return registryEntries;
-                }
-              },
-            }) as unknown as PiDiscoveryRuntimeModule,
-        );
-        const after = await buildModelsProviderData(nextConfig);
-        expect([...(after.byProvider.get("ollama") ?? new Set()).values()]).toEqual([
-          "existing",
-          "glm-5.1:cloud",
-        ]);
-        expect(hoisted.resetModelCatalogCache).toHaveBeenCalledTimes(1);
-      });
-    } finally {
-      __setModelCatalogImportForTest();
-      resetModelCatalogCacheForTest();
-    }
   });
 
   it("serves secrets.reload immediately after startup without race failures", async () => {

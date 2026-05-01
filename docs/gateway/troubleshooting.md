@@ -341,6 +341,7 @@ Look for:
     - `.clobbered.*` exists → an external direct edit or startup read was restored.
     - `.rejected.*` exists → an OpenClaw-owned config write failed schema or clobber checks before commit.
     - `Config write rejected:` → the write tried to drop required shape, shrink the file sharply, or persist invalid config.
+    - `Rejected validation details:` → the recovery log or main-agent notice includes the schema path that caused the restore, such as `agents.defaults.execution` or `gateway.auth.password.source`.
     - `missing-meta-vs-last-good`, `gateway-mode-missing-vs-last-good`, or `size-drop-vs-last-good:*` → startup treated the current file as clobbered because it lost fields or size compared with the last-known-good backup.
     - `Config last-known-good promotion skipped` → the candidate contained redacted secret placeholders such as `***`.
 
@@ -380,6 +381,7 @@ Common signatures:
 - `SSH tunnel failed to start; falling back to direct probes.` → SSH setup failed, but the command still tried direct configured/loopback targets.
 - `multiple reachable gateways detected` → more than one target answered. Usually this means an intentional multi-gateway setup or stale/duplicate listeners.
 - `Read-probe diagnostics are limited by gateway scopes (missing operator.read)` → connect worked, but detail RPC is scope-limited; pair device identity or use credentials with `operator.read`.
+- `Gateway accepted the WebSocket connection, but follow-up read diagnostics failed` → connect worked, but the full diagnostic RPC set timed out or failed. Treat this as a reachable Gateway with degraded diagnostics; compare `connect.ok` and `connect.rpcOk` in `--json` output.
 - `Capability: pairing-pending` or `gateway closed (1008): pairing required` → the gateway answered, but this client still needs pairing/approval before normal operator access.
 - unresolved `gateway.auth.*` / `gateway.remote.*` SecretRef warning text → auth material was unavailable in this command path for the failed target.
 
@@ -436,7 +438,7 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `lanes-busy`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
 
 <AccordionGroup>
   <Accordion title="Common signatures">

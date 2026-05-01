@@ -188,6 +188,8 @@ export async function runPreparedCliAgent(
         reason,
         provider: params.provider,
         model: context.modelId,
+        sessionId: params.sessionId,
+        lane: params.lane,
         status,
       });
     }
@@ -398,6 +400,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     runId: params.runId,
     jobId: params.jobId,
     extraSystemPrompt: params.extraSystemPrompt,
+    inputProvenance: params.inputProvenance,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     extraSystemPromptStatic: params.extraSystemPromptStatic,

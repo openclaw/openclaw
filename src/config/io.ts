@@ -52,6 +52,7 @@ import {
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
+  snapshotConfigAuditProcessInfo,
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
 import { throwInvalidConfig } from "./io.invalid-config.js";
@@ -214,6 +215,11 @@ export type ConfigWriteOptions = {
    * Normal writers must keep this false so clobbers are rejected before disk commit.
    */
   allowDestructiveWrite?: boolean;
+  /**
+   * Allow an intentional large config size drop while keeping other destructive
+   * guards active. Used by repair flows that remove stale or legacy config.
+   */
+  allowConfigSizeDrop?: boolean;
   /**
    * Suppress human-readable output logs (overwrite/anomaly messages).
    * Useful when the caller wants machine-readable output only (--json mode).
@@ -398,9 +404,14 @@ function resolveConfigWriteSuspiciousReasons(params: {
   return reasons;
 }
 
-function resolveConfigWriteBlockingReasons(suspicious: string[]): string[] {
+function resolveConfigWriteBlockingReasons(
+  suspicious: string[],
+  options: Pick<ConfigWriteOptions, "allowConfigSizeDrop"> = {},
+): string[] {
   return suspicious.filter(
-    (reason) => reason.startsWith("size-drop:") || reason === "gateway-mode-removed",
+    (reason) =>
+      (reason.startsWith("size-drop:") && options.allowConfigSizeDrop !== true) ||
+      reason === "gateway-mode-removed",
   );
 }
 
@@ -713,11 +724,7 @@ async function observeConfigSnapshot(
       event: "config.observe",
       phase: "read",
       configPath: snapshot.path,
-      pid: process.pid,
-      ppid: process.ppid,
-      cwd: process.cwd(),
-      argv: process.argv.slice(0, 8),
-      execArgv: process.execArgv.slice(0, 8),
+      ...snapshotConfigAuditProcessInfo(),
       exists: true,
       valid: snapshot.valid,
       hash: current.hash,
@@ -847,11 +854,7 @@ function observeConfigSnapshotSync(
       event: "config.observe",
       phase: "read",
       configPath: snapshot.path,
-      pid: process.pid,
-      ppid: process.ppid,
-      cwd: process.cwd(),
-      argv: process.argv.slice(0, 8),
-      execArgv: process.execArgv.slice(0, 8),
+      ...snapshotConfigAuditProcessInfo(),
       exists: true,
       valid: snapshot.valid,
       hash: current.hash,
@@ -1988,6 +1991,7 @@ export function createConfigIO(
         sourceConfig: snapshot.resolved,
         nextConfig: cfg,
         rootAuthoredConfig: snapshot.parsed,
+        unsetPaths,
       });
       try {
         const resolvedIncludes = resolveConfigIncludes(snapshot.parsed, configPath, {
@@ -2171,7 +2175,7 @@ export function createConfigIO(
         }),
       });
     };
-    const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons);
+    const blockingReasons = resolveConfigWriteBlockingReasons(suspiciousReasons, options);
     if (blockingReasons.length > 0 && options.allowDestructiveWrite !== true) {
       const rejectedPath = `${configPath}.rejected.${formatConfigArtifactTimestamp(new Date().toISOString())}`;
       await deps.fs.promises
@@ -2432,6 +2436,7 @@ export async function writeConfigFile(
     }),
     unsetPaths: resolveManagedUnsetPathsForWrite(options.unsetPaths),
     allowDestructiveWrite: options.allowDestructiveWrite,
+    allowConfigSizeDrop: options.allowConfigSizeDrop,
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
     skipOutputLogs: options.skipOutputLogs,
   });

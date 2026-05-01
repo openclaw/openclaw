@@ -188,10 +188,6 @@ vi.mock("../commands/models/auth.js", () => ({
   modelsAuthLoginCommand: vi.fn(),
 }));
 
-vi.mock("../commands/models/list.js", () => ({
-  modelsStatusCommand:
-    mocks.modelsStatusCommand as typeof import("../commands/models/list.js").modelsStatusCommand,
-}));
 vi.mock("../commands/models/list.status-command.js", () => ({
   modelsStatusCommand:
     mocks.modelsStatusCommand as typeof import("../commands/models/list.status-command.js").modelsStatusCommand,
@@ -582,6 +578,38 @@ describe("capability cli", () => {
         method: "agent",
         params: expect.objectContaining({
           cleanupBundleMcpOnRunEnd: true,
+          modelRun: true,
+          promptMode: "none",
+        }),
+      }),
+    );
+  });
+
+  it("requests admin scope for gateway model probes with provider/model overrides", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--model",
+        "anthropic/claude-haiku-4-5",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientName: "gateway-client",
+        method: "agent",
+        mode: "backend",
+        scopes: ["operator.admin"],
+        params: expect.objectContaining({
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
           modelRun: true,
           promptMode: "none",
         }),

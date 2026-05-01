@@ -70,6 +70,8 @@ const MemoryQmdUpdateSchema = z
     interval: z.string().optional(),
     debounceMs: z.number().int().nonnegative().optional(),
     onBoot: z.boolean().optional(),
+    startup: z.enum(["off", "idle", "immediate"]).optional(),
+    startupDelayMs: z.number().int().nonnegative().optional(),
     waitForBootSync: z.boolean().optional(),
     embedInterval: z.string().optional(),
     commandTimeoutMs: z.number().int().nonnegative().optional(),
@@ -248,6 +250,14 @@ const CrestodianSchema = z
       })
       .strict()
       .optional(),
+  })
+  .strict()
+  .optional();
+
+const CommitmentsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxPerDay: z.number().int().positive().optional(),
   })
   .strict()
   .optional();
@@ -453,6 +463,15 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
+        tabCleanup: z
+          .object({
+            enabled: z.boolean().optional(),
+            idleMinutes: z.number().int().nonnegative().optional(),
+            maxTabsPerSession: z.number().int().nonnegative().optional(),
+            sweepMinutes: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -646,6 +665,7 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    commitments: CommitmentsSchema,
     hooks: z
       .object({
         enabled: z.boolean().optional(),
@@ -797,6 +817,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        handshakeTimeoutMs: z.number().int().min(1).optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),
         channelMaxRestartsPerHour: z.number().int().min(1).optional(),

@@ -798,7 +798,10 @@ const writeBuildStamp = (deps) => {
   }
 };
 
-const shouldSkipCleanWatchRuntimeSync = (deps) => deps.env.OPENCLAW_WATCH_MODE === "1";
+const shouldSkipWatchRuntimeSync = (deps, requirement) =>
+  deps.env.OPENCLAW_WATCH_MODE === "1" &&
+  requirement.reason === "missing_runtime_postbuild_stamp" &&
+  hasDirtyRuntimePostBuildInputs(deps) !== true;
 
 const isGatewayClientCommand = (args) =>
   args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
@@ -808,6 +811,34 @@ const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
   isGatewayClientCommand(deps.args) &&
   deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
   statMtime(deps.distEntry, deps.fs) != null;
+
+const isQaParityReportCommand = (args) => args[0] === "qa" && args[1] === "parity-report";
+
+const shouldRunQaParityReportFromSource = (deps, buildRequirement) =>
+  buildRequirement.reason === "missing_private_qa_dist" &&
+  isQaParityReportCommand(deps.args) &&
+  deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
+  statMtime(path.join(deps.cwd, "extensions", "qa-lab", "src", "cli.runtime.ts"), deps.fs) != null;
+
+const runQaParityReportFromSource = async (deps) => {
+  const sourceEntrypoint = path.join(deps.cwd, "scripts", "qa-parity-report.ts");
+  const nodeProcess = deps.spawn(
+    deps.execPath,
+    ["--import", "tsx", sourceEntrypoint, ...deps.args.slice(2)],
+    {
+      cwd: deps.cwd,
+      env: deps.env,
+      stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
+    },
+  );
+  pipeSpawnedOutput(nodeProcess, deps);
+  const res = await waitForSpawnedProcess(nodeProcess, deps);
+  const interruptedExitCode = getInterruptedSpawnExitCode(res);
+  if (interruptedExitCode !== null) {
+    return interruptedExitCode;
+  }
+  return res.exitCode ?? 1;
+};
 
 export async function runNodeMain(params = {}) {
   const deps = {
@@ -847,13 +878,22 @@ export async function runNodeMain(params = {}) {
       deps,
       buildRequirement,
     );
+    const useQaParityReportSource = shouldRunQaParityReportFromSource(deps, buildRequirement);
     if (useExistingGatewayClientDist) {
       buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
     }
+    if (useQaParityReportSource) {
+      logRunner("Running QA parity report from source without rebuilding private QA dist.", deps);
+      exitCode = await runQaParityReportFromSource(deps);
+      return await closeRunNodeOutputTee(deps, exitCode);
+    }
     if (!buildRequirement.shouldBuild) {
-      if (!useExistingGatewayClientDist && !shouldSkipCleanWatchRuntimeSync(deps)) {
+      if (!useExistingGatewayClientDist) {
         const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
-        if (runtimePostBuildRequirement.shouldSync) {
+        if (
+          runtimePostBuildRequirement.shouldSync &&
+          !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)
+        ) {
           const synced = await withRunNodeBuildLock(deps, async () => {
             const lockedRuntimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
             if (!lockedRuntimePostBuildRequirement.shouldSync) {

@@ -66,6 +66,7 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   mergeAlsoAllowPolicy,
+  normalizeToolName,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
@@ -142,6 +143,7 @@ function applyModelProviderToolPolicy(
     modelId?: string;
     agentDir?: string;
     modelCompat?: ModelCompatConfig;
+    suppressManagedWebSearch?: boolean;
   },
 ): AnyAgentTool[] {
   if (params?.config?.agents?.defaults?.experimental?.localModelLean === true) {
@@ -150,6 +152,7 @@ function applyModelProviderToolPolicy(
   }
 
   if (
+    params?.suppressManagedWebSearch !== false &&
     shouldSuppressManagedWebSearchTool({
       config: params?.config,
       modelProvider: params?.modelProvider,
@@ -273,6 +276,8 @@ export function createOpenClawCodingTools(options?: {
   trace?: DiagnosticTraceContext;
   /** What initiated this run (for trigger-specific tool restrictions). */
   trigger?: string;
+  /** Stable cron job identifier populated for cron-triggered runs. */
+  jobId?: string;
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
   agentDir?: string;
@@ -299,6 +304,8 @@ export function createOpenClawCodingTools(options?: {
   modelContextWindowTokens?: number;
   /** Resolved runtime model compatibility hints. */
   modelCompat?: ModelCompatConfig;
+  /** If false, keep OpenClaw web_search even when a provider-native search tool is active. */
+  suppressManagedWebSearch?: boolean;
   /**
    * Auth mode for the current provider. We only need this for Anthropic OAuth
    * tool-name blocking quirks.
@@ -330,6 +337,8 @@ export function createOpenClawCodingTools(options?: {
   hasRepliedRef?: { value: boolean };
   /** Allow plugin tools for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+  /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
+  runtimeToolAllowlist?: string[];
   /** If true, the model has native vision capability */
   modelHasVision?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
@@ -340,6 +349,11 @@ export function createOpenClawCodingTools(options?: {
   forceMessageTool?: boolean;
   /** Whether the sender is an owner (required for owner-only tools). */
   senderIsOwner?: boolean;
+  /**
+   * Additional owner-only tools authorized by a server-side runtime grant.
+   * Keep this narrowly scoped; it is not a replacement for sender ownership.
+   */
+  ownerOnlyToolAllowlist?: string[];
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
@@ -350,6 +364,12 @@ export function createOpenClawCodingTools(options?: {
     throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
   }
   const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
+  const cronSelfRemoveOnlyJobId =
+    options?.trigger === "cron" &&
+    options.jobId?.trim() &&
+    options.ownerOnlyToolAllowlist?.some((toolName) => normalizeToolName(toolName) === "cron")
+      ? options.jobId.trim()
+      : undefined;
   const {
     agentId,
     globalPolicy,
@@ -615,6 +635,7 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy,
         sandboxToolPolicy,
         subagentPolicy,
+        options?.runtimeToolAllowlist ? { allow: options.runtimeToolAllowlist } : undefined,
       ]),
       currentChannelId: options?.currentChannelId,
       currentThreadTs: options?.currentThreadTs,
@@ -626,6 +647,7 @@ export function createOpenClawCodingTools(options?: {
       modelHasVision: options?.modelHasVision,
       requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
       disableMessageTool: options?.disableMessageTool,
+      ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
       requesterAgentIdOverride: agentId,
       requesterSenderId: options?.senderId,
       senderIsOwner: options?.senderIsOwner,
@@ -667,10 +689,15 @@ export function createOpenClawCodingTools(options?: {
     modelId: options?.modelId,
     agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
+    suppressManagedWebSearch: options?.suppressManagedWebSearch,
   });
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
-  const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  const toolsByAuthorization = applyOwnerOnlyToolPolicy(
+    toolsForModelProvider,
+    senderIsOwner,
+    options?.ownerOnlyToolAllowlist,
+  );
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),

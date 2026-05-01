@@ -1,4 +1,12 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
+  buildCrossOsReleaseSmokePluginAllowlist,
   buildReleaseOnboardArgs,
   buildWindowsDevUpdateToolchainCheckScript,
   buildWindowsFreshShellVersionCheckScript,
@@ -21,6 +30,7 @@ import {
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
+  CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   isImmutableReleaseRef,
   looksLikeReleaseVersionRef,
   normalizeRequestedRef,
@@ -31,6 +41,8 @@ import {
   readInstalledVersion,
   readRunnerOverrideEnv,
   resolveExplicitBaselineVersion,
+  resolveInstalledPackageRootFromCliPath,
+  resolveProviderConfig,
   resolveDevUpdateVerificationRef,
   resolveInstalledPrefixDirFromCliPath,
   resolvePublishedInstallerUrl,
@@ -46,6 +58,7 @@ import {
   shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   verifyDevUpdateStatus,
+  verifyPackagedUpgradeUpdateResult,
   writePackageDistInventoryForCandidate,
 } from "../../scripts/openclaw-cross-os-release-checks.ts";
 
@@ -96,8 +109,62 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         new Error("document-extract failed to stage bundled runtime deps after 463ms"),
       ),
     ).toBe(true);
-    expect(shouldRetryCrossOsAgentTurnError(new Error("Agent output did not contain OK."))).toBe(
-      false,
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("Agent output did not contain the expected OK marker."),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error(
+          "The model did not produce a response before the model idle timeout. Please try again.",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("gateway request timeout for agent after 210000ms"),
+      ),
+    ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("Command timed out and could not be terminated cleanly"),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows cross-OS provider smoke models to use faster CI overrides", () => {
+    expect(
+      resolveProviderConfig("openai", {
+        OPENCLAW_CROSS_OS_OPENAI_MODEL: "openai/gpt-5.4-mini",
+      })?.model,
+    ).toBe("openai/gpt-5.4-mini");
+    expect(
+      resolveProviderConfig("openai", {
+        OPENCLAW_CROSS_OS_MODEL: "openai/gpt-5.4-nano",
+      })?.model,
+    ).toBe("openai/gpt-5.4-nano");
+    expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
+  });
+
+  it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
+    const allowlist = buildCrossOsReleaseSmokePluginAllowlist({ extensionId: "openai" });
+
+    expect(allowlist).toEqual(expect.arrayContaining(["openai", "acpx"]));
+    expect(allowlist).not.toContain("memory-core");
+    expect(allowlist).not.toContain("document-extract");
+    expect(allowlist).not.toContain("microsoft");
+    expect(allowlist).not.toContain("web-readability");
+  });
+
+  it("keeps cross-OS live smoke agent turns on minimal thinking", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+
+    expect(source).toContain('"--thinking",\n    "minimal"');
+    expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeLessThanOrEqual(180);
+    expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
+    expect(source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g)?.length).toBeGreaterThanOrEqual(
+      2,
     );
   });
 
@@ -398,6 +465,36 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     ).toBe("/Users/runner/.npm-global");
   });
 
+  it("resolves Linux npm package roots when the CLI is a user-local shim", () => {
+    const homeDir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-linux-home-"));
+    try {
+      const packageRoot = join(homeDir, ".npm-global", "lib", "node_modules", "openclaw");
+      const distDir = join(packageRoot, "dist");
+      const cliDir = join(homeDir, ".local", "bin");
+      mkdirSync(distDir, { recursive: true });
+      mkdirSync(cliDir, { recursive: true });
+      writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+      writeFileSync(join(distDir, "entry.js"), "#!/usr/bin/env node\n");
+
+      expect(
+        resolveInstalledPackageRootFromCliPath(join(cliDir, "openclaw"), "linux", {
+          HOME: homeDir,
+        }),
+      ).toBe(packageRoot);
+
+      rmSync(join(cliDir, "openclaw"), { force: true });
+      symlinkSync(join(distDir, "entry.js"), join(cliDir, "openclaw"));
+
+      expect(
+        resolveInstalledPackageRootFromCliPath(join(cliDir, "openclaw"), "linux", {
+          HOME: homeDir,
+        }),
+      ).toBe(realpathSync(packageRoot));
+    } finally {
+      rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it("detects whether a managed gateway listener is still reachable on loopback", async () => {
     const server = createNetServer();
     await new Promise((resolvePromise) => {
@@ -460,11 +557,67 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(
       buildRealUpdateEnv({
         FOO: "bar",
+        NODE_COMPILE_CACHE: "/tmp/stale-openclaw-cache",
         OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL: "1",
       }),
     ).toEqual({
       FOO: "bar",
+      NODE_DISABLE_COMPILE_CACHE: "1",
     });
+  });
+
+  it("rejects a successful packaged update followed by an old self-swapped process import miss", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 0 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
+  });
+
+  it("rejects packaged update failures before the candidate package lands", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.26" },
+            steps: [{ name: "global update", exitCode: 0 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
+  });
+
+  it("rejects packaged update failures with unsuccessful update steps", () => {
+    expect(() =>
+      verifyPackagedUpgradeUpdateResult(
+        {
+          exitCode: 1,
+          stdout: JSON.stringify({
+            status: "ok",
+            after: { version: "2026.4.27" },
+            steps: [{ name: "global update", exitCode: 1 }],
+          }),
+          stderr:
+            "[openclaw] Failed to start CLI: Error [ERR_MODULE_NOT_FOUND]: Cannot find module '/tmp/prefix/lib/node_modules/openclaw/dist/memory-state-old.js'",
+        },
+        { candidateVersion: "2026.4.27" },
+      ),
+    ).toThrow(/Packaged upgrade failed/u);
   });
 
   it("only treats pinned baseline specs as exact installer version assertions", () => {

@@ -48,6 +48,9 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "clawhubPackage"
   | "clawhubFamily"
   | "clawhubChannel"
+  | "gitUrl"
+  | "gitRef"
+  | "gitCommit"
   | "marketplaceName"
   | "marketplaceSource"
   | "marketplacePlugin"
@@ -115,7 +118,6 @@ export type LoadInstalledPluginIndexParams = {
   stateDir?: string;
   pluginIndexFilePath?: string;
   installRecords?: Record<string, PluginInstallRecord>;
-  cache?: boolean;
   candidates?: PluginCandidate[];
   diagnostics?: PluginDiagnostic[];
   now?: () => Date;

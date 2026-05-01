@@ -318,6 +318,8 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
   const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
     signal: params.signal,
+    operation: "fetchWithSsrFGuard",
+    url: params.url,
   });
 
   let released = false;

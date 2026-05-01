@@ -97,6 +97,12 @@ Gateway → Client:
 }
 ```
 
+While the Gateway is still finishing startup sidecars, the `connect` request can
+return a retryable `UNAVAILABLE` error with `details.reason` set to
+`"startup-sidecars"` and `retryAfterMs`. Clients should retry that response
+within their overall connection budget instead of surfacing it as a terminal
+handshake failure.
+
 `server`, `features`, `snapshot`, and `policy` are all required by the schema
 (`src/gateway/protocol/schema/frames.ts`). `auth` is also required and reports
 the negotiated role/scopes. `canvasHostUrl` is optional.
@@ -327,6 +333,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `usage.status` returns provider usage windows/remaining quota summaries.
     - `usage.cost` returns aggregated cost usage summaries for a date range.
     - `doctor.memory.status` returns vector-memory / cached embedding readiness for the active default agent workspace. Pass `{ "probe": true }` or `{ "deep": true }` only when the caller explicitly wants a live embedding provider ping.
+    - `doctor.memory.remHarness` returns a bounded, read-only REM harness preview for remote control-plane clients. It can include workspace paths, memory snippets, rendered grounded markdown, and deep promotion candidates, so callers need `operator.read`.
     - `sessions.usage` returns per-session usage summaries.
     - `sessions.usage.timeseries` returns timeseries usage for one session.
     - `sessions.usage.logs` returns usage log entries for one session.
@@ -371,23 +378,24 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `config.apply` validates + replaces the full config payload.
     - `config.schema` returns the live config schema payload used by Control UI and CLI tooling: schema, `uiHints`, version, and generation metadata, including plugin + channel schema metadata when the runtime can load it. The schema includes field `title` / `description` metadata derived from the same labels and help text used by the UI, including nested object, wildcard, array-item, and `anyOf` / `oneOf` / `allOf` composition branches when matching field documentation exists.
     - `config.schema.lookup` returns a path-scoped lookup payload for one config path: normalized path, a shallow schema node, matched hint + `hintPath`, and immediate child summaries for UI/CLI drill-down. Lookup schema nodes keep the user-facing docs and common validation fields (`title`, `description`, `type`, `enum`, `const`, `format`, `pattern`, numeric/string/array/object bounds, and flags like `additionalProperties`, `deprecated`, `readOnly`, `writeOnly`). Child summaries expose `key`, normalized `path`, `type`, `required`, `hasChildren`, plus the matched `hint` / `hintPath`.
-    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded.
+    - `update.run` runs the gateway update flow and schedules a restart only when the update itself succeeded. Package-manager updates force a non-deferred, no-cooldown update restart after the package swap so the old Gateway process does not keep lazy-loading from a replaced `dist` tree.
     - `update.status` returns the latest cached update restart sentinel, including the post-restart running version when available.
     - `wizard.start`, `wizard.next`, `wizard.status`, and `wizard.cancel` expose the onboarding wizard over WS RPC.
 
   </Accordion>
 
   <Accordion title="Agent and workspace helpers">
-    - `agents.list` returns configured agent entries.
+    - `agents.list` returns configured agent entries, including effective model and runtime metadata.
     - `agents.create`, `agents.update`, and `agents.delete` manage agent records and workspace wiring.
     - `agents.files.list`, `agents.files.get`, and `agents.files.set` manage the bootstrap workspace files exposed for an agent.
+    - `artifacts.list`, `artifacts.get`, and `artifacts.download` expose transcript-derived artifact summaries and downloads for an explicit `sessionKey`, `runId`, or `taskId` scope. Run and task queries resolve the owning session server-side and only return transcript media with matching provenance; unsafe or local URL sources return unsupported downloads instead of fetching server-side.
     - `agent.identity.get` returns the effective assistant identity for an agent or session.
     - `agent.wait` waits for a run to finish and returns the terminal snapshot when available.
 
   </Accordion>
 
   <Accordion title="Session control">
-    - `sessions.list` returns the current session index.
+    - `sessions.list` returns the current session index, including per-row `agentRuntime` metadata when an agent runtime backend is configured.
     - `sessions.subscribe` and `sessions.unsubscribe` toggle session change event subscriptions for the current WS client.
     - `sessions.messages.subscribe` and `sessions.messages.unsubscribe` toggle transcript/message event subscriptions for one session.
     - `sessions.preview` returns bounded transcript previews for specific session keys.
@@ -395,8 +403,8 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `sessions.create` creates a new session entry.
     - `sessions.send` sends a message into an existing session.
     - `sessions.steer` is the interrupt-and-steer variant for an active session.
-    - `sessions.abort` aborts active work for a session.
-    - `sessions.patch` updates session metadata/overrides.
+    - `sessions.abort` aborts active work for a session. A caller may pass `key` plus optional `runId`, or pass `runId` alone for active runs the Gateway can resolve to a session.
+    - `sessions.patch` updates session metadata/overrides and reports the resolved canonical model plus effective `agentRuntime`.
     - `sessions.reset`, `sessions.delete`, and `sessions.compact` perform session maintenance.
     - `sessions.get` returns the full stored session row.
     - Chat execution still uses `chat.history`, `chat.send`, `chat.abort`, and `chat.inject`. `chat.history` is display-normalized for UI clients: inline directive tags are stripped from visible text, plain-text tool-call XML payloads (including `<tool_call>...</tool_call>`, `<function_call>...</function_call>`, `<tool_calls>...</tool_calls>`, `<function_calls>...</function_calls>`, and truncated tool-call blocks) and leaked ASCII/full-width model control tokens are stripped, pure silent-token assistant rows such as exact `NO_REPLY` / `no_reply` are omitted, and oversized rows can be replaced with placeholders.
@@ -435,7 +443,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Automation, skills, and tools">
     - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
-    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`.
+    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`.
 
   </Accordion>
 </AccordionGroup>
@@ -493,6 +501,15 @@ enumeration of `src/gateway/server-methods/*.ts`.
     caller-supplied auth or delivery context.
   - The response is session-scoped and reflects what the active conversation can use right now,
     including core, plugin, and channel tools.
+- Operators may call `tools.invoke` (`operator.write`) to invoke one available tool through the
+  same gateway policy path as `/tools/invoke`.
+  - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
+    `idempotencyKey` are optional.
+  - If both `sessionKey` and `agentId` are present, the resolved session agent must match
+    `agentId`.
+  - The response is an SDK-facing envelope with `ok`, `toolName`, optional `output`, and typed
+    `error` fields. Approval or policy refusals return `ok:false` in the payload rather than
+    bypassing the gateway tool policy pipeline.
 - Operators may call `skills.status` (`operator.read`) to fetch the visible
   skill inventory for an agent.
   - `agentId` is optional; omit it to read the default agent workspace.
@@ -550,19 +567,19 @@ enumeration of `src/gateway/server-methods/*.ts`.
 The reference client in `src/gateway/client.ts` uses these defaults. Values are
 stable across protocol v3 and are the expected baseline for third-party clients.
 
-| Constant                                  | Default                                               | Source                                                     |
-| ----------------------------------------- | ----------------------------------------------------- | ---------------------------------------------------------- |
-| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`          |
-| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)               |
-| Preauth / connect-challenge timeout       | `10_000` ms                                           | `src/gateway/handshake-timeouts.ts` (clamp `250`–`10_000`) |
-| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                      |
-| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)              |
-| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                    |
-| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                            |
-| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                 |
-| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                    |
-| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                    |
-| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                          |
+| Constant                                  | Default                                               | Source                                                                                     |
+| ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `PROTOCOL_VERSION`                        | `3`                                                   | `src/gateway/protocol/schema/protocol-schemas.ts`                                          |
+| Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
+| Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
+| Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |
+| Max reconnect backoff                     | `30_000` ms                                           | `src/gateway/client.ts` (`scheduleReconnect`)                                              |
+| Fast-retry clamp after device-token close | `250` ms                                              | `src/gateway/client.ts`                                                                    |
+| Force-stop grace before `terminate()`     | `250` ms                                              | `FORCE_STOP_TERMINATE_GRACE_MS`                                                            |
+| `stopAndWait()` default timeout           | `1_000` ms                                            | `STOP_AND_WAIT_TIMEOUT_MS`                                                                 |
+| Default tick interval (pre `hello-ok`)    | `30_000` ms                                           | `src/gateway/client.ts`                                                                    |
+| Tick-timeout close                        | code `4000` when silence exceeds `tickIntervalMs * 2` | `src/gateway/client.ts`                                                                    |
+| `MAX_PAYLOAD_BYTES`                       | `25 * 1024 * 1024` (25 MB)                            | `src/gateway/server-constants.ts`                                                          |
 
 The server advertises the effective `policy.tickIntervalMs`, `policy.maxPayload`,
 and `policy.maxBufferedBytes` in `hello-ok`; clients should honor those values

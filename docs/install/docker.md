@@ -131,6 +131,7 @@ The setup script accepts these optional environment variables:
 | `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
 | `OPENCLAW_PLUGIN_STAGE_DIR`                | Container path for generated bundled plugin deps and mirrors    |
 | `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
+| `OPENCLAW_SKIP_ONBOARDING`                 | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`) |
 | `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                     |
 | `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
 | `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS` | Disable bundled plugin source bind-mount overlays               |
@@ -260,7 +261,11 @@ For gotchas and troubleshooting, see [Bonjour discovery](/gateway/bonjour).
 
 Docker Compose bind-mounts `OPENCLAW_CONFIG_DIR` to `/home/node/.openclaw` and
 `OPENCLAW_WORKSPACE_DIR` to `/home/node/.openclaw/workspace`, so those paths
-survive container replacement.
+survive container replacement. When either variable is unset, the bundled
+`docker-compose.yml` falls back to `${HOME}/.openclaw` (and
+`${HOME}/.openclaw/workspace` for the workspace mount), or `/tmp/.openclaw`
+when `HOME` itself is also missing. That keeps `docker compose up` from
+emitting an empty-source volume spec on bare environments.
 
 That mounted config directory is where OpenClaw keeps:
 
@@ -447,11 +452,13 @@ For full configuration, images, security notes, and multi-agent profiles, see:
 }
 ```
 
-Build the default sandbox image:
+Build the default sandbox image (from a source checkout):
 
 ```bash
 scripts/sandbox-setup.sh
 ```
+
+For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
 
 ## Troubleshooting
 
@@ -459,6 +466,7 @@ scripts/sandbox-setup.sh
   <Accordion title="Image missing or sandbox container not starting">
     Build the sandbox image with
     [`scripts/sandbox-setup.sh`](https://github.com/openclaw/openclaw/blob/main/scripts/sandbox-setup.sh)
+    (source checkout) or the inline `docker build` command from [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) (npm install),
     or set `agents.defaults.sandbox.docker.image` to your custom image.
     Containers are auto-created per session on demand.
   </Accordion>

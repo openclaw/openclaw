@@ -215,9 +215,9 @@ describe("resolveBundledPluginsDir", () => {
       },
     ],
     [
-      "prefers source extensions during tsx-driven source execution",
+      "still prefers built bundled plugins during tsx-driven source execution",
       {
-        prefix: "openclaw-bundled-dir-tsx-",
+        prefix: "openclaw-bundled-dir-tsx-built-",
         hasExtensions: true,
         hasSrc: true,
         hasDistRuntimeExtensions: true,
@@ -225,7 +225,7 @@ describe("resolveBundledPluginsDir", () => {
         hasGitCheckout: true,
       },
       {
-        expectedRelativeDir: "extensions",
+        expectedRelativeDir: path.join("dist-runtime", "extensions"),
         execArgv: ["--import", "tsx"],
       },
     ],
@@ -330,6 +330,7 @@ describe("resolveBundledPluginsDir", () => {
     process.execArgv.length = 0;
     process.env.VITEST = "true";
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(overrideRoot, "extensions");
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 
     const bundledDir = resolveBundledPluginsDir();

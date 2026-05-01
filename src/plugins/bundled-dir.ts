@@ -7,6 +7,8 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
+const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR";
+let bundledPluginsDirOverrideForTest: string | undefined;
 
 export function areBundledPluginsDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = normalizeOptionalLowercaseString(env.OPENCLAW_DISABLE_BUNDLED_PLUGINS);
@@ -23,6 +25,20 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
     fs.existsSync(path.join(packageRoot, ".git")) &&
     fs.existsSync(path.join(packageRoot, "src")) &&
     fs.existsSync(path.join(packageRoot, "extensions"))
+  );
+}
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+}
+
+function shouldTrustTestBundledPluginsDirOverride(env: NodeJS.ProcessEnv): boolean {
+  const isVitestProcess = Boolean(env.VITEST) || Boolean(process.env.VITEST);
+  return (
+    isVitestProcess &&
+    (isTruthyEnvValue(env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]) ||
+      isTruthyEnvValue(process.env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV]))
   );
 }
 
@@ -105,50 +121,17 @@ function overrideResolvesUnderPackageBundledRoot(params: {
     .some((trustedRoot) => pathContains(trustedRoot, realOverride));
 }
 
-function runningSourceTypeScriptProcess(): boolean {
-  const argv1 = process.argv[1]?.toLowerCase();
-  if (
-    argv1?.endsWith(".ts") ||
-    argv1?.endsWith(".tsx") ||
-    argv1?.endsWith(".mts") ||
-    argv1?.endsWith(".cts")
-  ) {
-    return true;
-  }
-
-  for (let index = 0; index < process.execArgv.length; index += 1) {
-    const arg = process.execArgv[index]?.toLowerCase();
-    if (!arg) {
-      continue;
-    }
-    if (arg === "tsx" || arg.includes("tsx/register")) {
-      return true;
-    }
-    if ((arg === "--import" || arg === "--loader") && process.execArgv[index + 1]) {
-      const next = process.execArgv[index + 1].toLowerCase();
-      if (next === "tsx" || next.includes("tsx/")) {
-        return true;
-      }
-    }
-  }
-
-  return false;
-}
-
-function resolveBundledDirFromPackageRoot(
-  packageRoot: string,
-  preferSourceCheckout: boolean,
-): string | undefined {
+function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefined {
   const sourceExtensionsDir = path.join(packageRoot, "extensions");
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
   const sourceCheckout = isSourceCheckoutRoot(packageRoot);
   const hasUsableSourceTree = sourceCheckout && hasUsableBundledPluginTree(sourceExtensionsDir);
-  if (preferSourceCheckout && hasUsableSourceTree) {
-    return sourceExtensionsDir;
-  }
   // Local source checkouts stage a runtime-complete bundled plugin tree under
   // dist-runtime/. Prefer that over source extensions only when the paired
   // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
+  // Even when OpenClaw itself runs from TypeScript, bundled plugins should use
+  // compiled JavaScript whenever it is available. Source plugin entries force
+  // jiti onto hot runtime paths such as per-run tool construction.
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   const hasUsableRuntimeTree = sourceCheckout
     ? hasUsableBundledPluginTree(runtimeExtensionsDir)
@@ -173,11 +156,18 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
     return resolveDisabledBundledPluginsDir();
   }
 
+  if (bundledPluginsDirOverrideForTest) {
+    return bundledPluginsDirOverrideForTest;
+  }
+
   const override = env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim();
   let rejectedExistingOverride: string | null = null;
   if (override) {
     const resolvedOverride = resolveUserPath(override, env);
     if (fs.existsSync(resolvedOverride)) {
+      if (shouldTrustTestBundledPluginsDirOverride(env)) {
+        return path.resolve(resolvedOverride);
+      }
       const trustedOverride = resolveTrustedExistingOverride(resolvedOverride);
       if (trustedOverride) {
         return trustedOverride;
@@ -185,8 +175,6 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       rejectedExistingOverride = resolvedOverride;
     }
   }
-
-  const preferSourceCheckout = runningSourceTypeScriptProcess();
 
   try {
     const argvRoot = resolveOpenClawPackageRootSync({ argv1: process.argv[1] });
@@ -204,7 +192,7 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
       (entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index,
     );
     for (const packageRoot of packageRoots) {
-      const bundledDir = resolveBundledDirFromPackageRoot(packageRoot, preferSourceCheckout);
+      const bundledDir = resolveBundledDirFromPackageRoot(packageRoot);
       if (bundledDir) {
         return bundledDir;
       }
@@ -247,4 +235,11 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   }
 
   return undefined;
+}
+
+export function setBundledPluginsDirOverrideForTest(dir: string | undefined): void {
+  if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
+    throw new Error("setBundledPluginsDirOverrideForTest is only available in tests");
+  }
+  bundledPluginsDirOverrideForTest = dir;
 }

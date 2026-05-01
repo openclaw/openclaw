@@ -8,6 +8,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
 import {
@@ -15,7 +16,6 @@ import {
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "../plugins/install.js";
-import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import {
   installPluginFromMarketplace,
   resolveMarketplaceInstallShortcut,
@@ -307,7 +307,6 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     return { ok: false };
   }
 
-  clearPluginManifestRegistryCache();
   const installRecord = resolvePinnedNpmInstallRecordForCli(
     params.spec,
     Boolean(params.pin),
@@ -321,6 +320,42 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     snapshot: params.snapshot,
     pluginId: result.pluginId,
     install: installRecord,
+  });
+  return { ok: true };
+}
+
+async function tryInstallPluginFromGitSpec(params: {
+  snapshot: ConfigSnapshotForInstallPersist;
+  installMode: "install" | "update";
+  spec: string;
+  safetyOverrides: InstallSafetyOverrides;
+  extensionsDir: string;
+}): Promise<{ ok: true } | { ok: false }> {
+  const result = await installPluginFromGitSpec({
+    ...params.safetyOverrides,
+    mode: params.installMode,
+    spec: params.spec,
+    extensionsDir: params.extensionsDir,
+    logger: createPluginInstallLogger(),
+  });
+  if (!result.ok) {
+    defaultRuntime.error(result.error);
+    return { ok: false };
+  }
+
+  await persistPluginInstall({
+    snapshot: params.snapshot,
+    pluginId: result.pluginId,
+    install: {
+      source: "git",
+      spec: params.spec,
+      installPath: result.targetDir,
+      version: result.version,
+      resolvedAt: result.git.resolvedAt,
+      gitUrl: result.git.url,
+      gitRef: result.git.ref,
+      gitCommit: result.git.commit,
+    },
   });
   return { ok: true };
 }
@@ -446,6 +481,20 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
   }
+  const gitPrefix = raw.trim().toLowerCase().startsWith("git:");
+  const gitSpec = parseGitPluginSpec(raw);
+  if (gitPrefix && !gitSpec) {
+    defaultRuntime.error(`unsupported git: plugin spec: ${raw}`);
+    return defaultRuntime.exit(1);
+  }
+  if (gitSpec && opts.link) {
+    defaultRuntime.error("`--link` is not supported with `git:` installs.");
+    return defaultRuntime.exit(1);
+  }
+  if (gitSpec && opts.pin) {
+    defaultRuntime.error("`--pin` is not supported with `git:` installs; use `git:<repo>@<ref>`.");
+    return defaultRuntime.exit(1);
+  }
   if (opts.link && opts.force) {
     defaultRuntime.error("`--force` is not supported with `--link`.");
     return defaultRuntime.exit(1);
@@ -485,7 +534,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     await persistPluginInstall({
       snapshot,
       pluginId: result.pluginId,
@@ -588,7 +636,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     const source: "archive" | "path" = resolveArchiveKind(resolved) ? "archive" : "path";
     await persistPluginInstall({
       snapshot,
@@ -624,6 +671,20 @@ export async function runPluginInstallCommand(params: {
       extensionsDir,
     });
     if (!npmPrefixResult.ok) {
+      return defaultRuntime.exit(1);
+    }
+    return;
+  }
+
+  if (gitSpec) {
+    const gitResult = await tryInstallPluginFromGitSpec({
+      snapshot,
+      installMode,
+      spec: raw,
+      safetyOverrides,
+      extensionsDir,
+    });
+    if (!gitResult.ok) {
       return defaultRuntime.exit(1);
     }
     return;
@@ -682,7 +743,6 @@ export async function runPluginInstallCommand(params: {
       return defaultRuntime.exit(1);
     }
 
-    clearPluginManifestRegistryCache();
     await persistPluginInstall({
       snapshot,
       pluginId: result.pluginId,
@@ -712,7 +772,6 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(),
     });
     if (clawhubResult.ok) {
-      clearPluginManifestRegistryCache();
       await persistPluginInstall({
         snapshot,
         pluginId: clawhubResult.pluginId,

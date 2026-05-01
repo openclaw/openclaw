@@ -53,6 +53,9 @@ const DEFAULT_LIVENESS_WARN_COOLDOWN_MS = 120_000;
 let commandPollBackoffRuntimePromise: Promise<
   typeof import("../agents/command-poll-backoff.runtime.js")
 > | null = null;
+let stuckSessionRecoveryRuntimePromise: Promise<
+  typeof import("./diagnostic-stuck-session-recovery.runtime.js")
+> | null = null;
 
 type EmitDiagnosticMemorySample = typeof emitDiagnosticMemorySample;
 type EventLoopDelayMonitor = ReturnType<typeof monitorEventLoopDelay>;
@@ -64,6 +67,13 @@ type DiagnosticWorkSnapshot = {
   waitingCount: number;
   queuedCount: number;
 };
+
+type RecoverStuckSession = (params: {
+  sessionId?: string;
+  sessionKey?: string;
+  ageMs: number;
+  queueDepth?: number;
+}) => void | Promise<void>;
 
 type DiagnosticLivenessSample = {
   reasons: DiagnosticLivenessWarningReason[];
@@ -86,6 +96,7 @@ type StartDiagnosticHeartbeatOptions = {
   getConfig?: () => OpenClawConfig;
   emitMemorySample?: EmitDiagnosticMemorySample;
   sampleLiveness?: SampleDiagnosticLiveness;
+  recoverStuckSession?: RecoverStuckSession;
 };
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
@@ -97,6 +108,20 @@ let lastDiagnosticLivenessWarnAt = 0;
 function loadCommandPollBackoffRuntime() {
   commandPollBackoffRuntimePromise ??= import("../agents/command-poll-backoff.runtime.js");
   return commandPollBackoffRuntimePromise;
+}
+
+function recoverStuckSession(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  ageMs: number;
+  queueDepth?: number;
+}) {
+  stuckSessionRecoveryRuntimePromise ??= import("./diagnostic-stuck-session-recovery.runtime.js");
+  void stuckSessionRecoveryRuntimePromise
+    .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
+    .catch((err) => {
+      diag.warn(`stuck session recovery unavailable: ${String(err)}`);
+    });
 }
 
 function getDiagnosticWorkSnapshot(): DiagnosticWorkSnapshot {
@@ -123,6 +148,19 @@ function hasOpenDiagnosticWork(snapshot: DiagnosticWorkSnapshot): boolean {
 function hasRecentDiagnosticActivity(now: number): boolean {
   const lastActivityAt = getLastDiagnosticActivityAt();
   return lastActivityAt > 0 && now - lastActivityAt <= RECENT_DIAGNOSTIC_ACTIVITY_MS;
+}
+
+function resolveStuckSessionReason(state: {
+  state: SessionStateValue;
+  queueDepth: number;
+}): string {
+  if (state.queueDepth > 0) {
+    return "processing_with_queued_work";
+  }
+  if (state.state === "processing") {
+    return "processing_without_queue";
+  }
+  return "stale_session_state";
 }
 
 function roundDiagnosticMetric(value: number, digits = 3): number {
@@ -489,10 +527,13 @@ export function logSessionStuck(params: SessionRef & { state: SessionStateValue;
     return;
   }
   const state = getDiagnosticSessionState(params);
+  const reason = resolveStuckSessionReason(state);
   diag.warn(
     `stuck session: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
       state.sessionKey ?? "unknown"
-    } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${state.queueDepth}`,
+    } state=${params.state} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
+      state.queueDepth
+    } reason=${reason} recovery=checking`,
   );
   emitDiagnosticEvent({
     type: "session.stuck",
@@ -501,6 +542,7 @@ export function logSessionStuck(params: SessionRef & { state: SessionStateValue;
     state: params.state,
     ageMs: params.ageMs,
     queueDepth: state.queueDepth,
+    reason,
   });
   markActivity();
 }
@@ -658,6 +700,12 @@ export function startDiagnosticHeartbeat(
           sessionKey: state.sessionKey,
           state: state.state,
           ageMs,
+        });
+        void (opts?.recoverStuckSession ?? recoverStuckSession)({
+          sessionId: state.sessionId,
+          sessionKey: state.sessionKey,
+          ageMs,
+          queueDepth: state.queueDepth,
         });
       }
     }

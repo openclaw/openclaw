@@ -15,7 +15,7 @@ Status: bundled plugin (bot token + WebSocket events). Channels, groups, and DMs
 Mattermost ships as a bundled plugin in current OpenClaw releases, so normal packaged builds do not need a separate install.
 </Note>
 
-If you are on an older build or a custom install that excludes Mattermost, install it manually:
+If you are on an older build or a custom install that excludes Mattermost, install a current npm package when one is published:
 
 <Tabs>
   <Tab title="npm registry">
@@ -29,6 +29,10 @@ If you are on an older build or a custom install that excludes Mattermost, insta
     ```
   </Tab>
 </Tabs>
+
+If npm reports the OpenClaw-owned package as deprecated, use a current packaged
+OpenClaw build or the local checkout path until a newer npm package is
+published.
 
 Details: [Plugins](/tools/plugin)
 
@@ -89,7 +93,9 @@ Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash 
     - If `callbackUrl` is omitted, OpenClaw derives one from gateway host/port + `callbackPath`.
     - For multi-account setups, `commands` can be set at the top level or under `channels.mattermost.accounts.<id>.commands` (account values override top-level fields).
     - Command callbacks are validated with the per-command tokens returned by Mattermost when OpenClaw registers `oc_*` commands.
-    - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match one of the registered commands.
+    - OpenClaw refreshes current Mattermost command registration before accepting each callback so stale tokens from deleted or regenerated slash commands stop being accepted without a gateway restart.
+    - Callback validation fails closed if the Mattermost API cannot confirm the command is still current; failed validations are cached briefly, concurrent lookups are coalesced, and fresh lookup starts are rate-limited per command to bound replay pressure.
+    - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match the resolved command's registered token (a token valid for one command cannot reach upstream validation for a different command).
 
   </Accordion>
   <Accordion title="Reachability requirement">

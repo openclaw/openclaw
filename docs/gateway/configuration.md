@@ -184,6 +184,7 @@ cannot roll back unrelated user settings.
     ```json5
     {
       messages: {
+        visibleReplies: "automatic", // set "message_tool" to require message-tool sends everywhere
         groupChat: {
           visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
         },
@@ -208,7 +209,7 @@ cannot roll back unrelated user settings.
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
-    - **Visible replies**: `message_tool` keeps normal final replies private; the agent must call `message(action=send)` to post visibly in the group/channel.
+    - **Visible replies**: `messages.visibleReplies` can require message-tool sends globally; `messages.groupChat.visibleReplies` overrides that for groups/channels.
     - See [full reference](/gateway/config-channels#group-chat-mention-gating) for visible reply modes, per-channel overrides, and self-chat mode.
 
   </Accordion>
@@ -270,6 +271,24 @@ cannot roll back unrelated user settings.
 
   </Accordion>
 
+  <Accordion title="Tune gateway WebSocket handshake timeout">
+    Give local clients more time to complete the pre-auth WebSocket handshake on
+    loaded or low-powered hosts:
+
+    ```json5
+    {
+      gateway: {
+        handshakeTimeoutMs: 30000,
+      },
+    }
+    ```
+
+    - Default is `15000` milliseconds.
+    - `OPENCLAW_HANDSHAKE_TIMEOUT_MS` still takes precedence for one-off service or shell overrides.
+    - Prefer fixing startup/event-loop stalls first; this knob is for hosts that are healthy but slow during warmup.
+
+  </Accordion>
+
   <Accordion title="Configure sessions and resets">
     Sessions control conversation continuity and isolation:
 
@@ -314,7 +333,7 @@ cannot roll back unrelated user settings.
     }
     ```
 
-    Build the image first: `scripts/sandbox-setup.sh`
+    Build the image first — from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 
