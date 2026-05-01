@@ -203,9 +203,9 @@ async function callMessageGateway<T>(params: {
   method: string;
   params: Record<string, unknown>;
 }): Promise<T> {
-  const { callGatewayLeastPrivilege } = await loadMessageGatewayRuntime();
+  const { callGateway } = await loadMessageGatewayRuntime();
   const gateway = resolveGatewayOptions(params.gateway);
-  return await callGatewayLeastPrivilege<T>({
+  return await callGateway<T>({
     url: gateway.url,
     token: gateway.token,
     method: params.method,

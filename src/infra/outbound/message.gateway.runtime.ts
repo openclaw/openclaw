@@ -1,1 +1,1 @@
-export { callGatewayLeastPrivilege, randomIdempotencyKey } from "../../gateway/call.js";
+export { callGateway, randomIdempotencyKey } from "../../gateway/call.js";

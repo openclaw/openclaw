@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
   executePollAction: vi.fn(),
-  callGatewayLeastPrivilege: vi.fn(),
+  callGateway: vi.fn(),
   randomIdempotencyKey: vi.fn(() => "idem-gateway-action"),
 }));
 
@@ -34,7 +34,7 @@ vi.mock("./outbound-send-service.js", () => ({
 }));
 
 vi.mock("./message.gateway.runtime.js", () => ({
-  callGatewayLeastPrivilege: mocks.callGatewayLeastPrivilege,
+  callGateway: mocks.callGateway,
   randomIdempotencyKey: mocks.randomIdempotencyKey,
 }));
 
@@ -189,7 +189,7 @@ describe("runMessageAction plugin dispatch", () => {
       async ({ ctx }: { ctx: Parameters<typeof executePluginAction>[0]["ctx"] }) =>
         await executePluginAction({ action: "poll", ctx }),
     );
-    mocks.callGatewayLeastPrivilege.mockReset();
+    mocks.callGateway.mockReset();
     mocks.randomIdempotencyKey.mockClear();
   });
 
@@ -372,7 +372,7 @@ describe("runMessageAction plugin dispatch", () => {
           },
         ]),
       );
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+      mocks.callGateway.mockResolvedValue({
         ok: true,
         added: "✅",
       });
@@ -408,7 +408,7 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect(mocks.callGateway).toHaveBeenCalledWith(
         expect.objectContaining({
           method: "message.action",
           params: expect.objectContaining({
@@ -462,7 +462,7 @@ describe("runMessageAction plugin dispatch", () => {
           },
         ]),
       );
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+      mocks.callGateway.mockResolvedValue({
         ok: true,
         messageId: "gw-send-1",
       });
@@ -488,7 +488,7 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect(mocks.callGateway).toHaveBeenCalledWith(
         expect.objectContaining({
           method: "message.action",
           params: expect.objectContaining({
@@ -1040,7 +1040,7 @@ describe("runMessageAction plugin dispatch", () => {
           },
         ]),
       );
-      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+      mocks.callGateway.mockResolvedValue({
         ok: true,
         pollId: "gw-poll-1",
       });
@@ -1067,7 +1067,7 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+      expect(mocks.callGateway).toHaveBeenCalledWith(
         expect.objectContaining({
           method: "message.action",
           params: expect.objectContaining({
