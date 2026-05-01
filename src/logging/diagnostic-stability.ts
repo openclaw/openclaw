@@ -4,8 +4,8 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 
-export const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
-export const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
+const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
+const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
@@ -103,13 +103,13 @@ export type DiagnosticStabilitySnapshot = {
   };
 };
 
-export type DiagnosticStabilityQueryInput = {
+type DiagnosticStabilityQueryInput = {
   limit?: unknown;
   type?: unknown;
   sinceSeq?: unknown;
 };
 
-export type NormalizedDiagnosticStabilityQuery = {
+type NormalizedDiagnosticStabilityQuery = {
   limit: number;
   type: string | undefined;
   sinceSeq: number | undefined;
