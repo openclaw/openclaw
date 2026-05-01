@@ -17,7 +17,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
   ],
   [bundledPluginFile({ rootDir: ROOT_DIR, pluginId: "imessage", relativePath: "runtime-api.ts" })]:
     [
-      'export { DEFAULT_ACCOUNT_ID, getChatChannelMeta, type ChannelPlugin, type OpenClawConfig } from "openclaw/plugin-sdk/core";',
+      'export { DEFAULT_ACCOUNT_ID, getChatChannelMeta, type ChannelPlugin } from "openclaw/plugin-sdk/core";',
       'export { buildChannelConfigSchema, IMessageConfigSchema } from "./config-api.js";',
       'export { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";',
       'export { buildComputedAccountStatusSnapshot, collectStatusIssuesFromLastError } from "openclaw/plugin-sdk/status-helpers";',
