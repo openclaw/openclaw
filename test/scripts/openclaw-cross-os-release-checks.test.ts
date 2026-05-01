@@ -137,6 +137,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
   });
 
+  it("keeps cross-OS release workflow OpenAI default on GPT-5.5", () => {
+    const workflow = readFileSync(
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      "utf8",
+    );
+
+    expect(workflow).toContain(
+      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}",
+    );
+    expect(workflow).not.toContain("openai/gpt-5.4-mini");
+  });
+
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
     const allowlist = buildCrossOsReleaseSmokePluginAllowlist({ extensionId: "openai" });
 

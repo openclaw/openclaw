@@ -1,6 +1,6 @@
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 
-export type TransportUsage = {
+type TransportUsage = {
   input: number;
   output: number;
   cacheRead: number;

@@ -2,6 +2,10 @@
   "name": "@openclaw/twitch",
   "version": "2026.5.1-beta.1",
   "description": "OpenClaw Twitch channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "@twurple/api": "^8.1.3",

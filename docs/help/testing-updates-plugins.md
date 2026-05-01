@@ -77,6 +77,7 @@ pnpm test:docker:plugins
 pnpm test:docker:plugin-update
 pnpm test:docker:upgrade-survivor
 pnpm test:docker:published-upgrade-survivor
+pnpm test:docker:update-migration
 ```
 
 Important lanes:
@@ -95,6 +96,12 @@ Important lanes:
   configures it through a baked `openclaw config set` recipe, updates it to the
   candidate tarball, runs doctor, checks legacy cleanup, starts the Gateway, and
   probes `/healthz`, `/readyz`, and RPC status.
+- `test:docker:update-migration` is the cleanup-heavy published-update lane. It
+  starts from a configured Discord/Telegram-style user state, runs baseline
+  doctor so configured plugin dependencies have a chance to materialize, seeds
+  legacy plugin dependency debris for a configured packaged plugin, updates to
+  the candidate tarball, and requires post-update doctor to remove the legacy
+  dependency roots.
 
 Useful published-upgrade survivor variants:
 
@@ -109,9 +116,23 @@ pnpm test:docker:published-upgrade-survivor
 ```
 
 Available scenarios are `base`, `feishu-channel`, `bootstrap-persona`,
-`tilde-log-path`, and `versioned-runtime-deps`. In aggregate runs,
+`plugin-deps-cleanup`, `tilde-log-path`, and `versioned-runtime-deps`. In aggregate runs,
 `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS=reported-issues` expands to all reported
 issue-shaped scenarios.
+
+Full update migration is intentionally separate from Full Release CI. Use the
+manual `Update Migration` workflow when the release question is "can every
+published stable release from 2026.4.23 onward update to this candidate and
+clean up plugin dependency debris?":
+
+```bash
+gh workflow run update-migration.yml \
+  --ref main \
+  -f workflow_ref=main \
+  -f package_ref=main \
+  -f baselines=all-since-2026.4.23 \
+  -f scenarios=plugin-deps-cleanup
+```
 
 ## Package Acceptance
 
@@ -147,6 +168,11 @@ telegram_mode=mock-openai
 This keeps package migration, update channel switching, stale plugin dependency
 cleanup, offline plugin coverage, plugin update behavior, and Telegram package
 QA on the same resolved artifact.
+
+`release-history` is a bounded release-check sample: latest six stable releases,
+`2026.4.23`, and one older pre-date anchor. For exhaustive published update
+migration coverage, use `all-since-2026.4.23` in the separate Update Migration
+workflow instead of Full Release CI.
 
 Run a package profile manually when validating a candidate before release:
 

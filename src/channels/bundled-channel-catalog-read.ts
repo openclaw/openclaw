@@ -11,7 +11,7 @@ type ChannelCatalogEntryLike = {
   };
 };
 
-export type BundledChannelCatalogEntry = {
+type BundledChannelCatalogEntry = {
   id: string;
   channel: PluginPackageChannel;
   aliases: readonly string[];

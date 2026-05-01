@@ -11,10 +11,10 @@ export const HEARTBEAT_TOOL_OUTCOMES = [
   "blocked",
   "needs_attention",
 ] as const;
-export type HeartbeatToolOutcome = (typeof HEARTBEAT_TOOL_OUTCOMES)[number];
+type HeartbeatToolOutcome = (typeof HEARTBEAT_TOOL_OUTCOMES)[number];
 
 export const HEARTBEAT_TOOL_PRIORITIES = ["low", "normal", "high"] as const;
-export type HeartbeatToolPriority = (typeof HEARTBEAT_TOOL_PRIORITIES)[number];
+type HeartbeatToolPriority = (typeof HEARTBEAT_TOOL_PRIORITIES)[number];
 
 export type HeartbeatToolResponse = {
   outcome: HeartbeatToolOutcome;
