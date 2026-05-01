@@ -3,6 +3,8 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
 } from "./hook-types.js";
+import { getPluginSessionExtensionSync } from "./host-hook-state.js";
+import type { PluginJsonValue } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
 export async function runTrustedToolPolicies(
@@ -13,8 +15,35 @@ export async function runTrustedToolPolicies(
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];
+  const sessionExtensionCache = new Map<string, PluginJsonValue | undefined>();
   for (const registration of policies) {
-    const decision = await registration.policy.evaluate({ ...event, params: adjustedParams }, ctx);
+    const policyCtx: PluginHookToolContext = {
+      ...ctx,
+      // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
+      getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
+        const normalizedNamespace = namespace.trim();
+        const cacheKey = `${registration.pluginId}\0${normalizedNamespace}`;
+        if (sessionExtensionCache.has(cacheKey)) {
+          return sessionExtensionCache.get(cacheKey) as T | undefined;
+        }
+        if (!ctx.config) {
+          sessionExtensionCache.set(cacheKey, undefined);
+          return undefined;
+        }
+        const value = getPluginSessionExtensionSync<T>({
+          cfg: ctx.config,
+          pluginId: registration.pluginId,
+          sessionKey: ctx.sessionKey,
+          namespace: normalizedNamespace,
+        });
+        sessionExtensionCache.set(cacheKey, value);
+        return value;
+      },
+    };
+    const decision = await registration.policy.evaluate(
+      { ...event, params: adjustedParams },
+      policyCtx,
+    );
     if (!decision) {
       continue;
     }

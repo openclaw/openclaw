@@ -126,6 +126,7 @@ import type {
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
   findUndeclaredPluginToolNames,
@@ -1634,6 +1635,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       invalidMessage = "session extension projector must be synchronous";
     } else if (extension.cleanup !== undefined && typeof extension.cleanup !== "function") {
       invalidMessage = "session extension cleanup must be a function";
+    } else if (extension.sessionEntrySlotKey !== undefined) {
+      const slotKey = normalizeSessionEntrySlotKey(extension.sessionEntrySlotKey);
+      if (!slotKey.ok) {
+        invalidMessage = slotKey.error;
+      }
     }
     if (invalidMessage) {
       pushDiagnostic({
