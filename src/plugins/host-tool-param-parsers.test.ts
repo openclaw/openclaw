@@ -50,6 +50,18 @@ describe("deriveToolParams", () => {
     });
   });
 
+  it("preserves apply_patch backslashes when deriving path facts", () => {
+    const patch = [
+      "*** Begin Patch",
+      String.raw`*** Add File: safe\evil.ts`,
+      "+x",
+      "*** End Patch",
+    ].join("\n");
+    expect(deriveToolParams("apply_patch", { input: patch })).toEqual({
+      derivedPaths: [path.resolve(defaultCwd, String.raw`safe\evil.ts`)],
+    });
+  });
+
   it("returns an empty object when apply_patch input has no recognised paths", () => {
     expect(deriveToolParams("apply_patch", { input: "not a patch" })).toEqual({});
     expect(deriveToolParams("apply_patch", {})).toEqual({});
