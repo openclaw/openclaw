@@ -2074,7 +2074,7 @@ export async function runEmbeddedAttempt(
 
         if (activeContextEngine) {
           try {
-            unwindowedContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            const preassemblyContextEngineMessagesForPrecheck = activeSession.messages;
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
@@ -2093,6 +2093,10 @@ export async function runEmbeddedAttempt(
               activeSession.agent.state.messages = assembled.messages;
             }
             contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
+            if (contextEnginePromptAuthority === "preassembly_may_overflow") {
+              unwindowedContextEngineMessagesForPrecheck =
+                preassemblyContextEngineMessagesForPrecheck.slice();
+            }
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
                 systemPrompt: systemPromptText,
