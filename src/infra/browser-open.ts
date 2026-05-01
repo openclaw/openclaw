@@ -3,13 +3,13 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";
 import { isWSL } from "./wsl.js";
 
-export type BrowserOpenCommand = {
+type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
   command?: string;
 };
 
-export type BrowserOpenSupport = {
+type BrowserOpenSupport = {
   ok: boolean;
   reason?: string;
   command?: string;
