@@ -58,6 +58,7 @@ export function prepareBundledRuntimeLoadRootForPlugin(params: {
                 runtimeDepsInstallParams.installSpecs ?? runtimeDepsInstallParams.missingSpecs,
               installSpecs: runtimeDepsInstallParams.installSpecs,
               env: params.env,
+              force: true,
               warn: (message) => params.logger.warn(`[plugins] ${params.pluginId}: ${message}`),
             }));
         measureDiagnosticsTimelineSpanSync("runtimeDeps.stage", () => installer(installParams), {
