@@ -137,6 +137,7 @@ export function setActivePluginRegistry(
   workspaceDir?: string,
 ) {
   const previousRegistry = asPluginRegistry(state.activeRegistry);
+  markPluginRegistryActive(registry);
   if (previousRegistry && previousRegistry !== registry) {
     markPluginRegistryRetired(previousRegistry);
   }
