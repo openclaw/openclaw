@@ -60,6 +60,38 @@ export function resolveSessionCompactionCheckpointReason(params: {
   return "auto-threshold";
 }
 
+const SESSION_HEADER_READ_MAX_BYTES = 64 * 1024;
+
+async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Promise<string | null> {
+  let fileHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  try {
+    fileHandle = await fs.open(sessionFile, "r");
+    const buffer = Buffer.alloc(SESSION_HEADER_READ_MAX_BYTES);
+    const { bytesRead } = await fileHandle.read(buffer, 0, buffer.length, 0);
+    if (bytesRead <= 0) {
+      return null;
+    }
+    const chunk = buffer.toString("utf-8", 0, bytesRead);
+    const firstLine = chunk
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => line.length > 0);
+    if (!firstLine) {
+      return null;
+    }
+    const parsed = JSON.parse(firstLine) as { type?: unknown; id?: unknown };
+    return parsed.type === "session" && typeof parsed.id === "string" && parsed.id.trim()
+      ? parsed.id.trim()
+      : null;
+  } catch {
+    return null;
+  } finally {
+    if (fileHandle) {
+      await fileHandle.close().catch(() => undefined);
+    }
+  }
+}
+
 /**
  * Synchronous version — kept for callers that cannot be made async.
  * Prefer captureCompactionCheckpointSnapshotAsync for large transcripts
@@ -168,26 +200,17 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
   } catch {
     return null;
   }
-  let snapshotSession: SessionManager;
-  try {
-    snapshotSession = SessionManager.open(snapshotFile, path.dirname(snapshotFile));
-  } catch {
+  const sessionId = await readSessionIdFromTranscriptHeaderAsync(snapshotFile);
+  if (!sessionId) {
     try {
       await fs.unlink(snapshotFile);
     } catch {
-      // Best-effort cleanup if the copied transcript cannot be reopened.
+      // Best-effort cleanup if the copied transcript cannot be validated.
     }
     return null;
   }
-  const getSessionId =
-    snapshotSession && typeof snapshotSession.getSessionId === "function"
-      ? snapshotSession.getSessionId.bind(snapshotSession)
-      : null;
-  if (!getSessionId) {
-    return null;
-  }
   return {
-    sessionId: getSessionId(),
+    sessionId,
     sessionFile: snapshotFile,
     leafId,
   };
