@@ -19,7 +19,7 @@ export type ArchivedSessionTranscript = {
   archivedPath: string;
 };
 
-function classifySessionTranscriptCandidate(
+export function classifySessionTranscriptCandidate(
   sessionId: string,
   sessionFile?: string,
 ): "current" | "stale" | "custom" {
@@ -266,4 +266,57 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   }
 
   return { removed, scanned };
+}
+
+/**
+ * Returns the path of the most recent `.reset.<timestamp>` archive for the given
+ * session, or undefined if none exist. Used as a fallback in readSessionMessages
+ * so that chat.history returns archived content instead of an empty response
+ * after a daily or manual session reset.
+ *
+ * Searches all provided directories in order. The caller should derive searchDirs
+ * from the same candidate paths used to locate primary transcripts (including the
+ * legacy `~/.openclaw/sessions` dir) so archive lookup stays consistent.
+ *
+ * @param candidateBasenames - basenames of the resolved candidate transcript paths
+ *   (e.g. `["<sessionId>.jsonl", "<sessionId>-<agentId>.jsonl"]`). Archives are
+ *   named `<transcriptBasename>.reset.<timestamp>`, so matching against all
+ *   candidate basenames avoids missing archives for non-canonical transcript names.
+ *   Falls back to `<sessionId>.jsonl.reset.*` when not provided.
+ */
+export function findLatestResetArchive(
+  sessionId: string,
+  searchDirs: readonly string[],
+  candidateBasenames?: readonly string[],
+): string | undefined {
+  // Build one prefix per candidate basename; fall back to the canonical name.
+  const prefixes =
+    candidateBasenames && candidateBasenames.length > 0
+      ? candidateBasenames.map((b) => `${b}.reset.`)
+      : [`${sessionId}.jsonl.reset.`];
+
+  // Scan all dirs before deciding; pick the globally newest archive so that
+  // a more-recent file in the legacy dir is not missed when the primary dir
+  // also contains archives (e.g. after a store-path migration).
+  let latestTimestamp = -Infinity;
+  let latestPath: string | undefined;
+
+  for (const dir of searchDirs) {
+    try {
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const d of entries) {
+        if (!d.isFile() || !prefixes.some((p) => d.name.startsWith(p))) {
+          continue;
+        }
+        const ts = parseSessionArchiveTimestamp(d.name, "reset");
+        if (ts != null && ts > latestTimestamp) {
+          latestTimestamp = ts;
+          latestPath = path.join(dir, d.name);
+        }
+      }
+    } catch {
+      // Skip unreadable dirs (missing legacy dir is the common case).
+    }
+  }
+  return latestPath;
 }

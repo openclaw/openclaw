@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { SessionManager, type SessionEntry } from "@mariozechner/pi-coding-agent";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
@@ -13,6 +14,8 @@ import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
+  classifySessionTranscriptCandidate,
+  findLatestResetArchive,
 } from "./session-transcript-files.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -98,7 +101,21 @@ export function readSessionMessages(
 ): unknown[] {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile);
 
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  let filePath = candidates.find((p) => fs.existsSync(p));
+  // Fall back to the most recent reset archive when no primary transcript exists.
+  // This ensures chat.history returns content after a daily or manual session reset
+  // rather than an empty response (related: #42336, #56131, #57139).
+  // Derive search dirs from the same candidate paths so archive lookup mirrors
+  // primary transcript resolution (including legacy ~/.openclaw/sessions).
+  if (!filePath && sessionId) {
+    const searchDirs = Array.from(new Set(candidates.map((c) => path.dirname(c))));
+    // Exclude stale candidates (paths whose embedded session ID belongs to a different session)
+    // to prevent returning another session's archived messages.
+    const candidateBasenames = candidates
+      .filter((c) => classifySessionTranscriptCandidate(sessionId, c) !== "stale")
+      .map((c) => path.basename(c));
+    filePath = findLatestResetArchive(sessionId, searchDirs, candidateBasenames);
+  }
   if (!filePath) {
     return [];
   }
@@ -242,7 +259,19 @@ export function readSessionTitleFieldsFromTranscript(
   opts?: { includeInterSession?: boolean },
 ): SessionTitleFields {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  let filePath = candidates.find((p) => fs.existsSync(p));
+  // Fall back to the most recent reset archive when no primary transcript exists,
+  // mirroring readSessionMessages so derivedTitle (firstUserMessage) and
+  // lastMessagePreview survive a daily or manual session reset. Without this,
+  // listSessionsFromStore falls through to formatSessionIdPrefix and the UI
+  // shows a raw sessionId instead of the human-readable first user message.
+  if (!filePath && sessionId) {
+    const searchDirs = Array.from(new Set(candidates.map((c) => path.dirname(c))));
+    const candidateBasenames = candidates
+      .filter((c) => classifySessionTranscriptCandidate(sessionId, c) !== "stale")
+      .map((c) => path.basename(c));
+    filePath = findLatestResetArchive(sessionId, searchDirs, candidateBasenames);
+  }
   if (!filePath) {
     return { firstUserMessage: null, lastMessagePreview: null };
   }
