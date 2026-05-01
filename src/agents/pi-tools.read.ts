@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { URL } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import {
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+  withFileMutationQueue,
+} from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import { isWindowsDrivePath } from "../infra/archive-path.js";
 import {
@@ -854,7 +859,7 @@ export function wrapToolWriteWithAppend(
       const normalized = filePath.startsWith("@") ? filePath.slice(1) : filePath;
       const expanded = expandTildeToOsHome(normalized);
       const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(ops.root, expanded);
-      await ops.appendFile(resolved, content);
+      await withFileMutationQueue(resolved, () => ops.appendFile(resolved, content));
       return {
         content: [{ type: "text", text: `Appended to ${filePath}.` }],
         details: { path: filePath, append: true },
