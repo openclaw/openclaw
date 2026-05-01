@@ -612,6 +612,24 @@ describe("update-cli", () => {
     expect(runDaemonRestart).not.toHaveBeenCalled();
   });
 
+  it("does not carry gateway service markers into the post-core update process", async () => {
+    setupUpdatedRootRefresh();
+
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
+
+    const spawnEnv = (spawn.mock.calls[0]?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env;
+    expect(spawnEnv?.OPENCLAW_SERVICE_MARKER).toBeUndefined();
+    expect(spawnEnv?.OPENCLAW_SERVICE_KIND).toBeUndefined();
+  });
+
   it("respawns into the updated git root before requested channel persistence", async () => {
     const { entrypoints } = setupUpdatedRootRefresh({
       gatewayUpdateImpl: async (root) =>
@@ -1263,7 +1281,7 @@ describe("update-cli", () => {
     ).toContain("Low disk space near");
   });
 
-  it("refuses package updates from inside the gateway service process", async () => {
+  it("allows package updates from inherited gateway service env when the managed gateway is not running", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
 
     await withEnvAsync(
@@ -1276,12 +1294,42 @@ describe("update-cli", () => {
       },
     );
 
+    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining(
+        "Package updates cannot run from inside the gateway service process.",
+      ),
+    );
+    expectPackageInstallSpec("openclaw@latest");
+  });
+
+  it("refuses package updates from inherited gateway service env when --no-restart leaves the gateway running", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
     expect(defaultRuntime.error).toHaveBeenCalledWith(
       expect.stringContaining(
         "Package updates cannot run from inside the gateway service process.",
       ),
     );
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(serviceStop).not.toHaveBeenCalled();
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
       ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
@@ -1605,7 +1653,15 @@ describe("update-cli", () => {
       };
     });
 
-    await updateCommand({ yes: true });
+    await withEnvAsync(
+      {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      async () => {
+        await updateCommand({ yes: true });
+      },
+    );
 
     const npmInstallCallIndex = vi
       .mocked(runCommandWithTimeout)
