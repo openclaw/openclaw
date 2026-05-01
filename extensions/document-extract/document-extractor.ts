@@ -180,8 +180,8 @@ function renderPageWithPdftoppm(
   let tmpDir: string | undefined;
   try {
     tmpDir = FS.mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/openclaw-pdf-`);
-    const pdfPath = path.join(tmpDir, `doc-${rand}.pdf`);
-    const outputBase = path.join(tmpDir, `page-${rand}`);
+    const pdfPath = path.join(tmpDir!, `doc-${rand}.pdf`);
+    const outputBase = path.join(tmpDir!, `page-${rand}`);
 
     FS.writeFileSync(pdfPath, pdfBuffer);
 
@@ -281,7 +281,7 @@ async function extractPdfContent(
       remainingPixels -= plan.pixels;
     } else {
       const scaled = page.getViewport({ scale: plan.scale });
-      const canvas = canvasModule.createCanvas(plan.width, plan.height);
+      const canvas = canvasModule!.createCanvas(plan.width, plan.height);
       await page.render({
         canvas: canvas as unknown as HTMLCanvasElement,
         viewport: scaled,
