@@ -1582,6 +1582,189 @@ describe("active-memory plugin", () => {
     ]);
   });
 
+  it("fast-fails empty recall when memory_search reports zero hits", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 10_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:empty-search-fast-fail";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-empty-search-fast-fail",
+      updatedAt: 0,
+    };
+    let aborted = false;
+    runEmbeddedPiAgent.mockImplementationOnce(
+      (params: { abortSignal?: AbortSignal; onToolResult?: (payload: unknown) => void }) => {
+        const pending = new Promise<never>((_resolve, reject) => {
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              const error = new Error("aborted by fast-fail");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        });
+        params.onToolResult?.({
+          text: `🧠 Memory Search\n\`\`\`txt\n${JSON.stringify(
+            {
+              results: [],
+              debug: {
+                backend: "qmd",
+                configuredMode: "search",
+                effectiveMode: "query",
+                searchMs: 12,
+                hits: 0,
+              },
+            },
+            null,
+            2,
+          )}\n\`\`\``,
+        });
+        return pending;
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what do you remember about my preferences?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    expect(aborted).toBe(true);
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("🧩 Active Memory: status=empty"),
+        expect.stringContaining("hits=0"),
+      ]),
+    );
+  });
+
+  it("fast-fails unavailable recall when memory_search is denied by scope", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["channel"],
+      timeoutMs: 10_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:discord:channel:1488793123260862544";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-scope-denied-fast-fail",
+      updatedAt: 0,
+    };
+    let aborted = false;
+    runEmbeddedPiAgent.mockImplementationOnce(
+      (params: { abortSignal?: AbortSignal; onToolResult?: (payload: unknown) => void }) => {
+        const pending = new Promise<never>((_resolve, reject) => {
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              const error = new Error("aborted by unavailable fast-fail");
+              error.name = "AbortError";
+              reject(error);
+            },
+            { once: true },
+          );
+        });
+        params.onToolResult?.({
+          text: `🧠 Memory Search\n\`\`\`txt\n${JSON.stringify(
+            {
+              results: [],
+              disabled: true,
+              unavailable: true,
+              error: "qmd search denied by scope",
+              warning: "Memory search is unavailable due to an embedding/provider error.",
+              action: "Check embedding provider configuration and retry memory_search.",
+              debug: {
+                error: "qmd search denied by scope",
+                warning: "Memory search is unavailable due to an embedding/provider error.",
+                action: "Check embedding provider configuration and retry memory_search.",
+              },
+            },
+            null,
+            2,
+          )}\n\`\`\``,
+        });
+        return pending;
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "Testing 1, 2, 3", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey,
+        messageProvider: "discord",
+        channelId: "1488793123260862544",
+      },
+    );
+
+    expect(result).toBeUndefined();
+    expect(aborted).toBe(true);
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("🧩 Active Memory: status=unavailable"),
+        expect.stringContaining("Memory search is unavailable"),
+      ]),
+    );
+  });
+
+  it("does not fast-fail unavailable output from memory_get", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 10_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:memory-get-unavailable-not-terminal";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-memory-get-unavailable-not-terminal",
+      updatedAt: 0,
+    };
+    let aborted = false;
+    runEmbeddedPiAgent.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal; onToolResult?: (payload: unknown) => void }) => {
+        params.abortSignal?.addEventListener(
+          "abort",
+          () => {
+            aborted = true;
+          },
+          { once: true },
+        );
+        params.onToolResult?.({
+          text: `📓 Memory Get\n\`\`\`txt\n${JSON.stringify(
+            {
+              disabled: true,
+              error: "wiki corpus result not found",
+            },
+            null,
+            2,
+          )}\n\`\`\``,
+        });
+        return { payloads: [{ text: "Useful search summary after memory_get miss." }] };
+      },
+    );
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what should I remember?", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(aborted).toBe(false);
+    expect((result as { prependContext?: string } | undefined)?.prependContext).toContain(
+      "Useful search summary after memory_get miss.",
+    );
+  });
+
   it("returns nothing when the subagent says none", async () => {
     runEmbeddedPiAgent.mockResolvedValueOnce({
       payloads: [{ text: "NONE" }],
@@ -1598,6 +1781,37 @@ describe("active-memory plugin", () => {
     );
 
     expect(result).toBeUndefined();
+  });
+
+  it("treats embedded timeout boilerplate as timeout instead of memory context", async () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 10_000,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:timeout-boilerplate";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-timeout-boilerplate",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "Request timed out before a response was generated. Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+        },
+      ],
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what wings should i order? timeout boilerplate", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result).toBeUndefined();
+    const lines = getActiveMemoryLines(sessionKey);
+    expect(lines).toEqual([expect.stringContaining("🧩 Active Memory: status=timeout")]);
+    expect(lines.join("\n")).not.toContain("Request timed out before a response was generated");
   });
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
@@ -2175,7 +2389,7 @@ describe("active-memory plugin", () => {
     ).toBe(true);
   });
 
-  it("does not spend the model timeout budget on active-memory subagent setup", async () => {
+  it("does not extend the user-visible recall budget with setup grace", async () => {
     const CONFIGURED_TIMEOUT_MS = 10;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(100);
@@ -2200,19 +2414,19 @@ describe("active-memory plugin", () => {
       },
     );
 
-    expect(result?.prependContext).toContain("remember the ramen place");
+    expect(result).toBeUndefined();
     expect(runEmbeddedPiAgent.mock.calls.at(-1)?.[0]?.timeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));
-    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(false);
+    expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
   });
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
     const CONFIGURED_TIMEOUT_MS = 200;
     const HARD_DEADLINE_MARGIN_MS = 4_800;
     __testing.setMinimumTimeoutMsForTests(1);
-    __testing.setSetupGraceTimeoutMsForTests(0);
+    __testing.setSetupGraceTimeoutMsForTests(5_000);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: CONFIGURED_TIMEOUT_MS,
