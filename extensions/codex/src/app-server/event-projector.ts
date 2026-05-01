@@ -18,6 +18,7 @@ import {
   type MessagingToolSend,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -327,8 +328,12 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.reasoningStarted = true;
-    this.reasoningTextByItem.set(itemId, `${this.reasoningTextByItem.get(itemId) ?? ""}${delta}`);
-    await this.params.onReasoningStream?.({ text: delta });
+    const text = `${this.reasoningTextByItem.get(itemId) ?? ""}${delta}`;
+    this.reasoningTextByItem.set(itemId, text);
+    const formatted = formatReasoningMessage(text);
+    if (formatted) {
+      await this.params.onReasoningStream?.({ text: formatted, isReasoning: true });
+    }
   }
 
   private handlePlanDelta(params: JsonObject): void {

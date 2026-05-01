@@ -635,7 +635,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking" });
+    expect(onReasoningStream).toHaveBeenCalledWith({
+      text: "Reasoning:\n_thinking_",
+      isReasoning: true,
+    });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
     expect(onAgentEvent).toHaveBeenCalledWith(
       expect.objectContaining({
