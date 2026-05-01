@@ -67,6 +67,32 @@ function createInMemoryAuthStorageBackend(
   };
 }
 
+// Cache normalized models per (agentDir, provider, modelId) so repeated
+// `registry.getAvailable()` calls don't re-load the entire plugin manifest
+// registry once per model on every call. Without this, ~50 models × 3 hooks
+// × ~50 plugin manifests = ~7,500 manifest open+stat+close cycles per
+// `getAvailable()` call, which is invoked from `ensureContextWindowCacheLoaded`
+// (`src/agents/context.ts:243`) and pegs the TUI process at 100% CPU during
+// startup model resolution. See #75137.
+//
+// Cache invalidation: the input model object identity is the cache value
+// criterion. If pi's underlying registry returns a NEW model object (e.g. after
+// a refresh), we miss the cache and re-normalize. The cache is bounded by
+// total unique (provider, modelId) pairs and is process-lifetime — discovered
+// models are stable for a given config snapshot.
+type NormalizedModelCacheKey = string;
+type NormalizedModelCacheEntry = { input: unknown; output: unknown };
+const NORMALIZED_MODEL_CACHE = new Map<NormalizedModelCacheKey, NormalizedModelCacheEntry>();
+const MAX_NORMALIZED_MODEL_CACHE_ENTRIES = 1024;
+
+function buildNormalizedModelCacheKey(
+  agentDir: string,
+  provider: string,
+  modelId: string,
+): NormalizedModelCacheKey {
+  return `${agentDir}\0${provider}\0${modelId}`;
+}
+
 export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
   if (!isRecord(value)) {
     return value;
@@ -79,6 +105,11 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
     return value;
   }
   const model = value as unknown as DiscoveredProviderRuntimeModelLike;
+  const cacheKey = buildNormalizedModelCacheKey(agentDir, model.provider, model.id);
+  const cached = NORMALIZED_MODEL_CACHE.get(cacheKey);
+  if (cached && cached.input === value) {
+    return cached.output as T;
+  }
   const pluginNormalized =
     normalizeProviderResolvedModelWithPlugin({
       provider: model.provider,
@@ -118,7 +149,21 @@ export function normalizeDiscoveredPiModel<T>(value: T, agentDir: string): T {
   ) {
     return value;
   }
-  return normalizeModelCompat(transportNormalized as Model<Api>) as T;
+  const result = normalizeModelCompat(transportNormalized as Model<Api>) as T;
+  if (NORMALIZED_MODEL_CACHE.size >= MAX_NORMALIZED_MODEL_CACHE_ENTRIES) {
+    // Bounded cache: evict oldest entry (FIFO via Map insertion order).
+    const oldestKey = NORMALIZED_MODEL_CACHE.keys().next().value;
+    if (oldestKey !== undefined) {
+      NORMALIZED_MODEL_CACHE.delete(oldestKey);
+    }
+  }
+  NORMALIZED_MODEL_CACHE.set(cacheKey, { input: value, output: result });
+  return result;
+}
+
+/** Test seam: clear the normalized-model cache between scenarios. */
+export function resetNormalizeDiscoveredPiModelCacheForTest(): void {
+  NORMALIZED_MODEL_CACHE.clear();
 }
 
 type PiModelRegistryClassLike = {
