@@ -149,14 +149,24 @@ export function resolvePluginWebProviders<TEntry>(
     return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
   }
 
-  // Fast path: use the active gateway registry if available. The gateway registry
-  // was loaded at startup with all plugins; filtering by onlyPluginIds afterward
-  // gives the same result without a redundant loadOpenClawPlugins call per request.
+  // Fast path: if the active gateway registry is available, derive the candidate
+  // plugin ids from config/origin/scope first (cheap), then map providers from the
+  // active registry instead of triggering a full loadOpenClawPlugins call.
+  // Deriving candidates ensures origin and onlyPluginIds filters are respected.
   const gatewayRegistry = getActivePluginRegistry();
   if (gatewayRegistry) {
+    const candidateIds = normalizePluginIdScope(
+      deps.resolveCandidatePluginIds({
+        config: params.config,
+        workspaceDir,
+        env,
+        onlyPluginIds: params.onlyPluginIds,
+        origin: params.origin,
+      }) ?? undefined,
+    );
     return deps.mapRegistryProviders({
       registry: gatewayRegistry,
-      onlyPluginIds: params.onlyPluginIds,
+      onlyPluginIds: candidateIds,
     });
   }
   const loadOptions = resolveWebProviderLoadOptions(params, deps);
