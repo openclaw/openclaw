@@ -2,10 +2,6 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
-import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -32,6 +28,11 @@ import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js"
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { coerceImageModelConfig } from "./tools/image-tool.helpers.js";
 import { createImageTool } from "./tools/image-tool.js";
+import {
+  getCurrentCapabilityMetadataSnapshot,
+  hasSnapshotCapabilityAvailability,
+  hasSnapshotProviderEnvAvailability,
+} from "./tools/manifest-capability-availability.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { coerceToolModelConfig, hasToolModelConfig } from "./tools/model-config.helpers.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
@@ -62,17 +63,6 @@ const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
 
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
 
-type CapabilityContractKey =
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders"
-  | "mediaUnderstandingProviders";
-
-type CapabilityProviderMetadataKey =
-  | "imageGenerationProviderMetadata"
-  | "videoGenerationProviderMetadata"
-  | "musicGenerationProviderMetadata";
-
 type OptionalMediaToolFactoryPlan = {
   imageGenerate: boolean;
   videoGenerate: boolean;
@@ -92,133 +82,9 @@ function isToolAllowedByFactoryAllowlist(toolName: string, allowlist?: string[])
   return expanded.has("*") || expanded.has(normalizeToolName(toolName));
 }
 
-function pluginSetupProviderEnvVars(
-  plugin: PluginManifestRecord,
-  providerId: string,
-): readonly string[] {
-  const direct = plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars;
-  if (direct && direct.length > 0) {
-    return direct;
-  }
-  // This is a deprecated fallback for older plugin versions that didn't have per-provider env var declarations. Do not use, will be removed after a grace period.
-  return plugin.providerAuthEnvVars?.[providerId] ?? [];
-}
-
-function hasNonEmptyEnvCandidate(envVars: readonly string[]): boolean {
-  return envVars.some((envVar) => {
-    const key = envVar.trim();
-    return key.length > 0 && Boolean(process.env[key]?.trim());
-  });
-}
-
-function metadataKeyForCapabilityContract(
-  key: CapabilityContractKey,
-): CapabilityProviderMetadataKey | undefined {
-  switch (key) {
-    case "imageGenerationProviders":
-      return "imageGenerationProviderMetadata";
-    case "videoGenerationProviders":
-      return "videoGenerationProviderMetadata";
-    case "musicGenerationProviders":
-      return "musicGenerationProviderMetadata";
-    case "mediaUnderstandingProviders":
-      return undefined;
-  }
-}
-
-function normalizeBaseUrlForManifestGuard(value: string): string {
-  return value.trim().replace(/\/+$/, "");
-}
-
-function providerBaseUrlGuardPasses(params: {
-  config?: OpenClawConfig;
-  guard: NonNullable<
-    NonNullable<PluginManifestRecord["imageGenerationProviderMetadata"]>[string]["authSignals"]
-  >[number]["providerBaseUrl"];
-}): boolean {
-  const guard = params.guard;
-  if (!guard) {
-    return true;
-  }
-  const providerConfig = params.config?.models?.providers?.[guard.provider];
-  const rawBaseUrl =
-    typeof providerConfig?.baseUrl === "string" && providerConfig.baseUrl.trim()
-      ? providerConfig.baseUrl
-      : guard.defaultBaseUrl;
-  if (!rawBaseUrl) {
-    return false;
-  }
-  const normalizedBaseUrl = normalizeBaseUrlForManifestGuard(rawBaseUrl);
-  return guard.allowedBaseUrls.some(
-    (allowedBaseUrl) => normalizeBaseUrlForManifestGuard(allowedBaseUrl) === normalizedBaseUrl,
-  );
-}
-
-function listCapabilityAuthSignals(params: {
-  plugin: PluginManifestRecord;
-  key: CapabilityContractKey;
-  providerId: string;
-}): Array<{
-  provider: string;
-  providerBaseUrl?: NonNullable<
-    NonNullable<PluginManifestRecord["imageGenerationProviderMetadata"]>[string]["authSignals"]
-  >[number]["providerBaseUrl"];
-}> {
-  const metadataKey = metadataKeyForCapabilityContract(params.key);
-  const metadata = metadataKey ? params.plugin[metadataKey]?.[params.providerId] : undefined;
-  if (metadata?.authSignals?.length) {
-    return metadata.authSignals;
-  }
-  return [params.providerId, ...(metadata?.aliases ?? []), ...(metadata?.authProviders ?? [])].map(
-    (provider) => ({ provider }),
-  );
-}
-
-function hasAuthSignalForSnapshotCapability(params: {
-  snapshot: PluginMetadataSnapshot;
-  authStore: AuthProfileStore;
-  key: CapabilityContractKey;
-  config?: OpenClawConfig;
-}): boolean {
-  for (const plugin of params.snapshot.plugins) {
-    if (
-      !isManifestPluginAvailableForControlPlane({
-        snapshot: params.snapshot,
-        plugin,
-        config: params.config,
-      })
-    ) {
-      continue;
-    }
-    for (const providerId of plugin.contracts?.[params.key] ?? []) {
-      for (const signal of listCapabilityAuthSignals({
-        plugin,
-        key: params.key,
-        providerId,
-      })) {
-        if (
-          !providerBaseUrlGuardPasses({
-            config: params.config,
-            guard: signal.providerBaseUrl,
-          })
-        ) {
-          continue;
-        }
-        if (listProfilesForProvider(params.authStore, signal.provider).length > 0) {
-          return true;
-        }
-        if (hasNonEmptyEnvCandidate(pluginSetupProviderEnvVars(plugin, signal.provider))) {
-          return true;
-        }
-      }
-    }
-  }
-  return false;
-}
-
 function hasConfiguredVisionModelAuthSignal(params: {
   config?: OpenClawConfig;
-  snapshot: PluginMetadataSnapshot;
+  snapshot: NonNullable<ReturnType<typeof getCurrentCapabilityMetadataSnapshot>>;
   authStore: AuthProfileStore;
 }): boolean {
   const providers = params.config?.models?.providers;
@@ -236,19 +102,14 @@ function hasConfiguredVisionModelAuthSignal(params: {
     if (listProfilesForProvider(params.authStore, providerId).length > 0) {
       return true;
     }
-    for (const plugin of params.snapshot.plugins) {
-      if (
-        !isManifestPluginAvailableForControlPlane({
-          snapshot: params.snapshot,
-          plugin,
-          config: params.config,
-        })
-      ) {
-        continue;
-      }
-      if (hasNonEmptyEnvCandidate(pluginSetupProviderEnvVars(plugin, providerId))) {
-        return true;
-      }
+    if (
+      hasSnapshotProviderEnvAvailability({
+        snapshot: params.snapshot,
+        providerId,
+        config: params.config,
+      })
+    ) {
+      return true;
     }
   }
   return false;
@@ -289,7 +150,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
   if (!params.authStore) {
     return fallbackPlan;
   }
-  const snapshot = getCurrentPluginMetadataSnapshot({
+  const snapshot = getCurrentCapabilityMetadataSnapshot({
     config: params.config,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
@@ -300,7 +161,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
     imageGenerate:
       allowImageGenerate &&
       (explicitImageGeneration ||
-        hasAuthSignalForSnapshotCapability({
+        hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
           key: "imageGenerationProviders",
@@ -309,7 +170,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
     videoGenerate:
       allowVideoGenerate &&
       (explicitVideoGeneration ||
-        hasAuthSignalForSnapshotCapability({
+        hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
           key: "videoGenerationProviders",
@@ -318,7 +179,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
     musicGenerate:
       allowMusicGenerate &&
       (explicitMusicGeneration ||
-        hasAuthSignalForSnapshotCapability({
+        hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
           key: "musicGenerationProviders",
@@ -327,7 +188,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
     pdf:
       allowPdf &&
       (explicitPdf ||
-        hasAuthSignalForSnapshotCapability({
+        hasSnapshotCapabilityAvailability({
           snapshot,
           authStore: params.authStore,
           key: "mediaUnderstandingProviders",

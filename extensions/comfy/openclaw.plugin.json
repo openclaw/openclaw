@@ -30,6 +30,57 @@
     "musicGenerationProviders": ["comfy"],
     "videoGenerationProviders": ["comfy"]
   },
+  "imageGenerationProviderMetadata": {
+    "comfy": {
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "image",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        }
+      ]
+    }
+  },
+  "musicGenerationProviderMetadata": {
+    "comfy": {
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "music",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        }
+      ]
+    }
+  },
+  "videoGenerationProviderMetadata": {
+    "comfy": {
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.comfy.config",
+          "overlayPath": "video",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        }
+      ]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

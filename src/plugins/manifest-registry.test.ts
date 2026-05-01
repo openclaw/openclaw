@@ -1210,6 +1210,19 @@ describe("loadPluginManifestRegistry", () => {
               },
             },
           ],
+          configSignals: [
+            {
+              rootPath: "plugins.entries.openai.config",
+              overlayPath: "image",
+              mode: {
+                path: "mode",
+                default: "local",
+                allowed: ["local"],
+              },
+              requiredAny: ["workflow", "workflowPath"],
+              required: ["promptNodeId"],
+            },
+          ],
         },
       },
       mediaUnderstandingProviderMetadata: {
@@ -1249,6 +1262,19 @@ describe("loadPluginManifestRegistry", () => {
               defaultBaseUrl: "https://api.openai.com/v1",
               allowedBaseUrls: ["https://api.openai.com/v1"],
             },
+          },
+        ],
+        configSignals: [
+          {
+            rootPath: "plugins.entries.openai.config",
+            overlayPath: "image",
+            mode: {
+              path: "mode",
+              default: "local",
+              allowed: ["local"],
+            },
+            requiredAny: ["workflow", "workflowPath"],
+            required: ["promptNodeId"],
           },
         ],
       },

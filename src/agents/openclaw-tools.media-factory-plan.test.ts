@@ -8,7 +8,7 @@ import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plug
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { __testing } from "./openclaw-tools.js";
+import { __testing, createOpenClawTools } from "./openclaw-tools.js";
 
 function createAuthStore(providers: string[] = []): AuthProfileStore {
   return {
@@ -31,6 +31,8 @@ function createPlugin(params: {
   origin?: PluginManifestRecord["origin"];
   contracts: NonNullable<PluginManifestRecord["contracts"]>;
   imageGenerationProviderMetadata?: PluginManifestRecord["imageGenerationProviderMetadata"];
+  videoGenerationProviderMetadata?: PluginManifestRecord["videoGenerationProviderMetadata"];
+  musicGenerationProviderMetadata?: PluginManifestRecord["musicGenerationProviderMetadata"];
   setupProviders?: Array<{ id: string; envVars?: string[] }>;
 }): PluginManifestRecord {
   return {
@@ -46,6 +48,8 @@ function createPlugin(params: {
     hooks: [],
     contracts: params.contracts,
     imageGenerationProviderMetadata: params.imageGenerationProviderMetadata,
+    videoGenerationProviderMetadata: params.videoGenerationProviderMetadata,
+    musicGenerationProviderMetadata: params.musicGenerationProviderMetadata,
     setup: params.setupProviders ? { providers: params.setupProviders } : undefined,
   };
 }
@@ -56,9 +60,11 @@ function installSnapshot(
   enabledPluginIds = plugins
     .filter((plugin) => plugin.origin !== "bundled")
     .map((plugin) => plugin.id),
+  workspaceDir?: string,
 ) {
   const snapshot = {
     policyHash: resolveInstalledPluginIndexPolicyHash(config),
+    ...(workspaceDir ? { workspaceDir } : {}),
     index: {
       plugins: plugins.map((plugin) => ({
         pluginId: plugin.id,
@@ -281,7 +287,7 @@ describe("optional media tool factory planning", () => {
 
   it("keeps manifest-declared image provider auth aliases on the factory path", () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, [
+    const plugins = [
       createPlugin({
         id: "openai",
         contracts: { imageGenerationProviders: ["openai"] },
@@ -304,7 +310,8 @@ describe("optional media tool factory planning", () => {
           },
         },
       }),
-    ]);
+    ];
+    installSnapshot(config, plugins);
 
     expect(
       __testing.resolveOptionalMediaToolFactoryPlan({
@@ -313,6 +320,73 @@ describe("optional media tool factory planning", () => {
       }),
     ).toMatchObject({
       imageGenerate: true,
+    });
+    installSnapshot(config, plugins, undefined, process.cwd());
+    expect(
+      createOpenClawTools({
+        config,
+        workspaceDir: process.cwd(),
+        authProfileStore: createAuthStore(["openai-codex"]),
+        pluginToolAllowlist: ["image_generate"],
+      }).map((tool) => tool.name),
+    ).toContain("image_generate");
+  });
+
+  it("keeps manifest-declared config-only generation providers on the factory path", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          comfy: {
+            config: {
+              mode: "local",
+              workflow: { "1": { inputs: {} } },
+              promptNodeId: "1",
+            },
+          },
+        },
+      },
+    };
+    const configSignals = [
+      {
+        rootPath: "plugins.entries.comfy.config",
+        mode: {
+          path: "mode",
+          default: "local",
+          allowed: ["local"],
+        },
+        requiredAny: ["workflow", "workflowPath"],
+        required: ["promptNodeId"],
+      },
+    ];
+    installSnapshot(config, [
+      createPlugin({
+        id: "comfy",
+        contracts: {
+          imageGenerationProviders: ["comfy"],
+          videoGenerationProviders: ["comfy"],
+          musicGenerationProviders: ["comfy"],
+        },
+        imageGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+        videoGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+        musicGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }),
+    ).toMatchObject({
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
     });
   });
 

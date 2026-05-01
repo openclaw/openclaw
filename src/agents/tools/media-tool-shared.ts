@@ -20,6 +20,10 @@ import {
 } from "./common.js";
 import type { ImageModelConfig } from "./image-tool.helpers.js";
 import {
+  getCurrentCapabilityMetadataSnapshot,
+  hasSnapshotCapabilityAvailability,
+} from "./manifest-capability-availability.js";
+import {
   buildToolModelConfigFromCandidates,
   coerceToolModelConfig,
   hasAuthForProvider,
@@ -316,6 +320,21 @@ export function hasGenerationToolAvailability(params: {
         authStore: params.authStore,
       }),
     );
+  }
+  const snapshot = getCurrentCapabilityMetadataSnapshot({
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  if (
+    snapshot &&
+    hasSnapshotCapabilityAvailability({
+      snapshot,
+      key: params.providerKey,
+      config: params.cfg,
+      authStore: params.authStore,
+    })
+  ) {
+    return true;
   }
   return resolveManifestCapabilityProviderIds({
     key: params.providerKey,

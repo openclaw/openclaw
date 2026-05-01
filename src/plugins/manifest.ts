@@ -431,10 +431,26 @@ export type PluginManifestCapabilityProviderAuthSignal = {
   providerBaseUrl?: PluginManifestProviderBaseUrlGuard;
 };
 
+export type PluginManifestCapabilityProviderModeConfigSignal = {
+  path?: string;
+  default?: string;
+  allowed?: string[];
+  disallowed?: string[];
+};
+
+export type PluginManifestCapabilityProviderConfigSignal = {
+  rootPath: string;
+  overlayPath?: string;
+  required?: string[];
+  requiredAny?: string[];
+  mode?: PluginManifestCapabilityProviderModeConfigSignal;
+};
+
 export type PluginManifestCapabilityProviderMetadata = {
   aliases?: string[];
   authProviders?: string[];
   authSignals?: PluginManifestCapabilityProviderAuthSignal[];
+  configSignals?: PluginManifestCapabilityProviderConfigSignal[];
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -640,6 +656,58 @@ function normalizeCapabilityProviderAuthSignals(
   return signals.length > 0 ? signals : undefined;
 }
 
+function normalizeCapabilityProviderModeConfigSignal(
+  value: unknown,
+): PluginManifestCapabilityProviderModeConfigSignal | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const path = normalizeOptionalString(value.path);
+  const defaultValue = normalizeOptionalString(value.default);
+  const allowed = normalizeTrimmedStringList(value.allowed);
+  const disallowed = normalizeTrimmedStringList(value.disallowed);
+  const signal = {
+    ...(path ? { path } : {}),
+    ...(defaultValue ? { default: defaultValue } : {}),
+    ...(allowed.length > 0 ? { allowed } : {}),
+    ...(disallowed.length > 0 ? { disallowed } : {}),
+  } satisfies PluginManifestCapabilityProviderModeConfigSignal;
+  return Object.keys(signal).length > 0 ? signal : undefined;
+}
+
+function normalizeCapabilityProviderConfigSignals(
+  value: unknown,
+): PluginManifestCapabilityProviderConfigSignal[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const signals: PluginManifestCapabilityProviderConfigSignal[] = [];
+  for (const rawSignal of value) {
+    if (!isRecord(rawSignal)) {
+      continue;
+    }
+    const rootPath = normalizeOptionalString(rawSignal.rootPath);
+    if (!rootPath) {
+      continue;
+    }
+    const overlayPath = normalizeOptionalString(rawSignal.overlayPath);
+    const required = normalizeTrimmedStringList(rawSignal.required);
+    const requiredAny = normalizeTrimmedStringList(rawSignal.requiredAny);
+    const mode = normalizeCapabilityProviderModeConfigSignal(rawSignal.mode);
+    const signal = {
+      rootPath,
+      ...(overlayPath ? { overlayPath } : {}),
+      ...(required.length > 0 ? { required } : {}),
+      ...(requiredAny.length > 0 ? { requiredAny } : {}),
+      ...(mode ? { mode } : {}),
+    } satisfies PluginManifestCapabilityProviderConfigSignal;
+    if (required.length > 0 || requiredAny.length > 0 || mode) {
+      signals.push(signal);
+    }
+  }
+  return signals.length > 0 ? signals : undefined;
+}
+
 function normalizeCapabilityProviderMetadata(
   value: unknown,
 ): Record<string, PluginManifestCapabilityProviderMetadata> | undefined {
@@ -655,10 +723,12 @@ function normalizeCapabilityProviderMetadata(
     const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
     const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
     const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
+    const configSignals = normalizeCapabilityProviderConfigSignals(rawMetadata.configSignals);
     const metadata = {
       ...(aliases.length > 0 ? { aliases } : {}),
       ...(authProviders.length > 0 ? { authProviders } : {}),
       ...(authSignals ? { authSignals } : {}),
+      ...(configSignals ? { configSignals } : {}),
     } satisfies PluginManifestCapabilityProviderMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[providerId] = metadata;

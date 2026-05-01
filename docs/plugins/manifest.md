@@ -206,6 +206,19 @@ stay in the plugin runtime.
     "example-image": {
       "aliases": ["example-image-oauth"],
       "authProviders": ["example-image"],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.example-image.config",
+          "overlayPath": "image",
+          "mode": {
+            "path": "mode",
+            "default": "local",
+            "allowed": ["local"]
+          },
+          "requiredAny": ["workflow", "workflowPath"],
+          "required": ["promptNodeId"]
+        }
+      ],
       "authSignals": [
         {
           "provider": "example-image"
@@ -226,11 +239,31 @@ stay in the plugin runtime.
 
 Each metadata entry supports:
 
-| Field           | Required | Type       | What it means                                                                                                                   |
-| --------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `aliases`       | No       | `string[]` | Additional provider ids that should count as static auth aliases for the generation provider.                                   |
-| `authProviders` | No       | `string[]` | Provider ids whose configured auth profiles should count as auth for this generation provider.                                  |
-| `authSignals`   | No       | `object[]` | Explicit auth signals. When present, these replace the default signal set from the provider id, `aliases`, and `authProviders`. |
+| Field           | Required | Type       | What it means                                                                                                                       |
+| --------------- | -------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `aliases`       | No       | `string[]` | Additional provider ids that should count as static auth aliases for the generation provider.                                       |
+| `authProviders` | No       | `string[]` | Provider ids whose configured auth profiles should count as auth for this generation provider.                                      |
+| `configSignals` | No       | `object[]` | Cheap config-only availability signals for local or self-hosted providers that can be configured without auth profiles or env vars. |
+| `authSignals`   | No       | `object[]` | Explicit auth signals. When present, these replace the default signal set from the provider id, `aliases`, and `authProviders`.     |
+
+Each `configSignals` entry supports:
+
+| Field         | Required | Type       | What it means                                                                                                                                                                           |
+| ------------- | -------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rootPath`    | Yes      | `string`   | Dot path to the plugin-owned config object to inspect, for example `plugins.entries.example.config`.                                                                                    |
+| `overlayPath` | No       | `string`   | Dot path inside the root config whose object should overlay the root object before evaluating the signal. Use this for capability-specific config such as `image`, `video`, or `music`. |
+| `required`    | No       | `string[]` | Dot paths inside the effective config that must have configured values. Strings must be non-empty; objects and arrays must not be empty.                                                |
+| `requiredAny` | No       | `string[]` | Dot paths inside the effective config where at least one must have a configured value.                                                                                                  |
+| `mode`        | No       | `object`   | Optional string mode guard inside the effective config. Use this when config-only availability applies only to one mode.                                                                |
+
+Each `mode` guard supports:
+
+| Field        | Required | Type       | What it means                                                                      |
+| ------------ | -------- | ---------- | ---------------------------------------------------------------------------------- |
+| `path`       | No       | `string`   | Dot path inside the effective config. Defaults to `mode`.                          |
+| `default`    | No       | `string`   | Mode value to use when the config omits the path.                                  |
+| `allowed`    | No       | `string[]` | If present, the signal passes only when the effective mode is one of these values. |
+| `disallowed` | No       | `string[]` | If present, the signal fails when the effective mode is one of these values.       |
 
 Each `authSignals` entry supports:
 
