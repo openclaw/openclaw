@@ -83,13 +83,7 @@ function resolveRuntimeTokenValue(params: {
     }
     return { status: "configured_unavailable" };
   }
-  // Runtime resolution stays strict for non-env SecretRefs.
-  resolveSecretInputString({
-    value: params.value,
-    path: params.path,
-    defaults: params.cfg?.secrets?.defaults,
-    mode: "strict",
-  });
+  // Non-env SecretRefs cannot be resolved in read-only paths; return configured_unavailable.
   return { status: "configured_unavailable" };
 }
 
