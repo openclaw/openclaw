@@ -235,7 +235,9 @@ function formatGitCommandFailure(params: {
   stdout: string;
   stderr: string;
 }): string {
-  const detail = sanitizeForLog(params.stderr.trim() || params.stdout.trim() || "git failed");
+  const detail = sanitizeForLog(
+    redactSensitiveUrlLikeString(params.stderr.trim() || params.stdout.trim() || "git failed"),
+  );
   return `failed to ${params.action} ${sanitizeForLog(redactSensitiveUrlLikeString(params.source.label))}: ${detail}`;
 }
 
