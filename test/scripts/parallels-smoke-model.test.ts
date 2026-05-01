@@ -321,8 +321,8 @@ console.log(JSON.stringify(result));
       expect(script, scriptPath).toContain("minimal");
       expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
     }
-    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("resolveParallelsModelTimeoutSeconds");
-    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("resolveParallelsModelTimeoutSeconds");
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("providerTimeoutConfigJson");
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("providerTimeoutConfigJson");
     expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsModelProviderTimeoutScript");
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
@@ -479,8 +479,8 @@ console.log(JSON.stringify(result));
     const windows = readFileSync(TS_PATHS.windows, "utf8");
 
     expect(powershell).toContain("windowsOpenClawResolver");
-    expect(powershell).toContain('resolveParallelsModelTimeoutSeconds("windows")');
-    expect(powershell).toContain("models.providers.${providerId}.timeoutSeconds");
+    expect(powershell).toContain("providerTimeoutConfigJson");
+    expect(powershell).toContain("models.providers.${providerId}");
     expect(powershell).toContain("Resolve-OpenClawCommand");
     expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
     expect(powershell).toContain("$ErrorActionPreference = 'Continue'");

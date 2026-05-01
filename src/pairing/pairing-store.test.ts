@@ -186,7 +186,7 @@ async function withAllowFromCacheReadSpy(params: {
     allowFrom: ["1001"],
   });
   clearPairingAllowFromReadCacheForTest();
-  const readSpy = params.createReadSpy();
+  const readSpy = params.createReadSpy(filePath);
   try {
     await assertAllowFromCacheInvalidation({
       stateDir: params.stateDir,

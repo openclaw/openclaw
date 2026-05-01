@@ -532,9 +532,7 @@ export { registerPluginsCli };
 export async function runPluginsCommand(argv: string[]) {
   const program = new Command();
   program.exitOverride();
-  vi.resetModules();
-  const { registerPluginsCli: registerPluginsCliFresh } = await import("./plugins-cli.js");
-  registerPluginsCliFresh(program);
+  registerPluginsCli(program);
   return await program.parseAsync(argv, { from: "user" });
 }
 

@@ -1,4 +1,4 @@
-import { providerIdFromModelId, resolveParallelsModelTimeoutSeconds } from "./provider-auth.ts";
+import { providerIdFromModelId, providerTimeoutConfigJson } from "./provider-auth.ts";
 
 export function psSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
@@ -16,12 +16,11 @@ export function encodePowerShell(script: string): string {
 
 export function windowsModelProviderTimeoutScript(modelId: string): string {
   const providerId = providerIdFromModelId(modelId);
-  if (!providerId) {
+  const configJson = providerTimeoutConfigJson(modelId, "windows");
+  if (!providerId || !configJson) {
     return "";
   }
-  return `Invoke-OpenClaw config set ${psSingleQuote(
-    `models.providers.${providerId}.timeoutSeconds`,
-  )} ${resolveParallelsModelTimeoutSeconds("windows")} --strict-json
+  return `Invoke-OpenClaw config set ${psSingleQuote(`models.providers.${providerId}`)} ${psSingleQuote(configJson)} --strict-json
 if ($LASTEXITCODE -ne 0) { throw "model provider timeout config set failed" }`;
 }
 
