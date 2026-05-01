@@ -287,6 +287,19 @@ function resolveRememberedSummaryFileNameForInputPath(filePath: string): string 
   return relativeParsed.fileName;
 }
 
+function canUseRememberedSummaryInputPathAlias(params: {
+  normalizedPath: string;
+  probePaths: Array<{ absolutePath: string; relativePath: string }>;
+}): boolean {
+  if (params.probePaths.length > 0) {
+    return true;
+  }
+  return (
+    isWindowsStyleSessionSummaryAbsolutePath(params.normalizedPath) &&
+    !path.isAbsolute(params.normalizedPath)
+  );
+}
+
 async function refreshRememberedSummaryEntryForMissingProbe(params: {
   workspaceDir: string;
   fileName: string;
@@ -572,7 +585,9 @@ export async function isSessionSummaryDailyMemoryPath(params: {
     }));
   const rememberedSessionSummaryFileName = !sawExistingCandidate
     ? (resolveRememberedSummaryFileNameForProbePaths(probePaths) ??
-      resolveRememberedSummaryFileNameForInputPath(params.filePath))
+      (canUseRememberedSummaryInputPathAlias({ normalizedPath, probePaths })
+        ? resolveRememberedSummaryFileNameForInputPath(params.filePath)
+        : null))
     : null;
   const rememberedEntry = rememberedSessionSummaryFileName
     ? await refreshRememberedSummaryEntryForMissingProbe({
