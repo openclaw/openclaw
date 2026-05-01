@@ -902,6 +902,43 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("uses structured command metadata and suppresses generic Codex lifecycle noise", async () => {
+    const draftStream = createDraftStream();
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        title: "Command",
+        name: "bash",
+        meta: "pnpm test extensions/telegram",
+        phase: "start",
+        status: "running",
+      });
+      await replyOptions?.onItemEvent?.({
+        kind: "analysis",
+        title: "Reasoning",
+        phase: "start",
+        status: "running",
+      });
+      await replyOptions?.onItemEvent?.({
+        kind: "command",
+        title: "Command",
+        name: "bash",
+        meta: "pnpm test extensions/telegram",
+        phase: "end",
+        status: "completed",
+      });
+      return { queuedFinal: false };
+    });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Working…\n• `command: pnpm test extensions/telegram`",
+    );
+    expect(draftStream.update).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses Telegram tool progress when explicitly disabled", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
