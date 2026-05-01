@@ -241,6 +241,43 @@ function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set
   return requested;
 }
 
+function addMediaModelProviders(target: Set<string>, value: unknown): void {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  for (const entry of value) {
+    if (typeof entry === "object" && entry !== null) {
+      addStringValue(target, (entry as { provider?: unknown }).provider);
+    }
+  }
+}
+
+function collectRequestedMediaUnderstandingProviderIds(
+  cfg: OpenClawConfig | undefined,
+): Set<string> {
+  const requested = new Set<string>();
+  const media = cfg?.tools?.media;
+  addMediaModelProviders(requested, media?.models);
+  addMediaModelProviders(requested, media?.image?.models);
+  addMediaModelProviders(requested, media?.audio?.models);
+  addMediaModelProviders(requested, media?.video?.models);
+  return requested;
+}
+
+function collectRequestedCapabilityProviderIds(params: {
+  key: CapabilityProviderRegistryKey;
+  cfg?: OpenClawConfig;
+}): Set<string> | undefined {
+  switch (params.key) {
+    case "speechProviders":
+      return collectRequestedSpeechProviderIds(params.cfg);
+    case "mediaUnderstandingProviders":
+      return collectRequestedMediaUnderstandingProviderIds(params.cfg);
+    default:
+      return undefined;
+  }
+}
+
 function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
   for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
     const provider = entry.provider as { id?: unknown; aliases?: unknown };
@@ -262,7 +299,7 @@ function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderReg
   requested: Set<string>;
   entries: PluginRegistry[K];
 }): PluginRegistry[K] {
-  if (params.key !== "speechProviders") {
+  if (params.key !== "speechProviders" && params.key !== "mediaUnderstandingProviders") {
     return [] as unknown as PluginRegistry[K];
   }
   if (params.requested.size === 0) {
@@ -341,23 +378,16 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
 
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (
-    activeProviders.length > 0 &&
-    params.key !== "memoryEmbeddingProviders" &&
-    params.key !== "speechProviders"
-  ) {
-    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-  }
-  if (activeProviders.length > 0 && params.key === "speechProviders" && !params.cfg) {
-    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-  }
-  const missingRequestedSpeechProviders =
-    activeProviders.length > 0 && params.key === "speechProviders"
-      ? collectRequestedSpeechProviderIds(params.cfg)
+  const missingRequestedProviders =
+    activeProviders.length > 0
+      ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
       : undefined;
-  if (missingRequestedSpeechProviders) {
-    removeActiveProviderIds(missingRequestedSpeechProviders, activeProviders);
-    if (missingRequestedSpeechProviders.size === 0) {
+  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
+    if (!missingRequestedProviders) {
+      return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+    }
+    removeActiveProviderIds(missingRequestedProviders, activeProviders);
+    if (missingRequestedProviders.size === 0) {
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
   }
@@ -390,7 +420,7 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       activeProviders.length > 0
         ? filterLoadedProvidersForRequestedConfig({
             key: params.key,
-            requested: missingRequestedSpeechProviders ?? new Set(),
+            requested: missingRequestedProviders ?? new Set(),
             entries: loadedProviders,
           })
         : loadedProviders;
