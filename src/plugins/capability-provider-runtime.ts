@@ -6,23 +6,21 @@ import {
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
 import {
-  resolvePluginRegistryLoadCacheKey,
-  resolveRuntimePluginRegistry,
-  type PluginLoadOptions,
-} from "./loader.js";
-import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
-import {
   resolveConfigScopedRuntimeCacheValue,
   type ConfigScopedRuntimeCache,
 } from "./plugin-cache-primitives.js";
 import {
+  resolvePluginRegistryLoadCacheKey,
+  resolveRuntimePluginRegistry,
+  type PluginLoadOptions,
+} from "./loader.js";
+import {
   hasManifestContractValue,
   isManifestPluginAvailableForControlPlane,
+  loadManifestContractSnapshot,
   listAvailableManifestContractValues,
 } from "./manifest-contract-eligibility.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
@@ -89,29 +87,10 @@ export function loadCapabilityManifestSnapshot(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
 }): Pick<PluginMetadataSnapshot, "index" | "plugins"> {
-  const current = getCurrentPluginMetadataSnapshot({
+  return loadManifestContractSnapshot({
     config: params.cfg,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-  if (current) {
-    return current;
-  }
-  const env = process.env;
-  const index = loadPluginRegistrySnapshot({
-    config: params.cfg,
-    env,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-  });
-  return {
-    index,
-    plugins: loadPluginManifestRegistryForInstalledIndex({
-      index,
-      config: params.cfg,
-      env,
-      includeDisabled: true,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    }).plugins,
-  };
 }
 
 function resolveCapabilityPluginIds(params: {

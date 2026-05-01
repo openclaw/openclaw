@@ -306,7 +306,7 @@ describe("resolvePluginTools optional tools", () => {
     },
     {
       name: "allows optional tools via plugin-scoped allowlist entries",
-      toolAllowlist: ["group:plugins"],
+      toolAllowlist: ["optional_tool", "tavily"],
     },
   ] as const)("$name", ({ toolAllowlist }) => {
     setOptionalDemoRegistry();
@@ -563,6 +563,41 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("does not widen active registry reuse to non-matching plugin tool owners", () => {
+    const heavyFactory = vi.fn(() => makeTool("heavy_tool"));
+    const activeRegistry = {
+      plugins: [
+        { id: "optional-demo", status: "loaded" },
+        { id: "heavy-startup", status: "loaded" },
+      ],
+      tools: [
+        createOptionalDemoEntry(),
+        {
+          pluginId: "heavy-startup",
+          optional: false,
+          source: "/tmp/heavy-startup.js",
+          names: ["heavy_tool"],
+          factory: heavyFactory,
+        },
+      ],
+      diagnostics: [],
+    };
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
+    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+        allowGatewaySubagentBinding: true,
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(heavyFactory).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("adds enabled non-startup tool plugins to the active tool runtime scope", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
@@ -581,7 +616,7 @@ describe("resolvePluginTools optional tools", () => {
           },
         },
       } as never,
-      toolAllowlist: ["optional_tool"],
+      toolAllowlist: ["optional_tool", "tavily"],
       allowGatewaySubagentBinding: true,
     });
 

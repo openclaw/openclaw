@@ -2,9 +2,11 @@ import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import { listEnabledInstalledPluginRecords } from "./installed-plugin-index.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestContractSnapshot,
+} from "./manifest-contract-eligibility.js";
 import {
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
@@ -199,13 +201,54 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
   return undefined;
 }
 
-function addLoadedPluginIdsFromRegistry(
+function pluginToolNamesMatchAllowlist(params: {
+  names: readonly string[];
+  pluginId: string;
+  optional: boolean;
+  allowlist: Set<string>;
+}): boolean {
+  if (params.allowlist.size === 0) {
+    return !params.optional;
+  }
+  return isOptionalToolEntryPotentiallyAllowed(params);
+}
+
+function manifestToolContractMatchesAllowlist(params: {
+  toolNames: readonly string[];
+  pluginId: string;
+  allowlist: Set<string>;
+}): boolean {
+  if (params.toolNames.length === 0) {
+    return false;
+  }
+  if (params.allowlist.size === 0) {
+    return true;
+  }
+  if (params.allowlist.has("*") || params.allowlist.has("group:plugins")) {
+    return true;
+  }
+  const pluginKey = normalizeToolName(params.pluginId);
+  if (params.allowlist.has(pluginKey)) {
+    return true;
+  }
+  return params.toolNames.some((name) => params.allowlist.has(normalizeToolName(name)));
+}
+
+function addToolPluginIdsFromRegistry(
   registry: ReturnType<typeof getActivePluginRegistry>,
   pluginIds: Set<string>,
+  allowlist: Set<string>,
 ): void {
-  for (const plugin of registry?.plugins ?? []) {
-    if (plugin.status === undefined || plugin.status === "loaded") {
-      pluginIds.add(plugin.id);
+  for (const entry of registry?.tools ?? []) {
+    if (
+      pluginToolNamesMatchAllowlist({
+        names: entry.names,
+        pluginId: entry.pluginId,
+        optional: entry.optional,
+        allowlist,
+      })
+    ) {
+      pluginIds.add(entry.pluginId);
     }
   }
 }
@@ -214,21 +257,38 @@ function resolvePluginToolRuntimePluginIds(params: {
   config: PluginLoadOptions["config"];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
-}): string[] | undefined {
+  toolAllowlist?: string[];
+}): string[] {
   const pluginIds = new Set<string>();
-  addLoadedPluginIdsFromRegistry(getActivePluginChannelRegistry(), pluginIds);
-  addLoadedPluginIdsFromRegistry(getActivePluginRegistry(), pluginIds);
-  const index = loadPluginRegistrySnapshot({
+  const allowlist = normalizeAllowlist(params.toolAllowlist);
+  addToolPluginIdsFromRegistry(getActivePluginChannelRegistry(), pluginIds, allowlist);
+  addToolPluginIdsFromRegistry(getActivePluginRegistry(), pluginIds, allowlist);
+  const snapshot = loadManifestContractSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
   });
-  for (const plugin of listEnabledInstalledPluginRecords(index, params.config)) {
-    pluginIds.add(plugin.pluginId);
+  for (const plugin of snapshot.plugins) {
+    if (
+      !isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: params.config,
+      })
+    ) {
+      continue;
+    }
+    if (
+      manifestToolContractMatchesAllowlist({
+        toolNames: plugin.contracts?.tools ?? [],
+        pluginId: plugin.id,
+        allowlist,
+      })
+    ) {
+      pluginIds.add(plugin.id);
+    }
   }
-  return pluginIds.size > 0
-    ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
+  return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
 }
 
 function registryContainsPluginIds(
@@ -238,8 +298,11 @@ function registryContainsPluginIds(
   if (!registry || pluginIds === undefined) {
     return false;
   }
-  const loadedPluginIds = new Set<string>();
-  addLoadedPluginIdsFromRegistry(registry, loadedPluginIds);
+  const loadedPluginIds = new Set(
+    (registry.plugins ?? [])
+      .filter((plugin) => plugin.status === undefined || plugin.status === "loaded")
+      .map((plugin) => plugin.id),
+  );
   return pluginIds.every((pluginId) => loadedPluginIds.has(pluginId));
 }
 
@@ -291,6 +354,7 @@ export function resolvePluginTools(params: {
     config: context.config,
     workspaceDir: context.workspaceDir,
     env,
+    toolAllowlist: params.toolAllowlist,
   });
   const loadOptions = buildPluginRuntimeLoadOptions(context, {
     activate: false,
@@ -335,10 +399,10 @@ export function resolvePluginTools(params: {
     }
     const declaredNames = entry.names ?? [];
     if (
-      entry.optional &&
-      !isOptionalToolEntryPotentiallyAllowed({
+      !pluginToolNamesMatchAllowlist({
         names: declaredNames,
         pluginId: entry.pluginId,
+        optional: entry.optional,
         allowlist,
       })
     ) {
