@@ -29,12 +29,21 @@ export function resolveLiveSessionModelSelection(params: {
     return null;
   }
   const agentId = normalizeOptionalString(params.agentId);
-  const defaultModelRef = agentId
-    ? resolveDefaultModelForAgent({
-        cfg,
-        agentId,
-      })
-    : { provider: params.defaultProvider, model: params.defaultModel };
+  // Use the caller-supplied defaults (which already reflect the heartbeat or
+  // cron model override) instead of re-resolving the agent's primary model.
+  // resolveDefaultModelForAgent returns the agent primary, which differs from
+  // the heartbeat model and would cause a spurious LiveSessionModelSwitchError
+  // on every heartbeat run.
+  const callerDefault = { provider: params.defaultProvider, model: params.defaultModel };
+  const agentDefault = agentId ? resolveDefaultModelForAgent({ cfg, agentId }) : callerDefault;
+  // Prefer the caller-supplied default when it intentionally differs from the
+  // agent primary (heartbeat, cron with explicit model).  Fall back to the
+  // agent-level default only when the caller passes the same values (normal
+  // message flow), so UI-driven model switches still take effect.
+  const defaultModelRef =
+    callerDefault.provider !== agentDefault.provider || callerDefault.model !== agentDefault.model
+      ? callerDefault
+      : agentDefault;
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId,
   });
