@@ -265,8 +265,10 @@ struct ConfigSchemaForm: View {
     private func stringBinding(_ path: ConfigPath, defaultValue: String?) -> Binding<String> {
         Binding(
             get: {
-                if let value = store.configValue(at: path) as? String { return value }
-                return defaultValue ?? ""
+                if let value = store.configValue(at: path) as? String {
+                    return value == "__OPENCLAW_REDACTED__" ? "" : value
+                }
+                return defaultValue == "__OPENCLAW_REDACTED__" ? "" : (defaultValue ?? "")
             },
             set: { newValue in
                 let trimmed = newValue.trimmingCharacters(in: .whitespacesAndNewlines)

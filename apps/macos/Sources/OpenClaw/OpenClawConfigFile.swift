@@ -6,7 +6,16 @@ enum OpenClawConfigFile {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "config")
     private static let configAuditFileName = "config-audit.jsonl"
     private static let configHealthFileName = "config-health.json"
+    private static let redactedSentinel = "__OPENCLAW_REDACTED__"
     private static let fileLock = NSRecursiveLock()
+
+    private struct RedactedSentinelRestoreError: LocalizedError {
+        let path: String
+
+        var errorDescription: String? {
+            "Refusing to save reserved redaction sentinel at \(self.path)."
+        }
+    }
 
     private static func withFileLock<T>(_ body: () throws -> T) rethrows -> T {
         self.fileLock.lock()
@@ -64,10 +73,10 @@ enum OpenClawConfigFile {
             let hadMetaBefore = self.hasMeta(previousRoot)
             let gatewayModeBefore = self.gatewayMode(previousRoot)
 
-            var output = dict
-            self.stampMeta(&output)
-
             do {
+                var output = try self.restoreRedactedSentinels(in: dict, original: previousRoot, path: [])
+                self.stampMeta(&output)
+
                 let data = try JSONSerialization.data(withJSONObject: output, options: [.prettyPrinted, .sortedKeys])
                 try FileManager().createDirectory(
                     at: url.deletingLastPathComponent(),
@@ -120,9 +129,9 @@ enum OpenClawConfigFile {
                     "previousBytes": previousBytes ?? NSNull(),
                     "nextBytes": NSNull(),
                     "hasMetaBefore": hadMetaBefore,
-                    "hasMetaAfter": self.hasMeta(output),
+                    "hasMetaAfter": self.hasMeta(dict),
                     "gatewayModeBefore": gatewayModeBefore ?? NSNull(),
-                    "gatewayModeAfter": self.gatewayMode(output) ?? NSNull(),
+                    "gatewayModeAfter": self.gatewayMode(dict) ?? NSNull(),
                     "suspicious": [],
                     "error": error.localizedDescription,
                 ])
@@ -615,6 +624,57 @@ enum OpenClawConfigFile {
         nextEntry["lastObservedSuspiciousSignature"] = signature
         state = self.setConfigHealthEntry(state: state, configPath: configURL.path, entry: nextEntry)
         self.writeConfigHealthState(state)
+    }
+
+    private static func restoreRedactedSentinels(
+        in incoming: [String: Any],
+        original: [String: Any]?,
+        path: ConfigPath) throws -> [String: Any]
+    {
+        var result: [String: Any] = [:]
+        for (key, value) in incoming {
+            let nextPath = path + [.key(key)]
+            let originalValue = original?[key]
+            result[key] = try self.restoreRedactedSentinels(
+                value,
+                original: originalValue,
+                path: nextPath)
+        }
+        return result
+    }
+
+    private static func restoreRedactedSentinels(
+        _ incoming: Any,
+        original: Any?,
+        path: ConfigPath) throws -> Any
+    {
+        if let string = incoming as? String, string == self.redactedSentinel {
+            if let original {
+                return original
+            }
+            throw RedactedSentinelRestoreError(path: pathKey(path).isEmpty ? "<root>" : pathKey(path))
+        }
+
+        if let array = incoming as? [Any] {
+            let originalArray = original as? [Any] ?? []
+            return try array.enumerated().map { index, item in
+                let originalItem = originalArray.indices.contains(index) ? originalArray[index] : nil
+                return try self.restoreRedactedSentinels(
+                    item,
+                    original: originalItem,
+                    path: path + [.index(index)])
+            }
+        }
+
+        if let dictionary = incoming as? [String: Any] {
+            let originalDictionary = original as? [String: Any]
+            return try self.restoreRedactedSentinels(
+                in: dictionary,
+                original: originalDictionary,
+                path: path)
+        }
+
+        return incoming
     }
 
     private static func appendConfigWriteAudit(_ fields: [String: Any]) {

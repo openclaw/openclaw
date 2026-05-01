@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import OpenClaw
 
@@ -64,5 +65,60 @@ struct ConfigStoreTests {
         await ConfigStore._testClearOverrides()
         #expect(localHit)
         #expect(!remoteHit)
+    }
+
+    @Test func `local save fallback preserves gateway redacted secrets`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-config-store-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+            "OPENCLAW_GATEWAY_PORT": "1",
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": [
+                        "mode": "token",
+                        "token": "real-secret-token",
+                    ],
+                ],
+                "channels": [
+                    "discord": [
+                        "enabled": true,
+                        "dmPolicy": "pairing",
+                    ],
+                ],
+            ])
+
+            await ConfigStore._testSetOverrides(.init(isRemoteMode: { false }))
+
+            try await ConfigStore.save([
+                "gateway": [
+                    "mode": "local",
+                    "auth": [
+                        "mode": "token",
+                        "token": "__OPENCLAW_REDACTED__",
+                    ],
+                ],
+                "channels": [
+                    "discord": [
+                        "enabled": true,
+                        "dmPolicy": "open",
+                    ],
+                ],
+            ])
+
+            let root = OpenClawConfigFile.loadDict()
+            let auth = ((root["gateway"] as? [String: Any])?["auth"] as? [String: Any]) ?? [:]
+            let discord = ((root["channels"] as? [String: Any])?["discord"] as? [String: Any]) ?? [:]
+            #expect(auth["token"] as? String == "real-secret-token")
+            #expect(discord["dmPolicy"] as? String == "open")
+
+            await ConfigStore._testClearOverrides()
+        }
     }
 }
