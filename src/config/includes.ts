@@ -248,8 +248,15 @@ class IncludeProcessor {
       if (err instanceof ConfigIncludeError) {
         throw err;
       }
-      // File doesn't exist yet - lexical containment check above is sufficient.
-      return { resolvedPath: normalized, root: lexicalMatch };
+      if (isNotFoundError(err)) {
+        // File doesn't exist yet - lexical containment check above is sufficient.
+        return { resolvedPath: normalized, root: lexicalMatch };
+      }
+      throw new ConfigIncludeError(
+        `Failed to resolve include file realpath: ${includePath} (resolved: ${normalized})`,
+        includePath,
+        err instanceof Error ? err : undefined,
+      );
     }
   }
 
@@ -286,6 +293,8 @@ class IncludeProcessor {
   private readFile(includePath: string, resolvedPath: string, root: IncludeRoot): string {
     try {
       if (this.resolver.readFileWithGuards) {
+        // This guard revalidates the opened file against root.rootRealDir, so
+        // symlink swaps between resolvePath() and read are rejected at open time.
         return this.resolver.readFileWithGuards({
           includePath,
           resolvedPath,
@@ -336,6 +345,15 @@ function safeRealpath(target: string): string {
   } catch {
     return target;
   }
+}
+
+function isNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ENOENT",
+  );
 }
 
 export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {

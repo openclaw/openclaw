@@ -1,6 +1,7 @@
+import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   CircularIncludeError,
@@ -612,6 +613,33 @@ describe("security: path traversal protection (CWE-22)", () => {
         );
         expect(result).toEqual({ logging: { redactSensitive: "tools" } });
       });
+    });
+
+    it("fails closed when include realpath resolution fails for reasons other than ENOENT", () => {
+      const includePath = configPath("denied.json");
+      const originalRealpathSync = nodeFs.realpathSync;
+      const realpathSpy = vi.spyOn(nodeFs, "realpathSync").mockImplementation((target) => {
+        if (path.normalize(String(target)) === includePath) {
+          const error = new Error("permission denied") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        }
+        return originalRealpathSync(target);
+      });
+
+      try {
+        expectResolveIncludeError(
+          () =>
+            resolveConfigIncludes(
+              { $include: "./denied.json" },
+              DEFAULT_BASE_PATH,
+              createMockResolver({ [includePath]: { leaked: true } }),
+            ),
+          /Failed to resolve include file realpath/,
+        );
+      } finally {
+        realpathSpy.mockRestore();
+      }
     });
 
     it("rejects include files that are hardlinked aliases", async () => {
