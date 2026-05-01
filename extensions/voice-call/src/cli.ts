@@ -38,6 +38,8 @@ type VoiceCallGatewayMethod =
   | "voicecall.initiate"
   | "voicecall.start"
   | "voicecall.continue"
+  | "voicecall.continue.start"
+  | "voicecall.continue.result"
   | "voicecall.speak"
   | "voicecall.dtmf"
   | "voicecall.end"
@@ -45,7 +47,10 @@ type VoiceCallGatewayMethod =
 
 type VoiceCallGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
 
-const VOICE_CALL_GATEWAY_TIMEOUT_MS = "5000";
+const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
+const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
+const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
+const VOICE_CALL_GATEWAY_POLL_INTERVAL_MS = 1000;
 
 const voiceCallCliDeps = {
   callGatewayFromCli,
@@ -83,11 +88,16 @@ function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
 async function callVoiceCallGateway(
   method: VoiceCallGatewayMethod,
   params?: Record<string, unknown>,
+  opts?: { timeoutMs?: number },
 ): Promise<VoiceCallGatewayCallResult> {
   try {
+    const timeoutMs =
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.ceil(opts.timeoutMs))
+        : VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS;
     const payload = await voiceCallCliDeps.callGatewayFromCli(
       method,
-      { json: true, timeout: VOICE_CALL_GATEWAY_TIMEOUT_MS },
+      { json: true, timeout: String(timeoutMs) },
       params,
       { progress: false },
     );
@@ -98,6 +108,94 @@ async function callVoiceCallGateway(
     }
     throw err;
   }
+}
+
+function resolveGatewayOperationTimeoutMs(config: VoiceCallConfig): number {
+  return Math.max(VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS, config.ringTimeoutMs + 5000);
+}
+
+function resolveGatewayContinueTimeoutMs(config: VoiceCallConfig): number {
+  return (
+    config.transcriptTimeoutMs +
+    VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS +
+    VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS
+  );
+}
+
+function isUnknownGatewayMethod(err: unknown, method: VoiceCallGatewayMethod): boolean {
+  return formatErrorMessage(err).includes(`unknown method: ${method}`);
+}
+
+function readGatewayOperationId(payload: unknown): string {
+  if (isRecord(payload) && typeof payload.operationId === "string" && payload.operationId) {
+    return payload.operationId;
+  }
+  throw new Error("voicecall gateway response missing operationId");
+}
+
+function readGatewayPollTimeoutMs(payload: unknown, fallbackTimeoutMs: number): number {
+  if (isRecord(payload) && typeof payload.pollTimeoutMs === "number") {
+    return Math.max(1, Math.ceil(payload.pollTimeoutMs));
+  }
+  return fallbackTimeoutMs;
+}
+
+function readCompletedContinueResult(
+  payload: unknown,
+):
+  | { status: "pending" }
+  | { status: "completed"; result: unknown }
+  | { status: "failed"; error: string } {
+  if (!isRecord(payload)) {
+    throw new Error("voicecall gateway response missing operation status");
+  }
+  if (payload.status === "pending") {
+    return { status: "pending" };
+  }
+  if (payload.status === "failed") {
+    return {
+      status: "failed",
+      error: typeof payload.error === "string" ? payload.error : "continue failed",
+    };
+  }
+  if (payload.status === "completed") {
+    return { status: "completed", result: payload.result };
+  }
+  throw new Error("voicecall gateway response has unknown operation status");
+}
+
+async function pollVoiceCallContinueGateway(params: {
+  operationId: string;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const deadlineMs = Date.now() + params.timeoutMs;
+
+  while (Date.now() <= deadlineMs) {
+    const gateway = await callVoiceCallGateway(
+      "voicecall.continue.result",
+      { operationId: params.operationId },
+      { timeoutMs: VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS },
+    );
+    if (!gateway.ok) {
+      throw new Error(
+        `gateway unavailable while waiting for voicecall continue result: ${formatErrorMessage(
+          gateway.error,
+        )}`,
+      );
+    }
+    const result = readCompletedContinueResult(gateway.payload);
+    if (result.status === "completed") {
+      return result.result;
+    }
+    if (result.status === "failed") {
+      throw new Error(result.error);
+    }
+    await sleep(
+      Math.min(VOICE_CALL_GATEWAY_POLL_INTERVAL_MS, Math.max(1, deadlineMs - Date.now())),
+    );
+  }
+
+  throw new Error("voicecall continue timed out waiting for gateway operation");
 }
 
 function resolveMode(input: string): "off" | "serve" | "funnel" {
@@ -252,17 +350,24 @@ function writeGatewayCallId(payload: unknown): void {
 
 async function initiateCallViaGatewayOrRuntime(params: {
   ensureRuntime: () => Promise<VoiceCallRuntime>;
+  config: VoiceCallConfig;
   method: "voicecall.initiate" | "voicecall.start";
   to?: string;
   message?: string;
   mode?: string;
 }) {
   const mode = resolveCallMode(params.mode);
-  const gateway = await callVoiceCallGateway(params.method, {
-    ...(params.to ? { to: params.to } : {}),
-    ...(params.message ? { message: params.message } : {}),
-    ...(mode ? { mode } : {}),
-  });
+  const gateway = await callVoiceCallGateway(
+    params.method,
+    {
+      ...(params.to ? { to: params.to } : {}),
+      ...(params.message ? { message: params.message } : {}),
+      ...(mode ? { mode } : {}),
+    },
+    {
+      timeoutMs: resolveGatewayOperationTimeoutMs(params.config),
+    },
+  );
   if (gateway.ok) {
     writeGatewayCallId(gateway.payload);
     return;
@@ -355,11 +460,17 @@ export function registerVoiceCallCli(params: {
           return;
         }
         const mode = resolveCallMode(options.mode) ?? "notify";
-        const gateway = await callVoiceCallGateway("voicecall.start", {
-          to: options.to,
-          ...(options.message ? { message: options.message } : {}),
-          mode,
-        });
+        const gateway = await callVoiceCallGateway(
+          "voicecall.start",
+          {
+            to: options.to,
+            ...(options.message ? { message: options.message } : {}),
+            mode,
+          },
+          {
+            timeoutMs: resolveGatewayOperationTimeoutMs(config),
+          },
+        );
         let callId: unknown;
         if (gateway.ok) {
           callId = isRecord(gateway.payload) ? gateway.payload.callId : undefined;
@@ -402,6 +513,7 @@ export function registerVoiceCallCli(params: {
     .action(async (options: { message: string; to?: string; mode?: string }) => {
       await initiateCallViaGatewayOrRuntime({
         ensureRuntime,
+        config,
         method: "voicecall.initiate",
         to: options.to,
         message: options.message,
@@ -422,6 +534,7 @@ export function registerVoiceCallCli(params: {
     .action(async (options: { to: string; message?: string; mode?: string }) => {
       await initiateCallViaGatewayOrRuntime({
         ensureRuntime,
+        config,
         method: "voicecall.start",
         to: options.to,
         message: options.message,
@@ -435,11 +548,45 @@ export function registerVoiceCallCli(params: {
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--message <text>", "Message to speak")
     .action(async (options: { callId: string; message: string }) => {
-      const gateway = await callVoiceCallGateway("voicecall.continue", {
-        callId: options.callId,
-        message: options.message,
-      });
+      let gateway: VoiceCallGatewayCallResult;
+      try {
+        gateway = await callVoiceCallGateway(
+          "voicecall.continue.start",
+          {
+            callId: options.callId,
+            message: options.message,
+          },
+          {
+            timeoutMs: resolveGatewayOperationTimeoutMs(config),
+          },
+        );
+      } catch (err) {
+        if (!isUnknownGatewayMethod(err, "voicecall.continue.start")) {
+          throw err;
+        }
+        gateway = await callVoiceCallGateway(
+          "voicecall.continue",
+          {
+            callId: options.callId,
+            message: options.message,
+          },
+          {
+            timeoutMs: resolveGatewayContinueTimeoutMs(config),
+          },
+        );
+      }
       if (gateway.ok) {
+        if (isRecord(gateway.payload) && typeof gateway.payload.operationId === "string") {
+          const result = await pollVoiceCallContinueGateway({
+            operationId: readGatewayOperationId(gateway.payload),
+            timeoutMs: readGatewayPollTimeoutMs(
+              gateway.payload,
+              resolveGatewayContinueTimeoutMs(config),
+            ),
+          });
+          writeStdoutJson(result);
+          return;
+        }
         writeStdoutJson(gateway.payload);
         return;
       }

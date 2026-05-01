@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import { Type } from "typebox";
 import {
@@ -19,6 +20,7 @@ import {
   type VoiceCallConfig,
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
+import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
@@ -203,6 +205,10 @@ export default definePluginEntry({
     }
 
     const runtimeState = getVoiceCallRuntimeGlobalState();
+    const continueOperationStore = createVoiceCallContinueOperationStore({
+      config,
+      coreConfig: api.config as CoreConfig,
+    });
 
     const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
       if (!config.enabled) {
@@ -258,8 +264,16 @@ export default definePluginEntry({
       }
     };
 
-    const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
-      respond(false, { error: formatErrorMessage(err) });
+    const respondError = (
+      respond: GatewayRequestHandlerOptions["respond"],
+      message: string,
+      code: (typeof ErrorCodes)[keyof typeof ErrorCodes] = ErrorCodes.UNAVAILABLE,
+    ) => {
+      respond(false, undefined, errorShape(code, message));
+    };
+
+    const sendError = (respond: GatewayRequestHandlerOptions["respond"], err: unknown) => {
+      respondError(respond, formatErrorMessage(err));
     };
 
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
@@ -271,6 +285,7 @@ export default definePluginEntry({
       const rt = await ensureRuntime();
       return { rt, callId, message } as const;
     };
+
     const initiateCallAndRespond = async (params: {
       rt: VoiceCallRuntime;
       respond: GatewayRequestHandlerOptions["respond"];
@@ -285,7 +300,7 @@ export default definePluginEntry({
         dtmfSequence: params.dtmfSequence,
       });
       if (!result.success) {
-        params.respond(false, { error: result.error || "initiate failed" });
+        respondError(params.respond, result.error || "initiate failed");
         return;
       }
       params.respond(true, { callId: result.callId, initiated: true });
@@ -306,12 +321,16 @@ export default definePluginEntry({
     }) => {
       const request = await resolveCallMessageRequest(params.requestParams);
       if ("error" in request) {
-        params.respond(false, { error: request.error });
+        respondError(
+          params.respond,
+          request.error ?? "callId and message required",
+          ErrorCodes.INVALID_REQUEST,
+        );
         return;
       }
       const result = await params.action(request);
       if (!result.success) {
-        params.respond(false, { error: result.error || params.failure });
+        respondError(params.respond, result.error || params.failure);
         return;
       }
       params.respond(
@@ -328,13 +347,13 @@ export default definePluginEntry({
         try {
           const message = normalizeOptionalString(params?.message) ?? "";
           if (!message) {
-            respond(false, { error: "message required" });
+            respondError(respond, "message required", ErrorCodes.INVALID_REQUEST);
             return;
           }
           const rt = await ensureRuntime();
           const to = normalizeOptionalString(params?.to) ?? rt.config.toNumber;
           if (!to) {
-            respond(false, { error: "to required" });
+            respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
           }
           const mode =
@@ -370,12 +389,57 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "voicecall.continue.start",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const request = await resolveCallMessageRequest(params);
+          if ("error" in request) {
+            respondError(
+              respond,
+              request.error ?? "callId and message required",
+              ErrorCodes.INVALID_REQUEST,
+            );
+            return;
+          }
+          respond(true, continueOperationStore.start(request));
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "voicecall.continue.result",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const operationId = normalizeOptionalString(params?.operationId) ?? "";
+          if (!operationId) {
+            respondError(respond, "operationId required", ErrorCodes.INVALID_REQUEST);
+            return;
+          }
+          const operation = continueOperationStore.read(operationId);
+          if (!operation.ok) {
+            respondError(respond, operation.error, ErrorCodes.INVALID_REQUEST);
+            return;
+          }
+          respond(true, operation.payload);
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "voicecall.speak",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const request = await resolveCallMessageRequest(params);
           if ("error" in request) {
-            respond(false, { error: request.error });
+            respondError(
+              respond,
+              request.error ?? "callId and message required",
+              ErrorCodes.INVALID_REQUEST,
+            );
             return;
           }
           if (request.rt.config.realtime.enabled) {
@@ -390,7 +454,7 @@ export default definePluginEntry({
           }
           const result = await request.rt.manager.speak(request.callId, request.message);
           if (!result.success) {
-            respond(false, { error: result.error || "speak failed" });
+            respondError(respond, result.error || "speak failed");
             return;
           }
           respond(true, { success: true });
@@ -407,13 +471,13 @@ export default definePluginEntry({
           const callId = normalizeOptionalString(params?.callId) ?? "";
           const digits = normalizeOptionalString(params?.digits) ?? "";
           if (!callId || !digits) {
-            respond(false, { error: "callId and digits required" });
+            respondError(respond, "callId and digits required", ErrorCodes.INVALID_REQUEST);
             return;
           }
           const rt = await ensureRuntime();
           const result = await rt.manager.sendDtmf(callId, digits);
           if (!result.success) {
-            respond(false, { error: result.error || "dtmf failed" });
+            respondError(respond, result.error || "dtmf failed");
             return;
           }
           respond(true, { success: true });
@@ -429,13 +493,13 @@ export default definePluginEntry({
         try {
           const callId = normalizeOptionalString(params?.callId) ?? "";
           if (!callId) {
-            respond(false, { error: "callId required" });
+            respondError(respond, "callId required", ErrorCodes.INVALID_REQUEST);
             return;
           }
           const rt = await ensureRuntime();
           const result = await rt.manager.endCall(callId);
           if (!result.success) {
-            respond(false, { error: result.error || "end failed" });
+            respondError(respond, result.error || "end failed");
             return;
           }
           respond(true, { success: true });
@@ -476,7 +540,7 @@ export default definePluginEntry({
           const message = normalizeOptionalString(params?.message) ?? "";
           const dtmfSequence = normalizeOptionalString(params?.dtmfSequence);
           if (!to) {
-            respond(false, { error: "to required" });
+            respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
           }
           const rt = await ensureRuntime();
