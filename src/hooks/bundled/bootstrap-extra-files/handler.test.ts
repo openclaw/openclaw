@@ -54,8 +54,9 @@ describe("bootstrap-extra-files hook", () => {
     const extraDir = path.join(tempDir, "packages", "core");
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "AGENTS.md"), "extra agents", "utf-8");
+    await fs.writeFile(path.join(extraDir, "PROJECT.md"), "project notes", "utf-8");
 
-    const cfg = createBootstrapExtraConfig(["packages/*/AGENTS.md"]);
+    const cfg = createBootstrapExtraConfig(["packages/*/AGENTS.md", "packages/*/PROJECT.md"]);
     const context = await createBootstrapContext({
       workspaceDir: tempDir,
       cfg,
@@ -71,6 +72,16 @@ describe("bootstrap-extra-files hook", () => {
     expect(injected.some((f) => f.path.endsWith(path.join("packages", "core", "AGENTS.md")))).toBe(
       true,
     );
+    expect(context.bootstrapFiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "PROJECT.md",
+          path: expect.stringContaining(path.join("packages", "core", "PROJECT.md")),
+          content: "project notes",
+          missing: false,
+        }),
+      ]),
+    );
   });
 
   it("re-applies subagent bootstrap allowlist after extras are added", async () => {
@@ -78,8 +89,9 @@ describe("bootstrap-extra-files hook", () => {
     const extraDir = path.join(tempDir, "packages", "persona");
     await fs.mkdir(extraDir, { recursive: true });
     await fs.writeFile(path.join(extraDir, "SOUL.md"), "evil", "utf-8");
+    await fs.writeFile(path.join(extraDir, "PROJECT.md"), "subagent hidden", "utf-8");
 
-    const cfg = createBootstrapExtraConfig(["packages/*/SOUL.md"]);
+    const cfg = createBootstrapExtraConfig(["packages/*/SOUL.md", "packages/*/PROJECT.md"]);
     const context = await createBootstrapContext({
       workspaceDir: tempDir,
       cfg,

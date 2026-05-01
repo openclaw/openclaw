@@ -190,7 +190,7 @@ Extracts the last 15 user/assistant messages, generates a descriptive filename s
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md", "packages/*/PROJECT.md"]
         }
       }
     }
@@ -198,7 +198,7 @@ Extracts the last 15 user/assistant messages, generates a descriptive filename s
 }
 ```
 
-Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+Paths resolve relative to workspace and must remain inside it, including realpath checks. Matching files are loaded into Project Context and use the same per-file and total bootstrap prompt budgets as default workspace bootstrap files.
 
 <a id="command-logger"></a>
 

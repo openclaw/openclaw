@@ -138,17 +138,13 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_MEMORY_FILENAME;
 
 export type WorkspaceBootstrapFile = {
-  name: WorkspaceBootstrapFileName;
+  name: string;
   path: string;
   content?: string;
   missing: boolean;
 };
 
-export type ExtraBootstrapLoadDiagnosticCode =
-  | "invalid-bootstrap-filename"
-  | "missing"
-  | "security"
-  | "io";
+export type ExtraBootstrapLoadDiagnosticCode = "missing" | "security" | "io";
 
 export type ExtraBootstrapLoadDiagnostic = {
   path: string;
@@ -161,18 +157,6 @@ type WorkspaceSetupState = {
   bootstrapSeededAt?: string;
   setupCompletedAt?: string;
 };
-
-/** Set of recognized bootstrap filenames for runtime validation */
-const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
-  DEFAULT_AGENTS_FILENAME,
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_TOOLS_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_USER_FILENAME,
-  DEFAULT_HEARTBEAT_FILENAME,
-  DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
-]);
 
 async function writeFileIfMissing(filePath: string, content: string): Promise<boolean> {
   try {
@@ -197,6 +181,10 @@ async function fileExists(filePath: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+function hasGlobPattern(value: string): boolean {
+  return value.includes("*") || value.includes("?") || value.includes("{");
 }
 
 async function fileContentDiffersFromTemplate(
@@ -707,14 +695,13 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
+    if (hasGlobPattern(pattern)) {
       try {
         const matches = fs.glob(pattern, { cwd: resolvedDir });
-        for await (const m of matches) {
-          resolvedPaths.add(m);
+        for await (const match of matches) {
+          resolvedPaths.add(match);
         }
       } catch {
-        // glob not available or pattern error — fall back to literal
         resolvedPaths.add(pattern);
       }
     } else {
@@ -724,25 +711,16 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
 
   const files: WorkspaceBootstrapFile[] = [];
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
-  for (const relPath of resolvedPaths) {
+  for (const relPath of [...resolvedPaths].toSorted((a, b) => a.localeCompare(b))) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
-      diagnostics.push({
-        path: filePath,
-        reason: "invalid-bootstrap-filename",
-        detail: `unsupported bootstrap basename: ${baseName}`,
-      });
-      continue;
-    }
     const loaded = await readWorkspaceFileWithGuards({
       filePath,
       workspaceDir: resolvedDir,
     });
     if (loaded.ok) {
       files.push({
-        name: baseName as WorkspaceBootstrapFileName,
+        name: baseName,
         path: filePath,
         content: loaded.content,
         missing: false,

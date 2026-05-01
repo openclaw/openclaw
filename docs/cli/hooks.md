@@ -288,7 +288,7 @@ openclaw hooks enable session-memory
 
 ### bootstrap-extra-files
 
-Injects additional bootstrap files (for example monorepo-local `AGENTS.md` / `TOOLS.md`) during `agent:bootstrap`.
+Injects additional workspace files (for example monorepo-local `AGENTS.md` / `PROJECT.md`) during `agent:bootstrap`.
 
 **Enable:**
 

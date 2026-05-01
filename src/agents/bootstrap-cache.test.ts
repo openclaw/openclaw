@@ -7,7 +7,7 @@ vi.mock("./workspace.js", () => ({
 
 function makeFile(name: string, content: string): WorkspaceBootstrapFile {
   return {
-    name: name as WorkspaceBootstrapFile["name"],
+    name,
     path: `/ws/${name}`,
     content,
     missing: false,
