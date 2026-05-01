@@ -67,6 +67,7 @@ import {
   setPluginRunContext,
 } from "./host-hook-runtime.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
+import { sendPluginSessionAttachment } from "./host-hook-workflow.js";
 import {
   isPluginJsonValue,
   normalizePluginHostHookId,
@@ -123,6 +124,7 @@ import type {
   PluginToolMetadataRegistryRegistration,
   PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
@@ -2379,6 +2381,25 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   namespace: params.namespace,
                 }),
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
+              sendSessionAttachment: (attachment) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return Promise.resolve({ ok: false, error: "global side effects disabled" });
+                }
+                const activeRegistry = getActivePluginRegistry();
+                const pluginLoaded =
+                  activeRegistry === registry &&
+                  registry.plugins.some(
+                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
+                  );
+                if (!pluginLoaded) {
+                  return Promise.resolve({ ok: false, error: "plugin is not loaded" });
+                }
+                return sendPluginSessionAttachment({
+                  ...attachment,
+                  config: params.config,
+                  origin: record.origin,
+                });
+              },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
                   throwRegistrationError("only memory plugins can register a memory capability");

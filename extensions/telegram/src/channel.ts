@@ -172,6 +172,7 @@ function buildTelegramSendOptions(params: {
   threadId?: string | number | null;
   silent?: boolean | null;
   forceDocument?: boolean | null;
+  parseMode?: "HTML" | "MarkdownV2" | null;
   gatewayClientScopes?: readonly string[] | null;
 }): TelegramSendOptions {
   return {
@@ -184,6 +185,7 @@ function buildTelegramSendOptions(params: {
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
     forceDocument: params.forceDocument ?? undefined,
+    textMode: params.parseMode === "MarkdownV2" ? "markdown" : "html",
     ...(Array.isArray(params.gatewayClientScopes)
       ? { gatewayClientScopes: [...params.gatewayClientScopes] }
       : {}),
@@ -201,6 +203,7 @@ async function sendTelegramOutbound(params: {
   replyToId?: string | null;
   threadId?: string | number | null;
   silent?: boolean | null;
+  parseMode?: "HTML" | "MarkdownV2" | null;
   gatewayClientScopes?: readonly string[] | null;
 }) {
   const send = await resolveTelegramSend(params.deps);
@@ -215,6 +218,7 @@ async function sendTelegramOutbound(params: {
       replyToId: params.replyToId,
       threadId: params.threadId,
       silent: params.silent,
+      parseMode: params.parseMode,
       gatewayClientScopes: params.gatewayClientScopes,
     }),
   );
@@ -1112,6 +1116,7 @@ export const telegramPlugin = createChatChannelPlugin({
         replyToId,
         threadId,
         silent,
+        formatting,
         gatewayClientScopes,
       }) =>
         await sendTelegramOutbound({
@@ -1123,6 +1128,7 @@ export const telegramPlugin = createChatChannelPlugin({
           replyToId,
           threadId,
           silent,
+          parseMode: formatting?.parseMode,
           gatewayClientScopes,
         }),
       sendMedia: async ({
@@ -1136,6 +1142,7 @@ export const telegramPlugin = createChatChannelPlugin({
         replyToId,
         threadId,
         silent,
+        formatting,
         gatewayClientScopes,
       }) =>
         await sendTelegramOutbound({
@@ -1149,6 +1156,7 @@ export const telegramPlugin = createChatChannelPlugin({
           replyToId,
           threadId,
           silent,
+          parseMode: formatting?.parseMode,
           gatewayClientScopes,
         }),
       sendPoll: async ({

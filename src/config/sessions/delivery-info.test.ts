@@ -5,6 +5,7 @@ import type { SessionEntry } from "./types.js";
 
 const storeState = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
+  stores: {} as Record<string, Record<string, SessionEntry>>,
 }));
 
 vi.mock("../io.js", () => ({
@@ -12,11 +13,20 @@ vi.mock("../io.js", () => ({
 }));
 
 vi.mock("./paths.js", () => ({
-  resolveStorePath: () => "/tmp/sessions.json",
+  resolveStorePath: (_store?: string, opts?: { agentId?: string }) =>
+    opts?.agentId === "worker" ? "/tmp/worker-sessions.json" : "/tmp/sessions.json",
 }));
 
 vi.mock("./store.js", () => ({
-  loadSessionStore: () => storeState.store,
+  loadSessionStore: (storePath: string) => storeState.stores[storePath] ?? storeState.store,
+}));
+
+vi.mock("./targets.js", () => ({
+  resolveAllAgentSessionStoreTargetsSync: () => [
+    { agentId: "main", storePath: "/tmp/sessions.json" },
+    { agentId: "shadow", storePath: "/tmp/shadow-sessions.json" },
+    { agentId: "worker", storePath: "/tmp/worker-sessions.json" },
+  ],
 }));
 
 let extractDeliveryInfo: typeof import("./delivery-info.js").extractDeliveryInfo;
@@ -35,6 +45,7 @@ beforeAll(async () => {
 beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
+  storeState.stores = {};
 });
 
 describe("extractDeliveryInfo", () => {
@@ -115,6 +126,57 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("looks up deliveryContext in per-agent session stores", () => {
+    const sessionKey = "agent:worker:webchat:dm:user-456";
+    storeState.stores["/tmp/sessions.json"] = {};
+    storeState.stores["/tmp/worker-sessions.json"] = {
+      [sessionKey]: buildEntry({
+        channel: "webchat",
+        to: "webchat:user-456",
+        accountId: "worker-account",
+      }),
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-456",
+        accountId: "worker-account",
+      },
+      threadId: undefined,
+    });
+  });
+
+  it("continues across per-agent stores until it finds a routable deliveryContext", () => {
+    const sessionKey = "agent:shadow:webchat:dm:user-789";
+    storeState.stores["/tmp/sessions.json"] = {
+      [sessionKey]: {
+        sessionId: "stale-shadow",
+        updatedAt: Date.now() - 1000,
+      },
+    };
+    storeState.stores["/tmp/shadow-sessions.json"] = {
+      [sessionKey]: buildEntry({
+        channel: "webchat",
+        to: "webchat:user-789",
+        accountId: "shadow-account",
+      }),
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-789",
+        accountId: "shadow-account",
+      },
+      threadId: undefined,
+    });
+  });
+
   it("falls back to base sessions for :topic: keys", () => {
     const baseKey = "agent:main:telegram:group:98765";
     const topicKey = `${baseKey}:topic:55`;
@@ -156,7 +218,7 @@ describe("extractDeliveryInfo", () => {
         channel: "telegram",
         to: "group:98765",
         accountId: "main",
-        threadId: "77",
+        threadId: 77,
       },
       threadId: undefined,
     });

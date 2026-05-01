@@ -48,7 +48,7 @@ async function resolveTelegramSendContext(params: {
   baseOpts: {
     cfg: NonNullable<TelegramSendOpts>["cfg"];
     verbose: false;
-    textMode: "html";
+    textMode: "html" | "markdown";
     messageThreadId?: number;
     replyToMessageId?: number;
     accountId?: string;
@@ -162,6 +162,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       replyToId,
       threadId,
       gatewayClientScopes,
+      formatting,
     }) => {
       const { send, baseOpts } = await resolveTelegramSendContext({
         cfg,
@@ -173,6 +174,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       });
       return await send(to, text, {
         ...baseOpts,
+        textMode: formatting?.parseMode === "MarkdownV2" ? "markdown" : "html",
       });
     },
     sendMedia: async ({
@@ -188,6 +190,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       threadId,
       forceDocument,
       gatewayClientScopes,
+      formatting,
     }) => {
       const { send, baseOpts } = await resolveTelegramSendContext({
         cfg,
@@ -199,6 +202,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       });
       return await send(to, text, {
         ...baseOpts,
+        textMode: formatting?.parseMode === "MarkdownV2" ? "markdown" : "html",
         mediaUrl,
         mediaLocalRoots,
         mediaReadFile,
