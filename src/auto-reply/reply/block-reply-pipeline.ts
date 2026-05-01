@@ -22,8 +22,10 @@ export type BlockReplyBuffer = {
   finalize?: (payload: ReplyPayload) => ReplyPayload;
 };
 
-// Re-export from the public types surface so pipeline and callers share one definition.
-export type { BlockReplyResult } from "../get-reply-options.types.js";
+export type BlockReplyResult = {
+  /** Media URLs confirmed as delivered by the channel handler. */
+  sentMediaUrls?: readonly string[];
+};
 
 export function createAudioAsVoiceBuffer(params: {
   isAudioPayload: (payload: ReplyPayload) => boolean;
