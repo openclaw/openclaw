@@ -1503,6 +1503,19 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      // Diagnostic for issue #74377: Pi silently drops allowlist entries that
+      // are not in `_toolRegistry`. Surface that mismatch at the source so the
+      // next repro (Telegram → Anthropic with empty `context.tools`) shows
+      // whether tools were lost here or later in the session lifecycle.
+      if (sessionToolAllowlist.length > 0) {
+        const activeAfterSet = activeSession.getActiveToolNames();
+        if (activeAfterSet.length < sessionToolAllowlist.length) {
+          const dropped = sessionToolAllowlist.filter((name) => !activeAfterSet.includes(name));
+          log.warn(
+            `[OPENCLAW_TOOLS_DIAG] setActiveToolsByName dropped ${dropped.length}/${sessionToolAllowlist.length} entries (active=${activeAfterSet.length}); first dropped=${dropped.slice(0, 5).join(",")}`,
+          );
+        }
+      }
       prepStages.mark("agent-session");
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
@@ -2843,6 +2856,18 @@ export async function runEmbeddedAttempt(
               messages: btwSnapshotMessages,
               inFlightPrompt: promptSubmission.prompt,
             });
+            // Diagnostic for issue #74377: confirm Pi's active tool set at the
+            // moment of prompt dispatch. If non-empty allowlist + non-raw run
+            // arrives here with empty `state.tools`, something between session
+            // creation and prompt-time wiped it (likely `_refreshToolRegistry`).
+            if (!isRawModelRun && sessionToolAllowlist.length > 0) {
+              const activeNow = activeSession.agent.state.tools.length;
+              if (activeNow === 0) {
+                log.warn(
+                  `[OPENCLAW_TOOLS_DIAG] active tools empty at prompt dispatch (allowlist=${sessionToolAllowlist.length}, effective=${effectiveTools.length}); Anthropic transport will receive tools:[]`,
+                );
+              }
+            }
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
             } else {
