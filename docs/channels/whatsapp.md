@@ -569,6 +569,15 @@ Behavior notes:
 
   </Accordion>
 
+  <Accordion title="Reply appears in transcript but not in WhatsApp">
+    Transcript rows record what the agent generated. WhatsApp delivery is checked separately: OpenClaw only treats an auto-reply as sent after Baileys returns an outbound message id for at least one visible text or media send.
+
+    Ack reactions are independent pre-reply receipts. A successful reaction does not prove that the later text or media reply was accepted by WhatsApp.
+
+    Check gateway logs for `auto-reply delivery failed` or `auto-reply was not accepted by WhatsApp provider`.
+
+  </Accordion>
+
   <Accordion title="Group messages unexpectedly ignored">
     Check in this order:
 

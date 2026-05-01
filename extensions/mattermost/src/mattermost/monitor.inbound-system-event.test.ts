@@ -5,20 +5,26 @@ class FakeWebSocket {
   public readonly sent: string[] = [];
   private readonly openListeners: Array<() => void> = [];
   private readonly messageListeners: Array<(data: Buffer) => void | Promise<void>> = [];
+  private readonly pongListeners: Array<(data: Buffer) => void> = [];
   private readonly closeListeners: Array<(code: number, reason: Buffer) => void> = [];
   private readonly errorListeners: Array<(err: unknown) => void> = [];
 
   on(event: "open", listener: () => void): void;
   on(event: "message", listener: (data: Buffer) => void | Promise<void>): void;
+  on(event: "pong", listener: (data: Buffer) => void): void;
   on(event: "close", listener: (code: number, reason: Buffer) => void): void;
   on(event: "error", listener: (err: unknown) => void): void;
-  on(event: "open" | "message" | "close" | "error", listener: unknown): void {
+  on(event: "open" | "message" | "pong" | "close" | "error", listener: unknown): void {
     if (event === "open") {
       this.openListeners.push(listener as () => void);
       return;
     }
     if (event === "message") {
       this.messageListeners.push(listener as (data: Buffer) => void | Promise<void>);
+      return;
+    }
+    if (event === "pong") {
+      this.pongListeners.push(listener as (data: Buffer) => void);
       return;
     }
     if (event === "close") {
@@ -31,6 +37,8 @@ class FakeWebSocket {
   send(data: string): void {
     this.sent.push(data);
   }
+
+  ping(): void {}
 
   close(): void {}
 
@@ -168,6 +176,27 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       };
     },
   );
+  const run = vi.fn(
+    async (params: {
+      raw: unknown;
+      adapter: {
+        ingest: (raw: unknown) => unknown;
+        resolveTurn: (
+          input: unknown,
+          eventClass: { kind: "message"; canStartAgentTurn: true },
+          preflight: Record<string, never>,
+        ) => Parameters<typeof runPrepared>[0];
+      };
+    }) => {
+      const input = params.adapter.ingest(params.raw);
+      const turn = params.adapter.resolveTurn(
+        input,
+        { kind: "message", canStartAgentTurn: true },
+        {},
+      );
+      return await runPrepared(turn);
+    },
+  );
   return {
     config: {
       current: () => cfg,
@@ -252,6 +281,7 @@ function createRuntimeCore(cfg: OpenClawConfig) {
         updateLastRoute: vi.fn(async () => {}),
       },
       turn: {
+        run,
         runPrepared,
       },
       text: {

@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
-import { measureDiagnosticsTimelineSpanSync } from "../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
@@ -27,21 +26,18 @@ import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
 import {
   clearBundledRuntimeDependencyJitiAliases,
-  registerBundledRuntimeDependencyJitiAliases,
   resolveBundledRuntimeDependencyJitiAliasMap,
 } from "./bundled-runtime-deps-jiti-aliases.js";
-import {
-  clearBundledRuntimeDependencyNodePaths,
-  installBundledRuntimeDeps,
-  type BundledRuntimeDepsInstallParams,
-} from "./bundled-runtime-deps.js";
+import { clearBundledRuntimeDependencyNodePaths } from "./bundled-runtime-deps.js";
 import { clearBundledRuntimeDistMirrorPreparationCache } from "./bundled-runtime-dist-mirror-cache.js";
 import {
+  clearPreparedBundledPluginRuntimeLoadRoots,
   ensureOpenClawPluginSdkAlias,
-  prepareBundledPluginRuntimeLoadRoot,
 } from "./bundled-runtime-root.js";
+import { prepareBundledRuntimeLoadRootForPlugin } from "./bundled-runtime-staging.js";
 import {
   clearPluginCommands,
   listRegisteredPluginCommands,
@@ -192,6 +188,7 @@ export type PluginLoadOptions = {
   installBundledRuntimeDeps?: boolean;
   throwOnLoadError?: boolean;
   bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
+  bundledRuntimeDepsRepairError?: unknown;
   manifestRegistry?: PluginManifestRegistry;
 };
 
@@ -291,6 +288,7 @@ export function clearPluginLoaderCache(): void {
   pluginLoaderCacheState.clear();
   clearBundledRuntimeDependencyNodePaths();
   clearBundledRuntimeDistMirrorPreparationCache();
+  clearPreparedBundledPluginRuntimeLoadRoots();
   clearBundledRuntimeDependencyJitiAliases();
   clearAgentHarnesses();
   clearPluginCommands();
@@ -339,6 +337,7 @@ type PluginRegistrySnapshot = {
     cliRegistrars: PluginRegistry["cliRegistrars"];
     reloads: NonNullable<PluginRegistry["reloads"]>;
     nodeHostCommands: NonNullable<PluginRegistry["nodeHostCommands"]>;
+    nodeInvokePolicies: NonNullable<PluginRegistry["nodeInvokePolicies"]>;
     securityAuditCollectors: NonNullable<PluginRegistry["securityAuditCollectors"]>;
     services: PluginRegistry["services"];
     commands: PluginRegistry["commands"];
@@ -378,6 +377,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       cliRegistrars: [...registry.cliRegistrars],
       reloads: [...(registry.reloads ?? [])],
       nodeHostCommands: [...(registry.nodeHostCommands ?? [])],
+      nodeInvokePolicies: [...(registry.nodeInvokePolicies ?? [])],
       securityAuditCollectors: [...(registry.securityAuditCollectors ?? [])],
       services: [...registry.services],
       commands: [...registry.commands],
@@ -416,6 +416,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.cliRegistrars = snapshot.arrays.cliRegistrars;
   registry.reloads = snapshot.arrays.reloads;
   registry.nodeHostCommands = snapshot.arrays.nodeHostCommands;
+  registry.nodeInvokePolicies = snapshot.arrays.nodeInvokePolicies;
   registry.securityAuditCollectors = snapshot.arrays.securityAuditCollectors;
   registry.services = snapshot.arrays.services;
   registry.commands = snapshot.arrays.commands;
@@ -686,6 +687,24 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
   );
 }
 
+function pluginLoadOptionsMatchCacheKey(
+  options: PluginLoadOptions,
+  expectedCacheKey: string,
+): boolean {
+  if (resolvePluginLoadCacheContext(options).cacheKey === expectedCacheKey) {
+    return true;
+  }
+  if (options.installBundledRuntimeDeps !== false) {
+    return false;
+  }
+  return (
+    resolvePluginLoadCacheContext({
+      ...options,
+      installBundledRuntimeDeps: undefined,
+    }).cacheKey === expectedCacheKey
+  );
+}
+
 type PluginRegistrationPlan = {
   /** Public compatibility label passed to plugin register(api). */
   mode: PluginRegistrationMode;
@@ -895,15 +914,15 @@ function getCompatibleActivePluginRegistry(
     return undefined;
   }
   const loadContext = resolvePluginLoadCacheContext(options);
-  if (loadContext.cacheKey === activeCacheKey) {
+  if (pluginLoadOptionsMatchCacheKey(options, activeCacheKey)) {
     return activeRegistry;
   }
   if (!loadContext.shouldActivate) {
-    const activatingCacheKey = resolvePluginLoadCacheContext({
+    const activatingOptions = {
       ...options,
       activate: true,
-    }).cacheKey;
-    if (activatingCacheKey === activeCacheKey) {
+    };
+    if (pluginLoadOptionsMatchCacheKey(activatingOptions, activeCacheKey)) {
       return activeRegistry;
     }
   }
@@ -911,26 +930,26 @@ function getCompatibleActivePluginRegistry(
     loadContext.runtimeSubagentMode === "default" &&
     getActivePluginRuntimeSubagentMode() === "gateway-bindable"
   ) {
-    const gatewayBindableCacheKey = resolvePluginLoadCacheContext({
+    const gatewayBindableOptions = {
       ...options,
       runtimeOptions: {
         ...options.runtimeOptions,
         allowGatewaySubagentBinding: true,
       },
-    }).cacheKey;
-    if (gatewayBindableCacheKey === activeCacheKey) {
+    };
+    if (pluginLoadOptionsMatchCacheKey(gatewayBindableOptions, activeCacheKey)) {
       return activeRegistry;
     }
     if (!loadContext.shouldActivate) {
-      const activatingGatewayBindableCacheKey = resolvePluginLoadCacheContext({
+      const activatingGatewayBindableOptions = {
         ...options,
         activate: true,
         runtimeOptions: {
           ...options.runtimeOptions,
           allowGatewaySubagentBinding: true,
         },
-      }).cacheKey;
-      if (activatingGatewayBindableCacheKey === activeCacheKey) {
+      };
+      if (pluginLoadOptionsMatchCacheKey(activatingGatewayBindableOptions, activeCacheKey)) {
         return activeRegistry;
       }
     }
@@ -1313,6 +1332,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     let selectedMemoryPluginId: string | null = null;
     let memorySlotMatched = false;
     const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
+    const pluginLoadStartMs = performance.now();
+    let pluginLoadAttemptCount = 0;
 
     for (const candidate of orderedCandidates) {
       const manifestRecord = manifestByRoot.get(candidate.rootDir);
@@ -1458,79 +1479,28 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         markPluginActivationDisabled(record, enableState.reason);
       }
 
-      if (
-        shouldLoadModules &&
-        shouldInstallBundledRuntimeDeps &&
-        candidate.origin === "bundled" &&
-        enableState.enabled
-      ) {
-        let runtimeDepsInstallStartedAt: number | null = null;
-        let runtimeDepsInstallSpecs: string[] = [];
+      if (shouldLoadModules && candidate.origin === "bundled" && enableState.enabled) {
         try {
-          const preparedRuntimeRoot = prepareBundledPluginRuntimeLoadRoot({
+          const preparedRuntimeRoot = prepareBundledRuntimeLoadRootForPlugin({
             pluginId: record.id,
             pluginRoot,
             modulePath: runtimeCandidateSource,
             ...(runtimeSetupSource ? { setupModulePath: runtimeSetupSource } : {}),
             env,
             config: cfg,
-            registerRuntimeAliasRoot: registerBundledRuntimeDependencyJitiAliases,
-            installDeps: (installParams) => {
-              const installSpecs = installParams.installSpecs ?? installParams.missingSpecs;
-              runtimeDepsInstallStartedAt = Date.now();
-              runtimeDepsInstallSpecs = installSpecs;
-              if (shouldActivate) {
-                logger.info(
-                  `[plugins] ${record.id} staging bundled runtime deps (${installSpecs.length} specs): ${installSpecs.join(", ")}`,
-                );
-              }
-              const installer =
-                options.bundledRuntimeDepsInstaller ??
-                ((params: BundledRuntimeDepsInstallParams) =>
-                  installBundledRuntimeDeps({
-                    installRoot: params.installRoot,
-                    installExecutionRoot: params.installExecutionRoot,
-                    missingSpecs: params.installSpecs ?? params.missingSpecs,
-                    installSpecs: params.installSpecs,
-                    env,
-                    warn: (message) => logger.warn(`[plugins] ${record.id}: ${message}`),
-                  }));
-              measureDiagnosticsTimelineSpanSync(
-                "runtimeDeps.stage",
-                () => installer(installParams),
-                {
-                  phase: "startup",
-                  config: cfg,
-                  env,
-                  attributes: {
-                    pluginId: record.id,
-                    dependencyCount: installSpecs.length,
-                  },
-                },
-              );
-            },
-            logInstalled: (installedSpecs) => {
-              if (shouldActivate) {
-                const elapsed =
-                  runtimeDepsInstallStartedAt === null
-                    ? ""
-                    : ` in ${Date.now() - runtimeDepsInstallStartedAt}ms`;
-                logger.info(
-                  `[plugins] ${record.id} installed bundled runtime deps${elapsed}: ${installedSpecs.join(", ")}`,
-                );
-              }
-            },
+            installMissingDeps: shouldInstallBundledRuntimeDeps,
+            previousRepairError: options.bundledRuntimeDepsRepairError,
+            shouldLog: shouldActivate,
+            logger,
+            ...(options.bundledRuntimeDepsInstaller
+              ? { installer: options.bundledRuntimeDepsInstaller }
+              : {}),
           });
           runtimePluginRoot = preparedRuntimeRoot.pluginRoot;
           runtimeCandidateSource = preparedRuntimeRoot.modulePath;
           runtimeSetupSource = preparedRuntimeRoot.setupModulePath;
         } catch (error) {
-          if (shouldActivate && runtimeDepsInstallStartedAt !== null) {
-            logger.error(
-              `[plugins] ${record.id} failed to stage bundled runtime deps after ${Date.now() - runtimeDepsInstallStartedAt}ms: ${runtimeDepsInstallSpecs.join(", ")}`,
-            );
-          }
-          pushPluginLoadError(`failed to install bundled runtime deps: ${String(error)}`);
+          pushPluginLoadError(`failed to prepare bundled runtime deps: ${String(error)}`);
           continue;
         }
       }
@@ -1699,6 +1669,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         // Track the plugin as imported once module evaluation begins. Top-level
         // code may have already executed even if evaluation later throws.
         recordImportedPluginId(record.id);
+        pluginLoadAttemptCount++;
+        logger.debug?.(`[plugins] loading ${record.id} from ${safeSource}`);
         mod = withProfile(
           { pluginId: record.id, source: safeSource },
           registrationMode,
@@ -2060,6 +2032,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           diagnosticMessagePrefix: "plugin failed during register: ",
         });
       }
+    }
+
+    const pluginLoadElapsedMs = performance.now() - pluginLoadStartMs;
+    if (pluginLoadAttemptCount > 0) {
+      logger.debug?.(
+        `[plugins] loaded ${registry.plugins.length} plugin(s) (${pluginLoadAttemptCount} attempted) in ${pluginLoadElapsedMs.toFixed(1)}ms`,
+      );
     }
 
     // Scoped snapshot loads may intentionally omit the configured memory plugin, so only

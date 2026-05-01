@@ -91,6 +91,7 @@ import {
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
+import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { chatHandlers } from "./chat.js";
 import type {
   GatewayClient,
@@ -1314,6 +1315,19 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       canonicalKey,
       runId: requestedRunId,
     });
+    // Capture run kinds before the abort because abortChatRunById deletes entries
+    // from chatAbortControllers synchronously. We use this snapshot to choose the
+    // correct dedupe namespace: agent-kind runs use "agent:" (their runId equals
+    // their idempotency key), while chat-send runs use "chat:" so the abort
+    // snapshot does not collide with the agent RPC dedupe cache.
+    const preAbortRunKinds = new Map<string, "chat-send" | "agent" | undefined>();
+    if (requestedRunId) {
+      preAbortRunKinds.set(requestedRunId, context.chatAbortControllers.get(requestedRunId)?.kind);
+    } else {
+      for (const [rid, entry] of context.chatAbortControllers) {
+        preAbortRunKinds.set(rid, entry.kind);
+      }
+    }
     let abortedRunId: string | null = null;
     await chatHandlers["chat.abort"]({
       req,
@@ -1334,7 +1348,27 @@ export const sessionsHandlers: GatewayRequestHandlers = {
                 Boolean(normalizeOptionalString(value)),
               )
             : [];
-        abortedRunId = runIds[0] ?? null;
+        const firstAbortedRunId = runIds[0] ?? null;
+        abortedRunId = firstAbortedRunId;
+        if (firstAbortedRunId) {
+          const endedAt = Date.now();
+          const runKind = preAbortRunKinds.get(firstAbortedRunId);
+          const dedupePrefix = runKind === "agent" ? "agent" : "chat";
+          setGatewayDedupeEntry({
+            dedupe: context.dedupe,
+            key: `${dedupePrefix}:${firstAbortedRunId}`,
+            entry: {
+              ts: endedAt,
+              ok: true,
+              payload: {
+                status: "timeout",
+                runId: firstAbortedRunId,
+                stopReason: "rpc",
+                endedAt,
+              },
+            },
+          });
+        }
         respond(
           true,
           {

@@ -1,18 +1,6 @@
 export const AGENT_BUTTON_KEY = "agent";
 export const AGENT_SELECT_KEY = "agentsel";
 
-/**
- * The component custom id only carries the logical button id. Channel binding
- * comes from Discord's trusted interaction payload.
- */
-export function buildAgentButtonCustomId(componentId: string): string {
-  return `${AGENT_BUTTON_KEY}:componentId=${encodeURIComponent(componentId)}`;
-}
-
-export function buildAgentSelectCustomId(componentId: string): string {
-  return `${AGENT_SELECT_KEY}:componentId=${encodeURIComponent(componentId)}`;
-}
-
 export {
   ackComponentInteraction,
   resolveAgentComponentRoute,

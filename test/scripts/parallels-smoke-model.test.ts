@@ -87,7 +87,7 @@ describe("Parallels smoke model selection", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
-    expect(providerAuth).toContain("openai/gpt-5.4");
+    expect(providerAuth).toContain("openai/gpt-5.5");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
@@ -213,13 +213,19 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     }
   });
 
+  it("waits for apt locks during Linux snapshot bootstrap", () => {
+    const script = readFileSync(TS_PATHS.linux, "utf8");
+
+    expect(script).toContain("DPkg::Lock::Timeout=300");
+  });
+
   it("resolves provider defaults and explicit model overrides", () => {
     expect(resolveProviderAuth("openai", { env: { OPENAI_API_KEY: "sk-openai" } })).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.4",
+      modelId: "openai/gpt-5.5",
     });
 
     expect(
@@ -283,11 +289,16 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       expect(script, scriptPath).toContain("AgentWorkspaceScript");
       expect(script, scriptPath).toContain("parallels-");
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
+      expect(script, scriptPath).toContain("tools.profile");
+      expect(script, scriptPath).toContain("--thinking");
+      expect(script, scriptPath).toContain("minimal");
     }
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
+    expect(npmUpdateScripts).toContain("tools.profile");
+    expect(npmUpdateScripts).toContain("--thinking minimal");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {
@@ -352,6 +363,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(macos).not.toContain("Authorization: Bot");
     expect(discord).toContain("Authorization: Bot");
     expect(discord).toContain('"--silent"');
+    expect(discord).toContain("plugins deps --repair");
     expect(discord).toContain("channels status --probe --json");
     expect(discord).toContain("Stop ${this.input.vmName} after successful Discord smoke");
   });
@@ -371,8 +383,29 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(script).toContain("guestPowerShellBackground");
     expect(script).toContain("Join-Path $env:TEMP");
     expect(script).toContain("__OPENCLAW_BACKGROUND_DONE__");
+    expect(script).toContain("__OPENCLAW_BACKGROUND_EXIT__");
     expect(script).toContain("__OPENCLAW_LOG_OFFSET__");
-    expect(script).toContain('start "" /min powershell.exe');
+    expect(script).toContain("result.status !== 0 && result.status !== 124");
+    expect(script).toContain("Start-Process -FilePath powershell.exe");
+    expect(script).toContain('launchLog.includes("started")');
+    expect(script).toContain("waitForBackgroundMaterialized(pathsScript, 45_000)");
+  });
+
+  it("returns timed-out host command status when check is disabled", () => {
+    const result = JSON.parse(
+      runTsEval(`
+import { run } from "./${TS_PATHS.hostCommand}";
+const result = run(process.execPath, ["-e", "process.stdout.write('partial'); setTimeout(() => {}, 1000);"], {
+  check: false,
+  quiet: true,
+  timeoutMs: 50,
+});
+console.log(JSON.stringify(result));
+`),
+    ) as { status: number; stdout: string };
+
+    expect(result.status).toBe(124);
+    expect(result.stdout).toEqual(expect.any(String));
   });
 
   it("runs the Windows agent turn through the detached done-file runner", () => {
@@ -398,6 +431,8 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(powershell).toContain("windowsOpenClawResolver");
     expect(powershell).toContain("Resolve-OpenClawCommand");
     expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
+    expect(powershell).toContain("$ErrorActionPreference = 'Continue'");
+    expect(powershell).toContain("$PSNativeCommandUseErrorActionPreference = $false");
     expect(windows).toContain("windowsOpenClawResolver");
     expect(windows).toContain("Invoke-OpenClaw gateway");
     expect(windows).not.toContain("Join-Path $env:APPDATA 'npm\\\\openclaw.cmd'");

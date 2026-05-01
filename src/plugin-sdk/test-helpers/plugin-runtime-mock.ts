@@ -78,40 +78,64 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       createTaskFlowSessionMock,
     ) as unknown as PluginRuntime["tasks"]["managedFlows"]["fromToolContext"],
   };
-  const dispatchAssembledChannelTurnMock = vi.fn(
-    async (params: Parameters<PluginRuntime["channel"]["turn"]["dispatchAssembled"]>[0]) => {
-      await params.recordInboundSession({
-        storePath: params.storePath,
-        sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
-        ctx: params.ctxPayload,
-        groupResolution: params.record?.groupResolution,
-        createIfMissing: params.record?.createIfMissing,
-        updateLastRoute: params.record?.updateLastRoute,
-        onRecordError: params.record?.onRecordError ?? (() => undefined),
-        trackSessionMetaTask: params.record?.trackSessionMetaTask,
-      });
-      const dispatchResult = await params.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: params.ctxPayload,
-        cfg: params.cfg,
+  const dispatchAssembledChannelTurnMock = vi.fn(async (params: Record<string, unknown>) => {
+    const ctxPayload = params.ctxPayload as Record<string, unknown>;
+    const record = params.record as
+      | Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]["record"]
+      | undefined;
+    const recordInboundSession = params.recordInboundSession as Parameters<
+      PluginRuntime["channel"]["turn"]["runPrepared"]
+    >[0]["recordInboundSession"];
+    const routeSessionKey = params.routeSessionKey as string;
+    const storePath = params.storePath as string;
+    const delivery = params.delivery as {
+      deliver: (payload: unknown, info: unknown) => Promise<unknown>;
+      onError?: (err: unknown, info: { kind: string }) => void;
+    };
+    const ctxSessionKey = ctxPayload.SessionKey;
+    const sessionKey = typeof ctxSessionKey === "string" ? ctxSessionKey : routeSessionKey;
+    const dispatchReplyWithBufferedBlockDispatcher =
+      params.dispatchReplyWithBufferedBlockDispatcher as (params: {
+        ctx: unknown;
+        cfg: unknown;
         dispatcherOptions: {
-          ...params.dispatcherOptions,
-          deliver: async (payload, info) => {
-            await params.delivery.deliver(payload, info);
-          },
-          onError: params.delivery.onError,
+          deliver: (payload: unknown, info: unknown) => Promise<void>;
+          onError?: (err: unknown, info: { kind: string }) => void;
+        };
+        replyOptions?: unknown;
+        replyResolver?: unknown;
+      }) => Promise<unknown>;
+    await recordInboundSession({
+      storePath,
+      sessionKey,
+      ctx: ctxPayload,
+      groupResolution: record?.groupResolution,
+      createIfMissing: record?.createIfMissing,
+      updateLastRoute: record?.updateLastRoute,
+      onRecordError: record?.onRecordError ?? (() => undefined),
+      trackSessionMetaTask: record?.trackSessionMetaTask,
+    });
+    const dispatchResult = await dispatchReplyWithBufferedBlockDispatcher({
+      ctx: ctxPayload,
+      cfg: params.cfg,
+      dispatcherOptions: {
+        ...(params.dispatcherOptions as Record<string, unknown> | undefined),
+        deliver: async (payload, info) => {
+          await delivery.deliver(payload, info);
         },
-        replyOptions: params.replyOptions,
-        replyResolver: params.replyResolver,
-      });
-      return {
-        admission: { kind: "dispatch" as const },
-        dispatched: true,
-        ctxPayload: params.ctxPayload,
-        routeSessionKey: params.routeSessionKey,
-        dispatchResult,
-      };
-    },
-  ) as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"];
+        onError: delivery.onError,
+      },
+      replyOptions: params.replyOptions,
+      replyResolver: params.replyResolver,
+    });
+    return {
+      admission: params.admission ?? { kind: "dispatch" },
+      dispatched: true,
+      ctxPayload,
+      routeSessionKey,
+      dispatchResult,
+    };
+  });
   const runPreparedChannelTurnMock = vi.fn(
     async (params: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
       try {
@@ -133,9 +157,16 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         }
         throw err;
       }
-      const dispatchResult = await params.runDispatch();
+      const admission = params.admission ?? { kind: "dispatch" as const };
+      const dispatchResult =
+        admission.kind === "observeOnly"
+          ? (params.observeOnlyDispatchResult ?? {
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 0 },
+            })
+          : await params.runDispatch();
       return {
-        admission: { kind: "dispatch" as const },
+        admission,
         dispatched: true,
         ctxPayload: params.ctxPayload,
         routeSessionKey: params.routeSessionKey,
@@ -178,11 +209,26 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         };
       }
       const resolved = await params.adapter.resolveTurn(input, eventClass, preflight ?? {});
-      const dispatchResult = await dispatchAssembledChannelTurnMock(resolved);
+      const admission =
+        resolved.admission ?? preflight.admission ?? ({ kind: "dispatch" } as const);
+      const dispatchResult =
+        "runDispatch" in resolved
+          ? await runPreparedChannelTurnMock({
+              ...resolved,
+              admission,
+            })
+          : await dispatchAssembledChannelTurnMock({
+              ...resolved,
+              admission,
+              delivery:
+                admission.kind === "observeOnly"
+                  ? { deliver: async () => ({ visibleReplySent: false }) }
+                  : resolved.delivery,
+            });
       const result = {
         ...dispatchResult,
-        admission: resolved.admission ?? preflight.admission ?? dispatchResult.admission,
-      };
+        admission,
+      } as Parameters<NonNullable<typeof params.adapter.onFinalize>>[0];
       await params.adapter.onFinalize?.(result);
       return result;
     },
@@ -224,28 +270,6 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         ...params.extra,
       }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
   ) as unknown as PluginRuntime["channel"]["turn"]["buildContext"];
-  const runResolvedChannelTurnMock = vi.fn(
-    async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) => {
-      const input =
-        typeof params.input === "function" ? await params.input(params.raw) : params.input;
-      if (!input) {
-        return {
-          admission: { kind: "drop" as const, reason: "ingest-null" },
-          dispatched: false,
-        };
-      }
-      return await runChannelTurnMock({
-        channel: params.channel,
-        accountId: params.accountId,
-        raw: params.raw,
-        log: params.log,
-        adapter: {
-          ingest: () => input,
-          resolveTurn: params.resolveTurn,
-        },
-      });
-    },
-  ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"];
   const base: PluginRuntime = {
     version: "1.0.0-test",
     config: {
@@ -600,10 +624,24 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       turn: {
         run: runChannelTurnMock,
-        runResolved: runResolvedChannelTurnMock,
+        runResolved: vi.fn(
+          async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) =>
+            await runChannelTurnMock({
+              channel: params.channel,
+              accountId: params.accountId,
+              raw: params.raw,
+              log: params.log,
+              adapter: {
+                ingest: (raw) =>
+                  typeof params.input === "function" ? params.input(raw) : params.input,
+                resolveTurn: params.resolveTurn,
+              },
+            }),
+        ) as unknown as PluginRuntime["channel"]["turn"]["runResolved"],
         buildContext: buildChannelTurnContextMock,
         runPrepared: runPreparedChannelTurnMock,
-        dispatchAssembled: dispatchAssembledChannelTurnMock,
+        dispatchAssembled:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["dispatchAssembled"],
       },
       threadBindings: {
         setIdleTimeoutBySessionKey:

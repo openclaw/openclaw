@@ -341,8 +341,6 @@ export function createAgentEventHandler({
           );
         }
       } else {
-        chatRunState.abortedRuns.delete(clientRunId);
-        chatRunState.abortedRuns.delete(evt.runId);
         clearBufferedChatState(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);

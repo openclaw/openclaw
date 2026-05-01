@@ -327,10 +327,6 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/brave:
-    dependencies:
-      typebox:
-        specifier: 1.1.34
-        version: 1.1.34
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -588,6 +584,19 @@ importers:
       openclaw:
         specifier: workspace:*
         version: link:../..
+
+  extensions/file-transfer:
+    dependencies:
+      minimatch:
+        specifier: 10.2.4
+        version: 10.2.4
+      typebox:
+        specifier: 1.1.34
+        version: 1.1.34
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
 
   extensions/firecrawl:
     dependencies:

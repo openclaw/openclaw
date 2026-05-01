@@ -1,5 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { readRuntimeDepsJsonObject, type JsonObject } from "./bundled-runtime-deps-json.js";
@@ -7,6 +9,7 @@ import {
   collectPackageRuntimeDeps,
   normalizeInstallableRuntimeDepName,
   parseInstallableRuntimeDep,
+  parseInstallableRuntimeDepSpec,
   type RuntimeDepEntry,
 } from "./bundled-runtime-deps-specs.js";
 import {
@@ -28,10 +31,17 @@ export type BundledPluginRuntimeDepsManifest = {
   enabledByDefault: boolean;
   id?: string;
   legacyPluginIds: string[];
+  localMemoryEmbeddingRuntimeDeps: RuntimeDepEntry[];
+  modelSupport?: BundledPluginRuntimeDepsModelSupport;
   providers: string[];
 };
 
 export type BundledPluginRuntimeDepsManifestCache = Map<string, BundledPluginRuntimeDepsManifest>;
+
+type BundledPluginRuntimeDepsModelSupport = {
+  modelPatterns: string[];
+  modelPrefixes: string[];
+};
 
 function collectDeclaredMirroredRootRuntimeDepNames(packageJson: JsonObject): string[] {
   const openclaw = packageJson.openclaw;
@@ -102,6 +112,10 @@ function readBundledPluginRuntimeDepsManifest(
   const manifest = readRuntimeDepsJsonObject(path.join(pluginDir, "openclaw.plugin.json"));
   const channels = manifest?.channels;
   const legacyPluginIds = manifest?.legacyPluginIds;
+  const localMemoryEmbeddingRuntimeDeps = readBundledPluginLocalMemoryEmbeddingRuntimeDeps(
+    manifest?.runtimeDependencies,
+  );
+  const modelSupport = readBundledPluginRuntimeDepsModelSupport(manifest?.modelSupport);
   const providers = manifest?.providers;
   const runtimeDepsManifest = {
     channels: Array.isArray(channels)
@@ -114,12 +128,53 @@ function readBundledPluginRuntimeDepsManifest(
           (entry): entry is string => typeof entry === "string" && entry !== "",
         )
       : [],
+    localMemoryEmbeddingRuntimeDeps,
+    ...(modelSupport ? { modelSupport } : {}),
     providers: Array.isArray(providers)
       ? providers.filter((entry): entry is string => typeof entry === "string" && entry !== "")
       : [],
   };
   cache?.set(pluginDir, runtimeDepsManifest);
   return runtimeDepsManifest;
+}
+
+function readBundledPluginLocalMemoryEmbeddingRuntimeDeps(value: unknown): RuntimeDepEntry[] {
+  if (!isRecord(value)) {
+    return [];
+  }
+  const specs = value.localMemoryEmbedding;
+  if (!Array.isArray(specs)) {
+    return [];
+  }
+  return specs.map((spec) => {
+    if (typeof spec !== "string") {
+      throw new Error(
+        "openclaw.plugin.json runtimeDependencies.localMemoryEmbedding must contain strings",
+      );
+    }
+    return Object.assign(parseInstallableRuntimeDepSpec(spec), { pluginIds: [] });
+  });
+}
+
+function readBundledPluginRuntimeDepsModelSupport(
+  value: unknown,
+): BundledPluginRuntimeDepsModelSupport | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const modelPatterns = readRuntimeDepsManifestStringList(value.modelPatterns);
+  const modelPrefixes = readRuntimeDepsManifestStringList(value.modelPrefixes);
+  if (modelPatterns.length === 0 && modelPrefixes.length === 0) {
+    return undefined;
+  }
+  return { modelPatterns, modelPrefixes };
+}
+
+function readRuntimeDepsManifestStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((entry): entry is string => typeof entry === "string" && entry !== "");
 }
 
 const BUILT_IN_RUNTIME_DEPS_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<
@@ -207,11 +262,225 @@ function passesRuntimeDepsPluginPolicy(params: {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+type ConfiguredRuntimeDepsTargets = {
+  modelRefs: Set<string>;
+  providerIds: Set<string>;
+};
+
+function createConfiguredRuntimeDepsTargets(): ConfiguredRuntimeDepsTargets {
+  return {
+    modelRefs: new Set(),
+    providerIds: new Set(),
+  };
+}
+
+function addConfiguredProviderId(targets: ConfiguredRuntimeDepsTargets, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const normalized = normalizeProviderId(value);
+  if (normalized) {
+    targets.providerIds.add(normalized);
+  }
+}
+
+function addConfiguredModelRef(targets: ConfiguredRuntimeDepsTargets, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const parsed = parseConfiguredModelRef(value);
+  if (!parsed) {
+    return;
+  }
+  if (parsed.providerId) {
+    targets.providerIds.add(parsed.providerId);
+  } else {
+    targets.modelRefs.add(parsed.modelId);
+  }
+}
+
+function parseConfiguredModelRef(
+  value: string,
+): { modelId: string; providerId?: string } | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const slash = trimmed.indexOf("/");
+  if (slash < 0) {
+    const modelId = splitTrailingAuthProfile(trimmed).model.trim();
+    return modelId ? { modelId } : undefined;
+  }
+  const providerId = normalizeProviderId(trimmed.slice(0, slash));
+  const modelId = splitTrailingAuthProfile(trimmed.slice(slash + 1)).model.trim();
+  if (!providerId || !modelId) {
+    return undefined;
+  }
+  return { providerId, modelId };
+}
+
+function addConfiguredModelsFromModelConfig(
+  targets: ConfiguredRuntimeDepsTargets,
+  value: unknown,
+): void {
+  if (typeof value === "string") {
+    addConfiguredModelRef(targets, value);
+    return;
+  }
+  if (!isRecord(value)) {
+    return;
+  }
+  addConfiguredModelRef(targets, value.primary);
+  if (Array.isArray(value.fallbacks)) {
+    for (const fallback of value.fallbacks) {
+      addConfiguredModelRef(targets, fallback);
+    }
+  }
+}
+
+function collectConfiguredRuntimeDepsTargets(config: OpenClawConfig): ConfiguredRuntimeDepsTargets {
+  const targets = createConfiguredRuntimeDepsTargets();
+  for (const providerId of Object.keys(config.models?.providers ?? {})) {
+    addConfiguredProviderId(targets, providerId);
+  }
+  for (const profile of Object.values(config.auth?.profiles ?? {})) {
+    addConfiguredProviderId(targets, profile.provider);
+  }
+  for (const providerId of Object.keys(config.auth?.order ?? {})) {
+    addConfiguredProviderId(targets, providerId);
+  }
+
+  const defaults = config.agents?.defaults;
+  addConfiguredModelsFromModelConfig(targets, defaults?.model);
+  addConfiguredModelsFromModelConfig(targets, defaults?.imageModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.imageGenerationModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.videoGenerationModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.musicGenerationModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.pdfModel);
+  addConfiguredModelsFromModelConfig(targets, defaults?.subagents?.model);
+  for (const providerId of Object.keys(defaults?.models ?? {})) {
+    addConfiguredModelRef(targets, providerId);
+  }
+
+  for (const agent of config.agents?.list ?? []) {
+    addConfiguredModelsFromModelConfig(targets, agent.model);
+    addConfiguredModelsFromModelConfig(targets, agent.subagents?.model);
+  }
+  return targets;
+}
+
+function collectConfiguredProviderIds(config: OpenClawConfig): Set<string> {
+  return collectConfiguredRuntimeDepsTargets(config).providerIds;
+}
+
+function memorySearchConfigUsesProvider(
+  value: { enabled?: boolean; provider?: string } | undefined,
+  providerId: string,
+): boolean {
+  return (
+    value?.enabled !== false && normalizeOptionalLowercaseString(value?.provider) === providerId
+  );
+}
+
+function isMemoryEmbeddingProviderConfiguredForRuntimeDeps(
+  config: OpenClawConfig | undefined,
+  providerId: string,
+): boolean {
+  if (!config) {
+    return false;
+  }
+  if (memorySearchConfigUsesProvider(config.agents?.defaults?.memorySearch, providerId)) {
+    return true;
+  }
+  return (config.agents?.list ?? []).some((agent) =>
+    memorySearchConfigUsesProvider(agent.memorySearch, providerId),
+  );
+}
+
+function matchesBundledRuntimeDepsModelSupport(
+  manifest: BundledPluginRuntimeDepsManifest,
+  modelId: string,
+  kind: "pattern" | "prefix",
+): boolean {
+  if (kind === "pattern") {
+    for (const patternSource of manifest.modelSupport?.modelPatterns ?? []) {
+      try {
+        if (new RegExp(patternSource, "u").test(modelId)) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+  return (manifest.modelSupport?.modelPrefixes ?? []).some((prefix) => modelId.startsWith(prefix));
+}
+
+export function resolveBundledRuntimeDepsConfiguredModelOwnerPluginIds(params: {
+  config: OpenClawConfig;
+  extensionsDir: string;
+  manifestCache?: BundledPluginRuntimeDepsManifestCache;
+}): ReadonlySet<string> {
+  const targets = collectConfiguredRuntimeDepsTargets(params.config);
+  if (targets.modelRefs.size === 0 || !fs.existsSync(params.extensionsDir)) {
+    return new Set();
+  }
+  const plugins = fs
+    .readdirSync(params.extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const pluginDir = path.join(params.extensionsDir, entry.name);
+      return {
+        pluginId: entry.name,
+        manifest: readBundledPluginRuntimeDepsManifest(pluginDir, params.manifestCache),
+      };
+    });
+  const pluginIds = new Set<string>();
+  for (const modelId of targets.modelRefs) {
+    const patternMatches = plugins.filter(({ manifest }) =>
+      matchesBundledRuntimeDepsModelSupport(manifest, modelId, "pattern"),
+    );
+    if (patternMatches.length === 1) {
+      pluginIds.add(patternMatches[0].pluginId);
+      continue;
+    }
+    if (patternMatches.length > 1) {
+      continue;
+    }
+    const prefixMatches = plugins.filter(({ manifest }) =>
+      matchesBundledRuntimeDepsModelSupport(manifest, modelId, "prefix"),
+    );
+    if (prefixMatches.length === 1) {
+      pluginIds.add(prefixMatches[0].pluginId);
+    }
+  }
+  return pluginIds;
+}
+
+function isBundledProviderConfiguredForRuntimeDeps(params: {
+  config: OpenClawConfig;
+  providers: readonly string[];
+}): boolean {
+  if (params.providers.length === 0) {
+    return false;
+  }
+  const configuredProviderIds = collectConfiguredProviderIds(params.config);
+  return params.providers.some((provider) =>
+    configuredProviderIds.has(normalizeProviderId(provider)),
+  );
+}
+
 export function isBundledPluginConfiguredForRuntimeDeps(params: {
   config: OpenClawConfig;
   plugins: NormalizedPluginsConfig;
   pluginId: string;
   pluginDir: string;
+  configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
@@ -280,7 +549,18 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   if (hasConfiguredChannel) {
     return true;
   }
-  return manifest.enabledByDefault;
+  if (params.configuredModelOwnerPluginIds?.has(params.pluginId)) {
+    return true;
+  }
+  if (
+    isBundledProviderConfiguredForRuntimeDeps({
+      config: params.config,
+      providers: manifest.providers,
+    })
+  ) {
+    return true;
+  }
+  return manifest.enabledByDefault && manifest.providers.length === 0;
 }
 
 function isBundledPluginExplicitlyDisabledForRuntimeDeps(params: {
@@ -315,15 +595,16 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
   plugins?: NormalizedPluginsConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   pluginId: string;
   pluginDir: string;
+  configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  if (params.selectedPluginIds) {
+  if (params.exactPluginIds) {
     return (
-      params.selectedPluginIds.has(params.pluginId) &&
+      params.exactPluginIds.has(params.pluginId) &&
       !(
         params.config &&
         params.plugins &&
@@ -367,6 +648,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
     plugins: params.plugins,
     pluginId: params.pluginId,
     pluginDir: params.pluginDir,
+    configuredModelOwnerPluginIds: params.configuredModelOwnerPluginIds,
     includeConfiguredChannels: params.includeConfiguredChannels,
     manifestCache: params.manifestCache,
   });
@@ -376,7 +658,7 @@ export function collectBundledPluginRuntimeDeps(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
   normalizePluginId?: NormalizePluginId;
@@ -399,6 +681,14 @@ export function collectBundledPluginRuntimeDeps(params: {
   const plugins = params.config
     ? normalizePluginsConfigWithResolver(params.config.plugins, normalizePluginId)
     : undefined;
+  const configuredModelOwnerPluginIds =
+    params.config && plugins
+      ? resolveBundledRuntimeDepsConfiguredModelOwnerPluginIds({
+          config: params.config,
+          extensionsDir: params.extensionsDir,
+          manifestCache,
+        })
+      : undefined;
   const includedPluginIds = new Set<string>();
 
   for (const entry of fs.readdirSync(params.extensionsDir, { withFileTypes: true })) {
@@ -412,9 +702,10 @@ export function collectBundledPluginRuntimeDeps(params: {
         config: params.config,
         plugins,
         pluginIds: params.pluginIds,
-        selectedPluginIds: params.selectedPluginIds,
+        exactPluginIds: params.exactPluginIds,
         pluginId,
         pluginDir,
+        configuredModelOwnerPluginIds,
         includeConfiguredChannels: params.includeConfiguredChannels,
         manifestCache,
       })
@@ -422,20 +713,32 @@ export function collectBundledPluginRuntimeDeps(params: {
       continue;
     }
     includedPluginIds.add(pluginId);
+    const manifest = readBundledPluginRuntimeDepsManifest(pluginDir, manifestCache);
     const packageJson = readRuntimeDepsJsonObject(path.join(pluginDir, "package.json"));
-    if (!packageJson) {
-      continue;
-    }
-    for (const [name, rawVersion] of Object.entries(collectPackageRuntimeDeps(packageJson))) {
-      const dep = parseInstallableRuntimeDep(name, rawVersion);
-      if (!dep) {
-        continue;
+    if (packageJson) {
+      for (const [name, rawVersion] of Object.entries(collectPackageRuntimeDeps(packageJson))) {
+        const dep = parseInstallableRuntimeDep(name, rawVersion);
+        if (!dep) {
+          continue;
+        }
+        const byVersion = versionMap.get(dep.name) ?? new Map<string, Set<string>>();
+        const pluginIds = byVersion.get(dep.version) ?? new Set<string>();
+        pluginIds.add(pluginId);
+        byVersion.set(dep.version, pluginIds);
+        versionMap.set(dep.name, byVersion);
       }
-      const byVersion = versionMap.get(dep.name) ?? new Map<string, Set<string>>();
-      const pluginIds = byVersion.get(dep.version) ?? new Set<string>();
-      pluginIds.add(pluginId);
-      byVersion.set(dep.version, pluginIds);
-      versionMap.set(dep.name, byVersion);
+    }
+    if (
+      manifest.localMemoryEmbeddingRuntimeDeps.length > 0 &&
+      isMemoryEmbeddingProviderConfiguredForRuntimeDeps(params.config, "local")
+    ) {
+      for (const dep of manifest.localMemoryEmbeddingRuntimeDeps) {
+        const byVersion = versionMap.get(dep.name) ?? new Map<string, Set<string>>();
+        const pluginIds = byVersion.get(dep.version) ?? new Set<string>();
+        pluginIds.add(pluginId);
+        byVersion.set(dep.version, pluginIds);
+        versionMap.set(dep.name, byVersion);
+      }
     }
   }
 

@@ -22,10 +22,8 @@ import {
   type DetachedTaskLifecycleRuntime,
 } from "../tasks/detached-task-runtime-state.js";
 import { withEnv } from "../test-utils/env.js";
-import {
-  resolveBundledRuntimeDependencyInstallRootPlan,
-  type BundledRuntimeDepsInstallParams,
-} from "./bundled-runtime-deps.js";
+import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
+import { resolveBundledRuntimeDependencyInstallRootPlan } from "./bundled-runtime-deps-roots.js";
 import { ensureOpenClawPluginSdkAlias } from "./bundled-runtime-root.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
@@ -3654,6 +3652,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
             description: "failme",
             run: async () => ({ ok: true }),
           });
+          api.registerNodeInvokePolicy({
+            commands: ["failme.node"],
+            handle: async () => ({ ok: true }),
+          });
           api.registerSecurityAuditCollector({
             id: "failme",
             collect: async () => [],
@@ -3696,6 +3698,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getPluginCommandSpecs()).toEqual([]);
     expect(registry.reloads).toEqual([]);
     expect(registry.nodeHostCommands).toEqual([]);
+    expect(registry.nodeInvokePolicies).toEqual([]);
     expect(registry.securityAuditCollectors).toEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();

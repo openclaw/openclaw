@@ -57,7 +57,7 @@ export interface GatewayPluginRuntime {
       recordInboundSession: (params: unknown) => Promise<unknown>;
     };
     turn: {
-      runPrepared: (params: unknown) => Promise<unknown>;
+      run: (params: unknown) => Promise<unknown>;
     };
     text: {
       chunkMarkdownText: (text: string, limit: number) => string[];

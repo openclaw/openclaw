@@ -124,6 +124,13 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");
     expect(assertionsScript).toContain("expectedErrorMessages");
+    expect(assertionsScript).toContain(
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "adversarial"]);',
+    );
+    expect(assertionsScript).toContain("!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)");
+    expect(assertionsScript).not.toContain(
+      'const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance"',
+    );
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       'from "openclaw/plugin-sdk/plugin-entry"',
     );
@@ -288,6 +295,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         include_repo_e2e: false,
         live_models_only: false,
         ref: "${{ needs.preflight.outputs.checkout_revision }}",
+        targeted_docker_lane_group_size: 4,
       },
     });
     expect(dockerSuite.secrets).toBeUndefined();
@@ -313,7 +321,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
-      "cancel-in-progress": false,
+      "cancel-in-progress": "${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}",
     });
     expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");

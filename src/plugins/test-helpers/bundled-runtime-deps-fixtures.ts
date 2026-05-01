@@ -13,6 +13,7 @@ export function writeInstalledRuntimeDepPackage(
     JSON.stringify({ name: packageName, version }),
     "utf8",
   );
+  fs.writeFileSync(path.join(packageDir, "index.js"), "export {};\n", "utf8");
 }
 
 export function writeGeneratedRuntimeDepsManifest(rootDir: string, specs: readonly string[]): void {
@@ -46,6 +47,9 @@ export function writeBundledPluginRuntimeDepsPackage(params: {
   deps: Record<string, string>;
   enabledByDefault?: boolean;
   channels?: string[];
+  modelSupport?: { modelPatterns?: string[]; modelPrefixes?: string[] };
+  providers?: string[];
+  runtimeDependencies?: Record<string, string[]>;
 }): string {
   const pluginRoot = path.join(params.packageRoot, "dist", "extensions", params.pluginId);
   fs.mkdirSync(pluginRoot, { recursive: true });
@@ -59,6 +63,9 @@ export function writeBundledPluginRuntimeDepsPackage(params: {
       id: params.pluginId,
       enabledByDefault: params.enabledByDefault === true,
       ...(params.channels ? { channels: params.channels } : {}),
+      ...(params.modelSupport ? { modelSupport: params.modelSupport } : {}),
+      ...(params.providers ? { providers: params.providers } : {}),
+      ...(params.runtimeDependencies ? { runtimeDependencies: params.runtimeDependencies } : {}),
     }),
   );
   return pluginRoot;
