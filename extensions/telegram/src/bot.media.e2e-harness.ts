@@ -177,7 +177,7 @@ beforeEach(() => {
 
 vi.doMock("./bot.runtime.js", () => ({
   ...telegramBotRuntimeForTest,
-  apiThrottler: (() => throttlerSpy()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
+  apiThrottler: () => throttlerSpy(),
 }));
 
 vi.mock("undici", () => ({
