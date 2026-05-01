@@ -360,7 +360,7 @@ export function createBundledRuntimeDepsPackagePlan(
       : undefined;
   const exactPluginIds = normalizePluginIdSet(params.exactPluginIds, normalizePluginId);
   const scopedPluginIds = normalizePluginIdSet(params.pluginIds, normalizePluginId);
-  const { deps, conflicts, pluginIds } = collectBundledPluginRuntimeDeps({
+  const { deps, conflicts } = collectBundledPluginRuntimeDeps({
     extensionsDir,
     ...(params.config ? { config: params.config } : {}),
     ...(exactPluginIds ? { exactPluginIds } : {}),
