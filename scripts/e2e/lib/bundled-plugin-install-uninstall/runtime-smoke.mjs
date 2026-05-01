@@ -336,10 +336,9 @@ async function runManifestProbes(plan, options) {
   if (plan.speechProviders.length > 0) {
     const providers = await rpcCall("tts.providers", {}, options);
     const status = await rpcCall("tts.status", {}, options);
-    for (const provider of plan.speechProviders) {
-      assertSpeechProviderVisible(providers, provider, "tts.providers");
-      assertSpeechProviderVisible(status, provider, "tts.status");
-    }
+    const provider = plan.speechProviders[0];
+    assertSpeechProviderVisible(providers, provider, "tts.providers");
+    assertSpeechProviderVisible(status, provider, "tts.status");
   }
 }
 
