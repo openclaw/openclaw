@@ -441,12 +441,22 @@ class NpmUpdateSmoke {
     timeoutMs: number,
     ctx: UpdateJobContext,
   ): Promise<void> {
-    const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx);
     const scriptPath = this.writeGuestScript(
       macosVm,
       script,
       "openclaw-parallels-npm-update-macos",
     );
+    const macosExecArgs = this.resolveMacosUpdateExecArgs(ctx);
+    const sudoUserArgIndex = macosExecArgs.indexOf("-u");
+    const sudoUser =
+      sudoUserArgIndex >= 0 && sudoUserArgIndex + 1 < macosExecArgs.length
+        ? macosExecArgs[sudoUserArgIndex + 1]
+        : "";
+    if (sudoUser) {
+      run("prlctl", ["exec", macosVm, "/usr/sbin/chown", sudoUser, scriptPath], {
+        timeoutMs: 30_000,
+      });
+    }
     try {
       const status = await this.runStreamingToJobLog(
         "prlctl",

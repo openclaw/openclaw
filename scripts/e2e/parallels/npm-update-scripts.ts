@@ -30,9 +30,10 @@ entries = plugins.get("entries")
 if isinstance(entries, dict):
     entries.pop("feishu", None)
     entries.pop("whatsapp", None)
+    entries.pop("openai", None)
 allow = plugins.get("allow")
 if isinstance(allow, list):
-    plugins["allow"] = [item for item in allow if item not in {"feishu", "whatsapp"}]
+    plugins["allow"] = [item for item in allow if item not in {"feishu", "whatsapp", "openai"}]
 path.write_text(json.dumps(config, indent=2) + "\n")
 PY
 }
@@ -86,13 +87,13 @@ function Remove-FuturePluginEntries {
   if (-not ($plugins -is [hashtable])) { return }
   $entries = $plugins['entries']
   if ($entries -is [hashtable]) {
-    foreach ($pluginId in @('feishu', 'whatsapp')) {
+    foreach ($pluginId in @('feishu', 'whatsapp', 'openai')) {
       if ($entries.ContainsKey($pluginId)) { $entries.Remove($pluginId) }
     }
   }
   $allow = $plugins['allow']
   if ($allow -is [array]) {
-    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp') })
+    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp', 'openai') })
   }
   $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
 }
@@ -119,8 +120,25 @@ if ($updateExit -ne 0) {
   Write-Host "openclaw update returned a stale post-swap module import; continuing to post-update health checks"
 }
 ${windowsVersionCheck(input.expectedNeedle)}
-Invoke-OpenClaw gateway restart
-Invoke-OpenClaw gateway status --deep --require-rpc
+function Wait-OpenClawGateway {
+  $deadline = (Get-Date).AddSeconds(180)
+  $attempt = 0
+  while ((Get-Date) -lt $deadline) {
+    Invoke-OpenClaw gateway status --deep --require-rpc --timeout 15000
+    if ($LASTEXITCODE -eq 0) { return }
+    $attempt += 1
+    if ($attempt -eq 4) {
+      Invoke-OpenClaw gateway start *>&1 | Out-Host
+    }
+    Start-Sleep -Seconds 5
+  }
+  throw "gateway did not become ready after update"
+}
+Invoke-OpenClaw gateway restart *>&1 | Out-Host
+if ($LASTEXITCODE -ne 0) {
+  "gateway restart exited with code $LASTEXITCODE; probing readiness before failing" | Out-Host
+}
+Wait-OpenClawGateway
 Invoke-OpenClaw models set ${psSingleQuote(input.auth.modelId)}
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
@@ -144,9 +162,10 @@ if (!plugins || typeof plugins !== "object") process.exit(0);
 if (plugins.entries && typeof plugins.entries === "object") {
   delete plugins.entries.feishu;
   delete plugins.entries.whatsapp;
+  delete plugins.entries.openai;
 }
 if (Array.isArray(plugins.allow)) {
-  plugins.allow = plugins.allow.filter((id) => id !== "feishu" && id !== "whatsapp");
+  plugins.allow = plugins.allow.filter((id) => id !== "feishu" && id !== "whatsapp" && id !== "openai");
 }
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 JS
