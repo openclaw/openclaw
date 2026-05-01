@@ -70,9 +70,10 @@ export function resolveCliStartupPolicy(params: {
 }) {
   const suppressDoctorStdout = params.jsonOutputMode;
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
+  const env = params.env ?? process.env;
   return {
     suppressDoctorStdout,
-    hideBanner: isTruthyEnvValue(params.env?.OPENCLAW_HIDE_BANNER) || commandPolicy.hideBanner,
+    hideBanner: isTruthyEnvValue(env.OPENCLAW_HIDE_BANNER) || commandPolicy.hideBanner,
     skipConfigGuard: params.routeMode
       ? commandPolicy.routeConfigGuard === "always" ||
         (commandPolicy.routeConfigGuard === "when-suppressed" && suppressDoctorStdout)

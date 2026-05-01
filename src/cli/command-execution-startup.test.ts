@@ -30,6 +30,7 @@ describe("command-execution-startup", () => {
       mod.resolveCliExecutionStartupContext({
         argv: ["node", "openclaw", "status", "--json"],
         jsonOutputMode: true,
+        env: {},
         routeMode: true,
       }),
     ).toEqual({
@@ -49,6 +50,33 @@ describe("command-execution-startup", () => {
         pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
       },
     });
+  });
+
+  it("uses process env banner suppression when startup env is omitted", () => {
+    const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+    try {
+      process.env.OPENCLAW_HIDE_BANNER = "1";
+
+      expect(
+        mod.resolveCliExecutionStartupContext({
+          argv: ["node", "openclaw", "status"],
+          jsonOutputMode: false,
+        }).startupPolicy.hideBanner,
+      ).toBe(true);
+      expect(
+        mod.resolveCliExecutionStartupContext({
+          argv: ["node", "openclaw", "status"],
+          jsonOutputMode: false,
+          env: {},
+        }).startupPolicy.hideBanner,
+      ).toBe(false);
+    } finally {
+      if (originalHideBanner === undefined) {
+        delete process.env.OPENCLAW_HIDE_BANNER;
+      } else {
+        process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
+      }
+    }
   });
 
   it("skips local plugin bootstrap for JSON gateway agent calls", () => {
