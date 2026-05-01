@@ -281,7 +281,7 @@ export function createCapturedPluginRegistration(params?: {
           sessionSchedulerJobs.push(job);
           return {
             id: job.id,
-            pluginId: "captured-plugin-registration",
+            pluginId,
             sessionKey: job.sessionKey,
             kind: job.kind,
           };
@@ -294,7 +294,7 @@ export function createCapturedPluginRegistration(params?: {
           capturedSessionTurnCount += 1;
           return {
             id: `captured-session-turn-${capturedSessionTurnCount}`,
-            pluginId: "captured-plugin-registration",
+            pluginId,
             sessionKey: schedule.sessionKey,
             kind: "session-turn",
           };
