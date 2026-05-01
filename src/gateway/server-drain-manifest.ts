@@ -20,6 +20,7 @@ export type DrainManifest = {
 };
 
 const DRAIN_MANIFEST_FILENAME = "draining-sessions.json";
+const DRAIN_MANIFEST_MAX_BYTES = 1024 * 1024;
 
 export function resolveDrainManifestPath(): string {
   const stateDir = resolveStateDir();
@@ -106,25 +107,79 @@ export function deleteDrainManifest(): void {
   }
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function validateDrainManifestEntry(entry: unknown): entry is DrainManifestEntry {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+    return false;
+  }
+  const candidate = entry as Partial<Record<keyof DrainManifestEntry, unknown>>;
+  return (
+    isNonEmptyString(candidate.runId) &&
+    isNonEmptyString(candidate.sessionKey) &&
+    isNonEmptyString(candidate.clientRunId)
+  );
+}
+
+function validateDrainManifest(parsed: unknown): DrainManifest | null {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
+  }
+  const candidate = parsed as Partial<Record<keyof DrainManifest, unknown>>;
+  if (
+    candidate.version !== 1 ||
+    !isNonEmptyString(candidate.writtenAt) ||
+    Number.isNaN(Date.parse(candidate.writtenAt)) ||
+    !Array.isArray(candidate.sessions)
+  ) {
+    return null;
+  }
+  if (!candidate.sessions.every((entry) => validateDrainManifestEntry(entry))) {
+    return null;
+  }
+  return {
+    version: 1,
+    writtenAt: candidate.writtenAt,
+    sessions: candidate.sessions,
+  };
+}
+
 /**
  * Read and parse the drain manifest from disk.
  * Returns null if no manifest exists or it's invalid.
  */
 export function readDrainManifest(): DrainManifest | null {
   const manifestPath = resolveDrainManifestPath();
+  let raw: string;
   try {
-    if (!fs.existsSync(manifestPath)) {
+    const stat = fs.lstatSync(manifestPath);
+    if (!stat.isFile() || stat.nlink > 1) {
+      drainLog.warn(`drain manifest is not a regular single-link file, ignoring`);
       return null;
     }
-    const raw = fs.readFileSync(manifestPath, "utf-8");
-    const parsed = JSON.parse(raw);
-    if (parsed?.version !== 1 || !Array.isArray(parsed?.sessions)) {
+    if (stat.size > DRAIN_MANIFEST_MAX_BYTES) {
+      drainLog.warn(`drain manifest exceeds ${DRAIN_MANIFEST_MAX_BYTES} bytes, ignoring`);
+      return null;
+    }
+    raw = fs.readFileSync(manifestPath, "utf-8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      drainLog.warn(`failed to read drain manifest: ${String(err)}`);
+    }
+    return null;
+  }
+
+  try {
+    const manifest = validateDrainManifest(JSON.parse(raw));
+    if (!manifest) {
       drainLog.warn(`drain manifest has invalid format, ignoring`);
       return null;
     }
-    return parsed as DrainManifest;
+    return manifest;
   } catch (err) {
-    drainLog.warn(`failed to read drain manifest: ${String(err)}`);
+    drainLog.warn(`failed to parse drain manifest: ${String(err)}`);
     return null;
   }
 }

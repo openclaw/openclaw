@@ -108,21 +108,90 @@ describe("server-drain-manifest", () => {
   });
 
   describe("readDrainManifest", () => {
+    const manifestPath = () => path.join(tmpDir, "state", "draining-sessions.json");
+
+    function writeRawManifest(value: unknown): void {
+      const target = manifestPath();
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, JSON.stringify(value), "utf-8");
+    }
+
     it("returns null when no manifest exists", () => {
       expect(readDrainManifest()).toBeNull();
     });
 
+    it("returns a valid generic manifest", () => {
+      const manifest = {
+        version: 1,
+        writtenAt: new Date().toISOString(),
+        sessions: [{ runId: "run-1", sessionKey: "agent:charles", clientRunId: "client-1" }],
+      };
+      writeRawManifest(manifest);
+
+      expect(readDrainManifest()).toEqual(manifest);
+    });
+
     it("returns null for invalid JSON", () => {
-      const manifestPath = path.join(tmpDir, "state", "draining-sessions.json");
-      fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-      fs.writeFileSync(manifestPath, "not json", "utf-8");
+      const target = manifestPath();
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "not json", "utf-8");
       expect(readDrainManifest()).toBeNull();
     });
 
     it("returns null for wrong version", () => {
-      const manifestPath = path.join(tmpDir, "state", "draining-sessions.json");
-      fs.mkdirSync(path.dirname(manifestPath), { recursive: true });
-      fs.writeFileSync(manifestPath, JSON.stringify({ version: 2, sessions: [] }), "utf-8");
+      writeRawManifest({ version: 2, writtenAt: new Date().toISOString(), sessions: [] });
+      expect(readDrainManifest()).toBeNull();
+    });
+
+    it("returns null for wrong top-level field types", () => {
+      writeRawManifest({ version: 1, writtenAt: 123, sessions: [] });
+      expect(readDrainManifest()).toBeNull();
+
+      writeRawManifest({ version: 1, writtenAt: new Date().toISOString(), sessions: {} });
+      expect(readDrainManifest()).toBeNull();
+    });
+
+    it("returns null for wrong entry field types", () => {
+      writeRawManifest({
+        version: 1,
+        writtenAt: new Date().toISOString(),
+        sessions: [{ runId: "run-1", sessionKey: "agent:charles", clientRunId: 42 }],
+      });
+      expect(readDrainManifest()).toBeNull();
+    });
+
+    it("returns null for an oversized manifest without parsing it", () => {
+      const target = manifestPath();
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "{".padEnd(1024 * 1024 + 1, " "), "utf-8");
+
+      expect(readDrainManifest()).toBeNull();
+    });
+
+    it("returns null for a directory manifest path", () => {
+      fs.mkdirSync(manifestPath(), { recursive: true });
+
+      expect(readDrainManifest()).toBeNull();
+    });
+
+    it("returns null for a symlink manifest path", () => {
+      const target = manifestPath();
+      const realManifestPath = path.join(tmpDir, "real-manifest.json");
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(
+        realManifestPath,
+        JSON.stringify({ version: 1, writtenAt: new Date().toISOString(), sessions: [] }),
+        "utf-8",
+      );
+      fs.symlinkSync(realManifestPath, target);
+
+      expect(readDrainManifest()).toBeNull();
+    });
+
+    it("returns null for a hard-linked manifest path", () => {
+      writeRawManifest({ version: 1, writtenAt: new Date().toISOString(), sessions: [] });
+      fs.linkSync(manifestPath(), path.join(tmpDir, "linked-manifest.json"));
+
       expect(readDrainManifest()).toBeNull();
     });
   });
