@@ -112,6 +112,15 @@ function resolveBackgroundTaskFailureStatus(error: AcpRuntimeError): "failed" | 
   return /\btimed out\b/i.test(error.message) ? "timed_out" : "failed";
 }
 
+function isAcpBackendUnavailableError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error != null &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "ACP_BACKEND_UNAVAILABLE"
+  );
+}
+
 function resolveBackgroundTaskTerminalResult(progressSummary: string): {
   terminalOutcome?: "blocked";
   terminalSummary?: string;
@@ -309,7 +318,10 @@ export class AcpSessionManager {
     const agent = normalizeAgentId(input.agent);
     await this.evictIdleRuntimeHandles({ cfg: input.cfg });
     return await this.withSessionActor(sessionKey, async () => {
-      const backend = this.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
+      const backend = await this.requireRuntimeBackendAfterAvailabilityProbe({
+        backendId: input.backendId || input.cfg.acp?.backend,
+        sessionKey,
+      });
       const runtime = backend.runtime;
       const initialRuntimeOptions = validateRuntimeOptionPatch({
         ...input.runtimeOptions,
@@ -1415,7 +1427,10 @@ export class AcpSessionManager {
       sessionKey: params.sessionKey,
     });
 
-    const backend = this.deps.requireRuntimeBackend(configuredBackend || undefined);
+    const backend = await this.requireRuntimeBackendAfterAvailabilityProbe({
+      backendId: configuredBackend || undefined,
+      sessionKey: params.sessionKey,
+    });
     const runtime = backend.runtime;
     const previousMeta = params.meta;
     const previousIdentity = resolveSessionIdentityFromMeta(previousMeta);
@@ -1550,6 +1565,39 @@ export class AcpSessionManager {
       handle: nextHandle,
       meta: nextMeta,
     };
+  }
+
+  private async requireRuntimeBackendAfterAvailabilityProbe(params: {
+    backendId?: string;
+    sessionKey: string;
+  }): Promise<ReturnType<AcpSessionManagerDeps["requireRuntimeBackend"]>> {
+    const backendId = normalizeText(params.backendId);
+    try {
+      return this.deps.requireRuntimeBackend(backendId || undefined);
+    } catch (error) {
+      if (!isAcpBackendUnavailableError(error)) {
+        throw error;
+      }
+      const backend = this.deps.getRuntimeBackend(backendId || undefined);
+      const runtime = backend?.runtime as
+        | (AcpRuntime & { probeAvailability?: () => Promise<void> | void })
+        | undefined;
+      if (typeof runtime?.probeAvailability !== "function") {
+        throw error;
+      }
+      logVerbose(
+        `acp-manager: backend${backendId ? ` "${backendId}"` : ""} unavailable for ${params.sessionKey}; probing before retry: ${formatErrorMessage(error)}`,
+      );
+      try {
+        await runtime.probeAvailability.call(runtime);
+      } catch (probeError) {
+        logVerbose(
+          `acp-manager: backend${backendId ? ` "${backendId}"` : ""} probe failed for ${params.sessionKey}: ${formatErrorMessage(probeError)}`,
+        );
+        throw error;
+      }
+      return this.deps.requireRuntimeBackend(backendId || undefined);
+    }
   }
 
   private async isCachedRuntimeHandleReusable(params: {

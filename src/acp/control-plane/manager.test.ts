@@ -311,6 +311,57 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("waits for a temporarily unavailable ACP backend before rehydrating an existing session", async () => {
+    const runtimeState = createRuntime();
+    const probeAvailability = vi.fn(async () => {});
+    let attempts = 0;
+    hoisted.requireAcpRuntimeBackendMock.mockImplementation(() => {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new AcpRuntimeError(
+          "ACP_BACKEND_UNAVAILABLE",
+          "ACP runtime backend is currently unavailable. Try again in a moment.",
+        );
+      }
+      return {
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      };
+    });
+    hoisted.getAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: {
+        ...runtimeState.runtime,
+        probeAvailability,
+      },
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+
+    const manager = new AcpSessionManager();
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "resume after transient backend flap",
+      mode: "prompt",
+      requestId: "r-backend-flap",
+    });
+
+    expect(probeAvailability).toHaveBeenCalledTimes(1);
+    expect(hoisted.requireAcpRuntimeBackendMock).toHaveBeenCalledTimes(2);
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-1",
+        agent: "codex",
+      }),
+    );
+    expect(runtimeState.runTurn).toHaveBeenCalled();
+  });
+
   it("tracks parented direct ACP turns in the task registry", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();

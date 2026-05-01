@@ -2026,18 +2026,28 @@ export function finalizeTaskRunByRunId(params: {
   runtime?: TaskRuntime;
   sessionKey?: string;
   status?: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
+  startedAt?: number;
   completedAt?: number;
+  endedAt?: number;
+  lastEventAt?: number;
   error?: string | null;
   result?: unknown;
+  progressSummary?: string | null;
+  terminalSummary?: string | null;
   terminalOutcome?: TaskTerminalOutcome | null;
 }) {
+  const endedAt = params.endedAt ?? params.completedAt ?? Date.now();
   return markTaskTerminalByRunId({
     runId: params.runId,
     runtime: params.runtime,
     sessionKey: params.sessionKey,
     status: params.status ?? "succeeded",
-    endedAt: params.completedAt ?? Date.now(),
+    startedAt: params.startedAt,
+    endedAt,
+    lastEventAt: params.lastEventAt ?? endedAt,
     error: params.error ?? undefined,
+    progressSummary: params.progressSummary,
+    terminalSummary: params.terminalSummary,
     terminalOutcome: params.terminalOutcome,
   });
 }
