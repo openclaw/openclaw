@@ -211,6 +211,20 @@ describe("createVoiceCallRuntime lifecycle", () => {
     },
   );
 
+  it("fails closed when Twilio publicUrl points at a local-only webhook", async () => {
+    await expect(
+      createVoiceCallRuntime({
+        config: createExternalProviderConfig({
+          provider: "twilio",
+          publicUrl: "http://127.0.0.1:3334/voice/webhook",
+        }),
+        coreConfig: {} as CoreConfig,
+        agentRuntime: {} as never,
+      }),
+    ).rejects.toThrow("twilio requires a publicly reachable webhook URL");
+    expect(mocks.webhookStop).toHaveBeenCalledTimes(1);
+  });
+
   it("accepts an explicit public URL for external voice providers", async () => {
     const runtime = await createVoiceCallRuntime({
       config: createExternalProviderConfig({

@@ -564,6 +564,38 @@ describe("voice-call plugin", () => {
     }
   });
 
+  it("CLI setup rejects local public webhook URLs for Twilio", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    await registerVoiceCallCli(program, {
+      provider: "twilio",
+      fromNumber: "+15550001234",
+      publicUrl: "http://127.0.0.1:3334/voice/webhook",
+      twilio: {
+        accountSid: "AC123",
+        authToken: "token",
+      },
+    });
+
+    try {
+      await program.parseAsync(["voicecall", "setup", "--json"], { from: "user" });
+      const parsed = JSON.parse(stdout.output()) as {
+        ok?: boolean;
+        checks?: Array<{ id: string; ok: boolean; message: string }>;
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.checks).toContainEqual(
+        expect.objectContaining({
+          id: "webhook-exposure",
+          ok: false,
+          message: expect.stringContaining("local/private"),
+        }),
+      );
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("CLI status lists active calls without a call id", async () => {
     const program = new Command();
     const stdout = captureStdout();

@@ -85,11 +85,12 @@ openclaw googlemeet setup --transport chrome-node --mode transcribe
 ```
 
 When Twilio delegation is configured, setup also reports whether the
-`voice-call` plugin and Twilio credentials are ready. Treat any `ok: false`
-check as a blocker for the checked transport and mode before asking an agent to
-join. Use `openclaw googlemeet setup --json` for scripts or machine-readable
-output. Use `--transport chrome`, `--transport chrome-node`, or `--transport twilio`
-to preflight a specific transport before an agent tries it.
+`voice-call` plugin, Twilio credentials, and public webhook exposure are ready.
+Treat any `ok: false` check as a blocker for the checked transport and mode
+before asking an agent to join. Use `openclaw googlemeet setup --json` for
+scripts or machine-readable output. Use `--transport chrome`,
+`--transport chrome-node`, or `--transport twilio` to preflight a specific
+transport before an agent tries it.
 
 Join a meeting:
 
@@ -439,7 +440,8 @@ openclaw googlemeet setup
 ```
 
 When Twilio delegation is wired, `googlemeet setup` includes successful
-`twilio-voice-call-plugin` and `twilio-voice-call-credentials` checks.
+`twilio-voice-call-plugin`, `twilio-voice-call-credentials`, and
+`twilio-voice-call-webhook` checks.
 
 ```bash
 openclaw googlemeet join https://meet.google.com/abc-defg-hij \
@@ -1115,8 +1117,8 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij \
 
 Expected Twilio state:
 
-- `googlemeet setup` includes green `twilio-voice-call-plugin` and
-  `twilio-voice-call-credentials` checks.
+- `googlemeet setup` includes green `twilio-voice-call-plugin`,
+  `twilio-voice-call-credentials`, and `twilio-voice-call-webhook` checks.
 - `voicecall` is available in the CLI after Gateway reload.
 - The returned session has `transport: "twilio"` and a `twilio.voiceCallId`.
 - `googlemeet leave <sessionId>` hangs up the delegated voice call.
@@ -1302,6 +1304,11 @@ export TWILIO_ACCOUNT_SID=AC...
 export TWILIO_AUTH_TOKEN=...
 export TWILIO_FROM_NUMBER=+15550001234
 ```
+
+`twilio-voice-call-webhook` fails when `voice-call` has no public webhook
+exposure, or when `publicUrl` points at loopback or private network space.
+Set `plugins.entries.voice-call.config.publicUrl` to the public provider URL or
+configure a `voice-call` tunnel/Tailscale exposure.
 
 Then restart or reload the Gateway and run:
 

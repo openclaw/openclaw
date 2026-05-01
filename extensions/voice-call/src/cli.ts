@@ -10,6 +10,7 @@ import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
+import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
 import {
   cleanupTailscaleExposureRoute,
   getTailscaleSelfInfo,
@@ -166,16 +167,9 @@ function resolveCallMode(mode?: string): "notify" | "conversation" | undefined {
   return mode === "notify" || mode === "conversation" ? mode : undefined;
 }
 
-function hasPublicExposure(config: VoiceCallConfig): boolean {
-  return Boolean(
-    config.publicUrl ||
-    (config.tunnel?.provider && config.tunnel.provider !== "none") ||
-    (config.tailscale?.mode && config.tailscale.mode !== "off"),
-  );
-}
-
 function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
   const validation = validateProviderConfig(config);
+  const webhookExposure = resolveWebhookExposureStatus(config);
   const checks: SetupCheck[] = [
     {
       id: "plugin-enabled",
@@ -200,15 +194,8 @@ function buildSetupStatus(config: VoiceCallConfig): SetupStatus {
     },
     {
       id: "webhook-exposure",
-      ok: config.provider === "mock" || hasPublicExposure(config),
-      message:
-        config.provider === "mock"
-          ? "Mock provider does not need a public webhook"
-          : hasPublicExposure(config)
-            ? config.publicUrl
-              ? `Public webhook URL configured: ${config.publicUrl}`
-              : "Webhook exposure configured through tunnel or Tailscale"
-            : "Set publicUrl or configure tunnel/tailscale so the provider can reach webhooks",
+      ok: webhookExposure.ok,
+      message: webhookExposure.message,
     },
     {
       id: "mode",

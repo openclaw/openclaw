@@ -24,6 +24,78 @@ function resolveUserPath(input: string): string {
   return input;
 }
 
+function isLocalOnlyWebhookHost(hostname: string): boolean {
+  const host = hostname.trim().toLowerCase();
+  if (!host) {
+    return false;
+  }
+  if (
+    host === "localhost" ||
+    host === "0.0.0.0" ||
+    host === "::" ||
+    host === "::1" ||
+    host.startsWith("127.")
+  ) {
+    return true;
+  }
+  if (host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) {
+    return true;
+  }
+  const private172 = /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
+  return private172 || host.startsWith("fc") || host.startsWith("fd");
+}
+
+function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
+  try {
+    const parsed = new URL(webhookUrl);
+    return isLocalOnlyWebhookHost(parsed.hostname);
+  } catch {
+    return false;
+  }
+}
+
+function getVoiceCallWebhookExposureCheck(voiceCallConfig: Record<string, unknown>): SetupCheck {
+  const publicUrl = normalizeOptionalString(voiceCallConfig.publicUrl);
+  const tunnel = asRecord(voiceCallConfig.tunnel);
+  const tailscale = asRecord(voiceCallConfig.tailscale);
+  const tunnelProvider = normalizeOptionalString(tunnel.provider);
+  const tailscaleMode = normalizeOptionalString(tailscale.mode);
+
+  if (publicUrl) {
+    const ok = !isProviderUnreachableWebhookUrl(publicUrl);
+    return {
+      id: "twilio-voice-call-webhook",
+      ok,
+      message: ok
+        ? `Voice-call public webhook URL configured: ${publicUrl}`
+        : `Voice-call publicUrl is local/private and cannot be reached by Twilio: ${publicUrl}`,
+    };
+  }
+
+  if (tunnelProvider && tunnelProvider !== "none") {
+    return {
+      id: "twilio-voice-call-webhook",
+      ok: true,
+      message: "Voice-call webhook exposure configured through tunnel",
+    };
+  }
+
+  if (tailscaleMode && tailscaleMode !== "off") {
+    return {
+      id: "twilio-voice-call-webhook",
+      ok: true,
+      message: "Voice-call webhook exposure configured through Tailscale",
+    };
+  }
+
+  return {
+    id: "twilio-voice-call-webhook",
+    ok: false,
+    message:
+      "Set plugins.entries.voice-call.config.publicUrl or configure voice-call tunnel/tailscale exposure for Twilio dialing",
+  };
+}
+
 export function getGoogleMeetSetupStatus(config: GoogleMeetConfig): {
   ok: boolean;
   checks: SetupCheck[];
@@ -143,7 +215,7 @@ export function getGoogleMeetSetupStatus(
 
   const shouldCheckTwilioDelegation =
     config.voiceCall.enabled &&
-    (config.defaultTransport === "twilio" ||
+    (transport === "twilio" ||
       Boolean(config.twilio.defaultDialInNumber) ||
       Object.hasOwn(pluginEntries, "voice-call"));
   if (shouldCheckTwilioDelegation) {
@@ -175,6 +247,7 @@ export function getGoogleMeetSetupStatus(
           ? "Twilio voice-call credentials are configured"
           : "Set TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER or configure voice-call Twilio credentials",
       });
+      checks.push(getVoiceCallWebhookExposureCheck(voiceCallConfig));
     }
   }
 
