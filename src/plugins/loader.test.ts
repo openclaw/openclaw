@@ -4476,6 +4476,46 @@ module.exports = { id: "throws-after-import", register() {} };`,
     delete (globalThis as Record<string, unknown>)[marker];
   });
 
+  it("reuses skip-dependency gateway-bindable boot registries for default runtime resolves", () => {
+    useNoBundledPlugins();
+    const marker = "__openclawGatewayBootSkipDepsRegisterCount";
+    const plugin = writePlugin({
+      id: "costclaw-boot-skip-deps-cache",
+      filename: "costclaw-boot-skip-deps-cache.cjs",
+      body: `module.exports = {
+        id: "costclaw-boot-skip-deps-cache",
+        register() {
+          globalThis.${marker} = (globalThis.${marker} || 0) + 1;
+        },
+      };`,
+    });
+    const config = {
+      plugins: {
+        load: { paths: [plugin.file] },
+        allow: ["costclaw-boot-skip-deps-cache"],
+        entries: {
+          "costclaw-boot-skip-deps-cache": { enabled: true },
+        },
+      },
+    };
+
+    loadOpenClawPlugins({
+      workspaceDir: plugin.dir,
+      config,
+      installBundledRuntimeDeps: false,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    resolveRuntimePluginRegistry({
+      workspaceDir: plugin.dir,
+      config,
+    });
+
+    expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
+    delete (globalThis as Record<string, unknown>)[marker];
+  });
+
   it("re-initializes global hook runner when serving registry from cache", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

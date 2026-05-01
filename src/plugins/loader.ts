@@ -938,15 +938,19 @@ function getCompatibleActivePluginRegistry(
     return undefined;
   }
   const loadContext = resolvePluginLoadCacheContext(options);
-  if (pluginLoadOptionsMatchCacheKey(options, activeCacheKey)) {
+  const compatibleCacheKeys = resolvePluginLoadCompatibilityCacheKeys(
+    options,
+    loadContext.cacheKey,
+  );
+  if (compatibleCacheKeys.has(activeCacheKey)) {
     return activeRegistry;
   }
   if (!loadContext.shouldActivate) {
-    const activatingOptions = {
+    const activatingCacheKeys = resolvePluginLoadCompatibilityCacheKeys({
       ...options,
       activate: true,
-    };
-    if (pluginLoadOptionsMatchCacheKey(activatingOptions, activeCacheKey)) {
+    });
+    if (activatingCacheKeys.has(activeCacheKey)) {
       return activeRegistry;
     }
   }
@@ -954,31 +958,45 @@ function getCompatibleActivePluginRegistry(
     loadContext.runtimeSubagentMode === "default" &&
     getActivePluginRuntimeSubagentMode() === "gateway-bindable"
   ) {
-    const gatewayBindableOptions = {
+    const gatewayBindableCacheKeys = resolvePluginLoadCompatibilityCacheKeys({
       ...options,
       runtimeOptions: {
         ...options.runtimeOptions,
         allowGatewaySubagentBinding: true,
       },
-    };
-    if (pluginLoadOptionsMatchCacheKey(gatewayBindableOptions, activeCacheKey)) {
+    });
+    if (gatewayBindableCacheKeys.has(activeCacheKey)) {
       return activeRegistry;
     }
     if (!loadContext.shouldActivate) {
-      const activatingGatewayBindableOptions = {
+      const activatingGatewayBindableCacheKeys = resolvePluginLoadCompatibilityCacheKeys({
         ...options,
         activate: true,
         runtimeOptions: {
           ...options.runtimeOptions,
           allowGatewaySubagentBinding: true,
         },
-      };
-      if (pluginLoadOptionsMatchCacheKey(activatingGatewayBindableOptions, activeCacheKey)) {
+      });
+      if (activatingGatewayBindableCacheKeys.has(activeCacheKey)) {
         return activeRegistry;
       }
     }
   }
   return undefined;
+}
+
+function resolvePluginLoadCompatibilityCacheKeys(
+  options: PluginLoadOptions = {},
+  exactCacheKey?: string,
+): Set<string> {
+  const keys = new Set<string>([exactCacheKey ?? resolvePluginLoadCacheContext(options).cacheKey]);
+  keys.add(
+    resolvePluginLoadCacheContext({
+      ...options,
+      installBundledRuntimeDeps: options.installBundledRuntimeDeps === false ? undefined : false,
+    }).cacheKey,
+  );
+  return keys;
 }
 
 export function resolveRuntimePluginRegistry(
