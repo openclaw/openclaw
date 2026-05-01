@@ -113,6 +113,8 @@ export function createCapturedPluginRegistration(params?: {
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
   const sessionActions: PluginSessionActionRegistration[] = [];
+  let capturedSessionTurnCount = 0;
+  const sessionActions: PluginSessionActionRegistration[] = [];
   const tools: AnyAgentTool[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
@@ -289,21 +291,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
         scheduleSessionTurn: async (schedule) => {
+          capturedSessionTurnCount += 1;
           return {
-            id: schedule.name ?? "captured-session-turn",
-            pluginId: "captured-plugin-registration",
-            sessionKey: schedule.sessionKey,
-            kind: "session-turn",
-          };
-        },
-        unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
-        registerSessionAction(action: PluginSessionActionRegistration) {
-          sessionActions.push(action);
-        },
-        sendSessionAttachment: async () => ({ ok: false, error: "captured registration" }),
-        scheduleSessionTurn: async (schedule) => {
-          return {
-            id: schedule.name ?? "captured-session-turn",
+            id: `captured-session-turn-${capturedSessionTurnCount}`,
             pluginId: "captured-plugin-registration",
             sessionKey: schedule.sessionKey,
             kind: "session-turn",

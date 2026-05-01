@@ -97,6 +97,33 @@ describe("plugin scheduled turns", () => {
     expect(listPluginSessionSchedulerJobs("workflow-plugin")).toHaveLength(1);
   });
 
+  it("prefixes explicit untagged schedule names with plugin ownership metadata", async () => {
+    workflowMocks.callGatewayTool.mockImplementation(async (method: string) => {
+      if (method === "cron.add") {
+        return { id: "job-untagged" };
+      }
+      return { ok: true };
+    });
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "workflow-plugin",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1_000,
+          name: "daily-nudge",
+        },
+      }),
+    ).resolves.toMatchObject({ id: "job-untagged" });
+
+    const addCall = workflowMocks.callGatewayTool.mock.calls.find((args) => args[0] === "cron.add");
+    expect((addCall?.[2] as Record<string, unknown>).name).toBe(
+      "plugin:workflow-plugin:agent:main:main:daily-nudge",
+    );
+  });
+
   it("builds payloads accepted by the real cron.add protocol validator", async () => {
     const { validateCronAddParams } = await import("../../gateway/protocol/index.js");
     workflowMocks.callGatewayTool.mockImplementation(async (method: string, _opts, body) => {
@@ -238,6 +265,31 @@ describe("plugin scheduled turns", () => {
     expect(workflowMocks.callGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("falls back to a valid delay schedule when a malformed cron value is absent", async () => {
+    workflowMocks.callGatewayTool.mockImplementation(async (method: string) => {
+      if (method === "cron.add") {
+        return { id: "delay-job" };
+      }
+      return { ok: true };
+    });
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "workflow-plugin",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1_000,
+          cron: undefined,
+        } as never,
+      }),
+    ).resolves.toMatchObject({ id: "delay-job" });
+
+    const addCall = workflowMocks.callGatewayTool.mock.calls.find((args) => args[0] === "cron.add");
+    expect((addCall?.[2] as { schedule?: { kind?: string } }).schedule?.kind).toBe("at");
+  });
+
   it("removes a stale cron job when the plugin unloads after cron.add", async () => {
     let commit = true;
     const removed: string[] = [];
@@ -339,7 +391,7 @@ describe("plugin scheduled turns", () => {
     ]);
   });
 
-  it("fails stale scheduled-turn rollback when cron cleanup fails", async () => {
+  it("keeps stale scheduled-turn rollback non-throwing when cron cleanup fails", async () => {
     let commit = true;
     workflowMocks.callGatewayTool.mockImplementation(
       async (method: string, _opts: unknown, body: unknown) => {
@@ -361,7 +413,7 @@ describe("plugin scheduled turns", () => {
         schedule: { sessionKey: "agent:main:main", message: "wake", delayMs: 1 },
         shouldCommit: () => commit,
       }),
-    ).rejects.toThrow("failed to remove stale scheduled session turn: job-stale");
+    ).resolves.toBeUndefined();
     expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([]);
   });
 
@@ -536,6 +588,72 @@ describe("plugin scheduled turns", () => {
     ).resolves.toEqual({ removed: 2, failed: 0 });
     expect(listQueries).toEqual(["plugin:workflow-plugin:tag:nudge:agent:main:main:"]);
     expect(removed.toSorted()).toEqual(["job-a", "job-b"]);
+  });
+
+  it("prunes runtime scheduler records after tagged unschedule removes jobs", async () => {
+    let addCount = 0;
+    workflowMocks.callGatewayTool.mockImplementation(
+      async (method: string, _opts: unknown, body: unknown) => {
+        if (method === "cron.add") {
+          addCount += 1;
+          return { id: `job-${addCount}` };
+        }
+        if (method === "cron.list") {
+          return {
+            jobs: [
+              {
+                id: "job-1",
+                name: "plugin:workflow-plugin:tag:nudge:agent:main:main:first",
+                sessionTarget: "session:agent:main:main",
+              },
+              {
+                id: "job-2",
+                name: "plugin:workflow-plugin:tag:nudge:agent:main:main:second",
+                sessionTarget: "session:agent:main:main",
+              },
+            ],
+          };
+        }
+        if (method === "cron.remove") {
+          expect(["job-1", "job-2"]).toContain((body as { id?: unknown }).id);
+          return { ok: true, removed: true };
+        }
+        return { ok: true };
+      },
+    );
+
+    await schedulePluginSessionTurn({
+      pluginId: "workflow-plugin",
+      origin: "bundled",
+      schedule: {
+        sessionKey: "agent:main:main",
+        message: "first",
+        delayMs: 1_000,
+        tag: "nudge",
+        name: "first",
+      },
+    });
+    await schedulePluginSessionTurn({
+      pluginId: "workflow-plugin",
+      origin: "bundled",
+      schedule: {
+        sessionKey: "agent:main:main",
+        message: "second",
+        delayMs: 1_000,
+        tag: "nudge",
+        name: "second",
+      },
+    });
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toHaveLength(2);
+
+    await expect(
+      unschedulePluginSessionTurnsByTag({
+        pluginId: "workflow-plugin",
+        origin: "bundled",
+        request: { sessionKey: "agent:main:main", tag: "nudge" },
+      }),
+    ).resolves.toEqual({ removed: 2, failed: 0 });
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([]);
   });
 
   it("counts cron.list and cron.remove failures when unscheduling by tag", async () => {
