@@ -113,6 +113,44 @@ describe("gateway-client-timing", () => {
     expect(Object.keys(ok)).not.toContain("extraEvil");
   });
 
+  test("sanitize rejects unsafe timing identifiers", () => {
+    expect(
+      sanitizeGatewayClientTimingPayload({
+        stage: "ws_open",
+        elapsedMs: 2,
+        ok: true,
+        method: "cron.list sk-ant-api03-SENTINEL_TOKEN_DO_NOT_LEAK",
+        requestKind: "rpc",
+      }),
+    ).toBeNull();
+    expect(
+      sanitizeGatewayClientTimingPayload({
+        stage: "ws_open",
+        elapsedMs: 2,
+        ok: true,
+        method: "connect",
+        requestKind: "rpc https://evil.example.com/sentinel-hook",
+      }),
+    ).toBeNull();
+    const ok = sanitizeGatewayClientTimingPayload({
+      stage: "request_settle",
+      elapsedMs: -2,
+      ok: false,
+      method: "cron.list",
+      requestKind: "rpc",
+      errorName: "Error with details",
+      errorCode: "E_CRON_TIMEOUT",
+    });
+    expect(ok).toEqual({
+      stage: "request_settle",
+      elapsedMs: 0,
+      ok: false,
+      method: "cron.list",
+      requestKind: "rpc",
+      errorCode: "E_CRON_TIMEOUT",
+    });
+  });
+
   test("sanitize rejects non-finite elapsedMs", () => {
     expect(
       sanitizeGatewayClientTimingPayload({
