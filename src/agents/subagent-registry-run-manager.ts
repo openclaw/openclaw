@@ -238,8 +238,14 @@ export function createSubagentRunManager(params: {
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
       });
-    } catch {
-      // ignore
+    } catch (error) {
+      const entry = params.runs.get(runId);
+      log.warn("subagent completion failed; scheduling orphan recovery", {
+        runId,
+        childSessionKey: entry?.childSessionKey,
+        error,
+      });
+      params.scheduleOrphanRecovery({ delayMs: 1_000 });
     }
   };
 
