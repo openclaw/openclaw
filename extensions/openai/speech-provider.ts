@@ -309,6 +309,7 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
     },
     synthesizeTelephony: async (req) => {
       const config = readOpenAIProviderConfig(req.providerConfig);
+      const overrides = readOpenAIOverrides(req.providerOverrides);
       const apiKey = config.apiKey || process.env.OPENAI_API_KEY;
       if (!apiKey) {
         throw new Error("OpenAI API key missing");
@@ -319,9 +320,9 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         text: req.text,
         apiKey,
         baseUrl: config.baseUrl,
-        model: config.model,
-        voice: config.voice,
-        speed: config.speed,
+        model: overrides.model ?? config.model,
+        voice: overrides.voice ?? config.voice,
+        speed: overrides.speed ?? config.speed,
         instructions: config.instructions,
         responseFormat: outputFormat,
         timeoutMs: req.timeoutMs,

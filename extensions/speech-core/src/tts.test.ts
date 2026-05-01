@@ -10,6 +10,7 @@ import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
+  SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -540,6 +541,47 @@ describe("speech-core native voice-note routing", () => {
       persona: "alfred",
     });
     expect(result.attempts?.[0]).not.toHaveProperty("personaBinding");
+  });
+
+  it("passes directive overrides to telephony synthesis providers", async () => {
+    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+      audioBuffer: Buffer.from("voice"),
+      outputFormat: "pcm",
+      sampleRate: 24000,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesizeTelephony,
+      }),
+    ]);
+
+    const result = await textToSpeechTelephony({
+      text: "Use a directed telephony voice.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      },
+      overrides: {
+        providerOverrides: {
+          mock: {
+            voice: "directed-voice",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesizeTelephony).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: {
+          voice: "directed-voice",
+        },
+      }),
+    );
   });
 
   it("uses provider defaults when fallback policy allows missing persona bindings", async () => {
