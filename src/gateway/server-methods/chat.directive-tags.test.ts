@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { type AssistantMessage } from "@mariozechner/pi-ai";
+import {
+  CURRENT_SESSION_VERSION,
+  SessionManager,
+  type SessionMessageEntry,
+} from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -214,13 +219,19 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
 
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
-    (update: {
-      sessionFile: string;
-      sessionKey?: string;
-      message?: unknown;
-      messageId?: string;
-    }) => {
-      mockState.emittedTranscriptUpdates.push(update);
+    (
+      update:
+        | string
+        | {
+            sessionFile: string;
+            sessionKey?: string;
+            message?: unknown;
+            messageId?: string;
+          },
+    ) => {
+      mockState.emittedTranscriptUpdates.push(
+        typeof update === "string" ? { sessionFile: update } : update,
+      );
     },
   ),
 }));
@@ -288,10 +299,21 @@ vi.mock("../../media/store.js", async () => {
       }
       mockState.savedMediaCalls.push({ contentType, subdir, size: buffer.byteLength });
       const next = mockState.savedMediaResults.shift();
+      const savedPath =
+        next?.path ??
+        (subdir === "outgoing/originals"
+          ? path.join(
+              os.tmpdir(),
+              `openclaw-chat-outgoing-${process.pid}-${mockState.savedMediaCalls.length}.png`,
+            )
+          : `/tmp/${mockState.savedMediaCalls.length}.png`);
+      if (subdir === "outgoing/originals") {
+        fs.rmSync(savedPath, { force: true });
+      }
       try {
         return {
           id: "saved-media",
-          path: next?.path ?? `/tmp/${mockState.savedMediaCalls.length}.png`,
+          path: savedPath,
           size: buffer.byteLength,
           contentType: next?.contentType ?? contentType,
         };
@@ -831,6 +853,176 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ],
     });
     expect(JSON.stringify(payload?.message)).not.toContain("MEDIA:data:image/png;base64,cG5n");
+  });
+
+  it("replaces the raw agent MEDIA reply instead of appending a duplicate media reply", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-media-replace-");
+    const mediaUrl = path.join(transcriptDir, "reply.png");
+    fs.writeFileSync(
+      mediaUrl,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WnXcZ0AAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const rawText = `Here is the image.\nMEDIA:${mediaUrl}`;
+    const rawAssistantMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      stopReason: "stop",
+    };
+    const sessionManager = SessionManager.open(mockState.transcriptPath);
+    sessionManager.appendMessage(rawAssistantMessage);
+    mockState.triggerAgentRunStart = true;
+    mockState.finalPayload = {
+      text: rawText,
+      // The live Codex path can preserve the raw MEDIA line as a plain path while
+      // the normalized reply payload carries an equivalent file URL. The bridge
+      // should still recognize and replace the raw directive turn.
+      mediaUrl: `file://${mediaUrl}`,
+      trustedLocalMedia: true,
+    };
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-media-replace",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessages = branch.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(1);
+    const assistant = assistantMessages[0];
+    expect((assistant?.message as { idempotencyKey?: unknown }).idempotencyKey).toBe(
+      "idem-agent-media-replace:assistant-media",
+    );
+    expect(JSON.stringify(assistant?.message)).not.toContain(`MEDIA:${mediaUrl}`);
+    expect(
+      (assistant?.message as { content?: Array<{ type?: string }> }).content?.some(
+        (block) => block.type === "image",
+      ),
+    ).toBe(true);
+    expect(
+      mockState.emittedTranscriptUpdates.some(
+        (update) => update.sessionFile === mockState.transcriptPath && update.message === undefined,
+      ),
+    ).toBe(true);
+
+    await runNonStreamingChatSend({
+      context: createChatContext(),
+      respond: vi.fn(),
+      idempotencyKey: "idem-agent-media-replace",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const branchAfterRetry = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessagesAfterRetry = branchAfterRetry.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessagesAfterRetry).toHaveLength(1);
+  });
+
+  it("does not replace raw agent MEDIA replies with WebChat audio blocks", async () => {
+    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-audio-no-replace-");
+    const mediaUrl = path.join(transcriptDir, "reply.mp3");
+    fs.writeFileSync(mediaUrl, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+    mockState.config = {
+      agents: {
+        defaults: {
+          workspace: transcriptDir,
+        },
+      },
+    };
+    const rawText = `Here is the audio.\nMEDIA:${mediaUrl}`;
+    const rawAssistantMessage: AssistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: rawText }],
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-5.5",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      timestamp: Date.now(),
+      stopReason: "stop",
+    };
+    const sessionManager = SessionManager.open(mockState.transcriptPath);
+    sessionManager.appendMessage(rawAssistantMessage);
+    mockState.triggerAgentRunStart = true;
+    mockState.finalPayload = {
+      text: "Here is the audio.",
+      mediaUrl: `file://${mediaUrl}`,
+      trustedLocalMedia: true,
+      audioAsVoice: true,
+    };
+    const respond = vi.fn();
+
+    await runNonStreamingChatSend({
+      context: createChatContext(),
+      respond,
+      idempotencyKey: "idem-agent-audio-no-replace",
+      expectBroadcast: false,
+      waitFor: "dedupe",
+    });
+
+    const branch = SessionManager.open(mockState.transcriptPath).getBranch();
+    const assistantMessages = branch.filter(
+      (entry): entry is SessionMessageEntry =>
+        entry.type === "message" && entry.message.role === "assistant",
+    );
+    expect(assistantMessages).toHaveLength(2);
+    expect(assistantMessages[0]?.message).toMatchObject(rawAssistantMessage);
+    expect(JSON.stringify(assistantMessages[0]?.message)).toContain(`MEDIA:${mediaUrl}`);
+    expect(JSON.stringify(assistantMessages[0]?.message)).not.toContain('"type":"audio"');
+    expect(assistantMessages[1]?.message).toMatchObject({
+      role: "assistant",
+      provider: "openclaw",
+      model: "gateway-injected",
+      idempotencyKey: "idem-agent-audio-no-replace:assistant-media",
+      content: [
+        { type: "text", text: "Here is the audio." },
+        {
+          type: "audio",
+          source: {
+            type: "base64",
+            media_type: "audio/mpeg",
+          },
+        },
+      ],
+    });
   });
 
   it("suppresses reasoning payloads from webchat transcript replies", async () => {

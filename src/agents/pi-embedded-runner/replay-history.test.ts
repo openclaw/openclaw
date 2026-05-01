@@ -178,6 +178,39 @@ describe("normalizeAssistantReplayContent", () => {
     expect((out[1] as { provider: string }).provider).toBe("amazon-bedrock");
   });
 
+  it("removes managed outgoing WebChat image blocks from provider replay", () => {
+    const messages = [
+      userMessage("hello"),
+      {
+        ...bedrockAssistant([
+          { type: "text", text: "Here is the image." },
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/attachment-a/full",
+            openUrl: "/api/chat/media/outgoing/attachment-a/open",
+          },
+          {
+            type: "image",
+            url: "http://localhost/api/chat/media/outgoing/attachment-b/full",
+          },
+          { type: "image", data: "raw-base64", mimeType: "image/png" },
+        ]),
+        provider: "openai",
+        model: "gpt-5.5",
+      } as unknown as AgentMessage,
+    ];
+
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    const assistant = out[1] as AgentMessage & { content: unknown[]; provider: string };
+    expect(assistant.provider).toBe("openai");
+    expect(assistant.content).toEqual([
+      { type: "text", text: "Here is the image." },
+      { type: "image", data: "raw-base64", mimeType: "image/png" },
+    ]);
+    expect(JSON.stringify(out)).not.toContain("/api/chat/media/outgoing/");
+  });
+
   it("returns the original array reference when nothing needs to change", () => {
     const messages = [userMessage("hello"), bedrockAssistant([{ type: "text", text: "fine" }])];
     const out = normalizeAssistantReplayContent(messages);
