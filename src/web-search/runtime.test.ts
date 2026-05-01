@@ -596,4 +596,257 @@ describe("web search runtime", () => {
       }),
     ).rejects.toThrow("web_search is enabled but no provider is currently available.");
   });
+
+  it("resolves file SecretRefs synchronously when runtime snapshot has unresolved refs", async () => {
+    const { writeFileSync, mkdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = join(tmpdir(), "openclaw-test-secretref-runtime");
+    mkdirSync(dir, { recursive: true });
+    const secretFile = join(dir, "api-key.txt");
+    try {
+      writeFileSync(secretFile, "test-brave-key-12345", { mode: 0o600 });
+      const provider = createCustomSearchProvider({
+        createTool: ({ config }) => ({
+          description: "custom",
+          parameters: {},
+          execute: async (args) => ({
+            ...args,
+            apiKey: getCustomSearchApiKey(config),
+          }),
+        }),
+      });
+      resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+      resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+      const config: OpenClawConfig = {
+        secrets: {
+          providers: {
+            "test-vault": {
+              source: "file",
+              path: secretFile,
+              mode: "singleValue",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "custom-search": {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "file",
+                    provider: "test-vault",
+                    id: "value",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      await expect(
+        runWebSearch({
+          config,
+          args: { query: "secretref-file" },
+        }),
+      ).resolves.toEqual({
+        provider: "custom",
+        result: {
+          query: "secretref-file",
+          apiKey: "test-brave-key-12345",
+        },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves env SecretRefs synchronously when runtime snapshot has unresolved refs", async () => {
+    const provider = createCustomSearchProvider({
+      createTool: ({ config }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          apiKey: getCustomSearchApiKey(config),
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    const originalEnv = process.env["OPENCLAW_TEST_WEB_SEARCH_KEY"];
+    try {
+      process.env["OPENCLAW_TEST_WEB_SEARCH_KEY"] = "env-resolved-key-99999";
+
+      const config: OpenClawConfig = {
+        plugins: {
+          entries: {
+            "custom-search": {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "OPENCLAW_TEST_WEB_SEARCH_KEY",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      await expect(
+        runWebSearch({
+          config,
+          args: { query: "secretref-env" },
+        }),
+      ).resolves.toEqual({
+        provider: "custom",
+        result: {
+          query: "secretref-env",
+          apiKey: "env-resolved-key-99999",
+        },
+      });
+    } finally {
+      if (originalEnv === undefined) {
+        delete process.env["OPENCLAW_TEST_WEB_SEARCH_KEY"];
+      } else {
+        process.env["OPENCLAW_TEST_WEB_SEARCH_KEY"] = originalEnv;
+      }
+    }
+  });
+
+  it("resolves SecretRefs even when runtime snapshot is active with unresolved refs", async () => {
+    const { writeFileSync, mkdirSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = join(tmpdir(), "openclaw-test-secretref-snapshot");
+    mkdirSync(dir, { recursive: true });
+    const secretFile = join(dir, "api-key.txt");
+    try {
+      writeFileSync(secretFile, "snapshot-resolved-key", { mode: 0o600 });
+      const provider = createCustomSearchProvider({
+        createTool: ({ config }) => ({
+          description: "custom",
+          parameters: {},
+          execute: async (args) => ({
+            ...args,
+            apiKey: getCustomSearchApiKey(config),
+          }),
+        }),
+      });
+      resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+      resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+      const sourceConfig = createCustomSearchConfig({
+        source: "file",
+        provider: "snapshot-vault",
+        id: "value",
+      });
+
+      const snapshotConfig = createCustomSearchConfig({
+        source: "file",
+        provider: "snapshot-vault",
+        id: "value",
+      });
+
+      activateSecretsRuntimeSnapshot({
+        sourceConfig,
+        config: snapshotConfig,
+        authStores: [],
+        warnings: [],
+        webTools: {
+          search: {
+            providerSource: "auto-detect",
+            selectedProvider: "custom",
+            diagnostics: [],
+          },
+          fetch: {
+            providerSource: "none",
+            diagnostics: [],
+          },
+          diagnostics: [],
+        },
+      });
+
+      const config: OpenClawConfig = {
+        secrets: {
+          providers: {
+            "snapshot-vault": {
+              source: "file",
+              path: secretFile,
+              mode: "singleValue",
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "custom-search": {
+              enabled: true,
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "file",
+                    provider: "snapshot-vault",
+                    id: "value",
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      await expect(
+        runWebSearch({
+          config,
+          args: { query: "snapshot-secretref" },
+        }),
+      ).resolves.toEqual({
+        provider: "custom",
+        result: {
+          query: "snapshot-secretref",
+          apiKey: "snapshot-resolved-key",
+        },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes through plain string values without transformation", async () => {
+    const provider = createCustomSearchProvider({
+      createTool: ({ config }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          apiKey: getCustomSearchApiKey(config),
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    const config = createCustomSearchConfig("plain-string-key");
+
+    await expect(
+      runWebSearch({
+        config,
+        args: { query: "plain-string" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: {
+        query: "plain-string",
+        apiKey: "plain-string-key",
+      },
+    });
+  });
 });

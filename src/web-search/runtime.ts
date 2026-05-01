@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import os from "node:os";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { logVerbose } from "../globals.js";
 import type {
   PluginWebSearchProviderEntry,
@@ -48,12 +51,61 @@ function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   return resolveWebProviderConfig(cfg, "search") as NonNullable<WebSearchConfig> | undefined;
 }
 
+function resolveFileSecretRefSync(ref: SecretRef, fullConfig: OpenClawConfig): string | undefined {
+  const providers = (fullConfig as Record<string, unknown>).secrets as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+  const providerEntries = providers?.providers as
+    | Record<string, Record<string, unknown>>
+    | undefined;
+  if (!providerEntries) return undefined;
+  const providerCfg = providerEntries[ref.provider];
+  if (!providerCfg || providerCfg.source !== "file" || typeof providerCfg.path !== "string")
+    return undefined;
+  const secretPath = (providerCfg.path as string).replace(/^~(?=\/)/, os.homedir());
+  try {
+    const stat = fs.statSync(secretPath);
+    if (stat.mode & 0o077) {
+      logVerbose(
+        `resolveWebSearchRuntimeConfig: skipping secret file ${secretPath} with insecure permissions`,
+      );
+      return undefined;
+    }
+    const content = fs.readFileSync(secretPath, "utf8").replace(/^\uFEFF/, "");
+    if (providerCfg.mode === "singleValue") return content.replace(/\r?\n$/, "");
+    const parsed = JSON.parse(content) as Record<string, unknown>;
+    return typeof parsed === "object" && parsed !== null
+      ? (parsed[ref.id] as string | undefined)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveSecretRefsInConfig<T>(value: T, fullConfig: OpenClawConfig): T {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value))
+    return value.map((item) => resolveSecretRefsInConfig(item, fullConfig)) as T;
+  if (isSecretRef(value)) {
+    if (value.source === "file") return resolveFileSecretRefSync(value, fullConfig) as T;
+    if (value.source === "env") return process.env[value.id] as T;
+    return undefined as T;
+  }
+  const result: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>)) {
+    result[key] = resolveSecretRefsInConfig((value as Record<string, unknown>)[key], fullConfig);
+  }
+  return result as T;
+}
+
 function resolveWebSearchRuntimeConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
-  return selectApplicableRuntimeConfig({
+  const resolved = selectApplicableRuntimeConfig({
     inputConfig: config,
     runtimeConfig: getRuntimeConfigSnapshot(),
     runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
   });
+  if (!resolved) return resolved;
+  return resolveSecretRefsInConfig(resolved, config ?? resolved);
 }
 
 export function resolveWebSearchEnabled(params: {
