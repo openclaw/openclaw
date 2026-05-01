@@ -5,6 +5,7 @@ import {
   sanitizeToolUseResultPairing,
   repairToolUseResultPairing,
   stripToolResultDetails,
+  stripTrailingEmptyAssistantTurn,
 } from "./session-transcript-repair.js";
 import { castAgentMessage, castAgentMessages } from "./test-helpers/agent-message-fixtures.js";
 
@@ -767,6 +768,175 @@ describe("stripToolResultDetails", () => {
     ]);
 
     const out = stripToolResultDetails(input);
+    expect(out).toBe(input);
+  });
+});
+
+describe("stripTrailingEmptyAssistantTurn", () => {
+  it("returns the same array reference when last message is a user message", () => {
+    const input = castAgentMessages([
+      { role: "assistant", content: [{ type: "text", text: "hi" }] },
+      { role: "user", content: "ping" },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toBe(input);
+    expect(out).toHaveLength(2);
+  });
+
+  it("returns the same array reference when last message is a tool result", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "run grep" },
+      { role: "assistant", content: [{ type: "toolUse", id: "1", name: "grep", input: {} }] },
+      {
+        role: "toolResult",
+        toolCallId: "1",
+        toolName: "grep",
+        content: [{ type: "text", text: "match" }],
+      },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toBe(input);
+  });
+
+  it("returns the same array reference when trailing assistant turn has text content", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "text", text: "hello" }] },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toBe(input);
+  });
+
+  it("returns the same array reference when trailing assistant turn has a tool call", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "search" },
+      {
+        role: "assistant",
+        content: [{ type: "toolUse", id: "1", name: "grep", input: { pattern: "x" } }],
+      },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toBe(input);
+  });
+
+  it("strips a trailing assistant turn with empty content array", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "ping" },
+      { role: "assistant", content: [] },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toHaveLength(1);
+    expect((out[0] ?? {}).role).toBe("user");
+  });
+
+  it("strips a trailing assistant turn whose only blocks are empty/whitespace text", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "ping" },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "" },
+          { type: "text", text: "  \n\t" },
+        ],
+      },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toHaveLength(1);
+    expect((out[0] ?? {}).role).toBe("user");
+  });
+
+  it("strips a trailing assistant turn whose content is an empty string", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "ping" },
+      { role: "assistant", content: "" },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toHaveLength(1);
+  });
+
+  it("strips a trailing assistant turn whose content is null/undefined", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "ping" },
+      castAgentMessage({ role: "assistant" }),
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toHaveLength(1);
+  });
+
+  it("does not strip earlier empty assistant turns when last message is non-empty", () => {
+    // Mid-conversation empty assistant turns are preserved by design — only the
+    // trailing in-flight empty turn from a failed attempt is stripped.
+    const input = castAgentMessages([
+      { role: "user", content: "first" },
+      { role: "assistant", content: [] },
+      { role: "user", content: "second" },
+      { role: "assistant", content: [{ type: "text", text: "reply" }] },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toBe(input);
+  });
+
+  it("returns the same array reference for an empty messages array", () => {
+    const input = castAgentMessages([]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toBe(input);
+  });
+
+  it("strips a trailing assistant turn with stopReason='error' even when content is the disk-repaired sentinel text", () => {
+    // session-file-repair.ts rewrites empty stopReason=error turns into this
+    // sentinel on disk for AWS Bedrock Converse compat. The in-memory replay
+    // must still strip them before fallback dispatch — Vertex-routed Claude
+    // rejects ANY conversation ending with an assistant message regardless of
+    // whether the content is "real".
+    const input = castAgentMessages([
+      { role: "user", content: "ping" },
+      castAgentMessage({
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+      }),
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toHaveLength(1);
+    expect((out[0] ?? {}).role).toBe("user");
+  });
+
+  it("strips a trailing assistant turn with stopReason='error' even when content has arbitrary text", () => {
+    // Defense-in-depth: any assistant turn marked stopReason=error is by
+    // definition a failed turn that should not be presented to a fallback
+    // model as a usable assistant prefill, regardless of repair sentinel.
+    const input = castAgentMessages([
+      { role: "user", content: "ping" },
+      castAgentMessage({
+        role: "assistant",
+        stopReason: "error",
+        content: [{ type: "text", text: "partial output before crash" }],
+      }),
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toHaveLength(1);
+  });
+
+  it("strips a trailing assistant turn whose only block is the stream-error sentinel text", () => {
+    // Same on-disk shape but without the stopReason marker (rewriter sets
+    // stopReason=error, but defensive against future variants).
+    const input = castAgentMessages([
+      { role: "user", content: "ping" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+      },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
+    expect(out).toHaveLength(1);
+  });
+
+  it("does not strip a healthy assistant turn that has stopReason undefined and real text", () => {
+    const input = castAgentMessages([
+      { role: "user", content: "hi" },
+      { role: "assistant", content: [{ type: "text", text: "hello there" }] },
+    ]);
+    const out = stripTrailingEmptyAssistantTurn(input);
     expect(out).toBe(input);
   });
 });

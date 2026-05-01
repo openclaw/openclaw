@@ -133,6 +133,7 @@ import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js"
 import {
   sanitizeToolUseResultPairing,
   stripToolResultDetails,
+  stripTrailingEmptyAssistantTurn,
 } from "../../session-transcript-repair.js";
 import {
   acquireSessionWriteLock,
@@ -2619,6 +2620,16 @@ export async function runEmbeddedAttempt(
           if (filteredMessages.length < activeSession.messages.length) {
             activeSession.agent.state.messages = filteredMessages;
           }
+          // Drop an in-memory trailing empty assistant turn left behind by a
+          // prior attempt's empty-stop failure (v2026.4.25 #71880 surfaces this
+          // by triggering model fallback instead of keeping the silent reply).
+          // session-file-repair.ts handles the jsonl on disk; this catches the
+          // in-flight message array so fallback models that reject assistant
+          // prefill (LiteLLM via Vertex) get a clean conversation.
+          const cleanedMessages = stripTrailingEmptyAssistantTurn(activeSession.messages);
+          if (cleanedMessages.length < activeSession.messages.length) {
+            activeSession.agent.state.messages = cleanedMessages;
+          }
           prePromptMessageCount = activeSession.messages.length;
 
           const promptSubmission = resolveRuntimeContextPromptParts({
@@ -2858,6 +2869,19 @@ export async function runEmbeddedAttempt(
             );
             if (normalizedReplayMessages !== activeSession.messages) {
               activeSession.agent.state.messages = normalizedReplayMessages;
+            }
+            // Safety net: pi-agent-core auto-retry and fallback dispatch can
+            // append a fresh empty/error assistant turn to activeSession.messages
+            // between the upstream filterHeartbeatPairs strip
+            // (~prePromptMessageCount setup) and this prompt submission, so
+            // re-run stripTrailingEmptyAssistantTurn here to keep the
+            // conversation tail user-only when handed to the next provider.
+            // Required for LiteLLM/Vertex-routed Claude which rejects any
+            // conversation ending in an assistant message
+            // (real-world recurrence at 02:12 in cron run after 30b1bda133).
+            const replaySafeMessages = stripTrailingEmptyAssistantTurn(activeSession.messages);
+            if (replaySafeMessages.length < activeSession.messages.length) {
+              activeSession.agent.state.messages = replaySafeMessages;
             }
             finalPromptText = promptSubmission.prompt;
             trajectoryRecorder?.recordEvent("prompt.submitted", {

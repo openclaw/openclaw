@@ -4,6 +4,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
 import {
   REDACTED_SESSIONS_SPAWN_ATTACHMENT_CONTENT,
@@ -283,6 +284,83 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
     out.push(sanitized as unknown as AgentMessage);
   }
   return touched ? out : messages;
+}
+
+/**
+ * Strip a trailing assistant message that has no usable content for prefill.
+ *
+ * v2026.4.25 (#71880) treats `stopReason=stop` with empty payloads as a failed
+ * provider output and triggers model fallback instead of preserving it as a
+ * silent reply. The session jsonl is repaired on disk via
+ * session-file-repair.ts, but the in-memory message array passed to the
+ * fallback model still contains the empty/sentinel assistant turn.
+ * LiteLLM/Vertex-routed Claude rejects any conversation ending with an
+ * assistant message with `400: This model does not support assistant message
+ * prefill. The conversation must end with a user message.` Anthropic direct
+ * accepts the prefill so the bug only surfaces on Vertex-backed routes.
+ *
+ * "No usable content for prefill" means any of:
+ *   - assistant turn with `stopReason="error"` (always strip; the
+ *     disk-repaired sentinel-text shape lives here, see
+ *     rewriteAssistantEntryWithEmptyContent in session-file-repair.ts)
+ *   - empty content array, null/undefined content, empty string content
+ *   - content array whose only blocks are whitespace-only text or the
+ *     STREAM_ERROR_FALLBACK_TEXT sentinel
+ *
+ * No-op when the trailing assistant turn has real content (text, tool call,
+ * image, etc.) or when the conversation does not end with an assistant turn.
+ * Normal attempts always end with a user or tool-result message before the
+ * next assistant turn is generated.
+ */
+export function stripTrailingEmptyAssistantTurn(messages: AgentMessage[]): AgentMessage[] {
+  if (messages.length === 0) {
+    return messages;
+  }
+  const last = messages[messages.length - 1];
+  if (!last || typeof last !== "object" || (last as { role?: unknown }).role !== "assistant") {
+    return messages;
+  }
+  if ((last as { stopReason?: unknown }).stopReason === "error") {
+    return messages.slice(0, -1);
+  }
+  if (!isEmptyAssistantContent((last as { content?: unknown }).content)) {
+    return messages;
+  }
+  return messages.slice(0, -1);
+}
+
+function isEmptyAssistantContent(content: unknown): boolean {
+  if (content == null) {
+    return true;
+  }
+  if (typeof content === "string") {
+    const trimmed = content.trim();
+    return trimmed.length === 0 || trimmed === STREAM_ERROR_FALLBACK_TEXT;
+  }
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  if (content.length === 0) {
+    return true;
+  }
+  return content.every((block) => isEmptyAssistantContentBlock(block));
+}
+
+function isEmptyAssistantContentBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return true;
+  }
+  const record = block as { type?: unknown; text?: unknown };
+  if (record.type === "text") {
+    if (typeof record.text !== "string") {
+      return true;
+    }
+    const trimmed = record.text.trim();
+    return trimmed.length === 0 || trimmed === STREAM_ERROR_FALLBACK_TEXT;
+  }
+  // tool_use, image, and other structured blocks count as real content; do not
+  // strip an assistant turn that already produced a tool call or other payload.
+  return false;
 }
 
 export function repairToolCallInputs(
