@@ -134,6 +134,66 @@ describe("plugin loader CLI metadata", () => {
     expect(registry.plugins.find((entry) => entry.id === "config-cli")?.status).toBe("loaded");
   });
 
+  it("skips undefined config validation during CLI metadata capture", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "config-cli-optional-preflight",
+      filename: "config-cli-optional-preflight.cjs",
+      body: `module.exports = {
+  id: "config-cli-optional-preflight",
+  register(api) {
+    if (!api.pluginConfig || typeof api.pluginConfig !== "object" || Array.isArray(api.pluginConfig)) {
+      throw new Error("plugin config should stay normalized");
+    }
+    api.registerCli(() => {}, {
+      descriptors: [
+        {
+          name: "cfg-optional-preflight",
+          description: "Config-optional CLI metadata command",
+          hasSubcommands: true,
+        },
+      ],
+    });
+  },
+};`,
+    });
+    fs.writeFileSync(
+      path.join(plugin.dir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "config-cli-optional-preflight",
+          configSchema: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              token: { type: "string" },
+            },
+            required: ["token"],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["config-cli-optional-preflight"],
+        },
+      },
+    });
+
+    expect(registry.cliRegistrars.flatMap((entry) => entry.commands)).toContain(
+      "cfg-optional-preflight",
+    );
+    expect(
+      registry.plugins.find((entry) => entry.id === "config-cli-optional-preflight")?.status,
+    ).toBe("loaded");
+  });
+
   it("uses the real channel entry in cli-metadata mode for CLI metadata capture", async () => {
     useNoBundledPlugins();
     const pluginDir = makeTempDir();
