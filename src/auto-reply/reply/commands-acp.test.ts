@@ -1154,6 +1154,44 @@ describe("/acp command", () => {
     );
   });
 
+  it.each([
+    [
+      "dead details status",
+      {
+        summary: "status=alive sessionId=sid-1 pid=1234",
+        details: { status: "dead", sessionId: "sid-1", pid: 1234 },
+      },
+      "status=dead",
+    ],
+    [
+      "no-session summary status",
+      {
+        summary: "status=no-session session missing",
+        details: {},
+      },
+      "status=no-session",
+    ],
+  ])(
+    "fails spawn when immediate post-init status checks report %s",
+    async (_label, status, message) => {
+      hoisted.getStatusMock.mockResolvedValueOnce(status);
+
+      const result = await runDiscordAcpCommand("/acp spawn codex --bind here");
+
+      expect(result?.reply?.text).toContain(
+        `ACP error (ACP_TURN_FAILED): ACP session failed health checks immediately after spawn: ${message}`,
+      );
+      expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
+      expect(hoisted.sessionBindingBindMock).not.toHaveBeenCalled();
+      expect(hoisted.closeMock).toHaveBeenCalled();
+      expect(hoisted.callGatewayMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          method: "sessions.delete",
+        }),
+      );
+    },
+  );
+
   it("does not fail spawn when runtime capability lookup would fail after init", async () => {
     hoisted.getCapabilitiesMock.mockRejectedValueOnce(new Error("capability probe failed"));
 

@@ -11,10 +11,12 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
+import { AcpRuntimeError } from "../../../acp/runtime/errors.js";
 import {
   resolveAcpSessionCwd,
   resolveAcpThreadSessionDetailLines,
 } from "../../../acp/runtime/session-identifiers.js";
+import type { AcpRuntimeStatus } from "../../../acp/runtime/types.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/acp-spawn.js";
 import { getChannelPlugin, normalizeChannelId } from "../../../channels/plugins/index.js";
 import {
@@ -136,6 +138,23 @@ function buildSpawnedAcpBindingMetadata(params: {
       }),
     }),
   };
+}
+
+function resolveRuntimeStatusToken(status: AcpRuntimeStatus | undefined): string | undefined {
+  if (!status) {
+    return undefined;
+  }
+  const detailsStatus = normalizeOptionalString(status.details?.status)?.toLowerCase();
+  if (detailsStatus) {
+    return detailsStatus;
+  }
+  const summaryStatus = status.summary?.match(/\bstatus=([^\s]+)/i)?.[1];
+  return normalizeOptionalString(summaryStatus)?.toLowerCase();
+}
+
+function isUnhealthyRuntimeStatus(status: AcpRuntimeStatus | undefined): boolean {
+  const statusToken = resolveRuntimeStatusToken(status);
+  return statusToken === "dead" || statusToken === "no-session";
 }
 
 async function bindSpawnedAcpSession(params: {
@@ -525,7 +544,7 @@ export async function handleAcpSpawnAction(
         runtime: {
           getStatus?: (params: {
             handle: { sessionKey: string; backend: string; runtimeSessionName: string };
-          }) => Promise<unknown>;
+          }) => Promise<AcpRuntimeStatus | undefined>;
         };
         handle: { sessionKey: string; backend: string; runtimeSessionName: string };
       }
@@ -560,9 +579,15 @@ export async function handleAcpSpawnAction(
 
   try {
     if (initializedStatusProbe?.runtime.getStatus) {
-      await initializedStatusProbe.runtime.getStatus({
+      const status = await initializedStatusProbe.runtime.getStatus({
         handle: initializedStatusProbe.handle,
       });
+      if (isUnhealthyRuntimeStatus(status)) {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          `ACP session failed health checks immediately after spawn: status=${resolveRuntimeStatusToken(status)}`,
+        );
+      }
     }
   } catch (err) {
     await cleanupFailedSpawn({
