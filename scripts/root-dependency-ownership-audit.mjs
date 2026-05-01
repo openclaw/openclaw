@@ -19,6 +19,12 @@ const DYNAMIC_CONSTANT_IMPORT_PATTERNS = [
   /\brequire\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
   /\b(?:require|[_$A-Za-z][\w$]*require[\w$]*)\.resolve\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/gi,
 ];
+const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
+  [
+    "playwright-core",
+    "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
+  ],
+]);
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -170,6 +176,17 @@ export function classifyRootDependencyOwnership(record) {
     return {
       category: "core_runtime",
       recommendation: "keep at root",
+    };
+  }
+
+  const rootOwnedExtensionRuntime = ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES.get(record.depName);
+  if (
+    rootOwnedExtensionRuntime &&
+    sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))
+  ) {
+    return {
+      category: "root_owned_extension_runtime",
+      recommendation: rootOwnedExtensionRuntime,
     };
   }
 
