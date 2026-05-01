@@ -11,7 +11,7 @@ import { extractApplyPatchTargetPaths } from "../agents/apply-patch-paths.js";
  */
 export type HostToolDerivedParams = {
   /** Destination paths the tool intends to read or write, when discoverable. */
-  derivedPaths?: string[];
+  derivedPaths?: readonly string[];
 };
 
 type HostToolParamParser = (params: unknown) => HostToolDerivedParams;
@@ -23,7 +23,7 @@ type HostToolParamParser = (params: unknown) => HostToolDerivedParams;
 const HOST_TOOL_PARAM_PARSERS: Record<string, HostToolParamParser> = {
   apply_patch: (params) => {
     const paths = extractApplyPatchTargetPaths(params);
-    return paths.length > 0 ? { derivedPaths: paths } : {};
+    return paths.length > 0 ? { derivedPaths: Object.freeze([...paths]) } : {};
   },
 };
 
