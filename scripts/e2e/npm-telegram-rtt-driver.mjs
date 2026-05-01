@@ -80,6 +80,10 @@ const sut = new TelegramBot(sutToken);
 const observedMessages = [];
 let driverUpdateOffset = 0;
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function messageText(message) {
   return message.text ?? message.caption ?? "";
 }
