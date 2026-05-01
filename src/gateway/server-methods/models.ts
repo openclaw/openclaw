@@ -30,16 +30,15 @@ async function loadModelsListCatalog(
   }
   let timeout: NodeJS.Timeout | undefined;
   const timedOut = Symbol("models-list-catalog-timeout");
+  const catalogPromise = context.loadGatewayModelCatalog();
   const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
     timeout = setTimeout(() => resolve(timedOut), MODELS_LIST_CATALOG_TIMEOUT_MS);
     timeout.unref?.();
   });
   try {
-    const result = await Promise.race([
-      context.loadGatewayModelCatalog(),
-      timeoutPromise,
-    ]);
+    const result = await Promise.race([catalogPromise, timeoutPromise]);
     if (result === timedOut) {
+      catalogPromise.catch(() => undefined);
       if (!loggedSlowModelsListCatalog) {
         loggedSlowModelsListCatalog = true;
         context.logGateway.debug(

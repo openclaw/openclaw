@@ -121,13 +121,13 @@ describe("models.list", () => {
     }
   });
 
-  it("reports catalog load failures instead of falling back to an empty successful response", async () => {
+  it("preserves catalog load errors before the timeout fallback wins", async () => {
     const respond = vi.fn();
 
     await modelsHandlers["models.list"]({
       req: {
         type: "req",
-        id: "req-models-list-catalog-failure",
+        id: "req-models-list-catalog-error",
         method: "models.list",
         params: { view: "configured" },
       },
