@@ -98,7 +98,10 @@ function trackAgentEventHandler(runId: string, pending: Promise<void>): void {
   state.pendingAgentEventHandlersByRunId.set(runId, handlers);
   void pending.finally(() => {
     handlers.delete(pending);
-    if (handlers.size === 0) {
+    if (
+      handlers.size === 0 &&
+      getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.get(runId) === handlers
+    ) {
       state.pendingAgentEventHandlersByRunId.delete(runId);
     }
   });

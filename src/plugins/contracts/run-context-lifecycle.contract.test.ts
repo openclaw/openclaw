@@ -489,7 +489,7 @@ describe("plugin run context lifecycle", () => {
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(cleanup).toHaveBeenCalledTimes(1);
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
     await expect(resultPromise).resolves.toMatchObject({
       failures: [
         {
