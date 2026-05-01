@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Infra/backup: resolve a safe staging temp root outside all backup source paths before creating the manifest staging directory, falling back from the preferred OpenClaw temp dir to `os.tmpdir()` and throwing when both are inside the backup payload, so macOS LaunchAgent `openclaw backup create` runs no longer stage a duplicate `manifest.json` inside the archive. Fixes #75007. Thanks @hclsys.
 - Agents/pi-embedded-runner: extract the `abortable` provider-call wrapper from `runEmbeddedAttempt` to module scope so its promise handlers no longer close over the run lexical context, releasing transcripts, tool buffers, and subscription callbacks when a provider call hangs past abort. (#74182) Thanks @cjboy007.
 - Docker: restore `python3` in the gateway runtime image after the slim-runtime switch. Fixes #75041.
 - CLI/Voice Call: scope `voicecall` command activation to the Voice Call plugin so setup and smoke checks no longer broad-load unrelated plugin runtimes or hang after printing JSON. Thanks @vincentkoc.
