@@ -25,6 +25,7 @@ import { readSessionMessages } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
+import { CommandLane } from "../../process/lanes.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -817,6 +818,8 @@ export async function runMemoryFlushIfNeeded(params: {
         params.cfg,
       ),
       runId: flushRunId,
+      sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
+      lane: CommandLane.Main,
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,
