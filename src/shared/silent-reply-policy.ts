@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "./string-coerce.js";
+import { parseThreadSessionSuffix } from "../sessions/session-key-utils.js";
+import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.js";
 
 export type SilentReplyPolicy = "allow" | "disallow";
 export type SilentReplyConversationType = "direct" | "group" | "internal";
@@ -58,15 +59,65 @@ function hashSeed(seed: string): number {
   return hash;
 }
 
+function parseStructuredThreadSessionKey(sessionKey: string | undefined | null): {
+  baseSessionKey: string;
+  threadId: string;
+} | null {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return null;
+  }
+  const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw);
+  if (!baseSessionKey || !threadId) {
+    return null;
+  }
+  const normalizedBase = normalizeLowercaseStringOrEmpty(baseSessionKey);
+  const normalizedThreadId = normalizeLowercaseStringOrEmpty(threadId);
+  if (normalizedBase.includes(":thread:") || normalizedThreadId.includes(":thread:")) {
+    return null;
+  }
+  return { baseSessionKey, threadId };
+}
+
+export function isStructuredThreadSessionKey(sessionKey: string | undefined | null): boolean {
+  return parseStructuredThreadSessionKey(sessionKey) != null;
+}
+
+// Session keys are caller-controlled in a few dispatch paths, so only the
+// provider/runtime thread id can turn a structured suffix into internal policy.
+export function isTrustedStructuredThreadSessionKey(params: {
+  sessionKey: string | undefined | null;
+  threadId: string | number | undefined | null;
+}): boolean {
+  const expectedThreadId = normalizeOptionalString(
+    params.threadId == null ? undefined : String(params.threadId),
+  );
+  if (!expectedThreadId) {
+    return false;
+  }
+  const parsed = parseStructuredThreadSessionKey(params.sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return (
+    normalizeLowercaseStringOrEmpty(parsed.threadId) ===
+    normalizeLowercaseStringOrEmpty(expectedThreadId)
+  );
+}
+
 export function classifySilentReplyConversationType(params: {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
+  trustThreadSessionKey?: boolean;
 }): SilentReplyConversationType {
   if (params.conversationType) {
     return params.conversationType;
   }
   const normalizedSessionKey = normalizeLowercaseStringOrEmpty(params.sessionKey);
+  if (params.trustThreadSessionKey === true && isStructuredThreadSessionKey(params.sessionKey)) {
+    return "internal";
+  }
   if (normalizedSessionKey.includes(":group:") || normalizedSessionKey.includes(":channel:")) {
     return "group";
   }

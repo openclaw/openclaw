@@ -58,6 +58,10 @@ import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
+  isTrustedStructuredThreadSessionKey,
+  type SilentReplyConversationType,
+} from "../../shared/silent-reply-policy.js";
+import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -189,13 +193,21 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
 
 const resolveRoutedPolicyConversationType = (
   ctx: FinalizedMsgContext,
-): "direct" | "group" | undefined => {
+): SilentReplyConversationType | undefined => {
   if (
     ctx.CommandSource === "native" &&
     ctx.CommandTargetSessionKey &&
     ctx.CommandTargetSessionKey !== ctx.SessionKey
   ) {
     return undefined;
+  }
+  if (
+    isTrustedStructuredThreadSessionKey({
+      sessionKey: ctx.SessionKey,
+      threadId: ctx.MessageThreadId,
+    })
+  ) {
+    return "internal";
   }
   const chatType = normalizeChatType(ctx.ChatType);
   if (chatType === "direct") {

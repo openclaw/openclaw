@@ -63,6 +63,7 @@ export type ReplyDispatcherOptions = {
     sessionKey?: string;
     surface?: string;
     conversationType?: SilentReplyConversationType;
+    trustThreadSessionKey?: boolean;
   };
   responsePrefix?: string;
   transformReplyPayload?: (payload: ReplyPayload) => ReplyPayload | null;
@@ -144,6 +145,7 @@ function resolveSilentFinalPayload(params: {
     sessionKey: context.sessionKey,
     surface: context.surface,
     conversationType: context.conversationType,
+    trustThreadSessionKey: context.trustThreadSessionKey,
   });
   if (resolvedSettings.policy === "allow") {
     return undefined;

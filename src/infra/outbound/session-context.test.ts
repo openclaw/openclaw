@@ -135,6 +135,15 @@ describe("buildOutboundSessionContext", () => {
     ).toEqual({
       conversationType: "direct",
     });
+
+    expect(
+      buildOutboundSessionContext({
+        cfg: {} as never,
+        conversationType: "internal",
+      }),
+    ).toEqual({
+      conversationType: "internal",
+    });
   });
 
   it("falls back to isGroup when no explicit conversation type is provided", () => {

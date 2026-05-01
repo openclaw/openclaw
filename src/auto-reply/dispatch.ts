@@ -5,7 +5,10 @@ import {
   toPluginMessageContext,
 } from "../hooks/message-hook-mappers.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
-import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
+import {
+  isTrustedStructuredThreadSessionKey,
+  type SilentReplyConversationType,
+} from "../shared/silent-reply-policy.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -31,12 +34,21 @@ function resolveDispatcherSilentReplyContext(
     finalized.CommandSource === "native"
       ? (finalized.CommandTargetSessionKey ?? finalized.SessionKey)
       : finalized.SessionKey;
-  const chatType = normalizeChatType(finalized.ChatType);
-  const conversationType: SilentReplyConversationType | undefined =
+  const isNativeCrossSession =
     finalized.CommandSource === "native" &&
     finalized.CommandTargetSessionKey &&
-    finalized.CommandTargetSessionKey !== finalized.SessionKey
-      ? undefined
+    finalized.CommandTargetSessionKey !== finalized.SessionKey;
+  const hasTrustedThreadSessionKey =
+    !isNativeCrossSession &&
+    isTrustedStructuredThreadSessionKey({
+      sessionKey: policySessionKey,
+      threadId: finalized.MessageThreadId,
+    });
+  const chatType = normalizeChatType(finalized.ChatType);
+  const conversationType: SilentReplyConversationType | undefined = isNativeCrossSession
+    ? undefined
+    : hasTrustedThreadSessionKey
+      ? "internal"
       : chatType === "direct"
         ? "direct"
         : chatType === "group" || chatType === "channel"
@@ -47,6 +59,7 @@ function resolveDispatcherSilentReplyContext(
     sessionKey: policySessionKey,
     surface: finalized.Surface ?? finalized.Provider,
     conversationType,
+    trustThreadSessionKey: hasTrustedThreadSessionKey,
   };
 }
 

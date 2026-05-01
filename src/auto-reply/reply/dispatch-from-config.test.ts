@@ -1254,6 +1254,71 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
+  it("routes trusted threaded replies with internal policy context", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15550001111",
+      ExplicitDeliverRoute: true,
+      MessageThreadId: "thread-1",
+      SessionKey: "agent:main:imessage:direct:+15550001111:thread:thread-1",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "imessage",
+        policyConversationType: "internal",
+        policySessionKey: "agent:main:imessage:direct:+15550001111:thread:thread-1",
+        to: "imessage:+15550001111",
+      }),
+    );
+  });
+
+  it("routes mismatched threaded replies with parent direct policy context", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:+15550001111",
+      ExplicitDeliverRoute: true,
+      MessageThreadId: "provider-thread",
+      SessionKey: "agent:main:imessage:direct:+15550001111:thread:caller",
+    });
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      _opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "imessage",
+        policyConversationType: "direct",
+        to: "imessage:+15550001111",
+      }),
+    );
+  });
+
   it("routes media-only tool results when summaries are suppressed", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

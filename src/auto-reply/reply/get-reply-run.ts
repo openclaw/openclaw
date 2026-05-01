@@ -23,7 +23,10 @@ import {
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
-import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import {
+  isTrustedStructuredThreadSessionKey,
+  type SilentReplyConversationType,
+} from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
@@ -75,7 +78,10 @@ type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
 
 export function resolvePromptSilentReplyConversationType(params: {
-  ctx: Pick<MsgContext, "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "SessionKey">;
+  ctx: Pick<
+    MsgContext,
+    "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "MessageThreadId" | "SessionKey"
+  >;
   inboundSessionKey?: string;
 }): SilentReplyConversationType | undefined {
   const sourceSessionKey = params.inboundSessionKey ?? params.ctx.SessionKey;
@@ -85,6 +91,14 @@ export function resolvePromptSilentReplyConversationType(params: {
     params.ctx.CommandTargetSessionKey !== sourceSessionKey
   ) {
     return undefined;
+  }
+  if (
+    isTrustedStructuredThreadSessionKey({
+      sessionKey: sourceSessionKey,
+      threadId: params.ctx.MessageThreadId,
+    })
+  ) {
+    return "internal";
   }
   const chatType = normalizeChatType(params.ctx.ChatType);
   if (chatType === "direct") {
@@ -410,6 +424,10 @@ export async function runPreparedReply(
     sessionKey: runtimePolicySessionKey,
     surface: promptSessionCtx.Surface ?? promptSessionCtx.Provider,
     conversationType: silentReplyConversationType,
+    trustThreadSessionKey: isTrustedStructuredThreadSessionKey({
+      sessionKey: runtimePolicySessionKey,
+      threadId: promptSessionCtx.MessageThreadId,
+    }),
   });
   const useFastReplyRuntime = shouldUseReplyFastTestRuntime({
     cfg,

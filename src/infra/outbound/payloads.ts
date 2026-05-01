@@ -59,6 +59,7 @@ type OutboundPayloadPlanContext = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
+  trustThreadSessionKey?: boolean;
   /**
    * When true, bare silent payloads are dropped instead of being rewritten to
    * visible fallback text. Set by callers that know the parent session has at
@@ -192,6 +193,7 @@ export function createOutboundPayloadPlan(
     sessionKey: context.sessionKey,
     surface: context.surface,
     conversationType: context.conversationType,
+    trustThreadSessionKey: context.trustThreadSessionKey,
   });
   const hasPendingSpawnedChildren =
     context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);

@@ -73,6 +73,7 @@ Docs: https://docs.openclaw.ai
 - fix(logging): add redaction patterns for Tencent Cloud, Alibaba Cloud, HuggingFace and Replicate API keys (#58162). Thanks @gavyngong
 - Pairing: surface unexpected allowlist filesystem stat errors instead of treating the allowlist as missing, so permission and I/O failures are visible during pairing authorization checks. (#63324) Thanks @franciscomaestre.
 - macOS app: reserve layout space for exec approval command details so the allow dialog no longer overlaps the command, context, and action buttons. (#75470) Thanks @ngutman.
+- Auto-reply/silent replies: treat verified topic and thread session turns as internal for silent-reply policy, so provider-created direct or group threads can stay quiet without leaking fallback filler text. (#73400) Thanks @zqchris.
 
 ## 2026.4.29
 

@@ -82,6 +82,48 @@ describe("resolvePromptSilentReplyConversationType", () => {
     ).toBe("group");
   });
 
+  it("treats trusted threaded prompt sessions as internal", () => {
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyCtx({
+          ChatType: "direct",
+          MessageThreadId: "435427284:300118",
+          SessionKey: "agent:main:telegram:direct:435427284:thread:435427284:300118",
+        }),
+      }),
+    ).toBe("internal");
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyGroupCtx({
+          ChatType: "group",
+          MessageThreadId: "456",
+          SessionKey: "agent:main:discord:group:123:thread:456",
+        }),
+      }),
+    ).toBe("internal");
+  });
+
+  it("keeps malformed or mismatched threaded prompt sessions on parent chat policy", () => {
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyCtx({
+          ChatType: "direct",
+          MessageThreadId: "two",
+          SessionKey: "agent:main:telegram:direct:123:thread:one:thread:two",
+        }),
+      }),
+    ).toBe("direct");
+    expect(
+      resolvePromptSilentReplyConversationType({
+        ctx: buildGetReplyCtx({
+          ChatType: "direct",
+          MessageThreadId: "provider-thread",
+          SessionKey: "agent:main:telegram:direct:123:thread:caller",
+        }),
+      }),
+    ).toBe("direct");
+  });
+
   it("does not override a native cross-session target policy with the source chat type", () => {
     expect(
       resolvePromptSilentReplyConversationType({

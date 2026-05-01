@@ -15,6 +15,7 @@ type ResolveSilentReplyParams = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
+  trustThreadSessionKey?: boolean;
 };
 
 function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams): {
@@ -28,6 +29,7 @@ function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams)
     sessionKey: params.sessionKey,
     surface: params.surface,
     conversationType: params.conversationType,
+    trustThreadSessionKey: params.trustThreadSessionKey,
   });
   const normalizedSurface = normalizeLowercaseStringOrEmpty(params.surface);
   const surface = normalizedSurface ? params.cfg?.surfaces?.[normalizedSurface] : undefined;

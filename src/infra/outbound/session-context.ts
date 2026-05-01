@@ -2,7 +2,10 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../../shared/string-coerce.js";
 
 export type OutboundSessionContext = {
   /** Canonical session key used for internal hook dispatch. */
@@ -40,17 +43,20 @@ export function buildOutboundSessionContext(params: {
 }): OutboundSessionContext | undefined {
   const key = normalizeOptionalString(params.sessionKey);
   const policyKey = normalizeOptionalString(params.policySessionKey);
+  const normalizedPolicyType = normalizeOptionalLowercaseString(params.conversationType);
   const normalizedChatType = normalizeChatType(params.conversationType ?? undefined);
   const conversationType: SilentReplyConversationType | undefined =
-    normalizedChatType === "group" || normalizedChatType === "channel"
-      ? "group"
-      : normalizedChatType === "direct"
-        ? "direct"
-        : params.isGroup === true
-          ? "group"
-          : params.isGroup === false
-            ? "direct"
-            : undefined;
+    normalizedPolicyType === "internal"
+      ? "internal"
+      : normalizedChatType === "group" || normalizedChatType === "channel"
+        ? "group"
+        : normalizedChatType === "direct"
+          ? "direct"
+          : params.isGroup === true
+            ? "group"
+            : params.isGroup === false
+              ? "direct"
+              : undefined;
   const explicitAgentId = normalizeOptionalString(params.agentId);
   const requesterAccountId = normalizeOptionalString(params.requesterAccountId);
   const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
