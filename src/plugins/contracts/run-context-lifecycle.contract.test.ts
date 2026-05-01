@@ -242,6 +242,81 @@ describe("plugin run context lifecycle", () => {
     ).toBeUndefined();
   });
 
+  it("keeps the expired terminal marker across repeated terminal events", async () => {
+    vi.useFakeTimers();
+    let releaseFirstTerminalHandler: (() => void) | undefined;
+    let firstTerminalHandlerWroteContext: unknown;
+    let secondTerminalHandlerWroteContext: unknown;
+    let terminalEventsSeen = 0;
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "repeated-terminal-subscription",
+        name: "Repeated Terminal Subscription",
+      }),
+      register(api) {
+        api.registerAgentEventSubscription({
+          id: "repeat-terminal",
+          streams: ["lifecycle"],
+          async handle(event, ctx) {
+            if (event.data?.phase !== "end") {
+              return;
+            }
+            terminalEventsSeen += 1;
+            if (terminalEventsSeen === 1) {
+              await new Promise<void>((resolve) => {
+                releaseFirstTerminalHandler = resolve;
+              });
+              ctx.setRunContext("terminal", { from: "first" });
+              firstTerminalHandlerWroteContext = ctx.getRunContext("terminal");
+              return;
+            }
+            ctx.setRunContext("terminal", { from: "second" });
+            secondTerminalHandlerWroteContext = ctx.getRunContext("terminal");
+          },
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    emitAgentEvent({
+      runId: "run-repeat-terminal",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    await Promise.resolve();
+
+    await vi.advanceTimersByTimeAsync(PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
+
+    emitAgentEvent({
+      runId: "run-repeat-terminal",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(secondTerminalHandlerWroteContext).toBeUndefined();
+    expect(
+      getPluginRunContext({
+        pluginId: "repeated-terminal-subscription",
+        get: { runId: "run-repeat-terminal", namespace: "terminal" },
+      }),
+    ).toBeUndefined();
+
+    releaseFirstTerminalHandler?.();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(firstTerminalHandlerWroteContext).toBeUndefined();
+    expect(
+      getPluginRunContext({
+        pluginId: "repeated-terminal-subscription",
+        get: { runId: "run-repeat-terminal", namespace: "terminal" },
+      }),
+    ).toBeUndefined();
+  });
+
   it("preserves scheduler jobs instead of invoking stale cleanup callbacks", async () => {
     const cleanup = vi.fn();
     registerPluginSessionSchedulerJob({

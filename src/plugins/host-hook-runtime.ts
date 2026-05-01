@@ -59,7 +59,6 @@ function copyJsonValue(value: PluginJsonValue): PluginJsonValue {
 
 function markPluginRunClosed(runId: string): void {
   const state = getPluginHostRuntimeState();
-  state.terminalEventCleanupExpiredRunIds.delete(runId);
   state.closedRunIds.delete(runId);
   state.closedRunIds.add(runId);
   while (state.closedRunIds.size > CLOSED_RUN_IDS_MAX) {
