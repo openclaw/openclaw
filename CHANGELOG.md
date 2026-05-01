@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 - fix(logging): add redaction patterns for Tencent Cloud, Alibaba Cloud, HuggingFace and Replicate API keys (#58162). Thanks @gavyngong
 - Pairing: surface unexpected allowlist filesystem stat errors instead of treating the allowlist as missing, so permission and I/O failures are visible during pairing authorization checks. (#63324) Thanks @franciscomaestre.
 - macOS app: reserve layout space for exec approval command details so the allow dialog no longer overlaps the command, context, and action buttons. (#75470) Thanks @ngutman.
+- Plugins/SDK: re-export `createReplyPrefixContext`, `createReplyPrefixOptions`, `createTypingCallbacks`, and `createChannelReplyPipeline` on the deprecated `openclaw/plugin-sdk` compat surface so external plugins still on the legacy root import (e.g. Feishu) no longer hit `TypeError: createReplyPrefixContext is not a function` during dispatch, and lock the contract in the root-alias regression test. Fixes #75171. Thanks @zhangxiliang.
 
 ## 2026.4.29
 

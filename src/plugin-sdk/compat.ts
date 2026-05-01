@@ -62,6 +62,12 @@ export {
   mapAllowFromEntries,
 } from "./channel-config-helpers.js";
 export { formatAllowFromLowercase, formatNormalizedAllowFromEntries } from "./allow-from.js";
+export {
+  createChannelReplyPipeline,
+  createReplyPrefixContext,
+  createReplyPrefixOptions,
+  createTypingCallbacks,
+} from "./channel-reply-pipeline.js";
 export * from "./channel-config-schema.js";
 export * from "./channel-policy.js";
 export { collectOpenGroupPolicyConfiguredRouteWarnings } from "./channel-policy.js";
