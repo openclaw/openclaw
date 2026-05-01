@@ -107,6 +107,10 @@ type RouteWithTabParams<T> = {
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   targetId?: string;
+  /**
+   * Set for routes that read from or return data scoped to the selected tab.
+   * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
+   */
   enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabContext) => Promise<T>;
 };
@@ -149,6 +153,10 @@ export async function withRouteTabContext<T>(
   }
 }
 
+/**
+ * Response-only URL redaction. This swallows policy failures and must not be used as
+ * an execution gate; use enforceCurrentUrlAllowed on the route helper instead.
+ */
 export async function resolveSafeRouteTabUrl(params: {
   ctx: BrowserRouteContext;
   profileCtx: ProfileContext;
@@ -183,6 +191,10 @@ type RouteWithPwParams<T> = {
   ctx: BrowserRouteContext;
   targetId?: string;
   feature: string;
+  /**
+   * Set for routes that read from or return data scoped to the selected tab.
+   * Leave false only for routes that navigate, activate, close, or otherwise manage the tab.
+   */
   enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabPwContext) => Promise<T>;
 };

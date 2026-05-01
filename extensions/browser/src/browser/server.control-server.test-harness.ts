@@ -174,6 +174,8 @@ const pwMocks = vi.hoisted(() => ({
   evaluateViaPlaywright: vi.fn(async (_opts?: unknown) => "ok"),
   fillFormViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
+  getNetworkRequestsViaPlaywright: vi.fn(async () => ({ requests: [] })),
+  getPageErrorsViaPlaywright: vi.fn(async () => ({ errors: [] })),
   hoverViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   scrollIntoViewViaPlaywright: vi.fn(async (_opts?: unknown) => {}),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
@@ -195,6 +197,7 @@ const pwMocks = vi.hoisted(() => ({
     stats: { lines: 1, chars: 24, refs: 1, interactive: 1 },
   })),
   storeAriaSnapshotRefsViaPlaywright: vi.fn(async () => {}),
+  traceStartViaPlaywright: vi.fn(async () => {}),
   traceStopViaPlaywright: vi.fn(async () => {}),
   takeScreenshotViaPlaywright: vi.fn(async () => ({
     buffer: Buffer.from("png"),

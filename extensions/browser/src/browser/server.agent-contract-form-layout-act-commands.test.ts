@@ -20,6 +20,55 @@ const state = getBrowserControlServerTestState();
 const pwMocks = getPwMocks();
 const realFetch: BrowserTestFetch = (input, init) => getBrowserTestFetch()(input, init);
 
+type GuardedCurrentTabRouteCase = {
+  method: "GET" | "POST";
+  path: string;
+  body?: Record<string, unknown>;
+  mockName:
+    | "getConsoleMessagesViaPlaywright"
+    | "getPageErrorsViaPlaywright"
+    | "getNetworkRequestsViaPlaywright"
+    | "responseBodyViaPlaywright"
+    | "traceStartViaPlaywright"
+    | "traceStopViaPlaywright";
+};
+
+const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
+  {
+    method: "GET",
+    path: "/console?targetId=abcd1234",
+    mockName: "getConsoleMessagesViaPlaywright",
+  },
+  {
+    method: "GET",
+    path: "/errors?targetId=abcd1234",
+    mockName: "getPageErrorsViaPlaywright",
+  },
+  {
+    method: "GET",
+    path: "/requests?targetId=abcd1234",
+    mockName: "getNetworkRequestsViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/response/body",
+    body: { targetId: "abcd1234", url: "**/api/data" },
+    mockName: "responseBodyViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/trace/start",
+    body: { targetId: "abcd1234" },
+    mockName: "traceStartViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/trace/stop",
+    body: { targetId: "abcd1234" },
+    mockName: "traceStopViaPlaywright",
+  },
+] as const;
+
 async function withSymlinkPathEscape<T>(params: {
   rootDir: string;
   run: (relativePath: string) => Promise<T>;
@@ -446,19 +495,18 @@ describe("browser control server", () => {
     setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
     const base = await startServerAndBase();
 
-    const consoleRes = await realFetch(`${base}/console?targetId=abcd1234`);
-    expect(consoleRes.status).toBe(400);
-    await expect(consoleRes.json()).resolves.toMatchObject({
-      error: expect.stringMatching(/blocked/i),
-    });
-    expect(pwMocks.getConsoleMessagesViaPlaywright).not.toHaveBeenCalled();
-
-    const responseBody = await postJson<{ error?: string }>(`${base}/response/body`, {
-      targetId: "abcd1234",
-      url: "**/api/data",
-    });
-    expect(responseBody.error).toMatch(/blocked/i);
-    expect(pwMocks.responseBodyViaPlaywright).not.toHaveBeenCalled();
+    for (const routeCase of guardedCurrentTabRouteCases) {
+      const res = await realFetch(`${base}${routeCase.path}`, {
+        method: routeCase.method,
+        headers: routeCase.body ? { "Content-Type": "application/json" } : undefined,
+        body: routeCase.body ? JSON.stringify(routeCase.body) : undefined,
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: unknown };
+      expect(typeof body.error).toBe("string");
+      expect(body.error).not.toBe("");
+      expect(pwMocks[routeCase.mockName]).not.toHaveBeenCalled();
+    }
   });
 
   it("wait/download rejects traversal path outside downloads dir", async () => {
