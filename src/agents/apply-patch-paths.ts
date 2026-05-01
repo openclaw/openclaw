@@ -48,7 +48,7 @@ function normalizePatchPath(raw: string): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const normalized = path.normalize(trimmed);
+  const normalized = path.posix.normalize(trimmed.replace(/\\/g, "/"));
   return normalized && normalized !== "." ? normalized : undefined;
 }
 
@@ -72,7 +72,10 @@ function readMarkerPath(line: string | undefined, marker: string): string | unde
   return candidate.slice(marker.length);
 }
 
-function normalizeMarkerHeaderLine(line: string | undefined): string | undefined {
+function normalizeMarkerHeaderLine(
+  line: string | undefined,
+  options?: { allowSingleSpaceIndent?: boolean },
+): string | undefined {
   if (line === undefined) {
     return undefined;
   }
@@ -81,7 +84,14 @@ function normalizeMarkerHeaderLine(line: string | undefined): string | undefined
     return undefined;
   }
   const leadingWhitespace = line.length - candidate.length;
-  return leadingWhitespace === 1 && line.startsWith(" ") ? undefined : candidate;
+  if (
+    options?.allowSingleSpaceIndent === false &&
+    leadingWhitespace === 1 &&
+    line.startsWith(" ")
+  ) {
+    return undefined;
+  }
+  return candidate;
 }
 
 /**
@@ -133,7 +143,11 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
           lookahead += 1;
           continue;
         }
-        if (normalizeMarkerHeaderLine(lines[lookahead]) !== undefined) {
+        if (
+          normalizeMarkerHeaderLine(lines[lookahead], {
+            allowSingleSpaceIndent: false,
+          }) !== undefined
+        ) {
           break;
         }
         lookahead += 1;

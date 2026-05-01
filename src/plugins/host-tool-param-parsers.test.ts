@@ -24,6 +24,12 @@ describe("deriveToolParams", () => {
     });
   });
 
+  it("returns immutable derived path snapshots", () => {
+    const patch = ["*** Begin Patch", "*** Add File: src/new.ts", "+x", "*** End Patch"].join("\n");
+    const derived = deriveToolParams("apply_patch", { input: patch });
+    expect(Object.isFrozen(derived.derivedPaths)).toBe(true);
+  });
+
   it("returns an empty object when apply_patch input has no recognised paths", () => {
     expect(deriveToolParams("apply_patch", { input: "not a patch" })).toEqual({});
     expect(deriveToolParams("apply_patch", {})).toEqual({});
