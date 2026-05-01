@@ -54,7 +54,7 @@ function registerLatePlugin(client: Client, plugin: Plugin) {
   }
 }
 
-export function createDiscordStatusReadyListener(params: {
+function createDiscordStatusReadyListener(params: {
   discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0];
   getAutoPresenceController: () => DiscordAutoPresenceController | null;
 }): ReadyListener {

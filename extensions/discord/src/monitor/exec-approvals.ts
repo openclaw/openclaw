@@ -51,7 +51,7 @@ export function parseExecApprovalData(
   };
 }
 
-export type ExecApprovalButtonContext = {
+type ExecApprovalButtonContext = {
   getApprovers: () => string[];
   resolveApproval: (
     approvalId: string,

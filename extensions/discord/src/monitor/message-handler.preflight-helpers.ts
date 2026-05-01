@@ -25,7 +25,7 @@ export function isBoundThreadBotSystemMessage(params: {
   return DISCORD_BOUND_THREAD_SYSTEM_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
-export type BoundThreadLookupRecordLike = {
+type BoundThreadLookupRecordLike = {
   webhookId?: string | null;
   metadata?: {
     webhookId?: string | null;
