@@ -22,6 +22,11 @@ export type BlockReplyBuffer = {
   finalize?: (payload: ReplyPayload) => ReplyPayload;
 };
 
+export type BlockReplyResult = {
+  /** Media URLs confirmed as delivered by the channel handler. */
+  sentMediaUrls?: readonly string[];
+};
+
 export function createAudioAsVoiceBuffer(params: {
   isAudioPayload: (payload: ReplyPayload) => boolean;
 }): BlockReplyBuffer {
@@ -79,7 +84,7 @@ export function createBlockReplyPipeline(params: {
   onBlockReply: (
     payload: ReplyPayload,
     options?: { abortSignal?: AbortSignal; timeoutMs?: number },
-  ) => Promise<void> | void;
+  ) => Promise<BlockReplyResult | void> | BlockReplyResult | void;
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
   buffer?: BlockReplyBuffer;
@@ -132,7 +137,7 @@ export function createBlockReplyPipeline(params: {
         if (aborted) {
           return false;
         }
-        await withTimeout(
+        const result = await withTimeout(
           Promise.resolve(
             onBlockReply(payload, {
               abortSignal: abortController.signal,
@@ -142,23 +147,26 @@ export function createBlockReplyPipeline(params: {
           timeoutMs,
           timeoutError,
         );
-        return true;
+        return result ?? true;
       })
-      .then((didSend) => {
-        if (!didSend) {
+      .then((callbackResult) => {
+        if (!callbackResult) {
           return;
         }
         sentKeys.add(payloadKey);
         sentContentKeys.add(contentKey);
         const reply = resolveSendableOutboundReplyParts(payload);
-        // Track media URLs only when the block payload is media-only.
-        // For mixed text+media block payloads, the downstream delivery
-        // handler sends the text portion but does not reliably deliver
-        // the media attachment (e.g. Telegram captioned-media path may
-        // split or drop the attachment on first send). If we mark those
-        // URLs as sent, the final reply dedupe strips the still-undelivered
-        // attachment (#75156, #65468, #73253).
-        if (reply.hasMedia && !reply.trimmedText) {
+        // Delivery-aware media tracking: only record media URLs that the
+        // callback confirms were actually delivered. This prevents both:
+        //  - dropping attachments from mixed text+media replies (#75156)
+        //  - re-sending media that was already delivered via block path
+        // When the callback returns void (legacy callers), fall back to
+        // media-only tracking for backwards compatibility.
+        if (callbackResult && callbackResult.sentMediaUrls) {
+          for (const mediaUrl of callbackResult.sentMediaUrls) {
+            sentMediaUrls.add(mediaUrl);
+          }
+        } else if (!reply.trimmedText) {
           for (const mediaUrl of reply.mediaUrls) {
             sentMediaUrls.add(mediaUrl);
           }

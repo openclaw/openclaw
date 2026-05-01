@@ -1,3 +1,4 @@
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import {
@@ -78,7 +79,7 @@ describe("createBlockReplyPipeline dedup with threading", () => {
     expect(pipeline.hasSentPayload({ text: "response text", replyToId: "other-id" })).toBe(true);
   });
 
-  it("tracks media-only URLs but not mixed text+media URLs delivered via block replies", async () => {
+  it("tracks media-only URLs via legacy void callback fallback", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},
       timeoutMs: 5000,
@@ -86,17 +87,53 @@ describe("createBlockReplyPipeline dedup with threading", () => {
 
     expect(pipeline.getSentMediaUrls()).toEqual([]);
 
-    // Mixed text+media: media should NOT be tracked for dedupe because
-    // it must survive into the final reply (#75156).
+    // Mixed text+media: callback returns void, fallback is media-only.
+    // Mixed payload media is NOT tracked (legacy fallback).
     pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
-    // Media-only: media SHOULD be tracked for dedupe.
+    // Media-only: media IS tracked (legacy fallback).
     pipeline.enqueue({ mediaUrls: ["file:///b.ogg", "file:///c.ogg"] });
     await pipeline.flush({ force: true });
 
+    expect(pipeline.getSentMediaUrls()).toEqual(["file:///b.ogg", "file:///c.ogg"]);
+  });
+
+  it("tracks delivery-confirmed media URLs from callback result", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        const reply = resolveSendableOutboundReplyParts(payload);
+        return { sentMediaUrls: reply.mediaUrls };
+      },
+      timeoutMs: 5000,
+    });
+
+    // Mixed text+media: callback confirms media was delivered.
+    pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
+    // Media-only: callback confirms media was delivered.
+    pipeline.enqueue({ mediaUrls: ["file:///b.ogg", "file:///c.ogg"] });
+    await pipeline.flush({ force: true });
+
+    // Both mixed and media-only URLs are tracked because callback confirmed.
     expect(pipeline.getSentMediaUrls()).toEqual([
+      "file:///a.ogg",
       "file:///b.ogg",
       "file:///c.ogg",
     ]);
+  });
+
+  it("does not track media when callback confirms no media was sent", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {
+        return { sentMediaUrls: [] };
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "caption", mediaUrl: "file:///a.ogg" });
+    pipeline.enqueue({ mediaUrls: ["file:///b.ogg"] });
+    await pipeline.flush({ force: true });
+
+    // Empty sentMediaUrls from callback means nothing was delivered.
+    expect(pipeline.getSentMediaUrls()).toEqual([]);
   });
 
   it("does not track media when text-only blocks are delivered", async () => {
