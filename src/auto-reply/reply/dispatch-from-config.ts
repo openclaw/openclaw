@@ -5,6 +5,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
@@ -292,6 +293,42 @@ const createShouldEmitVerboseProgress = (params: {
     return params.fallbackLevel !== "off";
   };
 };
+
+const resolveHarnessSourceVisibleRepliesDefault = (params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  sessionAgentId: string;
+  sessionKey?: string;
+}): "automatic" | "message_tool" | undefined => {
+  if (params.ctx.CommandSource === "native") {
+    return undefined;
+  }
+  try {
+    const provider =
+      normalizeOptionalString(params.entry?.modelProvider) ??
+      normalizeOptionalString(params.ctx.Provider) ??
+      normalizeOptionalString(params.ctx.Surface) ??
+      "";
+    const harness = selectAgentHarness({
+      provider,
+      modelId: normalizeOptionalString(params.entry?.model),
+      config: params.cfg,
+      agentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+      agentHarnessId:
+        normalizeOptionalString(params.entry?.agentHarnessId) ??
+        normalizeOptionalString(params.entry?.agentRuntimeOverride),
+    });
+    return harness.deliveryDefaults?.sourceVisibleReplies;
+  } catch (error) {
+    logVerbose(
+      `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,
+    );
+    return undefined;
+  }
+};
+
 export type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
@@ -625,13 +662,24 @@ export async function dispatchReplyFromConfig(
     chatType === "group" || chatType === "channel"
       ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
       : cfg.messages?.visibleReplies;
+  const harnessDefaultVisibleReplies =
+    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
+      ? resolveHarnessSourceVisibleRepliesDefault({
+          cfg,
+          ctx,
+          entry: sessionStoreEntry.entry,
+          sessionAgentId,
+          sessionKey: acpDispatchSessionKey,
+        })
+      : undefined;
+  const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
   const prefersMessageToolDelivery =
     params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
     (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
       ctx.CommandSource !== "native" &&
       (chatType === "group" || chatType === "channel"
-        ? configuredVisibleReplies !== "automatic"
-        : configuredVisibleReplies === "message_tool"));
+        ? effectiveVisibleReplies !== "automatic"
+        : effectiveVisibleReplies === "message_tool"));
   const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
   const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
     ...(profileAlsoAllow ?? []),
@@ -690,6 +738,7 @@ export async function dispatchReplyFromConfig(
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
     shouldSuppressTyping,
     messageToolAvailable,
+    defaultVisibleReplies: harnessDefaultVisibleReplies,
   });
   const {
     sourceReplyDeliveryMode,

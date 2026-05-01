@@ -198,7 +198,8 @@ run_proxy_env_flow() {
     printf "%s\n" "Environment=HTTP_PROXY=http://stale-proxy.local:7890"
     printf "%s\n" "Environment=HTTPS_PROXY=https://stale-proxy.local:7890"
   } >>"$unit_path"
-  if ! timeout "$command_timeout" node "$git_cli" doctor --repair --yes >"$doctor_log" 2>&1; then
+  if ! timeout "$command_timeout" env OPENCLAW_UPDATE_IN_PROGRESS=1 \
+    node "$git_cli" doctor --repair --force --yes --non-interactive >"$doctor_log" 2>&1; then
     cat "$doctor_log"
     exit 1
   fi
