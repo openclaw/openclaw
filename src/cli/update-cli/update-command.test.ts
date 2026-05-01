@@ -6,6 +6,7 @@ import {
 } from "../../daemon/gateway-entrypoint.js";
 import {
   shouldPrepareUpdatedInstallRestart,
+  resolveUpdatedGatewayRestartPort,
   shouldUseLegacyProcessRestartAfterUpdate,
 } from "./update-command.js";
 
@@ -80,6 +81,28 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
         serviceLoaded: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("resolveUpdatedGatewayRestartPort", () => {
+  it("uses the managed service port ahead of the caller environment", () => {
+    expect(
+      resolveUpdatedGatewayRestartPort({
+        config: { gateway: { port: 19000 } } as never,
+        processEnv: { OPENCLAW_GATEWAY_PORT: "19001" },
+        serviceEnv: { OPENCLAW_GATEWAY_PORT: "19002" },
+      }),
+    ).toBe(19002);
+  });
+
+  it("falls back to the post-update config when no service port is available", () => {
+    expect(
+      resolveUpdatedGatewayRestartPort({
+        config: { gateway: { port: 19000 } } as never,
+        processEnv: {},
+        serviceEnv: {},
+      }),
+    ).toBe(19000);
   });
 });
 

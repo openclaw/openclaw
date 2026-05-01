@@ -320,6 +320,14 @@ function resolveUpdatedInstallCommandEnv(
   return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
 }
 
+export function resolveUpdatedGatewayRestartPort(params: {
+  config?: OpenClawConfig;
+  processEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+}): number {
+  return resolveGatewayPort(params.config, params.serviceEnv ?? params.processEnv ?? process.env);
+}
+
 type UpdateDryRunPreview = {
   dryRun: true;
   root: string;
@@ -944,7 +952,7 @@ async function maybeRestartService(params: {
     const diagnosticLines = [
       "Gateway did not become healthy after restart.",
       ...renderRestartDiagnostics(health),
-      `Restart log: ${resolveGatewayRestartLogPath(process.env)}`,
+      `Restart log: ${resolveGatewayRestartLogPath(params.serviceEnv ?? process.env)}`,
       `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
     ];
     if (params.opts.json) {
@@ -1771,10 +1779,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
-  const gatewayPort = resolveGatewayPort(
-    postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
-    process.env,
-  );
+  let gatewayPort = resolveUpdatedGatewayRestartPort({
+    config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+    processEnv: process.env,
+  });
   if (shouldRestart) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
@@ -1788,6 +1796,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         })
       ) {
         gatewayServiceEnv = serviceState.env;
+        gatewayPort = resolveUpdatedGatewayRestartPort({
+          config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+          processEnv: process.env,
+          serviceEnv: gatewayServiceEnv,
+        });
         restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
         refreshGatewayServiceEnv = true;
       }
