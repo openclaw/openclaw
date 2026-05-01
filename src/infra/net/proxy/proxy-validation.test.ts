@@ -147,6 +147,29 @@ describe("proxy validation", () => {
     ]);
   });
 
+  it("reports disabled proxy config as an actionable validation problem", async () => {
+    const fetchCheck = vi.fn();
+
+    const result = await runProxyValidation({
+      config: {},
+      env: {},
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      ok: false,
+      config: {
+        enabled: false,
+        source: "disabled",
+        errors: [
+          "proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url",
+        ],
+      },
+      checks: [],
+    });
+  });
+
   it("rejects non-http proxy URLs", () => {
     const result = resolveProxyValidationConfig({
       config: {

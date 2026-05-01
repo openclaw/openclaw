@@ -34,9 +34,11 @@ openclaw proxy purge
 ## Validate
 
 `openclaw proxy validate` checks the effective operator-managed proxy URL from
-`--proxy-url`, config, or `OPENCLAW_PROXY_URL`. By default it verifies that a
-public destination succeeds through the proxy and loopback or metadata-style
-destinations are blocked by the proxy.
+`--proxy-url`, config, or `OPENCLAW_PROXY_URL`. It reports a config problem when
+no proxy is enabled and configured; use `--proxy-url` for a one-off preflight
+before changing config. By default it verifies that a public destination succeeds
+through the proxy and loopback or metadata-style destinations are blocked by the
+proxy.
 
 Options:
 

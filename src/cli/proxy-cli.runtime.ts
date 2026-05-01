@@ -159,7 +159,7 @@ function formatProxyValidationNextSteps(result: ProxyValidationResult): string[]
   }
   if (result.config.errors.some((error) => error.includes("proxy.enabled"))) {
     return [
-      "Set proxy.enabled=true for configured proxy URLs, or pass --proxy-url for an explicit one-off validation.",
+      "Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.",
     ];
   }
   if (result.config.errors.length > 0) {

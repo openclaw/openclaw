@@ -148,7 +148,9 @@ export function resolveProxyValidationConfig(
   return {
     enabled: false,
     source: "disabled",
-    errors: [],
+    errors: [
+      "proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url",
+    ],
   };
 }
 

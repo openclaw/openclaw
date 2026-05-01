@@ -214,8 +214,37 @@ describe("proxy cli runtime", () => {
         "Problems\n" +
         "  - proxy validation requires proxy.enabled to be true for configured proxy URLs\n\n" +
         "Next steps\n" +
-        "  Set proxy.enabled=true for configured proxy URLs, or pass --proxy-url for an explicit one-off validation.\n",
+        "  Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.\n",
     );
+  });
+
+  it("prints actionable output when proxy config is disabled and missing", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: false,
+        source: "disabled",
+        errors: [
+          "proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url",
+        ],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({});
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: disabled\n" +
+        "  URL:    not configured\n\n" +
+        "Problems\n" +
+        "  - proxy validation requires proxy.enabled=true with proxy.proxyUrl or OPENCLAW_PROXY_URL, or --proxy-url\n\n" +
+        "Next steps\n" +
+        "  Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.\n",
+    );
+    expect(process.exitCode).toBe(1);
   });
 
   it("redacts malformed proxy URLs in text output", async () => {
