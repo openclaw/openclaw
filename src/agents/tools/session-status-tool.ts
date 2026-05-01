@@ -524,7 +524,7 @@ export function createSessionStatusTool(opts?: {
       const hasExplicitModelOverride = Boolean(
         resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
       );
-      
+
       const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
       const runtimeModelForCard = runtimeModelIdentity.model.trim();
 
@@ -535,10 +535,7 @@ export function createSessionStatusTool(opts?: {
       if (runtimeProviderForCard && runtimeModelForCard) {
         providerForCard = runtimeProviderForCard;
         modelForCard = runtimeModelForCard;
-      } else if (
-        resolved.entry.providerOverride?.trim() &&
-        resolved.entry.modelOverride?.trim()
-      ) {
+      } else if (resolved.entry.providerOverride?.trim() && resolved.entry.modelOverride?.trim()) {
         providerForCard = resolved.entry.providerOverride.trim();
         modelForCard = resolved.entry.modelOverride.trim();
       } else {
@@ -549,9 +546,7 @@ export function createSessionStatusTool(opts?: {
       const statusSessionEntry = resolved.entry;
 
       const primaryModelLabel =
-        providerForCard && modelForCard
-          ? `${providerForCard}/${modelForCard}`
-          : modelForCard;
+        providerForCard && modelForCard ? `${providerForCard}/${modelForCard}` : modelForCard;
       const isGroup =
         statusSessionEntry.chatType === "group" ||
         statusSessionEntry.chatType === "channel" ||
