@@ -87,6 +87,12 @@ export type {
   PluginRuntimeTaskFlows,
   PluginRuntimeTaskRuns,
   PluginRuntimeTasks,
+  TaskRunLifecycleCreateParams,
+  TaskRunLifecycleCreateStatus,
+  TaskRunLifecycleFinalizeParams,
+  TaskRunLifecycleProgressParams,
+  TaskRunLifecycleRuntime,
+  TaskRunLifecycleTerminalStatus,
 } from "../plugins/runtime/runtime-tasks.types.js";
 export type {
   TaskFlowDetail,
