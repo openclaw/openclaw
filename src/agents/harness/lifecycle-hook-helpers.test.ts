@@ -213,4 +213,36 @@ describe("agent harness lifecycle hook helpers", () => {
       reason: "fix generated baseline\n\nrerun the focused tests",
     });
   });
+
+  it("falls back to retry instruction keys when retry idempotency keys are malformed", async () => {
+    const hookRunner = {
+      hasHooks: () => true,
+      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
+        action: "revise",
+        retry: {
+          instruction: "retry with a safe key",
+          idempotencyKey: { invalid: true },
+          maxAttempts: 1,
+        } as never,
+      }),
+    };
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      action: "revise",
+      reason: "retry with a safe key",
+    });
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({ action: "continue" });
+  });
 });

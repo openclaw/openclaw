@@ -137,19 +137,19 @@ function normalizeBeforeAgentFinalizeResult(
   event?: PluginHookBeforeAgentFinalizeEvent,
 ): AgentHarnessBeforeAgentFinalizeOutcome {
   if (result?.action === "finalize") {
-    return result.reason?.trim()
-      ? { action: "finalize", reason: result.reason.trim() }
-      : { action: "finalize" };
+    const reason = normalizeTrimmedString(result.reason);
+    return reason ? { action: "finalize", reason } : { action: "finalize" };
   }
   if (result?.action === "revise") {
-    const retryInstruction = result.retry?.instruction?.trim();
+    const retryInstruction = normalizeTrimmedString(result.retry?.instruction);
     if (retryInstruction) {
       const maxAttempts =
         typeof result.retry?.maxAttempts === "number" && Number.isFinite(result.retry.maxAttempts)
           ? Math.max(1, Math.floor(result.retry.maxAttempts))
           : 1;
       const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
-      const retryKey = result.retry?.idempotencyKey?.trim() || retryInstruction.slice(0, 160);
+      const retryKey =
+        normalizeTrimmedString(result.retry?.idempotencyKey) || retryInstruction.slice(0, 160);
       const budget = getFinalizeRetryBudget();
       const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
       const nextCount = (runBudget.get(retryKey) ?? 0) + 1;
@@ -161,15 +161,23 @@ function normalizeBeforeAgentFinalizeResult(
       if (nextCount > maxAttempts) {
         return { action: "continue" };
       }
-      const reason = result.reason?.trim();
+      const reason = normalizeTrimmedString(result.reason);
       const revisedReason =
         reason && reason.includes(retryInstruction)
           ? reason
           : [reason, retryInstruction].filter(Boolean).join("\n\n");
       return { action: "revise", reason: revisedReason };
     }
-    const reason = result.reason?.trim();
+    const reason = normalizeTrimmedString(result.reason);
     return reason ? { action: "revise", reason } : { action: "continue" };
   }
   return { action: "continue" };
+}
+
+function normalizeTrimmedString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
 }
