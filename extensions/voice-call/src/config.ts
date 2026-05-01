@@ -39,7 +39,6 @@ export const E164Schema = z
  * - "open": Accept all inbound calls (dangerous!)
  */
 export const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
-export type InboundPolicy = z.infer<typeof InboundPolicySchema>;
 
 // -----------------------------------------------------------------------------
 // Provider-Specific Configuration

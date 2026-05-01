@@ -290,30 +290,3 @@ export type OutboundCallOptions = {
   /** DTMF digits to send after the call is connected */
   dtmfSequence?: string;
 };
-
-// -----------------------------------------------------------------------------
-// Tool Result Types
-// -----------------------------------------------------------------------------
-
-export type InitiateCallToolResult = {
-  success: boolean;
-  callId?: string;
-  status?: "initiated" | "queued" | "no-answer" | "busy" | "failed";
-  error?: string;
-};
-
-export type ContinueCallToolResult = {
-  success: boolean;
-  transcript?: string;
-  error?: string;
-};
-
-export type SpeakToUserToolResult = {
-  success: boolean;
-  error?: string;
-};
-
-export type EndCallToolResult = {
-  success: boolean;
-  error?: string;
-};
