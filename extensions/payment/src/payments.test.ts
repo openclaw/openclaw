@@ -12,6 +12,8 @@ import { createPaymentManager } from "./payments.js";
 import type { PaymentProviderAdapter } from "./providers/base.js";
 import { CardUnavailableError, UnsupportedRailError } from "./providers/base.js";
 import { __resetMockState, mockPaymentAdapter } from "./providers/mock.js";
+import type { CommandRunner } from "./providers/runner.js";
+import { createStripeLinkAdapter } from "./providers/stripe-link.js";
 import { handleMap } from "./store.js";
 import type { CredentialHandle, MachinePaymentResult } from "./types.js";
 
@@ -524,6 +526,83 @@ describe("createPaymentManager — adapter registry", () => {
       manager.issueVirtualCard({
         // @ts-expect-error — testing runtime guard for unregistered provider
         providerId: "stripe-link",
+        fundingSourceId: "any",
+        amount: BASE_AMOUNT,
+        merchant: BASE_MERCHANT,
+        purchaseIntent: VALID_PURCHASE_INTENT,
+      }),
+    ).rejects.toThrow(/no adapter registered/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// U4 integration: createPaymentManager({ adapters: [createStripeLinkAdapter(...)] })
+// ---------------------------------------------------------------------------
+
+describe("createPaymentManager with Stripe Link adapter", () => {
+  function makeStripeLinkFixtureRunner(
+    responses: Array<{ stdout: string; stderr?: string; exitCode: number }>,
+  ): CommandRunner {
+    let callIndex = 0;
+    return async () => {
+      const response = responses[callIndex % responses.length];
+      callIndex++;
+      return {
+        stdout: response!.stdout,
+        stderr: response!.stderr ?? "",
+        exitCode: response!.exitCode,
+      };
+    };
+  }
+
+  it("can be constructed without errors and adapter id is stripe-link", () => {
+    const runner = makeStripeLinkFixtureRunner([{ stdout: "{}", stderr: "", exitCode: 0 }]);
+    const stripeLinkAdapter = createStripeLinkAdapter({
+      command: "link-cli",
+      clientName: "TestClient",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner,
+    });
+    expect(() =>
+      createPaymentManager({
+        adapters: [stripeLinkAdapter],
+        config: { ...CONFIG, provider: "stripe-link" as const },
+      }),
+    ).not.toThrow();
+    expect(stripeLinkAdapter.id).toBe("stripe-link");
+  });
+
+  it("stripe-link adapter supports both rails", () => {
+    const runner = makeStripeLinkFixtureRunner([{ stdout: "{}", stderr: "", exitCode: 0 }]);
+    const stripeLinkAdapter = createStripeLinkAdapter({
+      command: "link-cli",
+      clientName: "TestClient",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner,
+    });
+    expect(stripeLinkAdapter.rails).toContain("virtual_card");
+    expect(stripeLinkAdapter.rails).toContain("machine_payment");
+  });
+
+  it("manager rejects unknown providerId even with stripe-link adapter registered", async () => {
+    const runner = makeStripeLinkFixtureRunner([{ stdout: "{}", stderr: "", exitCode: 0 }]);
+    const stripeLinkAdapter = createStripeLinkAdapter({
+      command: "link-cli",
+      clientName: "TestClient",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner,
+    });
+    const manager = createPaymentManager({
+      adapters: [stripeLinkAdapter],
+      config: { ...CONFIG, provider: "stripe-link" as const },
+    });
+    await expect(
+      manager.issueVirtualCard({
+        // @ts-expect-error — testing runtime guard for unregistered provider
+        providerId: "mock",
         fundingSourceId: "any",
         amount: BASE_AMOUNT,
         merchant: BASE_MERCHANT,

@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "spend_request_consumed",
+    "message": "This spend request has already been used and the card credentials are no longer available."
+  }
+}

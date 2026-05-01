@@ -1,0 +1,18 @@
+{
+  "spend_request": {
+    "id": "spreq_test_denied_001",
+    "status": "denied",
+    "credential_type": "virtual_card",
+    "amount_cents": 2500,
+    "currency": "usd",
+    "valid_until": null,
+    "merchant_name": "Test Merchant",
+    "denial_reason": "spend_limit_exceeded",
+    "card": {
+      "brand": "visa",
+      "last4": "4242",
+      "exp_month": 12,
+      "exp_year": 2030
+    }
+  }
+}

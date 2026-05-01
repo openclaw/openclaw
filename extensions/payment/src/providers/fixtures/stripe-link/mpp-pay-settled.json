@@ -1,0 +1,10 @@
+{
+  "result": {
+    "outcome": "settled",
+    "status_code": 200,
+    "receipt_id": "rcpt_test_settled_001",
+    "issued_at": "2026-04-30T19:26:21.000Z",
+    "target_url": "https://api.example.com/pay",
+    "response_body": "{\"status\":\"ok\"}"
+  }
+}

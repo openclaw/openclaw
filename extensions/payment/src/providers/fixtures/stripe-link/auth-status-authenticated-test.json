@@ -1,0 +1,10 @@
+{
+  "authenticated": true,
+  "account": {
+    "id": "acct_test_1234567890",
+    "email": "testuser@example.com",
+    "display_name": "Test User"
+  },
+  "version": "1.2.3",
+  "test_mode": true
+}

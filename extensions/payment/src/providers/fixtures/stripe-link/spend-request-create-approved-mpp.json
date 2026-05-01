@@ -1,0 +1,12 @@
+{
+  "spend_request": {
+    "id": "spreq_test_mpp_approved_001",
+    "status": "approved",
+    "credential_type": "shared_payment_token",
+    "amount_cents": 2500,
+    "currency": "usd",
+    "valid_until": "2026-05-01T03:26:21.000Z",
+    "shared_payment_token": "spt_test_abc123def456",
+    "merchant_name": "Test API Merchant"
+  }
+}

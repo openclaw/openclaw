@@ -1,0 +1,24 @@
+[
+  {
+    "id": "pm_test_card_visa_4242",
+    "type": "card",
+    "funding_source_type": "card",
+    "card": {
+      "brand": "visa",
+      "last4": "4242",
+      "exp_month": 12,
+      "exp_year": 2030
+    },
+    "currency": "usd",
+    "available_balance_cents": 500000,
+    "display_name": "Visa •• 4242"
+  },
+  {
+    "id": "pm_test_usdc_001",
+    "type": "crypto",
+    "funding_source_type": "stablecoin",
+    "currency": "usd",
+    "available_balance_cents": 100000000,
+    "display_name": "USDC Wallet"
+  }
+]

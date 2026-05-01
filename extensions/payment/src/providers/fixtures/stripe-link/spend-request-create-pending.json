@@ -1,0 +1,12 @@
+{
+  "spend_request": {
+    "id": "spreq_test_pending_001",
+    "status": "pending",
+    "credential_type": "virtual_card",
+    "amount_cents": 2500,
+    "currency": "usd",
+    "valid_until": null,
+    "merchant_name": "Test Merchant",
+    "card": null
+  }
+}

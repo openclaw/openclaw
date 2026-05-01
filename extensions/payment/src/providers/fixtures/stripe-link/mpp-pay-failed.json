@@ -1,0 +1,10 @@
+{
+  "result": {
+    "outcome": "failed",
+    "status_code": 402,
+    "receipt_id": "rcpt_test_failed_001",
+    "issued_at": "2026-04-30T19:26:21.000Z",
+    "target_url": "https://api.example.com/pay",
+    "error": "payment_required"
+  }
+}
