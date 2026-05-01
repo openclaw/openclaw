@@ -3,6 +3,7 @@ import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 export type ExecuteNodeHostCommandParams = {
   command: string;
   workdir: string | undefined;
+  workdirExplicit?: boolean;
   env: Record<string, string>;
   requestedEnv?: Record<string, string>;
   requestedNode?: string;
