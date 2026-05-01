@@ -632,6 +632,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         });
         return { content, isDirectMessage, locationPayload, selfUserId };
       };
+      let liveDmAllowFrom: string[] = [];
       const continueIngress = async (params: {
         content: RoomMessageEventContent;
         isDirectMessage: boolean;
@@ -713,7 +714,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           cfg: liveCfg,
           accountId,
         });
-        const liveDmAllowFrom = await resolveCachedLiveAllowlist({
+        liveDmAllowFrom = await resolveCachedLiveAllowlist({
           cfg: liveCfg,
           entries: liveAccountAllowlists.dmAllowFrom,
           startupResolvedEntries: allowFromResolvedEntries,
