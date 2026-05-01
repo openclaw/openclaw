@@ -244,3 +244,66 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(bedrockCanonical.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
   });
 });
+
+describe("transformTransportMessages handles malformed content blocks", () => {
+  const model = makeModel("anthropic-messages" as Api, "minimax", "MiniMax-M2.5");
+
+  function assistantMsg(
+    content: unknown[],
+    stopReason = "max_tokens" as const,
+  ): Extract<Context["messages"][number], { role: "assistant" }> {
+    return {
+      role: "assistant",
+      provider: "minimax",
+      api: "anthropic-messages",
+      model: "MiniMax-M2.5",
+      stopReason,
+      timestamp: Date.now(),
+      content,
+    } as Extract<Context["messages"][number], { role: "assistant" }>;
+  }
+
+  it("does not throw when content is an empty array", () => {
+    const messages: Context["messages"] = [
+      { role: "user", content: "hello", timestamp: Date.now() },
+      assistantMsg([]),
+    ];
+    const result = transformTransportMessages(messages, model);
+    // empty-content assistant with non-error stopReason passes through
+    expect(result.some((m) => m.role === "assistant")).toBe(true);
+  });
+
+  it("does not throw when content contains only a thinking block", () => {
+    const messages: Context["messages"] = [
+      { role: "user", content: "hello", timestamp: Date.now() },
+      assistantMsg([{ type: "thinking", thinking: "reasoning...", thinkingSignature: "" }]),
+    ];
+    const result = transformTransportMessages(messages, model);
+    const assistant = result.find((m) => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    // thinking without signature is converted to text for non-same-model
+    expect((assistant as any).content[0].type).toBe("text");
+  });
+
+  it("does not throw when a content block is undefined", () => {
+    const messages: Context["messages"] = [
+      { role: "user", content: "hello", timestamp: Date.now() },
+      assistantMsg([undefined, { type: "text", text: "hi" }]),
+    ];
+    const result = transformTransportMessages(messages, model);
+    const assistant = result.find((m) => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    expect((assistant as any).content).toHaveLength(1);
+    expect((assistant as any).content[0].type).toBe("text");
+  });
+
+  it("does not throw when a content block is null", () => {
+    const messages: Context["messages"] = [
+      { role: "user", content: "hello", timestamp: Date.now() },
+      assistantMsg([null, { type: "text", text: "ok" }]),
+    ];
+    const result = transformTransportMessages(messages, model);
+    const assistant = result.find((m) => m.role === "assistant");
+    expect((assistant as any).content).toHaveLength(1);
+  });
+});
