@@ -161,6 +161,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Voice Decrypt Failure Tolerance",
     help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
   },
+  "voice.connectTimeoutMs": {
+    label: "Discord Voice Connect Timeout (ms)",
+    help: "Initial @discordjs/voice Ready wait before a join is treated as failed. Default: 30000.",
+  },
+  "voice.reconnectGraceMs": {
+    label: "Discord Voice Reconnect Grace (ms)",
+    help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
+  },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",
     help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
