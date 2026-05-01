@@ -214,17 +214,6 @@ function extractRestoreErrorDetails(error: unknown): {
   return { code, message };
 }
 
-function createConfigObserveAnomalyAuditAppendParams(
-  deps: ObserveRecoveryDeps,
-  params: Omit<ConfigObserveAuditRecordParams, "restoredFromBackup" | "restoredBackupPath">,
-) {
-  return createConfigObserveAuditAppendParams(deps, {
-    ...params,
-    restoredFromBackup: false,
-    restoredBackupPath: null,
-  });
-}
-
 function hashConfigRaw(raw: string | null): string {
   return crypto
     .createHash("sha256")
