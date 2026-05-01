@@ -8,6 +8,11 @@ export const FILL_SENTINEL_FIELDS = [
   "exp_mm_yy",
   "exp_mm_yyyy",
   "holder_name",
+  "billing_line1",
+  "billing_city",
+  "billing_state",
+  "billing_postal_code",
+  "billing_country",
 ] as const;
 export type FillSentinelField = (typeof FILL_SENTINEL_FIELDS)[number];
 

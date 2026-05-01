@@ -412,7 +412,7 @@ describe("issueVirtualCard", () => {
     expect(meta?.providerId).toBe("stripe-link");
   });
 
-  it("populates all 7 fillSentinels referencing the handle id", async () => {
+  it("populates all 12 fillSentinels referencing the handle id", async () => {
     const { runner } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApproved),
       fixtureOk(spendRequestRetrievePollApproved),
@@ -433,6 +433,14 @@ describe("issueVirtualCard", () => {
     expect(s.exp_mm_yy).toEqual({ $paymentHandle: handle.id, field: "exp_mm_yy" });
     expect(s.exp_mm_yyyy).toEqual({ $paymentHandle: handle.id, field: "exp_mm_yyyy" });
     expect(s.holder_name).toEqual({ $paymentHandle: handle.id, field: "holder_name" });
+    expect(s.billing_line1).toEqual({ $paymentHandle: handle.id, field: "billing_line1" });
+    expect(s.billing_city).toEqual({ $paymentHandle: handle.id, field: "billing_city" });
+    expect(s.billing_state).toEqual({ $paymentHandle: handle.id, field: "billing_state" });
+    expect(s.billing_postal_code).toEqual({
+      $paymentHandle: handle.id,
+      field: "billing_postal_code",
+    });
+    expect(s.billing_country).toEqual({ $paymentHandle: handle.id, field: "billing_country" });
   });
 
   it("populates handleMap with providerId='stripe-link' and spendRequestId", async () => {
@@ -885,6 +893,51 @@ describe("retrieveCardSecrets", () => {
     await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     const [_cmd, args] = spy.mock.calls[0]!;
     expect(args).not.toContain("--test");
+  });
+
+  it("extracts billing_line1, billing_city, billing_state, billing_postal_code, billing_country from card.billing_address", async () => {
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
+    const adapter = makeAdapter({ runner });
+    const secrets = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
+    // Fixture has billing_address: { name, line1, city, state, postal_code, country }
+    expect(secrets.billingLine1).toBe("510 Townsend St");
+    expect(secrets.billingCity).toBe("San Francisco");
+    expect(secrets.billingState).toBe("CA");
+    expect(secrets.billingPostalCode).toBe("94103");
+    expect(secrets.billingCountry).toBe("US");
+  });
+
+  it("billing fields fall back to empty strings when card.billing_address is absent (defensive)", async () => {
+    // When billing_address is missing, the adapter should not throw — instead it returns
+    // empty strings for all billing fields. This allows the fill hook to proceed without
+    // crashing; the agent will receive empty values for those fields.
+    const noBillingAddressFixture = [
+      {
+        id: "lsrq_no_billing",
+        status: "approved",
+        card: {
+          id: "ic_no_billing",
+          number: "4242424242424242",
+          cvc: "123",
+          brand: "visa",
+          exp_month: 12,
+          exp_year: 2030,
+          // billing_address is absent
+          valid_until: "2026-05-01T05:29:51Z",
+        },
+      },
+    ];
+    const { runner } = makeFixtureRunner(fixtureOk(noBillingAddressFixture));
+    const adapter = makeAdapter({ runner });
+    const secrets = await adapter.retrieveCardSecrets("lsrq_no_billing");
+    // holderName falls back to "OPENCLAW VIRTUAL" when billing_address is absent
+    expect(secrets.holderName).toBe("OPENCLAW VIRTUAL");
+    // All billing fields fall back to empty strings — no throw
+    expect(secrets.billingLine1).toBe("");
+    expect(secrets.billingCity).toBe("");
+    expect(secrets.billingState).toBe("");
+    expect(secrets.billingPostalCode).toBe("");
+    expect(secrets.billingCountry).toBe("");
   });
 });
 

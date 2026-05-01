@@ -81,6 +81,11 @@ export type CardSecrets = {
   expMmYy: string; // "12/30"
   expMmYyyy: string; // "12/2030"
   holderName: string;
+  billingLine1: string;
+  billingCity: string;
+  billingState: string;
+  billingPostalCode: string;
+  billingCountry: string;
 };
 
 // ----- Typed errors -----

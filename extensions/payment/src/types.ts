@@ -30,7 +30,19 @@ export type FundingSource = {
 
 export type FillSentinel = {
   $paymentHandle: string;
-  field: "pan" | "cvv" | "exp_month" | "exp_year" | "exp_mm_yy" | "exp_mm_yyyy" | "holder_name";
+  field:
+    | "pan"
+    | "cvv"
+    | "exp_month"
+    | "exp_year"
+    | "exp_mm_yy"
+    | "exp_mm_yyyy"
+    | "holder_name"
+    | "billing_line1"
+    | "billing_city"
+    | "billing_state"
+    | "billing_postal_code"
+    | "billing_country";
 };
 
 export type CredentialHandle = {
@@ -47,7 +59,18 @@ export type CredentialHandle = {
     expYear?: string;
   };
   fillSentinels?: Record<
-    "pan" | "cvv" | "exp_month" | "exp_year" | "exp_mm_yy" | "exp_mm_yyyy" | "holder_name",
+    | "pan"
+    | "cvv"
+    | "exp_month"
+    | "exp_year"
+    | "exp_mm_yy"
+    | "exp_mm_yyyy"
+    | "holder_name"
+    | "billing_line1"
+    | "billing_city"
+    | "billing_state"
+    | "billing_postal_code"
+    | "billing_country",
     FillSentinel
   >;
 };

@@ -44,6 +44,11 @@ export function redactHandle(handle: CredentialHandle): /* RedactedHandle */ unk
             exp_mm_yy: handle.fillSentinels.exp_mm_yy,
             exp_mm_yyyy: handle.fillSentinels.exp_mm_yyyy,
             holder_name: handle.fillSentinels.holder_name,
+            billing_line1: handle.fillSentinels.billing_line1,
+            billing_city: handle.fillSentinels.billing_city,
+            billing_state: handle.fillSentinels.billing_state,
+            billing_postal_code: handle.fillSentinels.billing_postal_code,
+            billing_country: handle.fillSentinels.billing_country,
           }
         : undefined,
   };

@@ -213,6 +213,16 @@ function pickSecretValue(secrets: CardSecrets, field: FillSentinelField): string
       return secrets.expMmYyyy;
     case "holder_name":
       return secrets.holderName;
+    case "billing_line1":
+      return secrets.billingLine1;
+    case "billing_city":
+      return secrets.billingCity;
+    case "billing_state":
+      return secrets.billingState;
+    case "billing_postal_code":
+      return secrets.billingPostalCode;
+    case "billing_country":
+      return secrets.billingCountry;
   }
 }
 

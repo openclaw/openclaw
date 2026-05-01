@@ -52,6 +52,11 @@ const MOCK_HANDLE: CredentialHandle = {
     exp_mm_yy: { $paymentHandle: "handle-001", field: "exp_mm_yy" },
     exp_mm_yyyy: { $paymentHandle: "handle-001", field: "exp_mm_yyyy" },
     holder_name: { $paymentHandle: "handle-001", field: "holder_name" },
+    billing_line1: { $paymentHandle: "handle-001", field: "billing_line1" },
+    billing_city: { $paymentHandle: "handle-001", field: "billing_city" },
+    billing_state: { $paymentHandle: "handle-001", field: "billing_state" },
+    billing_postal_code: { $paymentHandle: "handle-001", field: "billing_postal_code" },
+    billing_country: { $paymentHandle: "handle-001", field: "billing_country" },
   },
 };
 
@@ -370,7 +375,7 @@ describe("issue_virtual_card result shape", () => {
     tool = extractTool(manager);
   });
 
-  it("returns fillSentinels with all 7 keys", async () => {
+  it("returns fillSentinels with all 12 keys", async () => {
     const result = (await tool.execute("tc-1", {
       action: "issue_virtual_card",
       providerId: "mock",
@@ -389,6 +394,11 @@ describe("issue_virtual_card result shape", () => {
     expect(fillSentinels).toHaveProperty("exp_mm_yy");
     expect(fillSentinels).toHaveProperty("exp_mm_yyyy");
     expect(fillSentinels).toHaveProperty("holder_name");
+    expect(fillSentinels).toHaveProperty("billing_line1");
+    expect(fillSentinels).toHaveProperty("billing_city");
+    expect(fillSentinels).toHaveProperty("billing_state");
+    expect(fillSentinels).toHaveProperty("billing_postal_code");
+    expect(fillSentinels).toHaveProperty("billing_country");
   });
 
   it("result content text does not contain a Luhn-valid PAN (4242424242424242)", async () => {

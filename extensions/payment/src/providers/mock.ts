@@ -111,6 +111,11 @@ export const mockPaymentAdapter: PaymentProviderAdapter = {
         exp_mm_yy: { $paymentHandle: handleId, field: "exp_mm_yy" },
         exp_mm_yyyy: { $paymentHandle: handleId, field: "exp_mm_yyyy" },
         holder_name: { $paymentHandle: handleId, field: "holder_name" },
+        billing_line1: { $paymentHandle: handleId, field: "billing_line1" },
+        billing_city: { $paymentHandle: handleId, field: "billing_city" },
+        billing_state: { $paymentHandle: handleId, field: "billing_state" },
+        billing_postal_code: { $paymentHandle: handleId, field: "billing_postal_code" },
+        billing_country: { $paymentHandle: handleId, field: "billing_country" },
       },
     };
 
@@ -147,6 +152,11 @@ export const mockPaymentAdapter: PaymentProviderAdapter = {
       expMmYy: "12/30",
       expMmYyyy: "12/2030",
       holderName: "Mock Holder",
+      billingLine1: "510 Townsend St",
+      billingCity: "San Francisco",
+      billingState: "CA",
+      billingPostalCode: "94103",
+      billingCountry: "US",
     };
   },
 

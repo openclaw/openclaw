@@ -54,6 +54,44 @@ describe("isFillSentinel — field constraints", () => {
     expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mm_yyyy" })).toBe(true);
   });
 
+  it("returns true for field 'billing_line1'", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_line1" })).toBe(true);
+  });
+
+  it("returns true for field 'billing_city'", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_city" })).toBe(true);
+  });
+
+  it("returns true for field 'billing_state'", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_state" })).toBe(true);
+  });
+
+  it("returns true for field 'billing_postal_code'", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_postal_code" })).toBe(
+      true,
+    );
+  });
+
+  it("returns true for field 'billing_country'", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_country" })).toBe(true);
+  });
+
+  it("returns false for field value 'billing-line-1' (hyphens — wrong separator)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing-line-1" })).toBe(false);
+  });
+
+  it("returns false for field value 'billingLine1' (camelCase — wrong form)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billingLine1" })).toBe(false);
+  });
+
+  it("returns false for field value 'billingCity' (camelCase — wrong form)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billingCity" })).toBe(false);
+  });
+
+  it("returns false for field value 'billing_zip' (unknown billing sub-field)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_zip" })).toBe(false);
+  });
+
   it("returns false for field value 'exp_mmyy' (no slash — wrong variant)", () => {
     expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mmyy" })).toBe(false);
   });
@@ -156,14 +194,14 @@ describe("findSentinelsInFields", () => {
     expect(result[1]!.sentinel).toBe(sentinelB);
   });
 
-  it("returns all 7 sentinels when all fields are sentinels", () => {
+  it("returns all 12 sentinels when all fields are sentinels", () => {
     const fields = FILL_SENTINEL_FIELDS.map((field) => ({
       ref: field,
       type: "text",
       value: { $paymentHandle: "h-multi", field },
     }));
     const result = findSentinelsInFields(fields);
-    expect(result).toHaveLength(7);
+    expect(result).toHaveLength(12);
     result.forEach((r, i) => {
       expect(r.index).toBe(i);
     });

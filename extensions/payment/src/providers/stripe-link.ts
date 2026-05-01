@@ -495,6 +495,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       exp_mm_yy: { $paymentHandle: handleId, field: "exp_mm_yy" },
       exp_mm_yyyy: { $paymentHandle: handleId, field: "exp_mm_yyyy" },
       holder_name: { $paymentHandle: handleId, field: "holder_name" },
+      billing_line1: { $paymentHandle: handleId, field: "billing_line1" },
+      billing_city: { $paymentHandle: handleId, field: "billing_city" },
+      billing_state: { $paymentHandle: handleId, field: "billing_state" },
+      billing_postal_code: { $paymentHandle: handleId, field: "billing_postal_code" },
+      billing_country: { $paymentHandle: handleId, field: "billing_country" },
     };
 
     const handle: CredentialHandle = {
@@ -607,10 +612,24 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     const expMmYy = `${expMonth}/${yy}`;
     const expMmYyyy = `${expMonth}/${expYear}`;
 
-    // Holder name from billing_address.name (link-cli 0.4.0 shape E)
+    // Billing address fields from billing_address (link-cli 0.4.0 shape E).
+    // Defensive: if billing_address is absent, fall back to empty strings so the
+    // sentinel substitution still succeeds (the form field will receive an empty
+    // string rather than crashing). Agents should not rely on these fields when
+    // billing_address is missing — but we prefer a graceful degradation over a
+    // CardUnavailableError that would block the entire fill.
     const billingAddress = card["billing_address"] as Record<string, unknown> | undefined;
     const holderName =
       typeof billingAddress?.["name"] === "string" ? billingAddress["name"] : "OPENCLAW VIRTUAL";
+    const billingLine1 =
+      typeof billingAddress?.["line1"] === "string" ? billingAddress["line1"] : "";
+    const billingCity = typeof billingAddress?.["city"] === "string" ? billingAddress["city"] : "";
+    const billingState =
+      typeof billingAddress?.["state"] === "string" ? billingAddress["state"] : "";
+    const billingPostalCode =
+      typeof billingAddress?.["postal_code"] === "string" ? billingAddress["postal_code"] : "";
+    const billingCountry =
+      typeof billingAddress?.["country"] === "string" ? billingAddress["country"] : "";
 
     // SECURITY: Return the secrets. Do NOT log. Do NOT cache in module scope.
     // The caller (U6 fill hook) must drop the reference after substitution.
@@ -622,6 +641,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       expMmYy,
       expMmYyyy,
       holderName,
+      billingLine1,
+      billingCity,
+      billingState,
+      billingPostalCode,
+      billingCountry,
     };
   }
 
@@ -882,6 +906,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       exp_mm_yy: { $paymentHandle: handleId, field: "exp_mm_yy" },
       exp_mm_yyyy: { $paymentHandle: handleId, field: "exp_mm_yyyy" },
       holder_name: { $paymentHandle: handleId, field: "holder_name" },
+      billing_line1: { $paymentHandle: handleId, field: "billing_line1" },
+      billing_city: { $paymentHandle: handleId, field: "billing_city" },
+      billing_state: { $paymentHandle: handleId, field: "billing_state" },
+      billing_postal_code: { $paymentHandle: handleId, field: "billing_postal_code" },
+      billing_country: { $paymentHandle: handleId, field: "billing_country" },
     };
 
     return {

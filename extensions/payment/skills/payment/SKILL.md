@@ -56,7 +56,7 @@ On success, the result contains:
 - `handle.id` — record this; you need it for fill and status checks.
 - `handle.validUntil` — the card expires at this timestamp.
 - `handle.display` — non-secret display info (`brand`, `last4`, `expMonth`, `expYear`).
-- `fillSentinels` — a map with keys `pan`, `cvv`, `exp_month`, `exp_year`, `exp_mm_yy`, `exp_mm_yyyy`, `holder_name`. Each value is a sentinel object `{ "$paymentHandle": "<id>", "field": "<name>" }`.
+- `fillSentinels` — a map with keys `pan`, `cvv`, `exp_month`, `exp_year`, `exp_mm_yy`, `exp_mm_yyyy`, `holder_name`, `billing_line1`, `billing_city`, `billing_state`, `billing_postal_code`, `billing_country`. Each value is a sentinel object `{ "$paymentHandle": "<id>", "field": "<name>" }`.
 
 > **Test-mode note:** In test mode, Stripe Link always returns "Jane Doe" as the holder name regardless of the buyer's actual name. This is expected; production cards will use the buyer's real name from their Link account.
 
@@ -160,6 +160,70 @@ Use `exp_mm_yy` when the form has a **single combined expiry field** (e.g. `inpu
 ```
 
 When the form has a single MM/YY field, use `field: "exp_mm_yy"` (year as 2 digits, slash-separated) or `field: "exp_mm_yyyy"` (year as 4 digits, slash-separated). Both are pre-formatted with a `/` separator so you do not need to combine the separate month and year values yourself.
+
+### For forms with billing address fields
+
+Use the billing address sentinels when the checkout form asks for the cardholder's address. These are sourced from `card.billing_address` in the Link card response.
+
+```json
+{
+  "action": "act",
+  "request": {
+    "kind": "fill",
+    "fields": [
+      {
+        "ref": "input[name='cardnumber']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "pan" }
+      },
+      {
+        "ref": "input[name='exp-date']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "exp_mm_yy" }
+      },
+      {
+        "ref": "input[name='cvc']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "cvv" }
+      },
+      {
+        "ref": "input[name='name']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "holder_name" }
+      },
+      {
+        "ref": "input[name='address-line1']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "billing_line1" }
+      },
+      {
+        "ref": "input[name='address-city']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "billing_city" }
+      },
+      {
+        "ref": "input[name='address-state']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "billing_state" }
+      },
+      {
+        "ref": "input[name='address-zip']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "billing_postal_code" }
+      },
+      {
+        "ref": "input[name='address-country']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "billing_country" }
+      }
+    ]
+  }
+}
+```
+
+Available billing address fields: `billing_line1`, `billing_city`, `billing_state`, `billing_postal_code`, `billing_country`. These correspond to the fields returned by `link-cli spend-request retrieve --include card` under `card.billing_address`.
+
+> **Email is NOT available as a sentinel.** The `link-cli` CLI does not expose the cardholder's email address in any command output. Do not attempt to use an `email` sentinel — it does not exist. If a checkout form requires an email address, the user must supply it separately.
 
 ### Common mistakes
 

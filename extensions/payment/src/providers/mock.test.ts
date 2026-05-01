@@ -89,7 +89,7 @@ describe("mockPaymentAdapter.issueVirtualCard", () => {
     expect(handle.display?.expYear).toBe("2030");
   });
 
-  it("populates all 7 fillSentinels referencing the handle id", async () => {
+  it("populates all 12 fillSentinels referencing the handle id", async () => {
     const handle = await mockPaymentAdapter.issueVirtualCard({
       fundingSourceId: "mock-fs-card-001",
       amount: BASE_AMOUNT,
@@ -106,6 +106,23 @@ describe("mockPaymentAdapter.issueVirtualCard", () => {
     expect(sentinels.exp_mm_yy).toEqual({ $paymentHandle: handle.id, field: "exp_mm_yy" });
     expect(sentinels.exp_mm_yyyy).toEqual({ $paymentHandle: handle.id, field: "exp_mm_yyyy" });
     expect(sentinels.holder_name).toEqual({ $paymentHandle: handle.id, field: "holder_name" });
+    expect(sentinels.billing_line1).toEqual({
+      $paymentHandle: handle.id,
+      field: "billing_line1",
+    });
+    expect(sentinels.billing_city).toEqual({ $paymentHandle: handle.id, field: "billing_city" });
+    expect(sentinels.billing_state).toEqual({
+      $paymentHandle: handle.id,
+      field: "billing_state",
+    });
+    expect(sentinels.billing_postal_code).toEqual({
+      $paymentHandle: handle.id,
+      field: "billing_postal_code",
+    });
+    expect(sentinels.billing_country).toEqual({
+      $paymentHandle: handle.id,
+      field: "billing_country",
+    });
   });
 
   it("throws PolicyDeniedError when purchaseIntent < 100 chars", async () => {
@@ -231,6 +248,12 @@ describe("mockPaymentAdapter.retrieveCardSecrets", () => {
     expect(secrets.expMmYy).toBe("12/30");
     expect(secrets.expMmYyyy).toBe("12/2030");
     expect(secrets.holderName).toBe("Mock Holder");
+    // Billing address fields
+    expect(secrets.billingLine1).toBe("510 Townsend St");
+    expect(secrets.billingCity).toBe("San Francisco");
+    expect(secrets.billingState).toBe("CA");
+    expect(secrets.billingPostalCode).toBe("94103");
+    expect(secrets.billingCountry).toBe("US");
   });
 
   it("throws CardUnavailableError for unknown spend request id", async () => {

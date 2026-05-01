@@ -28,6 +28,11 @@ const MOCK_SECRETS: CardSecrets = {
   expMmYy: "12/30",
   expMmYyyy: "12/2030",
   holderName: "Mock Holder",
+  billingLine1: "510 Townsend St",
+  billingCity: "San Francisco",
+  billingState: "CA",
+  billingPostalCode: "94103",
+  billingCountry: "US",
 };
 
 const HANDLE_ID = "test-handle-001";
@@ -495,6 +500,38 @@ describe("fill hook — substitution in rewritten params", () => {
     expect(fields[1]!.value).toBe(MOCK_SECRETS.pan);
     expect(fields[2]!.value).toBe("john@example.com");
   });
+
+  it("rewritten fields contain billing_line1, billing_city, billing_state, billing_postal_code, billing_country", async () => {
+    const manager = makeMockManager();
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        {
+          ref: "billing-address",
+          type: "text",
+          value: makeSentinel(HANDLE_ID, "billing_line1"),
+        },
+        { ref: "billing-city", type: "text", value: makeSentinel(HANDLE_ID, "billing_city") },
+        { ref: "billing-state", type: "text", value: makeSentinel(HANDLE_ID, "billing_state") },
+        {
+          ref: "billing-zip",
+          type: "text",
+          value: makeSentinel(HANDLE_ID, "billing_postal_code"),
+        },
+        {
+          ref: "billing-country",
+          type: "text",
+          value: makeSentinel(HANDLE_ID, "billing_country"),
+        },
+      ]),
+      makeOpts(manager),
+    );
+    const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
+    expect(fields[0]!.value).toBe(MOCK_SECRETS.billingLine1);
+    expect(fields[1]!.value).toBe(MOCK_SECRETS.billingCity);
+    expect(fields[2]!.value).toBe(MOCK_SECRETS.billingState);
+    expect(fields[3]!.value).toBe(MOCK_SECRETS.billingPostalCode);
+    expect(fields[4]!.value).toBe(MOCK_SECRETS.billingCountry);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -557,6 +594,11 @@ describe("fill hook — multiple handles", () => {
       expMmYy: "06/31",
       expMmYyyy: "06/2031",
       holderName: "Second Holder",
+      billingLine1: "1 Infinite Loop",
+      billingCity: "Cupertino",
+      billingState: "CA",
+      billingPostalCode: "95014",
+      billingCountry: "US",
     };
     const manager = {
       retrieveCardSecretsForHook: vi
@@ -664,6 +706,11 @@ describe("fill hook — secret clear on error path", () => {
       expMmYy: "12/30",
       expMmYyyy: "12/2030",
       holderName: "Alice Holder",
+      billingLine1: "123 Main St",
+      billingCity: "Springfield",
+      billingState: "IL",
+      billingPostalCode: "62701",
+      billingCountry: "US",
     };
 
     const manager = {

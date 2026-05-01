@@ -53,6 +53,11 @@ describe("redactHandle", () => {
         exp_mm_yy: { $paymentHandle: "h2", field: "exp_mm_yy" as const },
         exp_mm_yyyy: { $paymentHandle: "h2", field: "exp_mm_yyyy" as const },
         holder_name: { $paymentHandle: "h2", field: "holder_name" as const },
+        billing_line1: { $paymentHandle: "h2", field: "billing_line1" as const },
+        billing_city: { $paymentHandle: "h2", field: "billing_city" as const },
+        billing_state: { $paymentHandle: "h2", field: "billing_state" as const },
+        billing_postal_code: { $paymentHandle: "h2", field: "billing_postal_code" as const },
+        billing_country: { $paymentHandle: "h2", field: "billing_country" as const },
         // @ts-expect-error — smuggled extra field
         secretRoutingNumber: "111000025",
       },
@@ -60,7 +65,7 @@ describe("redactHandle", () => {
     const redacted = JSON.stringify(redactHandle(handle as never));
     expect(redacted).not.toContain("secretRoutingNumber");
     expect(redacted).not.toContain("111000025");
-    // All seven known sentinel keys should still be present
+    // All twelve known sentinel keys should still be present
     expect(redacted).toContain('"pan"');
     expect(redacted).toContain('"cvv"');
     expect(redacted).toContain('"exp_month"');
@@ -68,6 +73,11 @@ describe("redactHandle", () => {
     expect(redacted).toContain('"exp_mm_yy"');
     expect(redacted).toContain('"exp_mm_yyyy"');
     expect(redacted).toContain('"holder_name"');
+    expect(redacted).toContain('"billing_line1"');
+    expect(redacted).toContain('"billing_city"');
+    expect(redacted).toContain('"billing_state"');
+    expect(redacted).toContain('"billing_postal_code"');
+    expect(redacted).toContain('"billing_country"');
   });
 
   it("returns undefined display when input has no display", () => {
