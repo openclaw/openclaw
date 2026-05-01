@@ -10,6 +10,11 @@ capacity:
 actions:
   workflow: .github/workflows/ci-check-testbox.yml
   ref: main
+  runnerLabels:
+    - crabbox
+    - openclaw
+  runnerVersion: latest
+  ephemeral: true
 aws:
   region: eu-west-1
   rootGB: 400
