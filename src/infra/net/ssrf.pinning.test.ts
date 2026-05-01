@@ -222,4 +222,51 @@ describe("ssrf pinning", () => {
     });
     expect(lookup).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { allowPrivateNetwork: true },
+    { dangerouslyAllowPrivateNetwork: true },
+    { allowedHostnames: ["metadata.google.internal"] },
+  ])("blocks cloud metadata hostnames before private-network skips: %p", async (policy) => {
+    const lookup = vi.fn(async () => [
+      { address: "169.254.169.254", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("metadata.google.internal", {
+        lookupFn: lookup,
+        policy,
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it.each(["169.254.169.254", "::ffff:169.254.169.254"])(
+    "blocks cloud metadata IP literal %s before private-network skips",
+    async (hostname) => {
+      const lookup = createPublicLookupMock();
+
+      await expect(
+        resolvePinnedHostnameWithPolicy(hostname, {
+          lookupFn: lookup,
+          policy: { allowPrivateNetwork: true },
+        }),
+      ).rejects.toThrow(SsrFBlockedError);
+      expect(lookup).not.toHaveBeenCalled();
+    },
+  );
+
+  it("still rejects DNS answers pinned to the cloud metadata IP under private-network opt-in", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "169.254.169.254", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("api.example.com", {
+        lookupFn: lookup,
+        policy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toThrow(SsrFBlockedError);
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
 });
