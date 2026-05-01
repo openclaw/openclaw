@@ -72,7 +72,7 @@ const { createChatRunRegistry } = await import("./server-chat-state.js");
 const { readDrainManifest, writeDrainManifest } = await import("./server-drain-manifest.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
-const ORIGINAL_ENV = process.env;
+const ORIGINAL_ENV = { ...process.env };
 
 function createGatewayCloseTestDeps(
   overrides: Partial<GatewayCloseHandlerParams> = {},
@@ -417,7 +417,7 @@ describe("createGatewayCloseHandler", () => {
           chatRunRegistry: {
             entries: () => [
               {
-                sessionId: "session-1",
+                runId: "run-1",
                 runs: [{ sessionKey: "linear-AI-587-charles", clientRunId: "run-1" }],
               },
             ],
@@ -430,10 +430,9 @@ describe("createGatewayCloseHandler", () => {
       expect(result.warnings).toEqual([]);
       expect(readDrainManifest()?.sessions).toEqual([
         {
-          sessionId: "session-1",
+          runId: "run-1",
           sessionKey: "linear-AI-587-charles",
           clientRunId: "run-1",
-          linearTicketId: "AI-587",
         },
       ]);
     } finally {
@@ -475,7 +474,7 @@ describe("createGatewayCloseHandler", () => {
           chatRunRegistry: {
             entries: () => [
               {
-                sessionId: "session-1",
+                runId: "run-1",
                 runs: [{ sessionKey: "linear-AI-587", clientRunId: "run-1" }],
               },
             ],

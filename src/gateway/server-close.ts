@@ -197,7 +197,7 @@ export function createGatewayCloseHandler(params: {
   chatRunState: { clear: () => void };
   chatRunRegistry?: {
     entries: () => ReadonlyArray<{
-      sessionId: string;
+      runId: string;
       runs: ReadonlyArray<{ sessionKey: string; clientRunId: string }>;
     }>;
   } | null;

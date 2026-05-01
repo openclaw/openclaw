@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
@@ -7,10 +8,9 @@ import type { ChatRunRegistry } from "./server-chat-state.js";
 const drainLog = createSubsystemLogger("gateway/drain-manifest");
 
 export type DrainManifestEntry = {
-  sessionId: string;
+  runId: string;
   sessionKey: string;
   clientRunId: string;
-  linearTicketId: string | null;
 };
 
 export type DrainManifest = {
@@ -24,11 +24,6 @@ const DRAIN_MANIFEST_FILENAME = "draining-sessions.json";
 export function resolveDrainManifestPath(): string {
   const stateDir = resolveStateDir();
   return path.join(stateDir, "state", DRAIN_MANIFEST_FILENAME);
-}
-
-export function extractLinearTicketId(sessionKey: string): string | null {
-  const match = /\b([A-Z]+-\d+)\b/i.exec(sessionKey);
-  return match?.[1]?.toUpperCase() ?? null;
 }
 
 /**
@@ -46,10 +41,9 @@ export function writeDrainManifest(registry: Pick<ChatRunRegistry, "entries">): 
   for (const entry of activeEntries) {
     for (const run of entry.runs) {
       sessions.push({
-        sessionId: entry.sessionId,
+        runId: entry.runId,
         sessionKey: run.sessionKey,
         clientRunId: run.clientRunId,
-        linearTicketId: extractLinearTicketId(run.sessionKey),
       });
     }
   }
@@ -69,7 +63,29 @@ export function writeDrainManifest(registry: Pick<ChatRunRegistry, "entries">): 
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
-  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+  const tmpPath = path.join(
+    dir,
+    `.${path.basename(manifestPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
+  );
+  let fd: number | undefined;
+  try {
+    try {
+      fd = fs.openSync(tmpPath, "wx", 0o600);
+      fs.writeFileSync(fd, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+    } finally {
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+      }
+    }
+    fs.renameSync(tmpPath, manifestPath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* ignore cleanup failure */
+    }
+    throw err;
+  }
   drainLog.info(`drain manifest written: ${sessions.length} active session(s) to ${manifestPath}`);
   return sessions.length;
 }

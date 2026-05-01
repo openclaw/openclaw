@@ -5,12 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChatRunRegistry } from "./server-chat-state.js";
 import {
   deleteDrainManifest,
-  extractLinearTicketId,
   readDrainManifest,
   writeDrainManifest,
 } from "./server-drain-manifest.js";
 
-const ORIGINAL_ENV = process.env;
+const ORIGINAL_ENV = { ...process.env };
 
 describe("server-drain-manifest", () => {
   let tmpDir: string;
@@ -39,11 +38,11 @@ describe("server-drain-manifest", () => {
       expect(manifest).toBeNull();
     });
 
-    it("writes manifest with active sessions and extracted ticket IDs", () => {
+    it("writes manifest with active runs and session keys", () => {
       const registry = createChatRunRegistry();
-      registry.add("session-1", { sessionKey: "linear-AI-587-charles", clientRunId: "run-1" });
-      registry.add("session-1", { sessionKey: "linear-ai-588-charles", clientRunId: "run-2" });
-      registry.add("session-2", { sessionKey: "agent:noah", clientRunId: "run-3" });
+      registry.add("run-1", { sessionKey: "linear-AI-587-charles", clientRunId: "run-1" });
+      registry.add("run-1", { sessionKey: "linear-ai-588-charles", clientRunId: "run-2" });
+      registry.add("run-3", { sessionKey: "agent:noah", clientRunId: "run-3" });
 
       expect(writeDrainManifest(registry)).toBe(3);
 
@@ -57,11 +56,10 @@ describe("server-drain-manifest", () => {
       expect(sessionKeys).toContain("linear-AI-587-charles");
       expect(sessionKeys).toContain("agent:noah");
 
-      const sessionIds = manifest!.sessions.map((s) => s.sessionId);
-      expect(sessionIds.filter((id) => id === "session-1")).toHaveLength(2);
-      expect(sessionIds.filter((id) => id === "session-2")).toHaveLength(1);
-
-      expect(manifest!.sessions.map((s) => s.linearTicketId)).toEqual(["AI-587", "AI-588", null]);
+      const runIds = manifest!.sessions.map((s) => s.runId);
+      expect(runIds.filter((id) => id === "run-1")).toHaveLength(2);
+      expect(runIds.filter((id) => id === "run-3")).toHaveLength(1);
+      expect(manifest!.sessions.every((s) => !("linearTicketId" in s))).toBe(true);
     });
 
     it("creates state directory if it does not exist", () => {
@@ -74,23 +72,22 @@ describe("server-drain-manifest", () => {
       expect(manifest).not.toBeNull();
     });
 
+    it("writes manifest with owner-only permissions", () => {
+      const registry = createChatRunRegistry();
+      registry.add("r1", { sessionKey: "test", clientRunId: "r1" });
+
+      writeDrainManifest(registry);
+
+      const manifestPath = path.join(tmpDir, "state", "draining-sessions.json");
+      expect(fs.statSync(manifestPath).mode & 0o777).toBe(0o600);
+    });
+
     it("propagates manifest write failures", () => {
       const registry = createChatRunRegistry();
       registry.add("s1", { sessionKey: "linear-AI-587", clientRunId: "r1" });
       fs.writeFileSync(path.join(tmpDir, "state"), "not a directory");
 
       expect(() => writeDrainManifest(registry)).toThrow();
-    });
-  });
-
-  describe("extractLinearTicketId", () => {
-    it("extracts canonical and lower-case Linear ticket IDs", () => {
-      expect(extractLinearTicketId("linear-AI-587-charles")).toBe("AI-587");
-      expect(extractLinearTicketId("linear-ai-588-charles")).toBe("AI-588");
-    });
-
-    it("returns null for non-Linear session keys", () => {
-      expect(extractLinearTicketId("agent:charles")).toBeNull();
     });
   });
 
@@ -143,12 +140,12 @@ describe("server-drain-manifest", () => {
       registry.add("s2", { sessionKey: "k3", clientRunId: "r3" });
 
       const entries = registry.entries();
-      expect(entries).toHaveLength(2); // two session IDs
+      expect(entries).toHaveLength(2); // two active run IDs
 
-      const s1 = entries.find((e) => e.sessionId === "s1");
+      const s1 = entries.find((e) => e.runId === "s1");
       expect(s1?.runs).toHaveLength(2);
 
-      const s2 = entries.find((e) => e.sessionId === "s2");
+      const s2 = entries.find((e) => e.runId === "s2");
       expect(s2?.runs).toHaveLength(1);
     });
 
