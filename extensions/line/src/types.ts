@@ -2,7 +2,7 @@ import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 
 export type LineTokenSource = "config" | "env" | "file" | "none";
 
-export interface LineThreadBindingsConfig {
+interface LineThreadBindingsConfig {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
@@ -67,7 +67,7 @@ export type LineProbeResult = BaseProbeResult<string> & {
   };
 };
 
-export type LineFlexMessagePayload = {
+type LineFlexMessagePayload = {
   altText: string;
   contents: unknown;
 };
