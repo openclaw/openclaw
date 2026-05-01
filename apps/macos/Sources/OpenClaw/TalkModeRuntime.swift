@@ -1111,7 +1111,7 @@ extension TalkModeRuntime {
             } else {
                 self.ttsLogger
                     .info(
-                        "talk provider \(parsed.activeProvider, privacy: .public) unsupported; using system voice")
+                        "talk provider \(parsed.activeProvider, privacy: .public) uses gateway talk.speak with system voice fallback")
             }
             return parsed
         } catch {
