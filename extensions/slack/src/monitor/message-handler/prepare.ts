@@ -486,6 +486,18 @@ export async function prepareSlackMessage(params: {
     ? (channelConfig?.requireMention ?? ctx.defaultRequireMention)
     : false;
 
+  if (message._ambiguousThreadReply) {
+    ctx.logger.info(
+      {
+        channel: message.channel,
+        ts: message.ts,
+        parentUserId: message.parent_user_id,
+      },
+      "skipping ambiguous slack thread reply",
+    );
+    return null;
+  }
+
   // Allow "control commands" to bypass mention gating if sender is authorized.
   const canDetectMention = Boolean(ctx.botUserId) || mentionRegexes.length > 0;
   const mentionDecision = resolveInboundMentionDecision({
@@ -600,7 +612,7 @@ export async function prepareSlackMessage(params: {
     Boolean(
       ackReaction &&
       shouldAckReactionGate({
-        scope: ctx.ackReactionScope as AckReactionScope | undefined,
+        scope: ctx.ackReactionScope as AckReactionScope,
         isDirect: isDirectMessage,
         isGroup: isRoomish,
         isMentionableGroup: isRoom,

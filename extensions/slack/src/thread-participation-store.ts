@@ -24,10 +24,9 @@ const TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — longer than in-memory (24h
 const MAX_ENTRIES = 10_000;
 const STORE_FILENAME = "thread-participation.json";
 
-// Module-level cache of the loaded store to avoid repeated reads within the
-// same event loop tick.  Invalidated on write.
-let cachedStore: ParticipationStore | null = null;
-let cachedStorePath: string | null = null;
+// Module-level cache of loaded stores to avoid repeated reads within the same
+// event loop tick. Invalidated per path on write.
+const cachedStores = new Map<string, ParticipationStore>();
 
 function makeKey(accountId: string, channelId: string, threadTs: string): string {
   return `${accountId}:${channelId}:${threadTs}`;
@@ -38,20 +37,20 @@ export function deriveParticipationStorePath(sessionStorePath: string): string {
 }
 
 function loadStore(filePath: string): ParticipationStore {
-  if (cachedStore && cachedStorePath === filePath) {
+  const cachedStore = cachedStores.get(filePath);
+  if (cachedStore) {
     return cachedStore;
   }
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
     const parsed = JSON.parse(raw) as ParticipationStore;
-    cachedStore = parsed;
-    cachedStorePath = filePath;
+    cachedStores.set(filePath, parsed);
     return parsed;
   } catch {
     // File missing or corrupt — start fresh.
-    cachedStore = {};
-    cachedStorePath = filePath;
-    return {};
+    const emptyStore: ParticipationStore = {};
+    cachedStores.set(filePath, emptyStore);
+    return emptyStore;
   }
 }
 
@@ -61,8 +60,7 @@ function saveStore(filePath: string, store: ParticipationStore): void {
   const tmpPath = `${filePath}.tmp`;
   fs.writeFileSync(tmpPath, JSON.stringify(store, null, 2), "utf-8");
   fs.renameSync(tmpPath, filePath);
-  cachedStore = store;
-  cachedStorePath = filePath;
+  cachedStores.set(filePath, store);
 }
 
 function pruneExpired(store: ParticipationStore, now: number): ParticipationStore {

@@ -890,6 +890,32 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(1);
   });
 
+  it("drops ambiguous thread replies instead of treating them as root messages", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const replies = vi.fn();
+    const slackCtx = createThreadSlackCtx({ cfg, replies });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(slackCtx, createThreadAccount(), {
+      ...createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "<@B1> can you follow up?",
+        ts: "201.000",
+        parent_user_id: "U2",
+      }),
+      _ambiguousThreadReply: true,
+    } as SlackMessageEvent);
+
+    expect(prepared).toBeNull();
+    expect(replies).not.toHaveBeenCalled();
+  });
+
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
     const message = createSlackMessage({
       text: "this is a reply",

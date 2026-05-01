@@ -72,17 +72,20 @@ describe("thread-participation-store", () => {
     expect(hasPersistedThreadParticipation(sessionStorePath, "A1", "C123", "")).toBe(false);
   });
 
-  it("survives simulated process restart (re-reads from disk)", () => {
+  it("survives simulated process restart (re-reads from disk)", async () => {
     persistThreadParticipation(sessionStorePath, "A1", "C123", "1700000000.000001", "main");
 
-    // Clear the module-level cache by importing fresh — we simulate restart
-    // by directly reading from disk in a new call after clearing internal cache.
-    // The simplest way: just verify the file exists and has the right content.
-    const filePath = deriveParticipationStorePath(sessionStorePath);
-    const raw = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-    expect(raw["A1:C123:1700000000.000001"]).toBeDefined();
-    expect(raw["A1:C123:1700000000.000001"].agentId).toBe("main");
-    expect(raw["A1:C123:1700000000.000001"].repliedAt).toBeGreaterThan(0);
+    vi.resetModules();
+    const freshStore = await import("./thread-participation-store.js");
+
+    expect(
+      freshStore.hasPersistedThreadParticipation(
+        sessionStorePath,
+        "A1",
+        "C123",
+        "1700000000.000001",
+      ),
+    ).toBe(true);
   });
 
   it("expires entries older than TTL", () => {
