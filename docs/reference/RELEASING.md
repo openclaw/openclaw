@@ -430,11 +430,11 @@ Supported candidate sources:
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=ref`,
 `package_ref=<release-ref>`, `suite_profile=custom`,
-`docker_lanes=bundled-channel-deps-compat plugins-offline`, and
-`telegram_mode=mock-openai`. The release-path Docker chunks cover the
-overlapping install, update, and plugin-update lanes; Package Acceptance keeps
-artifact-native bundled-channel compat, offline plugin fixtures, and Telegram
-package QA against the same resolved tarball. It is the GitHub-native
+`docker_lanes=plugins-offline plugin-update`, and `telegram_mode=mock-openai`.
+The release-path Docker chunks cover the overlapping install, update, and
+plugin-update lanes; Package Acceptance keeps offline plugin fixtures, plugin
+update, and Telegram package QA against the same resolved tarball. It is the
+GitHub-native
 replacement for most of the package/update coverage that previously required
 Parallels. Cross-OS release checks still matter for OS-specific onboarding,
 installer, and platform behavior, but package/update product validation should

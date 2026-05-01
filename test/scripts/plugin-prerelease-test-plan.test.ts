@@ -38,7 +38,6 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "npm-onboard-channel-agent",
       "doctor-switch",
       "update-channel-switch",
-      "bundled-channel-deps-compat",
       "plugins-offline",
       "plugins",
       "kitchen-sink-plugin",
