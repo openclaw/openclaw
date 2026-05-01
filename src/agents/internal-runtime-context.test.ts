@@ -132,6 +132,30 @@ describe("internal runtime context codec", () => {
     expect(stripInternalRuntimeContext(input)).toBe('{"answer":"visible"}');
   });
 
+  it("strips markdown-style inbound context and exec state blocks", () => {
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "## Inbound Context (trusted metadata)",
+      "```json",
+      '{"channel":"webchat","messageId":"m_123"}',
+      "```",
+      "",
+      "## Current Exec Session State",
+      "",
+      "Current session exec defaults: workdir=/repo, shell=bash",
+      "",
+      "Current elevated level: none",
+      "",
+      "If the user asks to run a command, use the exec tool.",
+      "",
+      "Visible reply.",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply.");
+  });
+
   it("fuzzes delimiter injection and nested marker handling deterministically", () => {
     const rng = createDeterministicRng(0xc0ff_ee42);
     const tokenPool = [

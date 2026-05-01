@@ -373,6 +373,30 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Visible reply.");
   });
 
+  it("strips copied markdown-style inbound context and exec state sections", () => {
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "## Inbound Context (trusted metadata)",
+      "```json",
+      '{"messageId":"m_123","route":"webchat"}',
+      "```",
+      "",
+      "## Current Exec Session State",
+      "",
+      "Current session exec defaults: workdir=/repo, shell=bash",
+      "",
+      "Current elevated level: none",
+      "",
+      "If the user asks to run a command, use the exec tool.",
+      "",
+      "Visible reply.",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Visible reply.");
+  });
+
   it("strips copied runtime event prefaces when no visible text remains", () => {
     const input = [
       "OpenClaw runtime event.",
