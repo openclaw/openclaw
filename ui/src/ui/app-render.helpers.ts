@@ -132,6 +132,8 @@ const NEW_CHAT_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 const NEW_CHAT_SESSIONS_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
+const NEW_CHAT_CREATE_FAILED_MESSAGE =
+  "New Chat could not create a new session. Try again in a moment.";
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
@@ -641,7 +643,11 @@ export async function createChatSession(state: AppViewState) {
     !canSwitchToNewChatSession(state)
   ) {
     if (!nextSessionKey) {
-      state.lastError = state.sessionsError ?? NEW_CHAT_SESSIONS_LOADING_MESSAGE;
+      state.lastError =
+        state.sessionsError ??
+        (state.sessionsLoading
+          ? NEW_CHAT_SESSIONS_LOADING_MESSAGE
+          : NEW_CHAT_CREATE_FAILED_MESSAGE);
     }
     return;
   }

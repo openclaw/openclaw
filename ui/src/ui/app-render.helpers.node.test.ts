@@ -660,9 +660,26 @@ describe("createChatSession", () => {
     );
   });
 
-  it("shows retry feedback when creation is skipped without a session error", async () => {
+  it("shows creation failure feedback when creation is skipped without a session error", async () => {
     const state = createChatSessionState({ lastError: "previous error" });
     createSessionAndRefreshMock.mockResolvedValue(null);
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledTimes(1);
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.sessionsError).toBeNull();
+    expect(state.lastError).toBe("New Chat could not create a new session. Try again in a moment.");
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps refresh feedback when a queued session refresh skips creation", async () => {
+    const state = createChatSessionState({ lastError: "previous error" });
+    createSessionAndRefreshMock.mockImplementation(async () => {
+      state.sessionsLoading = true;
+      return null;
+    });
 
     await createChatSession(state);
 
