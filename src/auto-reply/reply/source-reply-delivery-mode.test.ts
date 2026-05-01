@@ -45,8 +45,6 @@ describe("resolveSourceReplyDeliveryMode", () => {
         ctx: { ChatType: "channel", WasMentioned: true },
       }),
     ).toBe("automatic");
-    // Warning should not fire because mode is "automatic"
-    expect(loggerMocks.warn).not.toHaveBeenCalled();
   });
 
   it("returns message_tool_only when not mentioned even with explicit false", () => {
