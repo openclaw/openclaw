@@ -1,63 +1,73 @@
-import { describe, expect, it, vi } from "vitest";
-import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "./bundle-mcp-config.js";
+import { describe, expect, it } from "vitest";
+import {
+  ownerCallerContextOptInServerNames,
+  ownerWantsBundleMcpCallerContextInjection,
+} from "./bundle-mcp-config.js";
 
-const mocks = vi.hoisted(() => ({
-  bundleMcp: {
-    config: {
-      mcpServers: {
-        bundleProbe: {
-          command: "node",
-          args: ["./servers/probe.mjs"],
-        },
-      },
-    },
-    diagnostics: [],
-  },
-}));
-
-vi.mock("../plugins/bundle-mcp.js", () => ({
-  loadEnabledBundleMcpConfig: () => mocks.bundleMcp,
-}));
-
-describe("loadMergedBundleMcpConfig", () => {
-  it("lets OpenClaw mcp.servers override bundle defaults while preserving raw transport shape", () => {
-    const merged = loadMergedBundleMcpConfig({
-      workspaceDir: "/workspace",
-      cfg: {
-        plugins: {
-          entries: {
-            "bundle-probe": { enabled: true },
+describe("ownerCallerContextOptInServerNames", () => {
+  it("collects only owner mcp.servers entries with injectCallerContext: true", () => {
+    const names = ownerCallerContextOptInServerNames({
+      plugins: { enabled: false },
+      mcp: {
+        servers: {
+          remote: {
+            type: "sse",
+            url: "https://example.com/mcp",
+            injectCallerContext: true,
+          },
+          remoteOff: {
+            type: "sse",
+            url: "https://example.com/other",
+            injectCallerContext: false,
+          },
+          remoteOmitted: {
+            type: "sse",
+            url: "https://example.com/third",
           },
         },
+      },
+    });
+
+    expect([...names]).toEqual(["remote"]);
+  });
+
+  it("returns an empty set when no servers are configured", () => {
+    expect([...ownerCallerContextOptInServerNames(undefined)]).toEqual([]);
+    expect([...ownerCallerContextOptInServerNames({ plugins: { enabled: false } })]).toEqual([]);
+  });
+});
+
+describe("ownerWantsBundleMcpCallerContextInjection", () => {
+  it("is true when at least one owner server opts in", () => {
+    expect(
+      ownerWantsBundleMcpCallerContextInjection({
+        plugins: { enabled: false },
         mcp: {
           servers: {
-            bundleProbe: {
-              transport: "streamable-http",
-              url: "https://mcp.example.com/mcp",
+            remote: {
+              type: "sse",
+              url: "https://example.com/mcp",
+              injectCallerContext: true,
             },
           },
         },
-      },
-    });
-
-    expect(merged.config.mcpServers.bundleProbe).toEqual({
-      transport: "streamable-http",
-      url: "https://mcp.example.com/mcp",
-    });
+      }),
+    ).toBe(true);
   });
 
-  it("maps OpenClaw transports to downstream CLI types when requested", () => {
+  it("is false when no owner server sets injectCallerContext: true", () => {
     expect(
-      toCliBundleMcpServerConfig({
-        transport: "streamable-http",
-        url: "https://mcp.example.com/mcp",
+      ownerWantsBundleMcpCallerContextInjection({
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            remote: {
+              type: "sse",
+              url: "https://example.com/mcp",
+            },
+          },
+        },
       }),
-    ).toEqual({
-      type: "http",
-      url: "https://mcp.example.com/mcp",
-    });
-    expect(toCliBundleMcpServerConfig({ type: "sse", transport: "streamable-http" })).toEqual({
-      type: "sse",
-    });
+    ).toBe(false);
   });
 });

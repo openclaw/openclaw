@@ -7,8 +7,13 @@ import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-mcp.js";
 import type { CliBundleMcpMode } from "../../plugins/types.js";
-import { loadMergedBundleMcpConfig, toCliBundleMcpServerConfig } from "../bundle-mcp-config.js";
+import {
+  loadMergedBundleMcpConfig,
+  ownerCallerContextOptInServerNames,
+  toCliBundleMcpServerConfig,
+} from "../bundle-mcp-config.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
+import { applyBundleMcpCallerContext } from "./bundle-mcp-caller-context.js";
 import { findClaudeMcpConfigPath, injectClaudeMcpConfigArgs } from "./bundle-mcp-claude.js";
 import { injectCodexMcpConfigArgs } from "./bundle-mcp-codex.js";
 import { writeGeminiSystemSettings } from "./bundle-mcp-gemini.js";
@@ -184,6 +189,20 @@ export async function prepareCliBundleMcpConfig(params: {
   if (params.additionalConfig) {
     mergedConfig = applyMergePatch(mergedConfig, params.additionalConfig) as BundleMcpConfig;
   }
+
+  // Trust comes from owner-managed layers only: cfg.mcp.servers (operator) and
+  // additionalConfig (OpenClaw runtime, e.g. the loopback gateway server).
+  // Plugin .mcp.json entries can declare injectCallerContext: true but it is
+  // ignored — they cannot self-grant access to the caller's session key.
+  const trustedCallerContextServers = ownerCallerContextOptInServerNames(params.config);
+  if (params.additionalConfig) {
+    for (const [name, server] of Object.entries(params.additionalConfig.mcpServers)) {
+      if (isRecord(server) && server.injectCallerContext === true) {
+        trustedCallerContextServers.add(name);
+      }
+    }
+  }
+  mergedConfig = applyBundleMcpCallerContext(mergedConfig, trustedCallerContextServers);
 
   return await prepareModeSpecificBundleMcpConfig({
     mode,
