@@ -77,6 +77,69 @@ describe("SessionHistorySseState", () => {
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
+  test("marks bounded tail snapshots as having older history", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "tail" }],
+          __openclaw: { seq: 99 },
+        },
+      ],
+      limit: 1,
+      rawTranscriptSeq: 99,
+      totalRawMessages: 99,
+    });
+
+    expect(snapshot.history.hasMore).toBe(true);
+    expect(snapshot.history.nextCursor).toBe("99");
+    expect(snapshot.rawTranscriptSeq).toBe(99);
+  });
+
+  test("refreshes limited SSE history from bounded tail reads", () => {
+    const fullReadSpy = vi.spyOn(sessionUtils, "readSessionMessages").mockReturnValue([]);
+    const tailReadSpy = vi
+      .spyOn(sessionUtils, "readRecentSessionMessagesWithStats")
+      .mockReturnValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "tail one" }],
+            __openclaw: { seq: 7 },
+          },
+        ],
+        totalMessages: 7,
+      })
+      .mockReturnValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "tail two" }],
+            __openclaw: { seq: 8 },
+          },
+        ],
+        totalMessages: 8,
+      });
+    try {
+      const state = new SessionHistorySseState({
+        target: { sessionId: "sess-main" },
+        limit: 1,
+      });
+
+      expect(state.snapshot().messages[0]?.__openclaw?.seq).toBe(7);
+      const refreshed = state.refresh();
+
+      expect(refreshed.hasMore).toBe(true);
+      expect(refreshed.nextCursor).toBe("8");
+      expect(refreshed.messages[0]?.__openclaw?.seq).toBe(8);
+      expect(tailReadSpy).toHaveBeenCalledTimes(2);
+      expect(fullReadSpy).not.toHaveBeenCalled();
+    } finally {
+      fullReadSpy.mockRestore();
+      tailReadSpy.mockRestore();
+    }
+  });
+
   test("strips legacy internal envelopes before exposing history", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [

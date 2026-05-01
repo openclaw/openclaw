@@ -11,7 +11,7 @@ import {
   attachOpenClawTranscriptMeta,
   loadGatewaySessionRow,
   loadSessionEntry,
-  readSessionMessages,
+  readSessionMessageCount,
   type GatewaySessionRow,
 } from "./session-utils.js";
 
@@ -105,7 +105,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     }
     const { entry, storePath } = loadSessionEntry(sessionKey);
     const messageSeq = entry?.sessionId
-      ? readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length
+      ? readSessionMessageCount(entry.sessionId, storePath, entry.sessionFile)
       : undefined;
     const sessionSnapshot = buildGatewaySessionSnapshot({
       sessionRow: loadGatewaySessionRow(sessionKey),

@@ -596,7 +596,8 @@ describe("gateway chat transcript writes (guardrail)", () => {
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
     expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
-    expect(helperSrc.includes("fs.appendFileSync(params.transcriptPath")).toBe(false);
+    expect(helperSrc).toContain("function shouldUseRawAppend(");
+    expect(helperSrc).toContain("function appendRawAssistantMessageToTranscript(");
     expect(helperSrc).toContain("SessionManager.open(params.transcriptPath)");
     expect(helperSrc).toContain("appendMessage(messageBody)");
   });
