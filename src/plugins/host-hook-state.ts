@@ -417,6 +417,23 @@ export function getPluginSessionExtensionSync<T extends PluginJsonValue = Plugin
   return value as T | undefined;
 }
 
+export function getPluginSessionExtensionStateSync(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+  sessionKey?: string;
+}): Record<string, PluginJsonValue> | undefined {
+  const pluginId = params.pluginId.trim();
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!pluginId || !sessionKey) {
+    return undefined;
+  }
+  const loaded = loadPluginHostHookSessionEntry({ cfg: params.cfg, sessionKey });
+  const value = loaded.entry?.pluginExtensions?.[pluginId] as
+    | Record<string, PluginJsonValue>
+    | undefined;
+  return value ? (copyJsonValue(value) as Record<string, PluginJsonValue>) : undefined;
+}
+
 export async function patchPluginSessionExtension(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

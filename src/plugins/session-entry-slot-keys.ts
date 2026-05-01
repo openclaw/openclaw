@@ -1,4 +1,6 @@
-const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set([
+import type { SessionEntry } from "../config/sessions/types.js";
+
+const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "__proto__",
   "constructor",
   "prototype",
@@ -99,7 +101,9 @@ const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set([
   "systemPromptReport",
   "pluginDebugEntries",
   "acp",
-]);
+] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
+
+const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<string>(SESSION_ENTRY_RESERVED_SLOT_KEY_LIST);
 
 const SESSION_ENTRY_SLOT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*$/u;
 

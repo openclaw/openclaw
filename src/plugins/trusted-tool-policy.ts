@@ -4,7 +4,7 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
 } from "./hook-types.js";
-import { getPluginSessionExtensionSync } from "./host-hook-state.js";
+import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
 import type { PluginJsonValue } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
@@ -17,29 +17,31 @@ export async function runTrustedToolPolicies(
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];
-  const sessionExtensionCache = new Map<string, PluginJsonValue | undefined>();
+  const sessionExtensionStateCache = new Map<string, Record<string, PluginJsonValue> | undefined>();
   for (const registration of policies) {
     const policyCtx: PluginHookToolContext = {
       ...ctx,
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
         const normalizedNamespace = namespace.trim();
-        const cacheKey = `${registration.pluginId}\0${normalizedNamespace}`;
-        if (sessionExtensionCache.has(cacheKey)) {
-          return sessionExtensionCache.get(cacheKey) as T | undefined;
+        const cacheKey = registration.pluginId;
+        if (!sessionExtensionStateCache.has(cacheKey)) {
+          sessionExtensionStateCache.set(
+            cacheKey,
+            options?.config
+              ? getPluginSessionExtensionStateSync({
+                  cfg: options.config,
+                  pluginId: registration.pluginId,
+                  sessionKey: ctx.sessionKey,
+                })
+              : undefined,
+          );
         }
-        if (!options?.config) {
-          sessionExtensionCache.set(cacheKey, undefined);
+        const pluginState = sessionExtensionStateCache.get(cacheKey);
+        if (!normalizedNamespace || !pluginState) {
           return undefined;
         }
-        const value = getPluginSessionExtensionSync<T>({
-          cfg: options.config,
-          pluginId: registration.pluginId,
-          sessionKey: ctx.sessionKey,
-          namespace: normalizedNamespace,
-        });
-        sessionExtensionCache.set(cacheKey, value);
-        return value;
+        return pluginState[normalizedNamespace] as T | undefined;
       },
     };
     const decision = await registration.policy.evaluate(

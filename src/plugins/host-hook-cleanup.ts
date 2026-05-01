@@ -13,6 +13,7 @@ import {
 } from "./host-hook-runtime.js";
 import type { PluginHostCleanupReason } from "./host-hooks.js";
 import type { PluginRegistry } from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 
 export type PluginHostCleanupFailure = {
@@ -182,7 +183,10 @@ export async function runPluginHostCleanup(params: {
     return { cleanupCount: 0, failures };
   }
   const registry = params.registry;
-  const sessionEntrySlotKeys = collectSessionEntrySlotKeys(registry, params.pluginId);
+  const sessionEntrySlotKeys = collectSessionEntrySlotKeys(
+    registry ?? getActivePluginRegistry(),
+    params.pluginId,
+  );
   let persistentCleanupCount = 0;
   if (params.reason !== "restart" && shouldCleanup()) {
     try {

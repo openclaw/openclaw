@@ -382,6 +382,73 @@ describe("plugin session extension SessionEntry projection", () => {
     }
   });
 
+  it("uses the active registry to clear promoted slots when cleanup omits registry", async () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "active-cleanup-promoted-plugin", name: "Cleanup" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "promoted workflow",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-host-hooks-slot-active-cleanup-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    const tempConfig = { session: { store: storePath } };
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    try {
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      await withTempConfig({
+        cfg: tempConfig,
+        run: async () => {
+          await updateSessionStore(storePath, (store) => {
+            store["agent:main:main"] = {
+              sessionId: "session-id",
+              updatedAt: Date.now(),
+            } as unknown as SessionEntry;
+          });
+          await expect(
+            patchPluginSessionExtension({
+              cfg: tempConfig as never,
+              sessionKey: "agent:main:main",
+              pluginId: "active-cleanup-promoted-plugin",
+              namespace: "workflow",
+              value: { state: "waiting" },
+            }),
+          ).resolves.toMatchObject({ ok: true });
+
+          await expect(
+            runPluginHostCleanup({
+              cfg: tempConfig as never,
+              pluginId: "active-cleanup-promoted-plugin",
+              reason: "delete",
+            }),
+          ).resolves.toMatchObject({ failures: [] });
+
+          const stored = loadSessionStore(storePath, { skipCache: true });
+          const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+          expect(entry.pluginExtensions).toBeUndefined();
+          expect(entry.approvalSnapshot).toBeUndefined();
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("exposes scoped session extension reads to trusted tool policies", async () => {
     const seen: unknown[] = [];
     const seenConfig: unknown[] = [];
@@ -399,11 +466,17 @@ describe("plugin session extension SessionEntry projection", () => {
           namespace: "policy",
           description: "policy state",
         });
+        api.registerSessionExtension({
+          namespace: "second",
+          description: "second policy state",
+        });
         api.registerTrustedToolPolicy({
           id: "inspect-session-state",
           description: "inspect session extension",
           evaluate(_event, ctx) {
             seen.push(ctx.getSessionExtension?.("policy"));
+            seen.push(ctx.getSessionExtension?.("second"));
+            seen.push(ctx.getSessionExtension?.("missing"));
             seenConfig.push((ctx as { config?: unknown }).config);
             return undefined;
           },
@@ -438,6 +511,15 @@ describe("plugin session extension SessionEntry projection", () => {
               value: { gate: "open" },
             }),
           ).resolves.toMatchObject({ ok: true });
+          await expect(
+            patchPluginSessionExtension({
+              cfg: tempConfig as never,
+              sessionKey: "agent:main:main",
+              pluginId: "policy-plugin",
+              namespace: "second",
+              value: { gate: "second" },
+            }),
+          ).resolves.toMatchObject({ ok: true });
 
           await expect(
             runTrustedToolPolicies(
@@ -470,7 +552,14 @@ describe("plugin session extension SessionEntry projection", () => {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
 
-    expect(seen).toEqual([{ gate: "open" }, undefined]);
+    expect(seen).toEqual([
+      { gate: "open" },
+      { gate: "second" },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
     expect(seenConfig).toEqual([undefined, undefined]);
   });
 
