@@ -21,6 +21,7 @@ import {
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import {
   type AuthProfileStore,
+  externalCliDiscoveryForProviderAuth,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveApiKeyForProfile,
@@ -48,6 +49,15 @@ export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
 const log = createSubsystemLogger("model-auth");
+
+function resolveConfigAwareEnvApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+  workspaceDir?: string,
+): EnvApiKeyResult | null {
+  return resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
+}
+
 function resolveProviderConfig(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -304,6 +314,37 @@ export function hasSyntheticLocalProviderAuthConfig(params: {
   return Boolean(providerConfig.baseUrl && isLocalBaseUrl(providerConfig.baseUrl));
 }
 
+export function hasRuntimeAvailableProviderAuth(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): boolean {
+  const provider = normalizeProviderId(params.provider);
+  const authOverride = resolveProviderAuthOverride(params.cfg, provider);
+  if (authOverride === "aws-sdk") {
+    return true;
+  }
+  if (
+    resolveEnvApiKey(provider, params.env, {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+    })
+  ) {
+    return true;
+  }
+  if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
+    return true;
+  }
+  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
+    return true;
+  }
+  if (authOverride === undefined && provider === "amazon-bedrock") {
+    return true;
+  }
+  return false;
+}
+
 type SyntheticProviderAuthResolution = {
   auth?: ResolvedProviderAuth;
   blockedOnManagedSecretRef?: boolean;
@@ -449,6 +490,18 @@ function shouldDeferSyntheticProfileAuth(params: {
   );
 }
 
+function resolveScopedAuthProfileStore(params: {
+  agentDir?: string;
+  cfg?: OpenClawConfig;
+  provider: string;
+  profileId?: string;
+  preferredProfile?: string;
+}): AuthProfileStore {
+  return ensureAuthProfileStore(params.agentDir, {
+    externalCli: externalCliDiscoveryForProviderAuth(params),
+  });
+}
+
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -456,6 +509,7 @@ export async function resolveApiKeyForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
   /** When true, treat profileId as a user-locked selection that must not be
    *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
@@ -464,7 +518,15 @@ export async function resolveApiKeyForProvider(params: {
   const { provider, cfg, profileId, preferredProfile } = params;
 
   if (profileId) {
-    const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+    const store =
+      params.store ??
+      resolveScopedAuthProfileStore({
+        agentDir: params.agentDir,
+        cfg,
+        provider,
+        profileId,
+        preferredProfile,
+      });
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -520,7 +582,7 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   if (params.credentialPrecedence === "env-first") {
-    const envResolved = resolveEnvApiKey(provider);
+    const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
     if (envResolved) {
       const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
         ? "oauth"
@@ -542,7 +604,7 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     };
   }
-  const localMarkerEnv = resolveEnvApiKey(provider);
+  const localMarkerEnv = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
   if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
     return {
       apiKey: localMarkerEnv.apiKey,
@@ -550,7 +612,14 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     };
   }
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const store =
+    params.store ??
+    resolveScopedAuthProfileStore({
+      agentDir: params.agentDir,
+      cfg,
+      provider,
+      preferredProfile,
+    });
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -593,7 +662,7 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const envResolved = resolveEnvApiKey(provider);
+  const envResolved = resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir);
   if (envResolved) {
     const resolvedMode: ResolvedProviderAuth["mode"] = envResolved.source.includes("OAUTH_TOKEN")
       ? "oauth"
@@ -666,6 +735,7 @@ export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
   store?: AuthProfileStore,
+  options?: { workspaceDir?: string },
 ): ModelAuthMode | undefined {
   const resolved = provider?.trim();
   if (!resolved) {
@@ -677,7 +747,12 @@ export function resolveModelAuthMode(
     return "aws-sdk";
   }
 
-  const authStore = store ?? ensureAuthProfileStore();
+  const authStore =
+    store ??
+    resolveScopedAuthProfileStore({
+      cfg,
+      provider: resolved,
+    });
   const profiles = listProfilesForProvider(authStore, resolved);
   if (profiles.length > 0) {
     const modes = new Set(
@@ -706,7 +781,7 @@ export function resolveModelAuthMode(
     return "aws-sdk";
   }
 
-  const envKey = resolveEnvApiKey(resolved);
+  const envKey = resolveConfigAwareEnvApiKey(cfg, resolved, options?.workspaceDir);
   if (envKey?.apiKey) {
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
   }
@@ -731,6 +806,7 @@ export async function hasAvailableAuthForProvider(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
 }): Promise<boolean> {
   const { provider, cfg, preferredProfile } = params;
 
@@ -738,7 +814,7 @@ export async function hasAvailableAuthForProvider(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
-  if (resolveEnvApiKey(provider)) {
+  if (resolveConfigAwareEnvApiKey(cfg, provider, params.workspaceDir)) {
     return true;
   }
   if (resolveUsableCustomProviderApiKey({ cfg, provider })) {
@@ -751,7 +827,14 @@ export async function hasAvailableAuthForProvider(params: {
     return true;
   }
 
-  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
+  const store =
+    params.store ??
+    resolveScopedAuthProfileStore({
+      agentDir: params.agentDir,
+      cfg,
+      provider,
+      preferredProfile,
+    });
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -783,6 +866,7 @@ export async function getApiKeyForModel(params: {
   preferredProfile?: string;
   store?: AuthProfileStore;
   agentDir?: string;
+  workspaceDir?: string;
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
 }): Promise<ResolvedProviderAuth> {
@@ -793,6 +877,7 @@ export async function getApiKeyForModel(params: {
     preferredProfile: params.preferredProfile,
     store: params.store,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     lockedProfile: params.lockedProfile,
     credentialPrecedence: params.credentialPrecedence,
   });

@@ -115,6 +115,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
       getApiKeyForModel({
         model: params.model,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
       }),
     getRuntimeAuthForModel: (params) =>
       getRuntimeAuthForModel({
@@ -126,6 +127,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
       resolveApiKeyForProvider({
         provider: params.provider,
         cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
       }),
   };
 }

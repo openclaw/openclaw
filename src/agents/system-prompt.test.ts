@@ -329,6 +329,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("uses provider-neutral web_search prompt metadata", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["web_search"],
+    });
+
+    expect(prompt).toContain("- web_search: Search the web using the configured provider");
+    expect(prompt).not.toContain("Brave API");
+  });
+
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -805,6 +815,18 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
+      },
+    });
+
+    expect(prompt).toContain("rely on native approval card/buttons when they appear");
+    expect(prompt).toContain("do not also send plain chat /approve instructions");
+  });
+
+  it("suppresses plain chat approval commands for native approval channels", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        channel: "slack",
       },
     });
 

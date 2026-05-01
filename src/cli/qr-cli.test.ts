@@ -413,6 +413,23 @@ describe("registerQrCli", () => {
     );
   });
 
+  it("rejects invalid gateway.remote.url before printing remote setup codes", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        remote: { url: "http://localhost:notaport", token: "remote-tok" },
+        auth: { mode: "token", token: "local-tok" },
+      },
+    });
+
+    await expectQrExit(["--setup-code-only", "--remote"]);
+
+    const output = runtimeError.mock.calls.map((call) => readRuntimeCallText(call)).join("\n");
+    expect(output).toContain("Configured gateway.remote.url is invalid.");
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
   it("logs remote secret diagnostics in non-json output mode", async () => {
     loadConfig.mockReturnValue(createRemoteQrConfig());
     resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({

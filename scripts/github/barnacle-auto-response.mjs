@@ -19,6 +19,12 @@ export const rules = [
       "Please use [our support server](https://discord.gg/clawd) and ask in #help or #users-helping-users to resolve this, or follow the stuck FAQ at https://docs.openclaw.ai/help/faq#im-stuck-whats-the-fastest-way-to-get-unstuck.",
   },
   {
+    label: "r: false-positive",
+    close: true,
+    message:
+      "Closing this because it looks like a false positive or reclassification-only report rather than an actionable OpenClaw bug. If this is still a real issue, please open a fresh report with concrete reproduction steps and current-version details.",
+  },
+  {
     label: "r: no-ci-pr",
     close: true,
     message:
@@ -63,6 +69,10 @@ export const managedLabelSpecs = {
   "r: support": {
     color: "0E8A16",
     description: "Auto-close: support requests belong in Discord or support docs.",
+  },
+  "r: false-positive": {
+    color: "D93F0B",
+    description: "Auto-close: false positive or reclassification-only report.",
   },
   "r: no-ci-pr": {
     color: "D93F0B",
@@ -183,6 +193,8 @@ const spamLabel = "r: spam";
 const dirtyLabel = "dirty";
 const badBarnacleLabel = "bad-barnacle";
 const maintainerAuthorLabel = "maintainer";
+const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
+const privilegedRepositoryRoles = new Set(["admin", "maintain", "write"]);
 const candidateLabelValues = Object.values(candidateLabels);
 const noisyPrMessage =
   "Closing this PR because it looks dirty (too many unrelated or unexpected changes). This usually happens when a branch picks up unrelated commits or a merge went sideways. Please recreate the PR from a clean branch.";
@@ -237,10 +249,14 @@ const candidateActionRules = [
 ];
 
 const normalizeLogin = (login) => login.toLowerCase();
+const automationPrHeadPrefixes = ["clawsweeper/", "clownfish/"];
 
-export function isClawsweeperPullRequest(pullRequest) {
+export function isAutomationPullRequest(pullRequest) {
   const headRefName = pullRequest.headRefName ?? pullRequest.head?.ref ?? "";
-  return typeof headRefName === "string" && headRefName.startsWith("clawsweeper/");
+  return (
+    typeof headRefName === "string" &&
+    automationPrHeadPrefixes.some((prefix) => headRefName.startsWith(prefix))
+  );
 }
 
 export function extractIssueFormValue(body, field) {
@@ -603,27 +619,40 @@ function createMaintainerChecker(github, context) {
   };
 }
 
-async function isPrivilegedPullRequestAuthor(github, context, pullRequest, labelSet, isMaintainer) {
-  const authorLogin = pullRequest.user?.login ?? "";
-  if (labelSet.has(maintainerAuthorLabel) || pullRequest.author_association === "OWNER") {
-    return true;
-  }
-  if (authorLogin && (await isMaintainer(authorLogin))) {
-    return true;
-  }
-
+async function hasPrivilegedRepositoryRole(github, context, login) {
   try {
     const permission = await github.rest.repos.getCollaboratorPermissionLevel({
       owner: context.repo.owner,
       repo: context.repo.repo,
-      username: authorLogin,
+      username: login,
     });
     const roleName = (permission?.data?.role_name ?? "").toLowerCase();
-    return roleName === "admin" || roleName === "maintain";
+    const permissionName = (permission?.data?.permission ?? "").toLowerCase();
+    return privilegedRepositoryRoles.has(roleName) || privilegedRepositoryRoles.has(permissionName);
   } catch (error) {
     if (error?.status !== 404) {
       throw error;
     }
+  }
+
+  return false;
+}
+
+async function isPrivilegedActor(github, context, login, isMaintainer) {
+  if (!login) {
+    return false;
+  }
+  return (await isMaintainer(login)) || (await hasPrivilegedRepositoryRole(github, context, login));
+}
+
+async function isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer) {
+  const authorLogin = target.user?.login ?? "";
+  const authorAssociation = String(target.author_association ?? "").toUpperCase();
+  if (labelSet.has(maintainerAuthorLabel) || privilegedAuthorAssociations.has(authorAssociation)) {
+    return true;
+  }
+  if (await isPrivilegedActor(github, context, authorLogin, isMaintainer)) {
+    return true;
   }
 
   return false;
@@ -699,10 +728,17 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
   );
 }
 
+function isAutomationUser(user, fallbackLogin = "") {
+  const login = user?.login ?? fallbackLogin;
+  return user?.type === "Bot" || /\[bot\]$/i.test(login) || login.startsWith("app/");
+}
+
 function isAutomationActor(context) {
-  const sender = context.payload.sender;
-  const login = sender?.login ?? context.actor ?? "";
-  return sender?.type === "Bot" || /\[bot\]$/i.test(login);
+  return isAutomationUser(context.payload.sender, context.actor ?? "");
+}
+
+function isGitHubAppPullRequestAuthor(pullRequest) {
+  return isAutomationUser(pullRequest.user);
 }
 
 function candidateActionRuleForLabelSet(labelSet, preferredLabel = "") {
@@ -772,12 +808,12 @@ async function removeLabels(github, context, issueNumber, labels, labelSet) {
         issue_number: issueNumber,
         name: label,
       });
-      labelSet.delete(label);
     } catch (error) {
       if (error?.status !== 404) {
         throw error;
       }
     }
+    labelSet.delete(label);
   }
 }
 
@@ -801,6 +837,15 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   if (comment) {
     const authorLogin = comment.user?.login ?? "";
     if (comment.user?.type === "Bot" || authorLogin.endsWith("[bot]")) {
+      return;
+    }
+    if (
+      (await isPrivilegedActor(github, context, authorLogin, isMaintainer)) ||
+      (await isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer))
+    ) {
+      core.info(
+        `Skipping Barnacle comment checks for #${target.number} because a maintainer is involved.`,
+      );
       return;
     }
 
@@ -832,6 +877,13 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
         body: responses.join("\n\n"),
       });
     }
+    return;
+  }
+
+  if (await isPrivilegedTargetAuthor(github, context, target, labelSet, isMaintainer)) {
+    core.info(
+      `Skipping Barnacle auto-response checks for #${target.number} because it is maintainer-authored.`,
+    );
     return;
   }
 
@@ -930,22 +982,12 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       return;
     }
 
-    const isMaintainerAuthoredPullRequest = await isPrivilegedPullRequestAuthor(
-      github,
-      context,
-      pullRequest,
-      labelSet,
-      isMaintainer,
-    );
-    if (isMaintainerAuthoredPullRequest) {
-      await removeLabels(github, context, pullRequest.number, candidateLabelValues, labelSet);
+    if (isGitHubAppPullRequestAuthor(pullRequest)) {
       await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
-      core.info(
-        `Skipping Barnacle candidate labels for maintainer-authored PR #${pullRequest.number}.`,
-      );
-    } else {
-      await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
+      core.info(`Skipping active PR limit for GitHub App-authored PR #${pullRequest.number}.`);
     }
+
+    await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
 
     if (labelSet.has(dirtyLabel)) {
       await github.rest.issues.createComment({
@@ -1031,7 +1073,10 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   if (pullRequest && labelSet.has(activePrLimitOverrideLabel)) {
     labelSet.delete(activePrLimitLabel);
   }
-  if (pullRequest && isClawsweeperPullRequest(pullRequest)) {
+  if (
+    pullRequest &&
+    (isAutomationPullRequest(pullRequest) || isGitHubAppPullRequestAuthor(pullRequest))
+  ) {
     await removeLabels(github, context, pullRequest.number, [activePrLimitLabel], labelSet);
   }
 

@@ -41,7 +41,7 @@ import {
   resolveSlackAllowListMatch,
   resolveSlackUserAllowed,
 } from "../allow-list.js";
-import { resolveSlackEffectiveAllowFrom } from "../auth.js";
+import { authorizeSlackBotRoomMessage, resolveSlackEffectiveAllowFrom } from "../auth.js";
 import { resolveSlackChannelConfig } from "../channel-config.js";
 import { stripSlackMentionsForCommandDetection } from "../commands.js";
 import {
@@ -54,7 +54,7 @@ import {
   resolveSlackChatType,
   type SlackMonitorContext,
 } from "../context.js";
-import { recordInboundSession, resolveConversationLabel } from "../conversation.runtime.js";
+import { resolveConversationLabel } from "../conversation.runtime.js";
 import { authorizeSlackDirectMessage } from "../dm-auth.js";
 import { resolveSlackRoomContextHints } from "../room-context.js";
 import { sendMessageSlack } from "../send.runtime.js";
@@ -271,6 +271,7 @@ export async function prepareSlackMessage(params: {
     isRoom,
     isRoomish,
     channelConfig,
+    allowBots,
     isBotMessage,
   } = conversation;
   const authorization = await authorizeSlackInboundMessage({
@@ -392,6 +393,21 @@ export async function prepareSlackMessage(params: {
     : true;
   if (isRoom && !channelUserAuthorized) {
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
+    return null;
+  }
+  if (
+    isRoom &&
+    isBotMessage &&
+    allowBots &&
+    !(await authorizeSlackBotRoomMessage({
+      ctx,
+      channelId: message.channel,
+      senderId,
+      senderName: senderNameForAuth,
+      channelUsers: channelConfig?.users,
+      allowFromLower,
+    }))
+  ) {
     return null;
   }
 
@@ -588,6 +604,7 @@ export async function prepareSlackMessage(params: {
   enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
     sessionKey,
     contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
+    trusted: false,
   });
 
   const envelopeFrom =
@@ -746,43 +763,6 @@ export async function prepareSlackMessage(params: {
       })
     : null;
 
-  await recordInboundSession({
-    storePath,
-    sessionKey,
-    ctx: ctxPayload,
-    updateLastRoute: isDirectMessage
-      ? {
-          sessionKey: route.mainSessionKey,
-          channel: "slack",
-          to: `user:${message.user}`,
-          accountId: route.accountId,
-          threadId: threadContext.messageThreadId,
-          mainDmOwnerPin:
-            pinnedMainDmOwner && message.user
-              ? {
-                  ownerRecipient: pinnedMainDmOwner,
-                  senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
-                  onSkip: ({ ownerRecipient, senderRecipient }) => {
-                    logVerbose(
-                      `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                    );
-                  },
-                }
-              : undefined,
-        }
-      : undefined,
-    onRecordError: (err) => {
-      ctx.logger.warn(
-        {
-          error: formatErrorMessage(err),
-          storePath,
-          sessionKey,
-        },
-        "failed updating session meta",
-      );
-    },
-  });
-
   // Live DM replies should target the concrete Slack DM channel id we just
   // received on. This avoids depending on a follow-up conversations.open
   // round-trip for the normal reply path while keeping persisted routing
@@ -804,6 +784,48 @@ export async function prepareSlackMessage(params: {
     channelConfig,
     replyTarget,
     ctxPayload,
+    turn: {
+      storePath,
+      record: {
+        updateLastRoute: isDirectMessage
+          ? {
+              sessionKey: route.mainSessionKey,
+              channel: "slack",
+              to: `user:${message.user}`,
+              accountId: route.accountId,
+              threadId: threadContext.messageThreadId,
+              mainDmOwnerPin:
+                pinnedMainDmOwner && message.user
+                  ? {
+                      ownerRecipient: pinnedMainDmOwner,
+                      senderRecipient: normalizeLowercaseStringOrEmpty(message.user),
+                      onSkip: ({
+                        ownerRecipient,
+                        senderRecipient,
+                      }: {
+                        ownerRecipient: string;
+                        senderRecipient: string;
+                      }) => {
+                        logVerbose(
+                          `slack: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                        );
+                      },
+                    }
+                  : undefined,
+            }
+          : undefined,
+        onRecordError: (err: unknown) => {
+          ctx.logger.warn(
+            {
+              error: formatErrorMessage(err),
+              storePath,
+              sessionKey,
+            },
+            "failed updating session meta",
+          );
+        },
+      },
+    },
     replyToMode,
     isDirectMessage,
     isRoomish,

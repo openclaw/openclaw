@@ -413,6 +413,31 @@ describe("createScopedChannelConfigAdapter", () => {
     });
     expectAdapterAllowFromAndDefaultTo(adapter);
   });
+
+  it("keeps read-only accessors on the accessor resolver", () => {
+    const adapter = createScopedChannelConfigAdapter<
+      { accountId: string; token: string },
+      { allowFrom: string[]; defaultTo: string }
+    >({
+      sectionKey: "demo",
+      listAccountIds: () => ["default"],
+      resolveAccount: () => {
+        throw new Error("runtime account resolver should not run for read-only accessors");
+      },
+      resolveAccessorAccount: ({ accountId }) => ({
+        allowFrom: [accountId ?? "default"],
+        defaultTo: " room:123 ",
+      }),
+      defaultAccountId: resolveDefaultAccountId,
+      clearBaseFields: ["token"],
+      resolveAllowFrom: (account) => account.allowFrom,
+      formatAllowFrom: (allowFrom) => allowFrom.map((entry) => String(entry)),
+      resolveDefaultTo: (account) => account.defaultTo,
+    });
+
+    expect(adapter.resolveAllowFrom?.({ cfg: {}, accountId: "default" })).toEqual(["default"]);
+    expect(adapter.resolveDefaultTo?.({ cfg: {}, accountId: "default" })).toBe("room:123");
+  });
 });
 
 describe("createScopedDmSecurityResolver", () => {

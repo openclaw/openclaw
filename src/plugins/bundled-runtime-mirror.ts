@@ -47,7 +47,7 @@ export function copyBundledPluginRuntimeRoot(sourceRoot: string, targetRoot: str
   if (path.resolve(sourceRoot) === path.resolve(targetRoot)) {
     return;
   }
-  fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
+  ensureBundledRuntimeMirrorDirectory(targetRoot);
   const mirroredNames = new Set<string>();
   for (const entry of fs.readdirSync(sourceRoot, { withFileTypes: true })) {
     if (shouldIgnoreBundledRuntimeMirrorEntry(entry.name)) {
@@ -81,26 +81,42 @@ export function materializeBundledRuntimeMirrorFile(sourcePath: string, targetPa
     return;
   }
   try {
-    if (
-      fs.realpathSync(sourcePath) === fs.realpathSync(targetPath) &&
-      !fs.lstatSync(targetPath).isSymbolicLink()
-    ) {
+    if (isBundledRuntimeMirrorFileAlreadyMaterialized(sourcePath, targetPath)) {
       return;
     }
   } catch {
     // Missing targets are expected before the mirror file is materialized.
   }
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o755 });
-  fs.rmSync(targetPath, { recursive: true, force: true });
+  ensureBundledRuntimeMirrorDirectory(path.dirname(targetPath));
+  removeBundledRuntimeMirrorPathIfTypeChanged(targetPath, "file");
+  const tempPath = createBundledRuntimeMirrorTempPath(targetPath);
   try {
-    fs.linkSync(sourcePath, targetPath);
-    return;
-  } catch {
-    fs.copyFileSync(sourcePath, targetPath);
+    try {
+      fs.linkSync(sourcePath, tempPath);
+    } catch {
+      fs.copyFileSync(sourcePath, tempPath);
+      chmodBundledRuntimeMirrorFileReadable(sourcePath, tempPath);
+    }
+    fs.renameSync(tempPath, targetPath);
+  } catch (error) {
+    fs.rmSync(tempPath, { force: true });
+    throw error;
   }
-  chmodBundledRuntimeMirrorFileReadable(sourcePath, targetPath);
 }
 
+function isBundledRuntimeMirrorFileAlreadyMaterialized(
+  sourcePath: string,
+  targetPath: string,
+): boolean {
+  const sourceStat = fs.lstatSync(sourcePath);
+  const targetStat = fs.lstatSync(targetPath);
+  return (
+    sourceStat.isFile() &&
+    targetStat.isFile() &&
+    sourceStat.dev === targetStat.dev &&
+    sourceStat.ino === targetStat.ino
+  );
+}
 function chmodBundledRuntimeMirrorFileReadable(sourcePath: string, targetPath: string): void {
   try {
     const sourceMode = fs.statSync(sourcePath).mode;
@@ -125,6 +141,21 @@ function pruneStaleBundledRuntimeMirrorEntries(
   }
 }
 
+function ensureBundledRuntimeMirrorDirectory(targetRoot: string): void {
+  try {
+    const stat = fs.lstatSync(targetRoot);
+    if (stat.isDirectory() && !stat.isSymbolicLink()) {
+      return;
+    }
+    fs.rmSync(targetRoot, { recursive: true, force: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  fs.mkdirSync(targetRoot, { recursive: true, mode: 0o755 });
+}
+
 function removeBundledRuntimeMirrorPathIfTypeChanged(
   targetPath: string,
   expectedType: "directory" | "file" | "symlink",
@@ -147,7 +178,7 @@ function removeBundledRuntimeMirrorPathIfTypeChanged(
 }
 
 function replaceBundledRuntimeMirrorSymlinkAtomic(linkTarget: string, targetPath: string): void {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o755 });
+  ensureBundledRuntimeMirrorDirectory(path.dirname(targetPath));
   const tempPath = createBundledRuntimeMirrorTempPath(targetPath);
   try {
     fs.symlinkSync(linkTarget, tempPath);
@@ -158,7 +189,7 @@ function replaceBundledRuntimeMirrorSymlinkAtomic(linkTarget: string, targetPath
 }
 
 function copyBundledRuntimeMirrorFileAtomic(sourcePath: string, targetPath: string): void {
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o755 });
+  ensureBundledRuntimeMirrorDirectory(path.dirname(targetPath));
   const tempPath = createBundledRuntimeMirrorTempPath(targetPath);
   try {
     fs.copyFileSync(sourcePath, tempPath);

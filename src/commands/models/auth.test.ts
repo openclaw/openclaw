@@ -367,7 +367,13 @@ describe("modelsAuthLoginCommand", () => {
 
     await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
 
-    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main");
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/main", {
+      externalCli: {
+        mode: "scoped",
+        allowKeychainPrompt: false,
+        providerIds: ["openai-codex"],
+      },
+    });
     expect(mocks.clearAuthProfileCooldown).toHaveBeenCalledWith({
       store: fakeStore,
       profileId: "openai-codex:user@example.com",
@@ -418,7 +424,16 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(mocks.resolveDefaultAgentId).not.toHaveBeenCalled();
     expect(mocks.resolveAgentDir).toHaveBeenCalledWith(originalConfig, "coder");
-    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/openclaw/agents/coder");
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith(
+      "/tmp/openclaw/agents/coder",
+      {
+        externalCli: {
+          mode: "scoped",
+          allowKeychainPrompt: false,
+          providerIds: ["openai-codex"],
+        },
+      },
+    );
     expect(runProviderAuth).toHaveBeenCalledWith(
       expect.objectContaining({
         agentDir: "/tmp/openclaw/agents/coder",
