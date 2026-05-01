@@ -13,7 +13,7 @@ import {
   resetCommitmentExtractionRuntimeForTests,
 } from "./runtime.js";
 import { loadCommitmentStore } from "./store.js";
-import type { CommitmentExtractionItem } from "./types.js";
+import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
 installHeartbeatRunnerTestRuntime();
 
@@ -55,25 +55,31 @@ describe("commitments full-chain integration", () => {
       });
       configureCommitmentExtractionRuntime({
         forceInTests: true,
-        extractBatch: vi.fn(async ({ items }: { items: CommitmentExtractionItem[] }) => ({
-          candidates: [
-            {
-              itemId: items[0]?.itemId ?? "",
-              kind: "event_check_in",
-              sensitivity: "routine",
-              source: "inferred_user_context",
-              reason: "The user mentioned an interview happening today.",
-              suggestedText: "How did the interview go?",
-              dedupeKey: "interview:2026-04-29",
-              confidence: 0.93,
-              dueWindow: {
-                earliest: new Date(dueMs).toISOString(),
-                latest: new Date(dueMs + 60 * 60_000).toISOString(),
-                timezone: "America/Los_Angeles",
+        extractBatch: vi.fn(
+          async ({
+            items,
+          }: {
+            items: CommitmentExtractionItem[];
+          }): Promise<CommitmentExtractionBatchResult> => ({
+            candidates: [
+              {
+                itemId: items[0]?.itemId ?? "",
+                kind: "event_check_in",
+                sensitivity: "routine",
+                source: "inferred_user_context",
+                reason: "The user mentioned an interview happening today.",
+                suggestedText: "How did the interview go?",
+                dedupeKey: "interview:2026-04-29",
+                confidence: 0.93,
+                dueWindow: {
+                  earliest: new Date(dueMs).toISOString(),
+                  latest: new Date(dueMs + 60 * 60_000).toISOString(),
+                  timezone: "America/Los_Angeles",
+                },
               },
-            },
-          ],
-        })),
+            ],
+          }),
+        ),
         setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
         clearTimer: () => undefined,
       });

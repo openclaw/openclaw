@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
-import type { CommitmentRecord } from "../commitments/types.js";
+import type { CommitmentRecord, CommitmentStoreFile } from "../commitments/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   runHeartbeatOnce,
@@ -90,7 +90,7 @@ describe("runHeartbeatOnce commitments", () => {
         lastProvider: "telegram",
         lastTo: "stale-target",
       });
-      const storePayload = {
+      const storePayload: CommitmentStoreFile = {
         version: 1,
         commitments: [
           buildCommitment({

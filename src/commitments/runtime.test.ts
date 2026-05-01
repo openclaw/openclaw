@@ -11,7 +11,7 @@ import {
   resetCommitmentExtractionRuntimeForTests,
 } from "./runtime.js";
 import { loadCommitmentStore } from "./store.js";
-import type { CommitmentExtractionItem } from "./types.js";
+import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
@@ -147,9 +147,13 @@ describe("commitment extraction runtime", () => {
 
   it("bounds hidden extraction queue growth before spending extractor tokens", async () => {
     const cfg = await createConfig();
-    const extractBatch = vi.fn(async () => ({
-      candidates: [],
-    }));
+    const extractBatch = vi.fn(
+      async (_params: {
+        items: CommitmentExtractionItem[];
+      }): Promise<CommitmentExtractionBatchResult> => ({
+        candidates: [],
+      }),
+    );
     configureCommitmentExtractionRuntime({
       forceInTests: true,
       extractBatch,
