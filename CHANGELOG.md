@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/config: allow `gateway config.patch` to update documented subagent thinking defaults. Fixes #75764. (#75802) Thanks @kAIborg24.
 - Plugins/CLI: keep git plugin install paths credential-free, preserve existing git checkouts until replacement succeeds, honor duplicate npm install mode, and remove managed git repos on uninstall. Thanks @vincentkoc.
 - Channels/status reactions: remove stale non-terminal lifecycle reactions when a run reaches done or error, so Discord does not leave a permanent thinking emoji after completion. Fixes #75458. Thanks @davelutztx.
+- Discord/doctor: migrate unsupported per-channel `agentId` entries under guild channel config into top-level `bindings[]` routes, so `openclaw doctor --fix` preserves the intended agent route instead of stripping it as an unknown key. Fixes #62455. Thanks @lobster-biscuit.
 
 ## 2026.4.30
 

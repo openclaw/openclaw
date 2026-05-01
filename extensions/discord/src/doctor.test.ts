@@ -167,6 +167,141 @@ describe("discord doctor", () => {
     });
   });
 
+  it("moves legacy guild channel agentId into a top-level route binding", () => {
+    const normalize = discordDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            guilds: {
+              "100": {
+                channels: {
+                  "200": {
+                    requireMention: false,
+                    agentId: "video",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never,
+    });
+
+    expect(result.changes).toEqual([
+      "Moved channels.discord.guilds.100.channels.200.agentId → top-level bindings[] route for Discord channel 200.",
+    ]);
+    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toEqual({
+      requireMention: false,
+    });
+    expect(result.config.bindings).toEqual([
+      {
+        agentId: "video",
+        match: {
+          channel: "discord",
+          guildId: "100",
+          peer: { kind: "channel", id: "200" },
+        },
+      },
+    ]);
+  });
+
+  it("moves account-scoped guild channel agentId into an account-scoped route binding", () => {
+    const normalize = discordDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            accounts: {
+              work: {
+                guilds: {
+                  "100": {
+                    channels: {
+                      "200": {
+                        agentId: "support",
+                      },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+        bindings: [{ agentId: "main", match: { channel: "discord" } }],
+      } as never,
+    });
+
+    expect(result.changes).toEqual([
+      "Moved channels.discord.accounts.work.guilds.100.channels.200.agentId → top-level bindings[] route for Discord channel 200.",
+    ]);
+    expect(
+      result.config.channels?.discord?.accounts?.work?.guilds?.["100"]?.channels?.["200"],
+    ).toEqual({});
+    expect(result.config.bindings).toEqual([
+      { agentId: "main", match: { channel: "discord" } },
+      {
+        agentId: "support",
+        match: {
+          channel: "discord",
+          accountId: "work",
+          guildId: "100",
+          peer: { kind: "channel", id: "200" },
+        },
+      },
+    ]);
+  });
+
+  it("removes legacy guild channel agentId when a matching route binding already exists", () => {
+    const normalize = discordDoctor.normalizeCompatibilityConfig;
+    expect(normalize).toBeDefined();
+    if (!normalize) {
+      return;
+    }
+
+    const existingBinding = {
+      agentId: "video",
+      match: {
+        channel: "discord",
+        guildId: "100",
+        peer: { kind: "channel", id: "200" },
+      },
+    };
+    const result = normalize({
+      cfg: {
+        channels: {
+          discord: {
+            guilds: {
+              "100": {
+                channels: {
+                  "200": {
+                    agentId: "video",
+                  },
+                },
+              },
+            },
+          },
+        },
+        bindings: [existingBinding],
+      } as never,
+    });
+
+    expect(result.changes).toEqual([
+      "Removed channels.discord.guilds.100.channels.200.agentId; a matching top-level bindings[] route already exists for Discord channel 200.",
+    ]);
+    expect(result.config.channels?.discord?.guilds?.["100"]?.channels?.["200"]).toEqual({});
+    expect(result.config.bindings).toEqual([existingBinding]);
+  });
+
   it("finds numeric id entries across discord scopes", () => {
     const cfg = {
       channels: {
