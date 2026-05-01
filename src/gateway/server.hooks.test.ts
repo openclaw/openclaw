@@ -625,6 +625,57 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("scopes /hooks/agent idempotency replay by thread", async () => {
+    testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOk();
+      const idempotencyKey = "hook-idem-thread-scope";
+
+      const first = await postHook(
+        port,
+        "/hooks/agent",
+        {
+          message: "Review-GRO-XXX",
+          name: "Symphony",
+          channel: "telegram",
+          to: "-1003800016870",
+          thread: "15961",
+        },
+        { headers: { "Idempotency-Key": idempotencyKey } },
+      );
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as { runId?: string };
+      await waitForSystemEvent(5_000);
+      drainSystemEvents(resolveMainKey());
+
+      const second = await postHook(
+        port,
+        "/hooks/agent",
+        {
+          message: "Review-GRO-XXX",
+          name: "Symphony",
+          channel: "telegram",
+          to: "-1003800016870",
+          thread: "14506",
+        },
+        { headers: { "Idempotency-Key": idempotencyKey } },
+      );
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as { runId?: string };
+      await waitForSystemEvent(5_000);
+
+      expect(firstBody.runId).toBeTruthy();
+      expect(secondBody.runId).toBeTruthy();
+      expect(secondBody.runId).not.toBe(firstBody.runId);
+      expect(cronIsolatedRun).toHaveBeenCalledTimes(2);
+      const secondCall = (cronIsolatedRun.mock.calls[1] as unknown[] | undefined)?.[0] as
+        | { job?: { delivery?: { threadId?: string | number } } }
+        | undefined;
+      expect(secondCall?.job?.delivery?.threadId).toBe("14506");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("dedupes hook retries even when trusted-proxy client IP changes", async () => {
     testState.hooksConfig = { enabled: true, token: HOOK_TOKEN };
     const configPath = process.env.OPENCLAW_CONFIG_PATH;

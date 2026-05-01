@@ -259,7 +259,7 @@ Query-string tokens are rejected.
       -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4"}'
     ```
 
-    Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `fallbacks`, `thinking`, `timeoutSeconds`.
+    Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `thread`, `model`, `fallbacks`, `thinking`, `timeoutSeconds`. Use `thread` with threaded destinations such as Telegram forum topics; it maps to `delivery.threadId` for the dispatched cron job.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
