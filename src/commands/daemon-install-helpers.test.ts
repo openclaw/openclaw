@@ -255,6 +255,7 @@ describe("buildGatewayInstallPlan", () => {
       env: isolatedPlanEnv(),
       port: 3000,
       runtime: "node",
+      platform: "linux",
       config: {
         env: {
           HOME: "/Users/config",
@@ -352,6 +353,7 @@ describe("buildGatewayInstallPlan", () => {
       }),
       port: 3000,
       runtime: "node",
+      platform: "linux",
       config: {
         channels: {
           discord: {
@@ -507,9 +509,13 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     });
 
     const plan = await buildGatewayInstallPlan({
-      env: { HOME: tmpDir },
+      env: {
+        HOME: tmpDir,
+        OPENCLAW_GATEWAY_AUTH_TOKEN: "shell-token",
+      },
       port: 3000,
       runtime: "node",
+      platform: "linux",
       config: {
         env: {
           vars: {
@@ -527,6 +533,40 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
       "BRAVE_API_KEY,MY_KEY,OPENROUTER_API_KEY",
     );
+  });
+
+  it("keeps durable managed env values for the launchd owner-only env file", async () => {
+    await writeStateDirDotEnv("OPENCLAW_GATEWAY_AUTH_TOKEN=dotenv-token\n", {
+      stateDir: path.join(tmpDir, ".openclaw"),
+    });
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "darwin",
+      config: {
+        env: {
+          vars: {
+            SERVICE_API_KEY: "config-service-key",
+          },
+        },
+      },
+    });
+
+    expect(plan.environment.OPENCLAW_GATEWAY_AUTH_TOKEN).toBe("dotenv-token");
+    expect(plan.environment.SERVICE_API_KEY).toBe("config-service-key");
+    expect(plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS).toBe(
+      "OPENCLAW_GATEWAY_AUTH_TOKEN,SERVICE_API_KEY",
+    );
+    expect(plan.environment.HOME).toBe("/from-service");
+    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
   });
 
   it("works when .env file does not exist", async () => {
@@ -759,6 +799,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       env: { HOME: tmpDir },
       port: 3000,
       runtime: "node",
+      platform: "linux",
       existingEnvironment: {
         TAVILY_API_KEY: "old-inline-value",
         CUSTOM_TOOL_HOME: "/Users/test/.custom-tool",
@@ -788,6 +829,7 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
       },
       port: 3000,
       runtime: "node",
+      platform: "linux",
       authStore: {
         version: 1,
         profiles: {

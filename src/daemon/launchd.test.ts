@@ -479,11 +479,16 @@ describe("launchd install", () => {
     const env = createDefaultLaunchdEnv();
     const tmpDir = "/Users/test/.openclaw/tmp";
     const apiKey = "secret-api-key";
+    const managedKeys = "OPENAI_API_KEY";
     await installLaunchAgent({
       env,
       stdout: new PassThrough(),
       programArguments: defaultProgramArguments,
-      environment: { TMPDIR: tmpDir, OPENAI_API_KEY: apiKey },
+      environment: {
+        TMPDIR: tmpDir,
+        OPENAI_API_KEY: apiKey,
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: managedKeys,
+      },
     });
 
     const plistPath = resolveLaunchAgentPlistPath(env);
@@ -497,6 +502,7 @@ describe("launchd install", () => {
     const envFile = state.files.get(envFilePath) ?? "";
     expect(envFile).toContain(`export TMPDIR='${tmpDir}'`);
     expect(envFile).toContain(`export OPENAI_API_KEY='${apiKey}'`);
+    expect(envFile).toContain(`export OPENCLAW_SERVICE_MANAGED_ENV_KEYS='${managedKeys}'`);
     expect(state.fileModes.get(envFilePath)).toBe(0o600);
     expect(state.fileModes.get(wrapperPath)).toBe(0o700);
     expect(state.dirModes.get("/Users/test/.openclaw/service-env")).toBe(0o700);
@@ -506,10 +512,12 @@ describe("launchd install", () => {
     expect(command?.environment).toMatchObject({
       TMPDIR: tmpDir,
       OPENAI_API_KEY: apiKey,
+      OPENCLAW_SERVICE_MANAGED_ENV_KEYS: managedKeys,
     });
     expect(command?.environmentValueSources).toMatchObject({
       TMPDIR: "file",
       OPENAI_API_KEY: "file",
+      OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "file",
     });
   });
 

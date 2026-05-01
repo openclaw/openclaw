@@ -16,6 +16,7 @@ import {
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
+  MANAGED_SERVICE_ENV_KEYS_VAR,
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "../daemon/service-managed-env.js";
@@ -321,6 +322,7 @@ function resolveGatewayInstallWorkingDirectory(params: {
 
 async function buildGatewayInstallEnvironment(params: {
   env: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
   warn?: DaemonInstallWarnFn;
@@ -355,7 +357,19 @@ async function buildGatewayInstallEnvironment(params: {
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {
     omitKeys: Object.keys(params.serviceEnvironment),
   });
-  writeManagedServiceEnvKeysToEnvironment(environment, managedServiceEnvKeys);
+  if (params.platform === "darwin") {
+    if (managedServiceEnvKeys) {
+      for (const key of managedServiceEnvKeys.split(",")) {
+        const value = durableEnvironment[key];
+        if (typeof value === "string" && value.trim()) {
+          environment[key] = value;
+        }
+      }
+      environment[MANAGED_SERVICE_ENV_KEYS_VAR] = managedServiceEnvKeys;
+    }
+  } else {
+    writeManagedServiceEnvKeysToEnvironment(environment, managedServiceEnvKeys);
+  }
   Object.assign(environment, params.serviceEnvironment);
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
@@ -431,6 +445,7 @@ export async function buildGatewayInstallPlan(params: {
     }),
     environment: await buildGatewayInstallEnvironment({
       env: serviceInputEnv,
+      platform,
       config: params.config,
       authStore: params.authStore,
       warn: params.warn,
