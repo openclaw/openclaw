@@ -108,6 +108,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
     expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
+    expect(sweepScript).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
     expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
     const successScenario = sweepScript.slice(
       sweepScript.indexOf("run_success_scenario()"),

@@ -121,6 +121,7 @@ while IFS='|' read -r label spec plugin_id source expectation surface_mode perso
   export KITCHEN_SINK_SOURCE="$source"
   export KITCHEN_SINK_SURFACE_MODE="$surface_mode"
   export KITCHEN_SINK_PERSONALITY="${personality:-}"
+  export OPENCLAW_KITCHEN_SINK_PERSONALITY="${personality:-}"
   case "$expectation" in
   success)
     run_success_scenario

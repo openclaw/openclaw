@@ -1212,6 +1212,21 @@ describe("gateway agent handler", () => {
     );
   });
 
+  it("forwards one-shot bundle MCP cleanup from agent RPC into the runner", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "cleanup probe",
+      sessionKey: "agent:main:subagent:cleanup-probe",
+      idempotencyKey: "test-idem-agent-cleanup-bundle-mcp",
+      cleanupBundleMcpOnRunEnd: true,
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.cleanupBundleMcpOnRunEnd).toBe(true);
+  });
+
   it.each(
     (["channel", "replyChannel"] as const).flatMap((field) =>
       (["heartbeat", "cron", "webhook"] as const).map((channel) => [field, channel] as const),
