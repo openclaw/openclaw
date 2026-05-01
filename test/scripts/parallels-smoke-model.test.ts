@@ -88,7 +88,7 @@ describe("Parallels smoke model selection", () => {
 
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL");
-    expect(providerAuth).toContain("openai/gpt-5.5");
+    expect(providerAuth).toContain("openai/gpt-5.4");
     expect(providerAuth).toContain("openai/gpt-4.1-mini");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
@@ -227,7 +227,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.5",
+      modelId: "openai/gpt-5.4",
     });
 
     expect(
