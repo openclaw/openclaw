@@ -12,7 +12,10 @@ import { getActivePluginRegistry } from "./runtime.js";
 export async function runTrustedToolPolicies(
   event: PluginHookBeforeToolCallEvent,
   ctx: PluginHookToolContext,
-  options?: { config?: OpenClawConfig },
+  options?: {
+    config?: OpenClawConfig;
+    deriveEvent?: (params: Record<string, unknown>) => Partial<PluginHookBeforeToolCallEvent>;
+  },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
   const policies = getActivePluginRegistry()?.trustedToolPolicies ?? [];
   let adjustedParams = event.params;
@@ -31,6 +34,15 @@ export async function runTrustedToolPolicies(
       }
     }
     return resolvedSessionConfig;
+  };
+  const { derivedPaths: _derivedPaths, ...eventWithoutDerivedPaths } = event;
+  const buildEvent = (params: Record<string, unknown>): PluginHookBeforeToolCallEvent => {
+    const derived = options?.deriveEvent?.(params) ?? {};
+    return {
+      ...eventWithoutDerivedPaths,
+      params,
+      ...derived,
+    };
   };
   for (const registration of policies) {
     const policyCtx: PluginHookToolContext = {
@@ -59,10 +71,7 @@ export async function runTrustedToolPolicies(
         return pluginState[normalizedNamespace] as T | undefined;
       },
     };
-    const decision = await registration.policy.evaluate(
-      { ...event, params: adjustedParams },
-      policyCtx,
-    );
+    const decision = await registration.policy.evaluate(buildEvent(adjustedParams), policyCtx);
     if (!decision) {
       continue;
     }
