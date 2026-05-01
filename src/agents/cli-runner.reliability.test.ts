@@ -33,6 +33,26 @@ vi.mock("../tts/tts.js", () => ({
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
+
+type HookRunnerGlobalStateForTest = {
+  hookRunner: unknown;
+  registry: unknown;
+};
+
+function setHookRunnerForTest(hookRunner: unknown): void {
+  mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const state = (globalStore[hookRunnerGlobalStateKey] as
+    | HookRunnerGlobalStateForTest
+    | undefined) ?? {
+    hookRunner: null,
+    registry: null,
+  };
+  state.hookRunner = hookRunner;
+  state.registry = null;
+  globalStore[hookRunnerGlobalStateKey] = state;
+}
 
 function createSessionFile(params?: { history?: Array<{ role: "user"; content: string }> }) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-hooks-"));
@@ -127,6 +147,7 @@ describe("runCliAgent reliability", () => {
   afterEach(() => {
     replyRunTesting.resetReplyRunRegistry();
     mockGetGlobalHookRunner.mockReset();
+    setHookRunnerForTest(null);
     vi.unstubAllEnvs();
   });
 
@@ -217,7 +238,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     supervisorSpawnMock.mockClear();
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -472,7 +493,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile();
 
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -572,7 +593,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -600,7 +621,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
 
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -644,7 +665,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const { dir, sessionFile } = createSessionFile({
       history: Array.from({ length: MAX_CLI_SESSION_HISTORY_MESSAGES + 5 }, (_, index) => ({
         role: "user" as const,
@@ -725,7 +746,7 @@ describe("runCliAgent reliability", () => {
       runLlmOutput: vi.fn(async () => undefined),
       runAgentEnd: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
     const historySpy = vi.spyOn(sessionHistoryModule, "loadCliSessionHistoryMessages");
 
     supervisorSpawnMock.mockResolvedValueOnce(
@@ -791,7 +812,7 @@ describe("runCliAgent reliability", () => {
       runBeforePromptBuild: vi.fn(async () => ({ prependContext: "hook context" })),
       runBeforeAgentStart: vi.fn(async () => undefined),
     };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+    setHookRunnerForTest(hookRunner);
 
     try {
       const context = await prepareCliRunContext({

@@ -43,6 +43,7 @@ title: "Tests"
 - `pnpm test:docker:openwebui`: Starts Dockerized OpenClaw + Open WebUI, signs in through Open WebUI, checks `/api/models`, then runs a real proxied chat through `/api/chat/completions`. Requires a usable live model key (for example OpenAI in `~/.profile`), pulls an external Open WebUI image, and is not expected to be CI-stable like the normal unit/e2e suites.
 - `pnpm test:docker:mcp-channels`: Starts a seeded Gateway container and a second client container that spawns `openclaw mcp serve`, then verifies routed conversation discovery, transcript reads, attachment metadata, live event queue behavior, outbound send routing, and Claude-style channel + permission notifications over the real stdio bridge. The Claude notification assertion reads the raw stdio MCP frames directly so the smoke reflects what the bridge actually emits.
 - `pnpm test:docker:upgrade-survivor`: Installs the packed OpenClaw tarball over a dirty old-user fixture, runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks that agents, channel config, plugin allowlists, workspace/session files, stale plugin runtime-deps state, startup, and RPC status survive.
+- `pnpm test:docker:published-upgrade-survivor`: Installs `openclaw@latest` by default over the dirty old-user fixture, updates that published install to the packed OpenClaw tarball, then runs the same doctor, Gateway startup, and RPC survival assertions. Override the baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`.
 
 ## Local PR gate
 

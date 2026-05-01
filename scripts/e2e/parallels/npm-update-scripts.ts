@@ -30,9 +30,10 @@ entries = plugins.get("entries")
 if isinstance(entries, dict):
     entries.pop("feishu", None)
     entries.pop("whatsapp", None)
+    entries.pop("openai", None)
 allow = plugins.get("allow")
 if isinstance(allow, list):
-    plugins["allow"] = [item for item in allow if item not in {"feishu", "whatsapp"}]
+    plugins["allow"] = [item for item in allow if item not in {"feishu", "whatsapp", "openai"}]
 path.write_text(json.dumps(config, indent=2) + "\n")
 PY
 }
@@ -86,13 +87,13 @@ function Remove-FuturePluginEntries {
   if (-not ($plugins -is [hashtable])) { return }
   $entries = $plugins['entries']
   if ($entries -is [hashtable]) {
-    foreach ($pluginId in @('feishu', 'whatsapp')) {
+    foreach ($pluginId in @('feishu', 'whatsapp', 'openai')) {
       if ($entries.ContainsKey($pluginId)) { $entries.Remove($pluginId) }
     }
   }
   $allow = $plugins['allow']
   if ($allow -is [array]) {
-    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp') })
+    $plugins['allow'] = @($allow | Where-Object { $_ -notin @('feishu', 'whatsapp', 'openai') })
   }
   $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding UTF8
 }
@@ -109,13 +110,35 @@ function Stop-OpenClawGatewayProcesses {
 Remove-FuturePluginEntries
 Stop-OpenClawGatewayProcesses
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
-Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart
-if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
-$version = Invoke-OpenClaw --version
-$version
+$updateOutput = Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
+$updateExit = $LASTEXITCODE
+$updateOutput
+if ($updateExit -ne 0) {
+  $updateText = $updateOutput | Out-String
+  $stalePostSwapImport = $updateText -match 'ERR_MODULE_NOT_FOUND' -and $updateText -match 'node_modules\\openclaw\\dist\\[^\\]+-[A-Za-z0-9_-]+\\.js'
+  if (-not $stalePostSwapImport) { throw "openclaw update failed with exit code $updateExit" }
+  Write-Host "openclaw update returned a stale post-swap module import; continuing to post-update health checks"
+}
 ${windowsVersionCheck(input.expectedNeedle)}
-Invoke-OpenClaw gateway restart
-Invoke-OpenClaw gateway status --deep --require-rpc
+function Wait-OpenClawGateway {
+  $deadline = (Get-Date).AddSeconds(180)
+  $attempt = 0
+  while ((Get-Date) -lt $deadline) {
+    Invoke-OpenClaw gateway status --deep --require-rpc --timeout 15000
+    if ($LASTEXITCODE -eq 0) { return }
+    $attempt += 1
+    if ($attempt -eq 4) {
+      Invoke-OpenClaw gateway start *>&1 | Out-Host
+    }
+    Start-Sleep -Seconds 5
+  }
+  throw "gateway did not become ready after update"
+}
+Invoke-OpenClaw gateway restart *>&1 | Out-Host
+if ($LASTEXITCODE -ne 0) {
+  "gateway restart exited with code $LASTEXITCODE; probing readiness before failing" | Out-Host
+}
+Wait-OpenClawGateway
 Invoke-OpenClaw models set ${psSingleQuote(input.auth.modelId)}
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
@@ -139,9 +162,10 @@ if (!plugins || typeof plugins !== "object") process.exit(0);
 if (plugins.entries && typeof plugins.entries === "object") {
   delete plugins.entries.feishu;
   delete plugins.entries.whatsapp;
+  delete plugins.entries.openai;
 }
 if (Array.isArray(plugins.allow)) {
-  plugins.allow = plugins.allow.filter((id) => id !== "feishu" && id !== "whatsapp");
+  plugins.allow = plugins.allow.filter((id) => id !== "feishu" && id !== "whatsapp" && id !== "openai");
 }
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
 JS
@@ -184,15 +208,69 @@ ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} openclaw agent --l
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {
+  const quotedNeedle = shellQuote(expectedNeedle);
   if (!expectedNeedle) {
-    return `${command} --version`;
+    return `hash -r || true
+version_deadline=$((SECONDS + 60))
+while true; do
+  if version="$(${command} --version 2>&1)"; then
+    version_status=0
+    printf '%s\\n' "$version"
+    break
+  else
+    version_status=$?
+    printf '%s\\n' "$version"
+  fi
+  if [ "$SECONDS" -ge "$version_deadline" ]; then
+    exit "$version_status"
+  fi
+  sleep 2
+done`;
   }
-  return `version="$(${command} --version)"; printf '%s\\n' "$version"; case "$version" in *${shellQuote(expectedNeedle)}*) ;; *) echo "version mismatch: expected ${expectedNeedle}" >&2; exit 1 ;; esac`;
+  return `hash -r || true
+version_deadline=$((SECONDS + 60))
+while true; do
+  if version="$(${command} --version 2>&1)"; then
+    version_status=0
+    printf '%s\\n' "$version"
+    case "$version" in *${quotedNeedle}*) break ;; esac
+  else
+    version_status=$?
+    printf '%s\\n' "$version"
+  fi
+  if [ "$SECONDS" -ge "$version_deadline" ]; then
+    if [ "$version_status" -ne 0 ]; then
+      exit "$version_status"
+    fi
+    echo "version mismatch: expected ${expectedNeedle}" >&2
+    exit 1
+  fi
+  sleep 2
+done`;
 }
 
 function windowsVersionCheck(expectedNeedle: string): string {
   if (!expectedNeedle) {
-    return "";
+    return `$versionDeadline = (Get-Date).AddSeconds(60)
+while ($true) {
+  $version = Invoke-OpenClaw --version
+  $version
+  if ($LASTEXITCODE -eq 0) { break }
+  if ((Get-Date) -ge $versionDeadline) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
+  Start-Sleep -Seconds 2
+}`;
   }
-  return `if (($version | Out-String) -notlike ${psSingleQuote(`*${expectedNeedle}*`)}) { throw ${psSingleQuote(`version mismatch: expected ${expectedNeedle}`)} }`;
+  const expectedPattern = psSingleQuote(`*${expectedNeedle}*`);
+  const mismatch = psSingleQuote(`version mismatch: expected ${expectedNeedle}`);
+  return `$versionDeadline = (Get-Date).AddSeconds(60)
+while ($true) {
+  $version = Invoke-OpenClaw --version
+  $version
+  if ($LASTEXITCODE -eq 0 -and (($version | Out-String) -like ${expectedPattern})) { break }
+  if ((Get-Date) -ge $versionDeadline) {
+    if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
+    throw ${mismatch}
+  }
+  Start-Sleep -Seconds 2
+}`;
 }

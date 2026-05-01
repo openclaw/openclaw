@@ -72,6 +72,10 @@ describe("collectAppcastSparkleVersionErrors", () => {
 });
 
 describe("packed CLI smoke", () => {
+  it("keeps generated dynamic imports opaque to tsx's source lexer", () => {
+    expect(readFileSync("scripts/release-check.ts", "utf8")).not.toContain("import(");
+  });
+
   it("keeps the expected packaged CLI smoke command list", () => {
     expect(PACKED_CLI_SMOKE_COMMANDS).toEqual([
       ["--help"],
@@ -172,6 +176,7 @@ describe("workspace bootstrap smoke", () => {
       TMPDIR: "/tmp/original-tmp",
       OPENCLAW_NO_ONBOARD: "1",
       OPENCLAW_SUPPRESS_NOTES: "1",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       AWS_EC2_METADATA_DISABLED: "true",
       AWS_SHARED_CREDENTIALS_FILE: "/tmp/bootstrap-home/.aws/credentials",

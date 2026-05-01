@@ -354,10 +354,10 @@ jobs:
               docker_lanes="npm-onboard-channel-agent gateway-network config-reload"
               ;;
             package)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor bundled-channel-deps-compat plugins-offline plugin-update"
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor bundled-channel-deps-compat plugins-offline plugin-update"
               ;;
             product)
-              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor bundled-channel-deps-compat plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
+              docker_lanes="npm-onboard-channel-agent doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor bundled-channel-deps-compat plugins plugin-update mcp-channels cron-mcp-cleanup openai-web-search-minimal openwebui"
               include_openwebui=true
               ;;
             full)

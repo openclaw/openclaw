@@ -148,6 +148,15 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     route: { id: "sessions" },
   },
   {
+    commandPath: ["commitments"],
+    policy: {
+      ensureCliPath: false,
+      routeConfigGuard: "when-suppressed",
+      loadPlugins: "never",
+      networkProxy: "bypass",
+    },
+  },
+  {
     commandPath: ["agents", "list"],
     // Text and JSON output are derived from config plus read-only channel
     // metadata, so the route should not preload bundled plugin runtimes.

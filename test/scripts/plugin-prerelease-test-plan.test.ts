@@ -113,10 +113,10 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
-      successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"'),
-    );
     expect(successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"')).toBeLessThan(
+      successScenario.indexOf("configure_kitchen_sink_runtime"),
+    );
+    expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
       successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
     );
     expect(sweepScript).toContain("run_failure_scenario");
