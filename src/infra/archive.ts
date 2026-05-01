@@ -132,10 +132,13 @@ export function resolveArchiveKind(filePath: string): ArchiveKind | null {
 }
 
 type ResolvePackedRootDirOptions = {
-  rootMarkers?: string[];
+  rootMarkers?: readonly string[];
 };
 
-async function hasPackedRootMarker(extractDir: string, rootMarkers: string[]): Promise<boolean> {
+async function hasPackedRootMarker(
+  extractDir: string,
+  rootMarkers: readonly string[],
+): Promise<boolean> {
   for (const marker of rootMarkers) {
     const trimmed = marker.trim();
     if (!trimmed) {

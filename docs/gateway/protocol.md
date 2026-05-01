@@ -517,9 +517,24 @@ enumeration of `src/gateway/server-methods/*.ts`.
     sanitized install options without exposing raw secret values.
 - Operators may call `skills.search` and `skills.detail` (`operator.read`) for
   ClawHub discovery metadata.
-- Operators may call `skills.install` (`operator.admin`) in two modes:
+- Operators may call `skills.upload.begin`, `skills.upload.chunk`, and
+  `skills.upload.commit` (`operator.admin`) to stage a private skill archive
+  before installing it.
+  - `skills.upload.begin({ kind: "skill-archive", slug, sizeBytes, sha256?, force?, idempotencyKey? })`
+    creates an upload bound to that slug and force value.
+  - `skills.upload.chunk({ uploadId, offset, dataBase64 })` appends bytes at
+    the exact decoded offset.
+  - `skills.upload.commit({ uploadId, sha256? })` verifies the final size and
+    SHA-256. Commit only finalizes the upload; it does not install the skill.
+  - Uploaded skill archives are zip archives containing a `SKILL.md` root. The
+    archive's internal directory name never selects the install target.
+- Operators may call `skills.install` (`operator.admin`) in three modes:
   - ClawHub mode: `{ source: "clawhub", slug, version?, force? }` installs a
     skill folder into the default agent workspace `skills/` directory.
+  - Upload mode: `{ source: "upload", uploadId, slug, force?, sha256?, timeoutMs? }`
+    installs a committed upload into the default agent workspace `skills/<slug>`
+    directory. The slug and force value must match the original
+    `skills.upload.begin` request.
   - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
