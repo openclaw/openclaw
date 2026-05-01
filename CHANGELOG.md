@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Voice Call/Twilio: send notify-mode initial TwiML directly in the outbound create-call request while keeping conversation and pre-connect DTMF calls webhook-driven, so one-shot notify calls do not depend on a first-answer webhook fetch. Supersedes #72758. Thanks @tyshepps.
 - Discord/Slack: defer status-reaction cleanup until run finalization so queued, thinking, tool, and terminal reactions no longer flicker during normal progress updates. (#75582)
 - Discord/voice: rerun configured voice auto-join after Discord gateway RESUMED events and ignore already-destroyed stale voice connections during reconnect cleanup, so health-monitor account restarts can rejoin configured channels. Fixes #40665. Thanks @liz709.
 - Discord/voice: lengthen the default voice join Ready wait, add configurable `voice.connectTimeoutMs`/`voice.reconnectGraceMs`, and warn before destroying unrecovered disconnected sessions so slow Discord voice handshakes and reconnects no longer fail silently. Fixes #63098; refs #39825 and #65039. Thanks @darealgege, @kzicherman, and @ayochim.
