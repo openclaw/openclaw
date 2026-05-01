@@ -12,6 +12,16 @@ export type DiscordChannelAudienceAccessGroup = {
   membership?: "canViewChannel";
 };
 
-export type AccessGroupConfig = DiscordChannelAudienceAccessGroup;
+export type MessageSendersAccessGroup = {
+  /**
+   * Static sender allowlists that can be referenced by any message channel via
+   * accessGroup:<name>.
+   */
+  type: "message.senders";
+  /** Sender entries by channel id, plus optional "*" entries shared by all channels. */
+  members: Record<string, string[]>;
+};
+
+export type AccessGroupConfig = DiscordChannelAudienceAccessGroup | MessageSendersAccessGroup;
 
 export type AccessGroupsConfig = Record<string, AccessGroupConfig>;

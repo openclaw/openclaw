@@ -105,12 +105,16 @@ function resolveMemberChannelPermissionBits(params: {
       permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
     }
   }
+  let roleDeny = 0n;
+  let roleAllow = 0n;
   for (const overwrite of overwrites) {
     if (params.member.roles?.includes(overwrite.id)) {
-      permissions = removePermissionBits(permissions, overwrite.deny ?? "0");
-      permissions = addPermissionBits(permissions, overwrite.allow ?? "0");
+      roleDeny = addPermissionBits(roleDeny, overwrite.deny ?? "0");
+      roleAllow = addPermissionBits(roleAllow, overwrite.allow ?? "0");
     }
   }
+  permissions = permissions & ~roleDeny;
+  permissions = permissions | roleAllow;
   for (const overwrite of overwrites) {
     if (overwrite.id === params.userId) {
       permissions = removePermissionBits(permissions, overwrite.deny ?? "0");

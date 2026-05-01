@@ -1,3 +1,4 @@
+import { expandAllowFromWithAccessGroups } from "openclaw/plugin-sdk/command-auth";
 import { resolveCommandAuthorizedFromAuthorizers } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
@@ -6,7 +7,7 @@ import {
   type DmGroupAccessDecision,
 } from "openclaw/plugin-sdk/security-runtime";
 import type { RequestClient } from "../internal/discord.js";
-import { resolveDiscordDmAccessGroupEntries } from "./access-groups.js";
+import { createDiscordAccessGroupMembershipResolver } from "./access-groups.js";
 import { normalizeDiscordAllowList, resolveDiscordAllowListMatch } from "./allow-list.js";
 
 const DISCORD_ALLOW_LIST_PREFIXES = ["discord:", "user:", "pk:"];
@@ -50,11 +51,24 @@ async function expandAllowFromWithDiscordAccessGroups(params: {
   token?: string;
   rest?: RequestClient;
 }) {
-  const matchedGroups = await resolveDiscordDmAccessGroupEntries(params);
-  if (matchedGroups.length === 0) {
-    return params.allowFrom;
-  }
-  return [...params.allowFrom, `discord:${params.sender.id}`];
+  return await expandAllowFromWithAccessGroups({
+    cfg: params.cfg,
+    allowFrom: params.allowFrom,
+    channel: "discord",
+    accountId: params.accountId,
+    senderId: params.sender.id,
+    senderAllowEntry: `discord:${params.sender.id}`,
+    isSenderAllowed: (senderId, allowFrom) =>
+      resolveSenderAllowMatch({
+        allowEntries: allowFrom,
+        sender: { id: senderId },
+        allowNameMatching: false,
+      }).allowed,
+    resolveMembership: createDiscordAccessGroupMembershipResolver({
+      token: params.token,
+      rest: params.rest,
+    }),
+  });
 }
 
 export async function resolveDiscordDmCommandAccess(params: {

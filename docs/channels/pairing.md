@@ -47,6 +47,32 @@ access; they do not add more owners.
 
 Supported channels: `bluebubbles`, `discord`, `feishu`, `googlechat`, `imessage`, `irc`, `line`, `matrix`, `mattermost`, `msteams`, `nextcloud-talk`, `nostr`, `openclaw-weixin`, `signal`, `slack`, `synology-chat`, `telegram`, `twitch`, `whatsapp`, `zalo`, `zalouser`.
 
+### Reusable sender groups
+
+Use top-level `accessGroups` when the same trusted sender set should apply to multiple message channels or to both DM and group allowlists. Static sender groups use `type: "message.senders"` and list members in each channel's normal `allowFrom` syntax.
+
+```json5
+{
+  accessGroups: {
+    operators: {
+      type: "message.senders",
+      members: {
+        "*": ["global-owner-id"],
+        discord: ["discord:123456789012345678"],
+        telegram: ["987654321"],
+        whatsapp: ["+15551234567"],
+      },
+    },
+  },
+  channels: {
+    telegram: { dmPolicy: "allowlist", allowFrom: ["accessGroup:operators"] },
+    whatsapp: { groupPolicy: "allowlist", groupAllowFrom: ["accessGroup:operators"] },
+  },
+}
+```
+
+The `"*"` member list is shared by all message channels. Channel-specific lists are checked with that channel's own sender matching rules.
+
 ### Where the state lives
 
 Stored under `~/.openclaw/credentials/`:

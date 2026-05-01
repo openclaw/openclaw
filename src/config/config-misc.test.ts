@@ -88,6 +88,29 @@ describe("accessGroups config", () => {
 
     expect(result.success).toBe(false);
   });
+
+  it("accepts message sender access groups for any channel", () => {
+    const result = OpenClawSchema.safeParse({
+      accessGroups: {
+        owners: {
+          type: "message.senders",
+          members: {
+            "*": ["global-owner"],
+            telegram: ["12345"],
+            discord: ["discord:67890"],
+          },
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "allowlist",
+          allowFrom: ["accessGroup:owners"],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
 });
 
 describe("plugins.slots.contextEngine", () => {

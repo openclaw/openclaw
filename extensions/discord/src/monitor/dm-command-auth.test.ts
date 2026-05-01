@@ -127,6 +127,33 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(result.commandAuthorized).toBe(true);
   });
 
+  it("authorizes allowlist DMs from a generic message sender access group", async () => {
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["accessGroup:owners"],
+      sender,
+      allowNameMatching: false,
+      useAccessGroups: true,
+      cfg: {
+        accessGroups: {
+          owners: {
+            type: "message.senders",
+            members: {
+              discord: ["discord:123"],
+              telegram: ["987"],
+            },
+          },
+        },
+      },
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(canViewDiscordGuildChannelMock).not.toHaveBeenCalled();
+    expect(result.decision).toBe("allow");
+    expect(result.commandAuthorized).toBe(true);
+  });
+
   it("fails closed when a Discord channel audience access group lookup rejects", async () => {
     canViewDiscordGuildChannelMock.mockRejectedValueOnce(new Error("missing intent"));
 

@@ -452,6 +452,29 @@ Example:
   <Tab title="DM access groups">
     Discord DMs can use dynamic `accessGroup:<name>` entries in `channels.discord.allowFrom`.
 
+    Access group names are shared across message channels. Use `type: "message.senders"` for a static group whose members are expressed in each channel's normal `allowFrom` syntax, or `type: "discord.channelAudience"` when a Discord channel's current `ViewChannel` audience should define membership dynamically.
+
+```json5
+{
+  accessGroups: {
+    operators: {
+      type: "message.senders",
+      members: {
+        "*": ["global-owner-id"],
+        discord: ["discord:123456789012345678"],
+        telegram: ["987654321"],
+      },
+    },
+  },
+  channels: {
+    discord: {
+      dmPolicy: "allowlist",
+      allowFrom: ["accessGroup:operators"],
+    },
+  },
+}
+```
+
     A Discord text channel has no separate member list. `type: "discord.channelAudience"` models membership as: the DM sender is a member of the configured guild and currently has effective `ViewChannel` permission on the configured channel after role and channel overwrites are applied.
 
     Example: allow anyone who can see `#maintainers` to DM the bot, while keeping DMs closed to everyone else.

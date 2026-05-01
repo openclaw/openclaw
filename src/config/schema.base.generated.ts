@@ -1310,6 +1310,31 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               required: ["type", "guildId", "channelId"],
               additionalProperties: false,
             },
+            {
+              type: "object",
+              properties: {
+                type: {
+                  type: "string",
+                  const: "message.senders",
+                },
+                members: {
+                  type: "object",
+                  propertyNames: {
+                    type: "string",
+                    minLength: 1,
+                  },
+                  additionalProperties: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      minLength: 1,
+                    },
+                  },
+                },
+              },
+              required: ["type", "members"],
+              additionalProperties: false,
+            },
           ],
         },
       },
