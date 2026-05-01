@@ -54,7 +54,7 @@ import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { formatUserTime, resolveUserTimeFormat, resolveUserTimezone } from "../date-time.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
-import { coerceToFailoverError } from "../failover-error.js";
+import { coerceToFailoverError, describeFailoverError } from "../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../heartbeat-system-prompt.js";
 import {
   applyAuthHeaderOverride,
@@ -357,7 +357,11 @@ function classifyCompactionFallbackResult(
   if (!reason) {
     return null;
   }
-  const failoverError = coerceToFailoverError(new Error(reason), { provider, model });
+  const failureError = Object.assign(new Error(result.failure?.rawError ?? reason), {
+    status: result.failure?.status,
+    code: result.failure?.code,
+  });
+  const failoverError = coerceToFailoverError(failureError, { provider, model });
   return failoverError ? { error: failoverError } : null;
 }
 
@@ -445,8 +449,9 @@ async function compactEmbeddedPiSessionDirectOnce(
   const authProfileId = resolvedCompactionTarget.authProfileId;
   let thinkLevel: ThinkLevel = params.thinkLevel ?? "off";
   const attemptedThinking = new Set<ThinkLevel>();
-  const fail = (reason: string): EmbeddedPiCompactResult => {
+  const fail = (reason: string, err?: unknown): EmbeddedPiCompactResult => {
     const failureReason = classifyCompactionReason(reason);
+    const failure = err ? describeFailoverError(err) : undefined;
     const detail =
       failureReason === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
     const detailSuffix = detail ? ` detail=${detail}` : "";
@@ -460,6 +465,14 @@ async function compactEmbeddedPiSessionDirectOnce(
       ok: false,
       compacted: false,
       reason,
+      failure: failure
+        ? {
+            reason: failure.reason,
+            status: failure.status,
+            code: failure.code,
+            rawError: failure.rawError ?? failure.message,
+          }
+        : undefined,
     };
   };
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
@@ -523,7 +536,7 @@ async function compactEmbeddedPiSessionDirectOnce(
     }
   } catch (err) {
     const reason = formatErrorMessage(err);
-    return fail(reason);
+    return fail(reason, err);
   }
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -1340,7 +1353,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       reason: formatErrorMessage(err),
       safeguardCancelReason: consumeCompactionSafeguardCancelReason(compactionSessionManager),
     });
-    return fail(reason);
+    return fail(reason, err);
   } finally {
     if (!checkpointSnapshotRetained) {
       await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
