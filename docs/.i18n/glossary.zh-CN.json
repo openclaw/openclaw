@@ -580,6 +580,14 @@
     "target": "测试"
   },
   {
+    "source": "Update and plugin tests",
+    "target": "更新和插件测试"
+  },
+  {
+    "source": "Testing updates and plugins",
+    "target": "更新和插件测试"
+  },
+  {
     "source": "Async Exec Duplicate Completion Investigation",
     "target": "Async Exec Duplicate Completion Investigation"
   },

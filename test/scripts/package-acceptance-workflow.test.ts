@@ -375,7 +375,11 @@ describe("package artifact reuse", () => {
       "package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}",
     );
     expect(workflow).toContain("suite_profile: custom");
-    expect(workflow).toContain("docker_lanes: plugins-offline plugin-update");
+    expect(workflow).toContain(
+      "docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update",
+    );
+    expect(workflow).toContain("published_upgrade_survivor_baselines: release-history");
+    expect(workflow).toContain("published_upgrade_survivor_scenarios: reported-issues");
     expect(workflow).toContain("telegram_mode: mock-openai");
     expect(workflow).toContain(
       "telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating",

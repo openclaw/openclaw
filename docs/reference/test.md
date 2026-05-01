@@ -6,6 +6,7 @@ title: "Tests"
 ---
 
 - Full testing kit (suites, live, Docker): [Testing](/help/testing)
+- Update and plugin package validation: [Testing updates and plugins](/help/testing-updates-plugins)
 
 - `pnpm test:force`: Kills any lingering gateway process holding the default control port, then runs the full Vitest suite with an isolated gateway port so server tests don’t collide with a running instance. Use this when a prior gateway run left port 18789 occupied.
 - `pnpm test:coverage`: Runs the unit suite with V8 coverage (via `vitest.unit.config.ts`). This is a loaded-file unit coverage gate, not whole-repo all-file coverage. Thresholds are 70% lines/functions/statements and 55% branches. Because `coverage.all` is false, the gate measures files loaded by the unit coverage suite instead of treating every split-lane source file as uncovered.
@@ -142,3 +143,4 @@ pnpm test:docker:qr
 
 - [Testing](/help/testing)
 - [Testing live](/help/testing-live)
+- [Testing updates and plugins](/help/testing-updates-plugins)

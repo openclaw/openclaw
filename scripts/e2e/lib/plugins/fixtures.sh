@@ -32,6 +32,16 @@ write_fixture_plugin_with_cli() {
   node scripts/e2e/lib/fixture.mjs plugin-cli "$dir" "$id" "$version" "$method" "$name" "$cli_root" "$cli_output"
 }
 
+write_fixture_plugin_with_vendored_dependency() {
+  local dir="$1"
+  local id="$2"
+  local version="$3"
+  local method="$4"
+  local name="$5"
+
+  node scripts/e2e/lib/fixture.mjs plugin-vendored-dep "$dir" "$id" "$version" "$method" "$name"
+}
+
 write_fixture_manifest() {
   local file="$1"
   local id="$2"

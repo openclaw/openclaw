@@ -144,6 +144,49 @@ describe("package dist inventory", () => {
     });
   });
 
+  it("omits packaged extension node_modules while keeping extension runtime files", async () => {
+    await withTempDir(
+      { prefix: "openclaw-dist-inventory-extension-node-modules-" },
+      async (packageRoot) => {
+        const extensionRuntime = path.join(
+          packageRoot,
+          "dist",
+          "extensions",
+          "demo",
+          "runtime-api.js",
+        );
+        const rootSdkAliasPackage = path.join(
+          packageRoot,
+          "dist",
+          "extensions",
+          "node_modules",
+          "openclaw",
+          "package.json",
+        );
+        const extensionDependencyPackage = path.join(
+          packageRoot,
+          "dist",
+          "extensions",
+          "demo",
+          "node_modules",
+          "left-pad",
+          "package.json",
+        );
+
+        await fs.mkdir(path.dirname(extensionRuntime), { recursive: true });
+        await fs.mkdir(path.dirname(rootSdkAliasPackage), { recursive: true });
+        await fs.mkdir(path.dirname(extensionDependencyPackage), { recursive: true });
+        await fs.writeFile(extensionRuntime, "export {};\n", "utf8");
+        await fs.writeFile(rootSdkAliasPackage, "{}", "utf8");
+        await fs.writeFile(extensionDependencyPackage, "{}", "utf8");
+
+        await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+          "dist/extensions/demo/runtime-api.js",
+        ]);
+      },
+    );
+  });
+
   it("reports runtime-created install staging dirs during installed dist verification", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
       const realFile = path.join(packageRoot, "dist", "real-AbC123.js");

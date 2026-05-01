@@ -422,17 +422,23 @@ Supported candidate sources:
 - `source=url`: download an HTTPS `.tgz` with required `package_sha256`
 - `source=artifact`: reuse a `.tgz` uploaded by another GitHub Actions run
 
-`OpenClaw Release Checks` runs Package Acceptance with `source=ref`,
-`package_ref=<release-ref>`, `suite_profile=custom`,
-`docker_lanes=plugins-offline plugin-update`, and `telegram_mode=mock-openai`.
-The release-path Docker chunks cover the overlapping install, update, and
-plugin-update lanes; Package Acceptance keeps offline plugin fixtures, plugin
-update, and Telegram package QA against the same resolved tarball. It is the
-GitHub-native
+`OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the
+prepared release package artifact, `suite_profile=custom`,
+`docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update`,
+`published_upgrade_survivor_baselines=release-history`,
+`published_upgrade_survivor_scenarios=reported-issues`, and
+`telegram_mode=mock-openai`. Package Acceptance keeps migration, update, stale
+plugin dependency cleanup, offline plugin fixtures, plugin update, and Telegram
+package QA against the same resolved tarball. It is the GitHub-native
 replacement for most of the package/update coverage that previously required
 Parallels. Cross-OS release checks still matter for OS-specific onboarding,
 installer, and platform behavior, but package/update product validation should
 prefer Package Acceptance.
+
+The canonical checklist for update and plugin validation is
+[Testing updates and plugins](/help/testing-updates-plugins). Use it when
+deciding which local, Docker, Package Acceptance, or release-check lane proves a
+plugin install/update, doctor cleanup, or published-package migration change.
 
 Legacy package-acceptance leniency is intentionally time boxed. Packages through
 `2026.4.25` may use the compatibility path for metadata gaps already published

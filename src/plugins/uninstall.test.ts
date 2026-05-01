@@ -17,6 +17,12 @@ import {
   uninstallPlugin,
 } from "./uninstall.js";
 
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../process/exec.js", () => ({
+  runCommandWithTimeout: runCommandWithTimeoutMock,
+}));
+
 type PluginConfig = NonNullable<OpenClawConfig["plugins"]>;
 type PluginInstallRecord = NonNullable<PluginConfig["installs"]>[string];
 
@@ -668,6 +674,15 @@ describe("uninstallPlugin", () => {
   const tempDirs: string[] = [];
 
   beforeEach(async () => {
+    runCommandWithTimeoutMock.mockReset();
+    runCommandWithTimeoutMock.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
     tempDir = await makeTrackedTempDirAsync("uninstall-test", tempDirs);
   });
 
@@ -745,6 +760,112 @@ describe("uninstallPlugin", () => {
 
     const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
     expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    await expect(fs.access(pluginDir)).rejects.toThrow();
+  });
+
+  it("uninstalls npm-managed packages through npm before deleting the package directory", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmRoot = path.join(stateDir, "npm");
+    const pluginDir = path.join(npmRoot, "node_modules", "@openclaw", "kitchen-sink");
+    const hoistedDir = path.join(npmRoot, "node_modules", "is-number");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.mkdir(hoistedDir, { recursive: true });
+    await fs.writeFile(path.join(pluginDir, "package.json"), "{}");
+    await fs.writeFile(path.join(hoistedDir, "package.json"), "{}");
+
+    const plan = planPluginUninstall({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries("openclaw-kitchen-sink-fixture"),
+        installs: {
+          "openclaw-kitchen-sink-fixture": {
+            source: "npm",
+            spec: "@openclaw/kitchen-sink@1.0.0",
+            installPath: pluginDir,
+          },
+        },
+      }),
+      pluginId: "openclaw-kitchen-sink-fixture",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) {
+      throw new Error(plan.error);
+    }
+    expect(plan.directoryRemoval).toEqual({
+      target: pluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "@openclaw/kitchen-sink",
+      },
+    });
+
+    const applied = await applyPluginUninstallDirectoryRemoval(plan.directoryRemoval);
+
+    expect(applied).toEqual({ directoryRemoved: true, warnings: [] });
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      [
+        "npm",
+        "uninstall",
+        "--loglevel=error",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--prefix",
+        npmRoot,
+        "@openclaw/kitchen-sink",
+      ],
+      expect.objectContaining({
+        timeoutMs: 300_000,
+        env: expect.objectContaining({
+          NPM_CONFIG_IGNORE_SCRIPTS: "true",
+          npm_config_package_lock: "true",
+        }),
+      }),
+    );
+    await expect(fs.access(pluginDir)).rejects.toThrow();
+  });
+
+  it("warns and still removes npm package dirs when npm prune cleanup fails", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "registry unavailable",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+    const stateDir = path.join(tempDir, "state");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const npmRoot = path.join(stateDir, "npm");
+    const pluginDir = path.join(npmRoot, "node_modules", "demo-plugin");
+    await fs.mkdir(pluginDir, { recursive: true });
+
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        entries: createSinglePluginEntries("demo-plugin"),
+        installs: {
+          "demo-plugin": {
+            source: "npm",
+            spec: "demo-plugin@1.0.0",
+            installPath: pluginDir,
+          },
+        },
+      }),
+      pluginId: "demo-plugin",
+      deleteFiles: true,
+      extensionsDir,
+    });
+
+    const successfulResult = expectSuccessfulUninstallActions(result, {
+      directory: true,
+    });
+    expect(successfulResult.warnings).toEqual([
+      "Failed to prune npm dependencies for plugin package demo-plugin: registry unavailable",
+    ]);
     await expect(fs.access(pluginDir)).rejects.toThrow();
   });
 
