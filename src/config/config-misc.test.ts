@@ -126,6 +126,36 @@ describe("plugins.slots.contextEngine", () => {
   });
 });
 
+describe("plugins.bundledMode", () => {
+  it.each(["compat", "respect-allow"] as const)("accepts bundledMode=%s", (bundledMode) => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        bundledMode,
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid bundledMode values", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        bundledMode: "invalid",
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts config without bundledMode", () => {
+    const result = OpenClawSchema.safeParse({
+      plugins: {
+        enabled: true,
+        allow: ["brave"],
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("models.pricing", () => {
   it("accepts the model pricing bootstrap toggle", () => {
     for (const enabled of [true, false]) {

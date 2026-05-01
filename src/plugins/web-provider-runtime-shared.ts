@@ -89,7 +89,7 @@ function resolveWebProviderLoadOptions<TEntry>(
       logger: createPluginRuntimeLoaderLogger(),
     },
     {
-      cache: params.cache ?? false,
+      cache: params.cache ?? params.config?.plugins?.bundledMode === "respect-allow",
       activate: params.activate ?? false,
       ...(hasExplicitPluginIdScope(onlyPluginIds) ? { onlyPluginIds } : {}),
     },
@@ -141,7 +141,7 @@ export function resolvePluginWebProviders<TEntry>(
         },
         {
           onlyPluginIds: pluginIds,
-          cache: params.cache ?? false,
+          cache: params.cache ?? params.config?.plugins?.bundledMode === "respect-allow",
           activate: params.activate ?? false,
         },
       ),

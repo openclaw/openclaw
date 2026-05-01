@@ -1,5 +1,6 @@
 import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginsBundledMode } from "../config/types.plugins.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -10,6 +11,7 @@ export type NormalizedPluginsConfig = {
   enabled: boolean;
   allow: string[];
   deny: string[];
+  bundledMode: PluginsBundledMode | undefined;
   loadPaths: string[];
   slots: {
     memory?: string | null;
@@ -150,6 +152,7 @@ export function normalizePluginsConfigWithResolver(
     enabled: config?.enabled !== false,
     allow: normalizeList(config?.allow, normalizePluginId),
     deny: normalizeList(config?.deny, normalizePluginId),
+    bundledMode: config?.bundledMode,
     loadPaths: normalizeList(config?.load?.paths, identityNormalizePluginId),
     slots: {
       memory: memorySlot === undefined ? defaultSlotIdForKey("memory") : memorySlot,

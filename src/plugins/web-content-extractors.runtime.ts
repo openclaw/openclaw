@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
+import {
+  resolveBundledPluginCompatibleLoadValues,
+  resolveCompatModeForBundledMode,
+} from "./activation-context.js";
 import {
   createPluginActivationSource,
   normalizePluginsConfig,
@@ -77,11 +80,14 @@ function resolveEnabledBundledExtractorPlugins(params: {
     workspaceDir: params.workspaceDir,
     onlyPluginIds: params.onlyPluginIds,
     applyAutoEnable: true,
-    compatMode: {
-      allowlist: true,
-      enablement: "always",
-      vitest: true,
-    },
+    compatMode: resolveCompatModeForBundledMode({
+      bundledMode: params.config?.plugins?.bundledMode,
+      compatMode: {
+        allowlist: true,
+        enablement: "always",
+        vitest: true,
+      },
+    }),
     resolveCompatPluginIds: (compatParams) =>
       listWebContentExtractorPluginIds({
         plugins: loadManifestRecords(compatParams.config),

@@ -1,5 +1,8 @@
 import { withActivatedPluginIds } from "./activation-context.js";
-import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
+import {
+  resolveBundledPluginCompatibleActivationInputs,
+  resolveCompatModeForBundledMode,
+} from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   isPluginRegistryLoadInFlight,
@@ -224,11 +227,14 @@ function resolveRuntimeProviderPluginLoadState(
     workspaceDir: base.workspaceDir,
     onlyPluginIds: runtimeRequestedPluginIds,
     applyAutoEnable: params.applyAutoEnable ?? true,
-    compatMode: {
-      allowlist: params.bundledProviderAllowlistCompat,
-      enablement: "allowlist",
-      vitest: params.bundledProviderVitestCompat,
-    },
+    compatMode: resolveCompatModeForBundledMode({
+      bundledMode: base.rawConfig?.plugins?.bundledMode,
+      compatMode: {
+        allowlist: params.bundledProviderAllowlistCompat,
+        enablement: "allowlist",
+        vitest: params.bundledProviderVitestCompat,
+      },
+    }),
     resolveCompatPluginIds: resolveBundledProviderCompatPluginIds,
   });
   const config = params.bundledProviderVitestCompat

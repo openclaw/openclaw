@@ -1,5 +1,6 @@
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginsBundledMode } from "../config/types.plugins.js";
 import {
   withBundledPluginAllowlistCompat,
   withBundledPluginEnablementCompat,
@@ -23,6 +24,22 @@ export type PluginActivationBundledCompatMode = {
   enablement?: "always" | "allowlist";
   vitest?: boolean;
 };
+
+const respectAllowCompatMode: PluginActivationBundledCompatMode = {
+  allowlist: false,
+  enablement: "allowlist",
+  vitest: false,
+};
+
+export function resolveCompatModeForBundledMode(params: {
+  bundledMode?: PluginsBundledMode;
+  compatMode: PluginActivationBundledCompatMode;
+}): PluginActivationBundledCompatMode {
+  if (params.bundledMode === "respect-allow") {
+    return respectAllowCompatMode;
+  }
+  return params.compatMode;
+}
 
 export type PluginActivationInputs = {
   rawConfig?: OpenClawConfig;

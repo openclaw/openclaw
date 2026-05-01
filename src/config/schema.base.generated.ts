@@ -23956,6 +23956,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
           },
+          bundledMode: {
+            type: "string",
+            enum: ["compat", "respect-allow"],
+            title: "Plugin Bundled Mode",
+            description:
+              'Controls whether bundled plugins honor plugins.allow and entries enablement. Default "compat" preserves current behavior where bundled plugins are force-loaded. Set to "respect-allow" to gate bundled plugins by the same allowlist and enablement policy as third-party plugins.',
+          },
           load: {
             type: "object",
             properties: {
@@ -28754,6 +28761,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Plugin Denylist",
       help: "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
       tags: ["access"],
+    },
+    "plugins.bundledMode": {
+      label: "Plugin Bundled Mode",
+      help: 'Controls whether bundled plugins honor plugins.allow and entries enablement. Default "compat" preserves current behavior where bundled plugins are force-loaded. Set to "respect-allow" to gate bundled plugins by the same allowlist and enablement policy as third-party plugins.',
+      tags: ["advanced"],
     },
     "plugins.load": {
       label: "Plugin Loader",

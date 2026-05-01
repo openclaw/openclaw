@@ -40,6 +40,8 @@ export type PluginInstallRecord = Omit<InstallRecordBase, "source"> & {
   marketplacePlugin?: string;
 };
 
+export type PluginsBundledMode = "compat" | "respect-allow";
+
 export type PluginsConfig = {
   /** Enable or disable plugin loading. */
   enabled?: boolean;
@@ -47,6 +49,8 @@ export type PluginsConfig = {
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
+  /** Controls whether bundled plugins honor the allowlist and entries enablement. */
+  bundledMode?: PluginsBundledMode;
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;

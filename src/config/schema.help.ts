@@ -1198,6 +1198,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional allowlist of plugin IDs; when set, only listed plugins are eligible to load. Configured bundled chat channels can still activate their bundled plugin when the channel is explicitly enabled in config. Use this to enforce approved extension inventories in controlled environments.",
   "plugins.deny":
     "Optional denylist of plugin IDs that are blocked even if allowlists or paths include them. Use deny rules for emergency rollback and hard blocks on risky plugins.",
+  "plugins.bundledMode":
+    'Controls whether bundled plugins honor plugins.allow and entries enablement. Default "compat" preserves current behavior where bundled plugins are force-loaded. Set to "respect-allow" to gate bundled plugins by the same allowlist and enablement policy as third-party plugins.',
   "plugins.load":
     "Plugin loader configuration group for specifying filesystem paths where plugins are discovered. Keep load paths explicit and reviewed to avoid accidental untrusted extension loading.",
   "plugins.load.paths":

@@ -65,6 +65,14 @@ describe("normalizePluginsConfig", () => {
   });
 
   it.each([
+    [{}, undefined],
+    [{ bundledMode: "compat" }, "compat"],
+    [{ bundledMode: "respect-allow" }, "respect-allow"],
+  ] as const)("normalizes bundledMode for %o", (config, expected) => {
+    expect(normalizePluginsConfig(config).bundledMode).toBe(expected);
+  });
+
+  it.each([
     {
       name: "normalizes plugin hook policy flags",
       entry: {

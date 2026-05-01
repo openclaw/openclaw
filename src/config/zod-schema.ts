@@ -1045,6 +1045,7 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         allow: z.array(z.string()).optional(),
         deny: z.array(z.string()).optional(),
+        bundledMode: z.enum(["compat", "respect-allow"]).optional(),
         load: z
           .object({
             paths: z.array(z.string()).optional(),

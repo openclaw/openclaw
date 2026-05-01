@@ -906,6 +906,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "plugins.enabled": "Enable Plugins",
   "plugins.allow": "Plugin Allowlist",
   "plugins.deny": "Plugin Denylist",
+  "plugins.bundledMode": "Plugin Bundled Mode",
   "plugins.load": "Plugin Loader",
   "plugins.load.paths": "Plugin Load Paths",
   "plugins.slots": "Plugin Slots",

@@ -1,4 +1,7 @@
-import { resolveBundledPluginCompatibleLoadValues } from "./activation-context.js";
+import {
+  resolveBundledPluginCompatibleLoadValues,
+  resolveCompatModeForBundledMode,
+} from "./activation-context.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -159,11 +162,14 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     env: params.env,
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
-    compatMode: {
-      allowlist: params.bundledAllowlistCompat,
-      enablement: "always",
-      vitest: true,
-    },
+    compatMode: resolveCompatModeForBundledMode({
+      bundledMode: params.config?.plugins?.bundledMode,
+      compatMode: {
+        allowlist: params.bundledAllowlistCompat,
+        enablement: "always",
+        vitest: true,
+      },
+    }),
     resolveCompatPluginIds: (compatParams) =>
       resolveBundledWebProviderCompatPluginIds({
         contract: params.contract,
