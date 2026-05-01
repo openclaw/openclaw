@@ -144,7 +144,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Docs change with behavior/API. Use docs list/read_when hints; docs links per `docs/AGENTS.md`.
 - Docs final answers: when doc files changed, end with the relevant full `https://docs.openclaw.ai/...` URL(s).
 - Changelog user-facing only; fixing an issue or landing/merging a PR needs one unless pure test/internal.
-- Changelog placement: active version `### Changes`/`### Fixes`; every added entry must include at least one `Thanks @author` attribution, using credited GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, or `Thanks @steipete`.
+- Changelog placement: active version `### Changes`/`### Fixes`; contributor-facing added entries should include at least one `Thanks @author` attribution, using credited human GitHub username(s). Never add `Thanks @codex`, `Thanks @openclaw`, `Thanks @clawsweeper`, or `Thanks @steipete`; for maintainer-owned or automation-only changes, omit the thanks instead of inventing credit.
 - Changelog bullets are always single-line. No wrapping/continuation across multiple lines. Long entries stay on one long line so dedupe, PR-ref, and credit-audit tooling work and so the visual style stays uniform.
 
 ## Git

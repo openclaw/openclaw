@@ -8,7 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - Providers/OpenAI: add `extraBody`/`extra_body` passthrough for OpenAI-compatible TTS endpoints, so custom speech servers can receive fields such as `lang` in `/audio/speech` requests. Fixes #39900. Thanks @R3NK0R.
 - Dependencies: refresh workspace dependency pins, including TypeBox 1.1.37, AWS SDK 3.1041.0, Microsoft Teams 2.0.9, and Marked 18.0.3. Thanks @mariozechner, @aws, and @microsoft.
-- Discord/channels: add reusable message-channel access groups plus Discord channel-audience DM authorization, so allowlists can reference `accessGroup:<name>` across channel auth paths. (#75813) Thanks @clawsweeper.
+- Discord/channels: add reusable message-channel access groups plus Discord channel-audience DM authorization, so allowlists can reference `accessGroup:<name>` across channel auth paths. (#75813)
 
 ### Fixes
 
@@ -69,7 +69,7 @@ Docs: https://docs.openclaw.ai
 - Discord/voice: rerun configured voice auto-join after Discord gateway RESUMED events and ignore already-destroyed stale voice connections during reconnect cleanup, so health-monitor account restarts can rejoin configured channels. Fixes #40665. Thanks @liz709.
 - Plugins/CLI: reuse the cold manifest registry while building plugin status and inspect reports, so large configured plugin sets no longer rediscover the bundled/plugin registry once per inspect row. Thanks @vincentkoc.
 - Discord/voice: lengthen the default voice join Ready wait, add configurable `voice.connectTimeoutMs`/`voice.reconnectGraceMs`, and warn before destroying unrecovered disconnected sessions so slow Discord voice handshakes and reconnects no longer fail silently. Fixes #63098; refs #39825 and #65039. Thanks @darealgege, @kzicherman, and @ayochim.
-- Gateway/health: refresh cached health RPC snapshots when channel runtime state diverges, so Discord and other channel status reads no longer report stale running or connected values until the cache TTL expires. (#75423) Thanks @clawsweeper.
+- Gateway/health: refresh cached health RPC snapshots when channel runtime state diverges, so Discord and other channel status reads no longer report stale running or connected values until the cache TTL expires. (#75423)
 - Gateway/sessions: keep session-store reads from running stale prune and entry-count cap maintenance during startup, so oversized stores no longer block chat history readiness after updates while writes and `sessions cleanup --enforce` still preserve the cleanup safeguards. Fixes #70050. Thanks @tangda18.
 - Security/audit: keep plain `security audit` on the cold config/filesystem path and reserve plugin runtime security collectors for `--deep`, so large plugin installs cannot execute every plugin runtime during routine audits. Thanks @vincentkoc.
 - Discord/voice: merge configured media-understanding providers such as Deepgram into partial active provider registries, so follow-up voice turns keep transcribing after another media plugin is already active. Fixes #65687. Thanks @OneMintJulep.
@@ -266,7 +266,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/models: serve the last successful model catalog while stale reloads refresh in the background, so Gateway control-plane and OpenAI-compatible requests no longer block behind model-provider rediscovery after model config changes. Refs #74135, #74630, and #74633. Thanks @DerFlash, @moltar-bot, and @Saboor711.
 - CLI/status: resolve read-only channel setup runtime fallback from the packaged OpenClaw dist root, so `status --all`, `status --deep`, channel, and doctor paths do not crash when an external channel plugin needs setup metadata. Fixes #74693. Thanks @giangthb.
 - SDK/events: keep per-run SDK event streams from surfacing duplicate raw chat projection frames, while normalizing chat-only projection frames and preserving raw access through `rawEvents`. Refs #74704. Thanks @BunsDev.
-- SDK: report Gateway terminal `agent.wait` timeout snapshots with lifecycle metadata as `timed_out` while keeping bare wait deadlines non-terminal. Thanks @clawsweeper.
+- SDK: report Gateway terminal `agent.wait` timeout snapshots with lifecycle metadata as `timed_out` while keeping bare wait deadlines non-terminal.
 - Google Meet: block managed Chrome intro/test speech until browser health proves the participant is in-call, and expose `speechReady` diagnostics so login, admission, permission, and audio-bridge blockers no longer look like successful speech. Refs #72478. Thanks @DougButdorf.
 - Slack/commands: keep native command argument menus on select controls for encoded choice values up to Slack's option limit and truncate fallback button labels to Slack's button-text limit, so long valid choices no longer render invalid Slack blocks. Thanks @slackapi.
 - Agents/Codex: flush accepted debounced steering messages before normal app-server turn cleanup, so inbound follow-ups acknowledged as queued are not dropped when the turn completes before the debounce fires. Thanks @vincentkoc.

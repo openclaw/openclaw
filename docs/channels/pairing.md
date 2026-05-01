@@ -49,7 +49,11 @@ Supported channels: `bluebubbles`, `discord`, `feishu`, `googlechat`, `imessage`
 
 ### Reusable sender groups
 
-Use top-level `accessGroups` when the same trusted sender set should apply to multiple message channels or to both DM and group allowlists. Static sender groups use `type: "message.senders"` and list members in each channel's normal `allowFrom` syntax.
+Use top-level `accessGroups` when the same trusted sender set should apply to
+multiple message channels or to both DM and group allowlists.
+
+Static groups use `type: "message.senders"` and are referenced with
+`accessGroup:<name>` from channel allowlists:
 
 ```json5
 {
@@ -57,7 +61,6 @@ Use top-level `accessGroups` when the same trusted sender set should apply to mu
     operators: {
       type: "message.senders",
       members: {
-        "*": ["global-owner-id"],
         discord: ["discord:123456789012345678"],
         telegram: ["987654321"],
         whatsapp: ["+15551234567"],
@@ -71,7 +74,7 @@ Use top-level `accessGroups` when the same trusted sender set should apply to mu
 }
 ```
 
-The `"*"` member list is shared by all message channels. Channel-specific lists are checked with that channel's own sender matching rules.
+Access groups are documented in detail here: [Access groups](/channels/access-groups)
 
 ### Where the state lives
 

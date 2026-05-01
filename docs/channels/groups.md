@@ -115,6 +115,9 @@ If you want...
 | Disable all group replies                    | `groupPolicy: "disabled"`                                  |
 | Only specific groups                         | `groups: { "<group-id>": { ... } }` (no `"*"` key)         |
 | Only you can trigger in groups               | `groupPolicy: "allowlist"`, `groupAllowFrom: ["+1555..."]` |
+| Reuse one trusted sender set across channels | `groupAllowFrom: ["accessGroup:operators"]`                |
+
+For reusable sender allowlists, see [Access groups](/channels/access-groups).
 
 ## Session keys
 

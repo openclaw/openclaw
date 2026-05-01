@@ -1093,6 +1093,7 @@
                 "group": "Configuration",
                 "pages": [
                   "channels/pairing",
+                  "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
                   "channels/broadcast-groups",
