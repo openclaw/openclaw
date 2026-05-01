@@ -302,7 +302,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveDeepSeekV4ReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4AssistantReasoningContent(payload);
+      stripDeepSeekV4ReasoningContent(payload);
     });
   };
 }
