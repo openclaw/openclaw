@@ -215,9 +215,7 @@ describe("plugin session actions", () => {
         api.registerSessionAction({
           id: "allow-any",
           schema: true,
-          handler: ({ payload }) => ({
-            data: { ...(payload !== undefined ? { payload } : {}) },
-          }),
+          handler: ({ payload }) => ({ data: { payload: payload ?? null } }),
         });
         api.registerSessionAction({
           id: "deny-all",
