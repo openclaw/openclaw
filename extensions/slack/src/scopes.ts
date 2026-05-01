@@ -10,7 +10,7 @@ export type SlackScopesResult = {
   error?: string;
 };
 
-type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
+type SlackScopesSource = "auth.scopes" | "apps.permissions.info" | "auth.test";
 
 function collectScopes(value: unknown, into: string[]) {
   if (!value) {
@@ -64,6 +64,18 @@ function extractScopes(payload: unknown): string[] {
     collectScopes((payload.info as { user_scopes?: unknown }).user_scopes, scopes);
     collectScopes((payload.info as { bot_scopes?: unknown }).bot_scopes, scopes);
   }
+  // The Slack SDK copies the `x-oauth-scopes` response header into
+  // `response_metadata.scopes` for every successful WebClient call. This is
+  // the only path that surfaces granted scopes for modern granular bot
+  // tokens (`xoxb-*`), since `auth.scopes` and `apps.permissions.info` are
+  // workspace-app-only and return `unknown_method`.
+  if (isRecord(payload.response_metadata)) {
+    collectScopes(payload.response_metadata.scopes, scopes);
+    collectScopes(
+      (payload.response_metadata as { acceptedScopes?: unknown }).acceptedScopes,
+      scopes,
+    );
+  }
   return normalizeScopes(scopes);
 }
 
@@ -87,7 +99,7 @@ export async function fetchSlackScopes(
   timeoutMs: number,
 ): Promise<SlackScopesResult> {
   const client = createSlackWebClient(token, { timeout: timeoutMs });
-  const attempts: SlackScopesSource[] = ["auth.scopes", "apps.permissions.info"];
+  const attempts: SlackScopesSource[] = ["auth.scopes", "apps.permissions.info", "auth.test"];
   const errors: string[] = [];
 
   for (const method of attempts) {

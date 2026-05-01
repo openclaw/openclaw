@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/capabilities: add `auth.test` as a third scope-discovery source after the legacy `auth.scopes` and `apps.permissions.info` methods, so `openclaw channels capabilities` reports granted and accepted scopes for modern granular bot tokens (`xoxb-*` from the app-manifest flow) instead of returning `unknown_method | unknown_method`. Fixes #44625. Thanks @martingarramon.
 - fix: block workspace CLOUDSDK_PYTHON override and always set trusted interpreter for gcloud. (#74492) Thanks @pgondhi987.
 - Providers/Z.AI: move the bundled GLM catalog and auth env metadata into the plugin manifest, so `models list --all --provider zai` shows the full known catalog without duplicated runtime seed data. Thanks @shakkernerd.
 - Providers/Qianfan and Providers/Stepfun: declare setup auth metadata (`api-key` method, `QIANFAN_API_KEY`, `STEPFUN_API_KEY`) in the plugin manifest so onboarding and `models setup` surface the expected env var without falling back to legacy `providerAuthEnvVars` runtime seed data. Thanks @shakkernerd.
