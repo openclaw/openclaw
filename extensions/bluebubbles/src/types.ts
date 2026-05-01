@@ -86,6 +86,14 @@ export type BlueBubblesAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: Record<string, unknown>;
+  /**
+   * When an inbound reply lands without `replyToBody`/`replyToSender` and the
+   * in-memory reply cache misses (e.g., multi-instance deployments sharing
+   * one BlueBubbles account, after process restarts, or after long-lived
+   * cache eviction), fetch the original message from the BlueBubbles HTTP API
+   * as a best-effort fallback. Default: false.
+   */
+  replyContextApiFallback?: boolean;
   /** Max outbound media size in MB. */
   mediaMaxMb?: number;
   /**
