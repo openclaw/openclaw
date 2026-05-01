@@ -35,7 +35,6 @@ describe("buildControlUiCspHeader", () => {
     });
     expect(csp).toContain("connect-src 'self' wss: https://remote-gateway.example");
   });
-  });
 
   it("includes inline script hashes in script-src when provided", () => {
     const csp = buildControlUiCspHeader({
