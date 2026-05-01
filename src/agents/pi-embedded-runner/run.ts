@@ -495,6 +495,8 @@ export async function runEmbeddedPiAgent(
           reason: "model_not_found",
           provider,
           model: modelId,
+          sessionId: params.sessionId,
+          lane: globalLane,
         });
       }
       let runtimeModel = model;
@@ -779,6 +781,8 @@ export async function runEmbeddedPiAgent(
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
+      let activeSessionId = params.sessionId;
+      let activeSessionFile = params.sessionFile;
       const maybeEscalateRateLimitProfileFallback = (params: {
         failoverProvider: string;
         failoverModel: string;
@@ -800,6 +804,8 @@ export async function runEmbeddedPiAgent(
             provider: params.failoverProvider,
             model: params.failoverModel,
             profileId: lastProfileId,
+            sessionId: activeSessionId,
+            lane: globalLane,
             status,
           },
         );
@@ -857,8 +863,6 @@ export async function runEmbeddedPiAgent(
       });
       startupStages.mark("context-engine");
       try {
-        let activeSessionId = params.sessionId;
-        let activeSessionFile = params.sessionFile;
         const resolveActiveHookContext = () => ({
           ...hookCtx,
           sessionId: activeSessionId,
@@ -1633,6 +1637,8 @@ export async function runEmbeddedPiAgent(
               provider: activeErrorContext.provider,
               model: activeErrorContext.model,
               profileId: lastProfileId,
+              sessionId: sessionIdUsed,
+              lane: globalLane,
             });
             const promptErrorDetails = normalizedPromptFailover
               ? describeFailoverError(normalizedPromptFailover)
@@ -1824,6 +1830,8 @@ export async function runEmbeddedPiAgent(
                   provider,
                   model: modelId,
                   profileId: lastProfileId,
+                  sessionId: sessionIdUsed,
+                  lane: globalLane,
                   status,
                 })
               );

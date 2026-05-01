@@ -225,6 +225,39 @@ export type VoiceCallRealtimeProvidersConfig = z.infer<
 export const VoiceCallRealtimeToolPolicySchema = z.enum(REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES);
 export type VoiceCallRealtimeToolPolicy = RealtimeVoiceAgentConsultToolPolicy;
 
+export const VoiceCallRealtimeFastContextSourceSchema = z.enum(["memory", "sessions"]);
+export type VoiceCallRealtimeFastContextSource = z.infer<
+  typeof VoiceCallRealtimeFastContextSourceSchema
+>;
+
+export const VoiceCallRealtimeFastContextConfigSchema = z
+  .object({
+    /** Enable bounded memory/session lookup before the full consult agent. */
+    enabled: z.boolean().default(false),
+    /** Hard deadline for the fast context lookup. */
+    timeoutMs: z.number().int().positive().default(800),
+    /** Maximum memory/session hits to inject into the realtime tool result. */
+    maxResults: z.number().int().positive().default(3),
+    /** Indexed sources used by the fast context lookup. */
+    sources: z
+      .array(VoiceCallRealtimeFastContextSourceSchema)
+      .min(1)
+      .default(["memory", "sessions"]),
+    /** Fall back to the full agent consult when fast context has no answer. */
+    fallbackToConsult: z.boolean().default(false),
+  })
+  .strict()
+  .default({
+    enabled: false,
+    timeoutMs: 800,
+    maxResults: 3,
+    sources: ["memory", "sessions"],
+    fallbackToConsult: false,
+  });
+export type VoiceCallRealtimeFastContextConfig = z.infer<
+  typeof VoiceCallRealtimeFastContextConfigSchema
+>;
+
 export const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -246,6 +279,8 @@ export const VoiceCallRealtimeConfigSchema = z
     toolPolicy: VoiceCallRealtimeToolPolicySchema.default("safe-read-only"),
     /** Tool definitions exposed to the realtime provider. */
     tools: z.array(RealtimeToolSchema).default([]),
+    /** Low-latency memory/session context for the consult tool. */
+    fastContext: VoiceCallRealtimeFastContextConfigSchema,
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
   })
@@ -255,6 +290,13 @@ export const VoiceCallRealtimeConfigSchema = z
     instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
     toolPolicy: "safe-read-only",
     tools: [],
+    fastContext: {
+      enabled: false,
+      timeoutMs: 800,
+      maxResults: 3,
+      sources: ["memory", "sessions"],
+      fallbackToConsult: false,
+    },
     providers: {},
   });
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
@@ -490,6 +532,11 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
   const realtimeProviders = sanitizeVoiceCallProviderConfigs(
     config.realtime?.providers ?? defaults.realtime.providers,
   );
+  const realtimeFastContext = {
+    ...defaults.realtime.fastContext,
+    ...config.realtime?.fastContext,
+    sources: config.realtime?.fastContext?.sources ?? defaults.realtime.fastContext.sources,
+  };
   return {
     ...defaults,
     ...config,
@@ -520,6 +567,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
         defaultRealtimeStreamPathForServePath(serve.path ?? defaults.serve.path),
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
+      fastContext: realtimeFastContext,
       providers: realtimeProviders,
     },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),

@@ -16,6 +16,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/runtime-deps: prune legacy version-scoped plugin runtime-deps roots during bundled dependency repair and cover the path in Package Acceptance's upgrade-survivor matrix, so upgrades from 2026.4.x no longer leave stale per-plugin runtime trees after doctor runs. Thanks @vincentkoc.
+- Plugins/runtime-deps: keep Gateway startup plugin imports and runtime plugin fallback loads verify-only after startup/config repair planning, so packaged installs no longer spawn package-manager repair from hot paths after readiness. Refs #75283 and #75069. Thanks @brokemac79 and @xiaohuaxi.
+- Voice Call/realtime: add default-off fast memory/session context for `openclaw_agent_consult`, giving live calls a bounded answer-or-miss path before the full agent consult. Fixes #71849. Thanks @amzzzzzzz.
 - Google Meet: interrupt Realtime provider output when local barge-in clears playback, so command-pair audio stops model speech instead of only restarting Chrome playback. Fixes #73850. (#73834) Thanks @shhtheonlyperson.
 - Gateway/config: cap oversized plugin-owned schemas in the full `config.schema` response so large installed plugin sets cannot balloon Gateway RSS or crash schema clients. Thanks @vincentkoc.
 - Gateway/sessions: use bounded tail reads for sessions-list transcript usage fallbacks and cap bulk title/last-message hydration, keeping large session stores responsive when rows request derived previews. Thanks @vincentkoc.
@@ -52,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime-deps: recover interrupted bundled runtime-dependency installs whose package sentinels exist but generated materialization is incomplete, forcing npm/pnpm repair in Gateway startup, doctor, and lazy plugin loads instead of leaving channels crash-looping on missing packages. Fixes #75309; refs #75310, #75296, and #75304. Thanks @scottgl9.
 - Plugins/runtime-deps: treat no-main and export-map package sentinels without reachable entry files as incomplete, so Gateway startup, doctor, and lazy plugin loads repair interrupted bundled dependency installs instead of accepting package.json-only partial installs. Fixes #75309; refs #75183. Thanks @shakkernerd.
 - Plugins/runtime-deps: keep runtime inspection and channel maintenance commands from downloading bundled plugin dependencies, route explicit repairs through `openclaw plugins deps --repair`, and still allow Gateway/DO paths to repair missing deps before import. Refs #75069. Thanks @xiaohuaxi.
+- Updates: force non-deferred, no-cooldown update restarts after package-manager updates requested through the live Gateway control plane and fail release validation on post-swap stale chunk import crashes, so Telegram/Discord imports do not stay pointed at removed dist files. Fixes #75206. Thanks @xonaman and @faux123.
 - Agents/tool-result guard: use the resolved runtime context token budget for non-context-engine tool-result overflow checks, so long tool-heavy sessions no longer compact early when `contextTokens` is larger than native `contextWindow`. Fixes #74917. Thanks @kAIborg24.
 - Gateway/systemd: exit with sysexits 78 for supervised lock and `EADDRINUSE` conflicts so `RestartPreventExitStatus=78` stops `Restart=always` restart loops instead of repeatedly reloading plugins against an occupied port. Fixes #75115. Thanks @yhyatt.
 - Agents/runtime: skip blank visible user prompts at the embedded-runner boundary before provider submission while still allowing internal runtime-only turns and media-only prompts, so Telegram/group sessions no longer leak raw empty-input provider errors when replay history exists. Fixes #74137. Thanks @yelog, @Gracker, and @nhaener.
@@ -84,6 +88,7 @@ Docs: https://docs.openclaw.ai
 - fix(logging): add redaction patterns for Tencent Cloud, Alibaba Cloud, HuggingFace and Replicate API keys (#58162). Thanks @gavyngong
 - Pairing: surface unexpected allowlist filesystem stat errors instead of treating the allowlist as missing, so permission and I/O failures are visible during pairing authorization checks. (#63324) Thanks @franciscomaestre.
 - macOS app: reserve layout space for exec approval command details so the allow dialog no longer overlaps the command, context, and action buttons. (#75470) Thanks @ngutman.
+- Agents/failover: carry `sessionId`, `lane`, `provider`, `model`, and `profileId` attribution through `FailoverError` and `describeFailoverError`/`coerceToFailoverError` so structured error logs (e.g. `gateway.err.log` ingestion) can attribute exhausted-fallback wrapper errors to the originating session and last-attempted provider instead of dropping the metadata after the per-profile errors. Fixes #42713. (#73506) Thanks @wenxu007.
 
 ## 2026.4.29
 

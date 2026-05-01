@@ -1,7 +1,11 @@
 import { request, type IncomingMessage } from "node:http";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
+import {
+  VoiceCallConfigSchema,
+  type VoiceCallConfig,
+  type VoiceCallConfigInput,
+} from "./config.js";
 import type { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
@@ -59,18 +63,35 @@ type TwilioProviderTestDouble = VoiceCallProvider &
     | "clearTtsQueue"
   >;
 
-const createConfig = (overrides: Partial<VoiceCallConfig> = {}): VoiceCallConfig => {
+const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => {
   const base = VoiceCallConfigSchema.parse({});
   base.serve.port = 0;
 
-  return {
+  const merged = {
     ...base,
     ...overrides,
     serve: {
       ...base.serve,
       ...overrides.serve,
     },
+    realtime: {
+      ...base.realtime,
+      ...overrides.realtime,
+      tools: overrides.realtime?.tools ?? base.realtime.tools,
+      fastContext: {
+        ...base.realtime.fastContext,
+        ...overrides.realtime?.fastContext,
+        sources: overrides.realtime?.fastContext?.sources ?? base.realtime.fastContext.sources,
+      },
+      providers: overrides.realtime?.providers ?? base.realtime.providers,
+    },
   };
+  const parsed = VoiceCallConfigSchema.parse({
+    ...merged,
+    serve: { ...merged.serve, port: merged.serve.port === 0 ? 1 : merged.serve.port },
+  });
+  parsed.serve.port = merged.serve.port;
+  return parsed;
 };
 
 const createCall = (startedAt: number): CallRecord => ({

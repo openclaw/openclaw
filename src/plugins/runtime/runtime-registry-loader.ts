@@ -175,7 +175,7 @@ export function ensurePluginRegistryLoaded(options?: {
     },
     {
       throwOnLoadError: true,
-      installBundledRuntimeDeps: options?.installBundledRuntimeDeps,
+      installBundledRuntimeDeps: options?.installBundledRuntimeDeps ?? false,
       ...(hasExplicitPluginIdScope(requestedPluginIds) ||
       shouldForwardChannelScope({ scope, scopedLoad }) ||
       hasNonEmptyPluginIdScope(expectedChannelPluginIds)

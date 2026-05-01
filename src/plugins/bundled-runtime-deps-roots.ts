@@ -13,6 +13,8 @@ import {
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_ROOTS_TO_KEEP = 20;
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_MIN_AGE_MS = 10 * 60_000;
 const PACKAGE_KEY_PATH_HASH_RE = /^openclaw-.+-([0-9a-f]{12})$/u;
+const LEGACY_VERSIONED_RUNTIME_DEPS_ROOT_RE =
+  /^openclaw-\d{4}\.\d+\.\d+(?:-[0-9A-Za-z.]+)*-[A-Za-z][A-Za-z0-9_-]*$/u;
 
 export type BundledRuntimeDepsInstallRootPlan = {
   installRoot: string;
@@ -143,6 +145,19 @@ export function pruneUnknownBundledRuntimeDepsRoots(
   let scanned = 0;
   let removed = 0;
   let skippedLocked = 0;
+  const removeRoot = (root: string): void => {
+    const lockDir = path.join(root, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+    if (fs.existsSync(lockDir) && !removeRuntimeDepsLockIfStale(lockDir, nowMs)) {
+      skippedLocked += 1;
+      return;
+    }
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+      removed += 1;
+    } catch (error) {
+      params.warn?.(`failed to remove stale bundled runtime deps root ${root}: ${String(error)}`);
+    }
+  };
 
   for (const baseDir of resolveBundledRuntimeDepsExternalBaseDirs(env)) {
     let entries: fs.Dirent[];
@@ -163,30 +178,37 @@ export function pruneUnknownBundledRuntimeDepsRoots(
       })
       .filter((entry): entry is { root: string; mtimeMs: number } => entry !== null)
       .toSorted((left, right) => right.mtimeMs - left.mtimeMs);
+    const legacyVersionedRoots = entries
+      .filter(
+        (entry) => entry.isDirectory() && isLegacyVersionedBundledRuntimeDepsRootName(entry.name),
+      )
+      .map((entry) => path.join(baseDir, entry.name))
+      .toSorted((left, right) => left.localeCompare(right));
     scanned += unknownRoots.length;
+    scanned += legacyVersionedRoots.length;
 
     for (const [index, entry] of unknownRoots.entries()) {
       const ageMs = nowMs - entry.mtimeMs;
       if (index < maxRootsToKeep && ageMs < minAgeMs) {
         continue;
       }
-      const lockDir = path.join(entry.root, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
-      if (fs.existsSync(lockDir) && !removeRuntimeDepsLockIfStale(lockDir, nowMs)) {
-        skippedLocked += 1;
-        continue;
-      }
-      try {
-        fs.rmSync(entry.root, { recursive: true, force: true });
-        removed += 1;
-      } catch (error) {
-        params.warn?.(
-          `failed to remove stale bundled runtime deps root ${entry.root}: ${String(error)}`,
-        );
-      }
+      removeRoot(entry.root);
+    }
+
+    for (const root of legacyVersionedRoots) {
+      removeRoot(root);
     }
   }
 
   return { scanned, removed, skippedLocked };
+}
+
+function isLegacyVersionedBundledRuntimeDepsRootName(name: string): boolean {
+  return (
+    name.startsWith("openclaw-") &&
+    readPackageKeyPathHash(name) === null &&
+    LEGACY_VERSIONED_RUNTIME_DEPS_ROOT_RE.test(name)
+  );
 }
 
 export function listSiblingExternalBundledRuntimeDepsRoots(params: {

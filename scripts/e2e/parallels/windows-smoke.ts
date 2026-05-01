@@ -892,6 +892,8 @@ $args = ${psArray([
         "parallels-windows-smoke",
         "--message",
         "Reply with exact ASCII text OK only.",
+        "--timeout",
+        "0",
         "--json",
       ])}
 $output = Invoke-OpenClaw @args 2>&1

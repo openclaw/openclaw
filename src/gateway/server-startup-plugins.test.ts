@@ -218,7 +218,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     runStartupSessionMigration.mockClear();
   });
 
-  it("falls back to loader-level runtime-deps staging after failed pre-start staging", async () => {
+  it("loads startup plugins in verify-only mode after failed pre-start staging", async () => {
     repairBundledRuntimeDepsPackagePlanAsync.mockRejectedValueOnce(new Error("offline registry"));
     const log = createLog();
     const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
@@ -245,7 +245,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
         pluginLookUpTable: expect.objectContaining({
           manifestRegistry: pluginManifestRegistry,
         }),
-        installBundledRuntimeDeps: true,
+        installBundledRuntimeDeps: false,
       }),
     );
     expect(repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledOnce();
@@ -296,7 +296,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       }),
     );
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ installBundledRuntimeDeps: true }),
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
     );
   });
 
@@ -321,7 +321,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       }),
     );
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ installBundledRuntimeDeps: true }),
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
     );
   });
 
@@ -491,7 +491,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
   });
 
-  it("falls back to loader-level runtime-deps staging after failed pre-start scan", async () => {
+  it("keeps startup plugin loading verify-only after failed pre-start scan", async () => {
     repairBundledRuntimeDepsPackagePlanAsync.mockRejectedValueOnce(
       new Error("unsupported runtime dependency spec"),
     );
@@ -518,7 +518,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       expect.stringContaining("unsupported runtime dependency spec"),
     );
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
-      expect.objectContaining({ installBundledRuntimeDeps: true }),
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
     );
     expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledRuntimeDepsInstaller",

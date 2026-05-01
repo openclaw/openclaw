@@ -2,6 +2,20 @@ import fs from "node:fs";
 import path from "node:path";
 
 const command = process.argv[2];
+const SCENARIOS = new Set([
+  "base",
+  "feishu-channel",
+  "bootstrap-persona",
+  "tilde-log-path",
+  "versioned-runtime-deps",
+]);
+
+const PERSONA_FILES = new Map([
+  ["BOOTSTRAP.md", "# Existing Bootstrap\n\nDo not overwrite me during update.\n"],
+  ["SOUL.md", "# Existing Soul\n\nKeep this voice intact.\n"],
+  ["USER.md", "# Existing User\n\nPrefers survivor tests.\n"],
+  ["MEMORY.md", "# Existing Memory\n\nUpgrade reports came from real users.\n"],
+]);
 
 function requireEnv(name) {
   const value = process.env[name];
@@ -30,6 +44,12 @@ function assert(condition, message) {
   }
 }
 
+function getScenario() {
+  const scenario = process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
+  assert(SCENARIOS.has(scenario), `unknown upgrade survivor scenario: ${scenario}`);
+  return scenario;
+}
+
 function getConfig() {
   return readJson(requireEnv("OPENCLAW_CONFIG_PATH"));
 }
@@ -56,11 +76,17 @@ function hasCoverage(coverage) {
 function seedState() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
+  const scenario = getScenario();
 
   write(
     path.join(workspace, "IDENTITY.md"),
     "# Upgrade Survivor\n\nThis workspace must survive package update and doctor repair.\n",
   );
+  if (scenario === "bootstrap-persona") {
+    for (const [fileName, contents] of PERSONA_FILES) {
+      write(path.join(workspace, fileName), contents);
+    }
+  }
   writeJson(path.join(workspace, ".openclaw", "workspace-state.json"), {
     version: 1,
     setupCompletedAt: "2026-04-01T00:00:00.000Z",
@@ -90,6 +116,33 @@ function seedState() {
       `${JSON.stringify({ name: "stale-sentinel", version: "0.0.0" }, null, 2)}\n`,
     );
   }
+  if (scenario === "versioned-runtime-deps") {
+    const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION || "2026.4.24";
+    for (const plugin of ["discord", "feishu", "telegram", "whatsapp"]) {
+      writeJson(
+        path.join(
+          runtimeRoot,
+          `openclaw-${version}-${plugin}`,
+          ".openclaw-runtime-deps-stamp.json",
+        ),
+        {
+          packageVersion: version,
+          plugin,
+          stale: true,
+        },
+      );
+      write(
+        path.join(
+          runtimeRoot,
+          `openclaw-${version}-${plugin}`,
+          "node_modules",
+          "stale-sentinel",
+          "package.json",
+        ),
+        `${JSON.stringify({ name: "stale-sentinel", version: "0.0.0" }, null, 2)}\n`,
+      );
+    }
+  }
 
   writeJson(path.join(stateDir, "survivor-baseline.json"), {
     agents: ["main", "ops"],
@@ -98,6 +151,7 @@ function seedState() {
     telegramGroup: "-1001234567890",
     whatsappGroup: "120363000000000000@g.us",
     workspaceIdentity: path.join(workspace, "IDENTITY.md"),
+    scenario,
   });
 }
 
@@ -150,6 +204,9 @@ function assertConfigSurvived() {
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
     assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
     assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
+    if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
+      assert(pluginAllow.includes("feishu"), "feishu plugin allow entry missing");
+    }
   }
 
   if (acceptsIntent(coverage, "discord-channel")) {
@@ -192,11 +249,31 @@ function assertConfigSurvived() {
       );
     }
   }
+
+  if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
+    const feishu = config.channels?.feishu;
+    assert(feishu?.enabled === true, "feishu enabled flag changed");
+    assert(feishu?.connectionMode === "webhook", "feishu connection mode changed");
+    assert(feishu?.defaultAccount === "default", "feishu default account changed");
+    assert(feishu?.accounts?.default?.appId === "cli_upgrade_survivor", "feishu account changed");
+    assert(
+      feishu.groups?.oc_upgrade_survivor?.requireMention === true,
+      "feishu group mention policy changed",
+    );
+  }
+
+  if (hasCoverage(coverage) && acceptsIntent(coverage, "logging")) {
+    assert(
+      config.logging?.file === "~/openclaw-upgrade-survivor/gateway.jsonl",
+      "logging.file tilde path changed",
+    );
+  }
 }
 
 function assertStateSurvived() {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
+  const scenario = getScenario();
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
   assert(
     fs.existsSync(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json")),
@@ -206,6 +283,27 @@ function assertStateSurvived() {
     fs.existsSync(path.join(stateDir, "plugin-runtime-deps", "discord")),
     "plugin runtime deps root missing",
   );
+  if (scenario === "bootstrap-persona") {
+    for (const [fileName, contents] of PERSONA_FILES) {
+      const actual = fs.readFileSync(path.join(workspace, fileName), "utf8");
+      assert(actual === contents, `${fileName} was changed during update/doctor`);
+    }
+  }
+  if (scenario === "versioned-runtime-deps") {
+    const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
+    if (stage === "baseline") {
+      return;
+    }
+    const version = process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION || "2026.4.24";
+    const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const staleVersionedRoots = fs.existsSync(runtimeRoot)
+      ? fs.readdirSync(runtimeRoot).filter((entry) => entry.startsWith(`openclaw-${version}-`))
+      : [];
+    assert(
+      staleVersionedRoots.length === 0,
+      `stale versioned runtime deps survived update/doctor: ${staleVersionedRoots.join(", ")}`,
+    );
+  }
 }
 
 function assertStatusJson([file]) {

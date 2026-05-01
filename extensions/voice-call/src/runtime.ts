@@ -18,6 +18,7 @@ import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { CallManager } from "./manager.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import type { TwilioProvider } from "./providers/twilio.js";
+import { resolveRealtimeFastContextConsult } from "./realtime-fast-context.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 import type { TelephonyTtsRuntime } from "./telephony-tts.js";
 import { createTelephonyTtsProvider } from "./telephony-tts.js";
@@ -27,6 +28,7 @@ import {
   providerRequiresPublicWebhook,
 } from "./webhook-exposure.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
+import type { ToolHandlerContext } from "./webhook/realtime-handler.js";
 import { cleanupTailscaleExposure, setupTailscaleExposure } from "./webhook/tailscale.js";
 
 export type VoiceCallRuntime = {
@@ -115,13 +117,23 @@ function resolveVoiceCallConsultSessionKey(call: {
   return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${call.callId}`;
 }
 
-function mapVoiceCallConsultTranscript(call: {
-  transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
-}): RealtimeVoiceAgentConsultTranscriptEntry[] {
-  return (call.transcript ?? []).map((entry) => ({
-    role: entry.speaker === "bot" ? "assistant" : "user",
-    text: entry.text,
-  }));
+function mapVoiceCallConsultTranscript(
+  call: {
+    transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
+  },
+  context?: ToolHandlerContext,
+): RealtimeVoiceAgentConsultTranscriptEntry[] {
+  const transcript: RealtimeVoiceAgentConsultTranscriptEntry[] = (call.transcript ?? []).map(
+    (entry) => ({
+      role: entry.speaker === "bot" ? "assistant" : "user",
+      text: entry.text,
+    }),
+  );
+  const partial = context?.partialUserTranscript?.trim();
+  if (partial && transcript.at(-1)?.text !== partial) {
+    transcript.push({ role: "user", text: partial });
+  }
+  return transcript;
 }
 
 function createRuntimeResourceLifecycle(params: {
@@ -316,10 +328,23 @@ export async function createVoiceCallRuntime(params: {
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(
         REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        async (args, callId) => {
+        async (args, callId, handlerContext) => {
           const call = manager.getCall(callId);
           if (!call) {
             return { error: `Call "${callId}" not found` };
+          }
+          const agentId = config.agentId ?? "main";
+          const sessionKey = resolveVoiceCallConsultSessionKey(call);
+          const fastContext = await resolveRealtimeFastContextConsult({
+            cfg,
+            agentId,
+            sessionKey,
+            config: config.realtime.fastContext,
+            args,
+            logger: log,
+          });
+          if (fastContext.handled) {
+            return fastContext.result;
           }
           const { provider: agentProvider, model } = resolveVoiceResponseModel({
             voiceConfig: config,
@@ -334,13 +359,13 @@ export async function createVoiceCallRuntime(params: {
             cfg,
             agentRuntime,
             logger: log,
-            agentId: config.agentId ?? "main",
-            sessionKey: resolveVoiceCallConsultSessionKey(call),
+            agentId,
+            sessionKey,
             messageProvider: "voice",
             lane: "voice",
             runIdPrefix: `voice-realtime-consult:${callId}`,
             args,
-            transcript: mapVoiceCallConsultTranscript(call),
+            transcript: mapVoiceCallConsultTranscript(call, handlerContext),
             surface: "a live phone call",
             userLabel: "Caller",
             assistantLabel: "Agent",

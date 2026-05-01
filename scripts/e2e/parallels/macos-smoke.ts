@@ -976,7 +976,7 @@ exit 1`);
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id parallels-macos-smoke --message ${shellQuote(
         "Reply with exact ASCII text OK only.",
-      )} --json`,
+      )} --timeout 0 --json`,
     );
   }
 

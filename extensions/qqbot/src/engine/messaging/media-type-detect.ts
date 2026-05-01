@@ -1,30 +1,12 @@
 /**
  * Media type detection — pure functions for classifying files by MIME or extension.
  *
- * These replace the inline `isImageFile`, `isVideoFile`, `isAudioFile` helpers
- * scattered across `outbound.ts`. Centralizing them here ensures consistent
- * detection across both the built-in and standalone versions.
+ * These replace the inline `isImageFile` and `isVideoFile` helpers scattered
+ * across `outbound.ts`. Centralizing them here keeps detection consistent.
  */
-
-/** Supported media kind for QQ Bot outbound routing. */
-export type MediaKind = "image" | "voice" | "video" | "file";
 
 const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"]);
 const VIDEO_EXTENSIONS = new Set([".mp4", ".mov", ".avi", ".mkv", ".webm", ".flv", ".wmv"]);
-const AUDIO_EXTENSIONS = new Set([
-  ".mp3",
-  ".wav",
-  ".ogg",
-  ".flac",
-  ".aac",
-  ".m4a",
-  ".wma",
-  ".opus",
-  ".amr",
-  ".silk",
-  ".slk",
-  ".pcm",
-]);
 
 /**
  * Extract a lowercase file extension from a path or URL, ignoring query and hash.
@@ -52,19 +34,4 @@ export function isVideoFile(filePath: string, mimeType?: string): boolean {
     return true;
   }
   return VIDEO_EXTENSIONS.has(getCleanExtension(filePath));
-}
-
-/** Check whether a file is audio using MIME first and extension as fallback. */
-export function isAudioFile(filePath: string, mimeType?: string): boolean {
-  if (mimeType) {
-    if (
-      mimeType.startsWith("audio/") ||
-      mimeType === "voice" ||
-      mimeType.includes("silk") ||
-      mimeType.includes("amr")
-    ) {
-      return true;
-    }
-  }
-  return AUDIO_EXTENSIONS.has(getCleanExtension(filePath));
 }

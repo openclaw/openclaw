@@ -16,6 +16,7 @@ export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
 export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
 export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
 export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
+export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 
 ARTIFACT_ROOT="$(dirname "${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-/tmp/openclaw-upgrade-survivor-artifacts/summary.json}")"
 mkdir -p "$ARTIFACT_ROOT"
@@ -33,6 +34,7 @@ PHASE_LOG="$ARTIFACT_ROOT/phases.jsonl"
 BASELINE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE:?missing OPENCLAW_UPGRADE_SURVIVOR_BASELINE}"
 CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
+SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 CURRENT_PHASE="setup"
 FAILURE_PHASE=""
 FAILURE_MESSAGE=""
@@ -44,12 +46,16 @@ candidate_version=""
 installed_version=""
 start_seconds=""
 status_seconds=""
+healthz_seconds=""
+readyz_seconds=""
 
 BASELINE_INSTALL_LOG="$ARTIFACT_ROOT/baseline-install.log"
 UPDATE_JSON="$ARTIFACT_ROOT/update.json"
 UPDATE_ERR="$ARTIFACT_ROOT/update.err"
 DOCTOR_LOG="$ARTIFACT_ROOT/doctor.log"
 GATEWAY_LOG="$ARTIFACT_ROOT/gateway.log"
+HEALTHZ_JSON="$ARTIFACT_ROOT/healthz.json"
+READYZ_JSON="$ARTIFACT_ROOT/readyz.json"
 STATUS_JSON="$ARTIFACT_ROOT/status.json"
 STATUS_ERR="$ARTIFACT_ROOT/status.err"
 BASELINE_CONFIG_VALIDATE_LOG="$ARTIFACT_ROOT/baseline-config-validate.log"
@@ -128,7 +134,10 @@ write_summary() {
     SUMMARY_BASELINE_VERSION="$baseline_version" \
     SUMMARY_CANDIDATE_VERSION="$candidate_version" \
     SUMMARY_INSTALLED_VERSION="$installed_version" \
+    SUMMARY_SCENARIO="$SCENARIO" \
     SUMMARY_START_SECONDS="$start_seconds" \
+    SUMMARY_HEALTHZ_SECONDS="$healthz_seconds" \
+    SUMMARY_READYZ_SECONDS="$readyz_seconds" \
     SUMMARY_STATUS_SECONDS="$status_seconds" \
     SUMMARY_FAILURE_PHASE="$FAILURE_PHASE" \
     SUMMARY_CONFIG_COVERAGE="$CONFIG_COVERAGE_JSON" \
@@ -153,6 +162,7 @@ const summary = {
     spec: process.env.SUMMARY_BASELINE_SPEC || null,
     version: process.env.SUMMARY_BASELINE_VERSION || null,
   },
+  scenario: process.env.SUMMARY_SCENARIO || "base",
   candidate: {
     kind: process.env.OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND || null,
     spec: process.env.OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC || process.env.OPENCLAW_CURRENT_PACKAGE_TGZ || null,
@@ -161,6 +171,8 @@ const summary = {
   installedVersion: process.env.SUMMARY_INSTALLED_VERSION || null,
   timings: {
     startupSeconds: numberOrNull(process.env.SUMMARY_START_SECONDS),
+    healthzSeconds: numberOrNull(process.env.SUMMARY_HEALTHZ_SECONDS),
+    readyzSeconds: numberOrNull(process.env.SUMMARY_READYZ_SECONDS),
     statusSeconds: numberOrNull(process.env.SUMMARY_STATUS_SECONDS),
   },
   config: readJsonOrNull(process.env.SUMMARY_CONFIG_COVERAGE),
@@ -273,6 +285,7 @@ install_baseline() {
 seed_state() {
   openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
   openclaw_test_state_create "$ARTIFACT_ROOT/state-home" minimal
+  export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_VERSION="$baseline_version"
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
 }
 
@@ -291,8 +304,10 @@ validate_baseline_config() {
 }
 
 assert_baseline_state() {
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
+  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 }
 
 resolve_candidate_version() {
@@ -349,6 +364,14 @@ run_doctor() {
   fi
 }
 
+validate_post_doctor_config() {
+  if ! openclaw config validate >>"$DOCTOR_LOG" 2>&1; then
+    echo "post-doctor config validation failed" >&2
+    cat "$DOCTOR_LOG" >&2 || true
+    return 1
+  fi
+}
+
 assert_survival() {
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
@@ -357,6 +380,22 @@ assert_survival() {
     echo "candidate package version mismatch: expected $candidate_version, got $installed_version" >&2
     return 1
   fi
+}
+
+probe_gateway_endpoint() {
+  local path="$1"
+  local expect_kind="$2"
+  local out_file="$3"
+  local start_epoch
+  local end_epoch
+  start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
+  node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
+    --base-url "http://127.0.0.1:18789" \
+    --path "$path" \
+    --expect "$expect_kind" \
+    --out "$out_file"
+  end_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
+  printf '%s\n' "$(((end_epoch - start_epoch + 999) / 1000))"
 }
 
 start_gateway() {
@@ -375,6 +414,11 @@ start_gateway() {
     cat "$GATEWAY_LOG" >&2 || true
     return 1
   fi
+}
+
+check_gateway_probes() {
+  healthz_seconds="$(probe_gateway_endpoint /healthz live "$HEALTHZ_JSON")"
+  readyz_seconds="$(probe_gateway_endpoint /readyz ready "$READYZ_JSON")"
 }
 
 check_gateway_status() {
@@ -409,8 +453,10 @@ phase assert-baseline assert_baseline_state
 phase resolve-candidate resolve_candidate_version
 phase update-candidate update_candidate
 phase doctor run_doctor
+phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
 phase gateway-start start_gateway
+phase gateway-probes check_gateway_probes
 phase gateway-status check_gateway_status
 
-echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} candidate=${candidate_version} startup=${start_seconds}s status=${status_seconds}s."
+echo "Upgrade survivor Docker E2E passed baseline=${baseline_spec} scenario=${SCENARIO} candidate=${candidate_version} startup=${start_seconds}s healthz=${healthz_seconds}s readyz=${readyz_seconds}s status=${status_seconds}s."
