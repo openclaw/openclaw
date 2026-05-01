@@ -202,6 +202,73 @@ describe("FS tools with workspaceOnly=false", () => {
     ).rejects.toThrow(/Path escapes (workspace|sandbox) root/);
   });
 
+  it("should append to an existing file when append=true (workspaceOnly=false)", async () => {
+    await fs.writeFile(outsideFile, "line one\n");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-append-1", {
+      path: outsideFile,
+      content: "line two\n",
+      append: true,
+    });
+    expect(hasToolError(result)).toBe(false);
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("line one\nline two\n");
+  });
+
+  it("should create a new file when append=true and file does not exist (workspaceOnly=false)", async () => {
+    const newFile = path.join(tmpDir, "append-new.txt");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await writeTool!.execute("test-append-2", {
+      path: newFile,
+      content: "first line\n",
+      append: true,
+    });
+    const content = await fs.readFile(newFile, "utf-8");
+    expect(content).toBe("first line\n");
+  });
+
+  it("should overwrite (not append) when append=false", async () => {
+    await fs.writeFile(outsideFile, "old content");
+
+    const tools = toolsFor(false);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    await writeTool!.execute("test-no-append", {
+      path: outsideFile,
+      content: "new content",
+      append: false,
+    });
+    const content = await fs.readFile(outsideFile, "utf-8");
+    expect(content).toBe("new content");
+  });
+
+  it("should append within workspace boundary when append=true and workspaceOnly=true", async () => {
+    const insideFile = path.join(workspaceDir, "log.txt");
+    await fs.writeFile(insideFile, "entry 1\n");
+
+    const tools = toolsFor(true);
+    const writeTool = tools.find((tool) => tool.name === "write");
+    expect(writeTool).toBeDefined();
+
+    const result = await writeTool!.execute("test-append-workspace", {
+      path: insideFile,
+      content: "entry 2\n",
+      append: true,
+    });
+    expect(hasToolError(result)).toBe(false);
+    const content = await fs.readFile(insideFile, "utf-8");
+    expect(content).toBe("entry 1\nentry 2\n");
+  });
+
   it("restricts memory-triggered writes to append-only canonical memory files", async () => {
     const allowedRelativePath = "memory/2026-03-07.md";
     const allowedAbsolutePath = path.join(workspaceDir, allowedRelativePath);
