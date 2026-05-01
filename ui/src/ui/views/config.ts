@@ -1775,15 +1775,27 @@ export function renderConfig(props: ConfigProps) {
                               Use Raw mode to edit those entries.
                             </div>
                           `
-                        : html`
-                            <config-editor
-                              .value=${props.raw}
-                              ?readonly=${blurred}
-                              ?dark=${props.themeMode === "dark" ||
-                              (props.themeMode === "system" && !prefersLightScheme())}
-                              @change=${(e: CustomEvent) => props.onRawChange(e.detail.value)}
-                            ></config-editor>
-                          `}
+                        : nothing}
+                      <div class="field config-raw-field">
+                        ${blurred
+                          ? html`
+                              <div class="callout info" style="margin-top: 12px">
+                                ${sensitiveCount} sensitive value${sensitiveCount === 1
+                                  ? ""
+                                  : "s"} hidden. Use the reveal button above to edit the raw config.
+                              </div>
+                            `
+                          : html`
+                              <config-editor
+                                .value=${props.raw}
+                                ?dark=${props.themeMode === "dark" ||
+                                (props.themeMode === "system" && !prefersLightScheme())}
+                                @change=${(e: CustomEvent) =>
+                                  props.onRawChange(e.detail.value)}
+                              ></config-editor>
+                            `}
+                      </div>
+                    `}
                     </div>
                   `;
                 })()}
