@@ -13,6 +13,8 @@ import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term
 
 const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn(() => ({})));
+const listMemoryEmbeddingProviders = vi.hoisted(() => vi.fn(() => []));
+const registerMemoryEmbeddingProvider = vi.hoisted(() => vi.fn());
 const resolveDefaultAgentId = vi.hoisted(() => vi.fn(() => "main"));
 const resolveCommandSecretRefsViaGateway = vi.hoisted(() =>
   vi.fn(async ({ config }: { config: unknown }) => ({
@@ -33,9 +35,11 @@ vi.mock("./cli.host.runtime.js", async () => {
     formatErrorMessage: runtimeCli.formatErrorMessage,
     getMemorySearchManager,
     isRich: runtimeCli.isRich,
+    listMemoryEmbeddingProviders,
     listMemoryFiles: runtimeFiles.listMemoryFiles,
     getRuntimeConfig,
     normalizeExtraMemoryPaths: runtimeFiles.normalizeExtraMemoryPaths,
+    registerMemoryEmbeddingProvider,
     resolveCommandSecretRefsViaGateway,
     resolveDefaultAgentId,
     resolveSessionTranscriptsDirForAgent: runtimeCore.resolveSessionTranscriptsDirForAgent,
@@ -74,6 +78,8 @@ beforeAll(async () => {
 beforeEach(() => {
   getMemorySearchManager.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue({});
+  listMemoryEmbeddingProviders.mockReset().mockReturnValue([]);
+  registerMemoryEmbeddingProvider.mockReset();
   resolveDefaultAgentId.mockReset().mockReturnValue("main");
   resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -212,6 +218,43 @@ describe("memory cli", () => {
     );
     expect(process.exitCode).toBeUndefined();
   }
+
+  it("registers built-in embedding providers before creating the memory manager", async () => {
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    await runMemoryCli(["status"]);
+
+    expect(registerMemoryEmbeddingProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "local" }),
+    );
+    expect(getMemorySearchManager).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", purpose: "status" }),
+    );
+  });
+
+  it("does not register built-in embedding providers when providers already exist", async () => {
+    listMemoryEmbeddingProviders.mockReturnValueOnce([
+      { id: "custom", transport: "remote", create: vi.fn() },
+    ]);
+    const close = vi.fn(async () => {});
+    mockManager({
+      probeVectorAvailability: vi.fn(async () => true),
+      status: () => makeMemoryStatus(),
+      close,
+    });
+
+    await runMemoryCli(["status"]);
+
+    expect(registerMemoryEmbeddingProvider).not.toHaveBeenCalled();
+    expect(getMemorySearchManager).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "main", purpose: "status" }),
+    );
+  });
 
   it("prints vector status when available", async () => {
     const close = vi.fn(async () => {});
