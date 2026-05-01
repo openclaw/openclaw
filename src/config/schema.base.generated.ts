@@ -27976,17 +27976,17 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "cron.maintenance.window": {
       label: "Cron Maintenance Window",
-      help: "Daily maintenance window definition with start/end 24-hour times and timezone. Supports cross-midnight windows such as `23:00` to `02:00`.",
+      help: "Defines the daily maintenance window with start/end 24-hour times and timezone. Use cross-midnight windows such as `23:00` to `02:00` for overnight maintenance.",
       tags: ["automation"],
     },
     "cron.maintenance.window.start": {
       label: "Cron Maintenance Start",
-      help: "Maintenance window start time (inclusive) in `HH:MM` 24-hour format; for example `02:00`.",
+      help: "Sets the inclusive maintenance window start time in `HH:MM` 24-hour format. Use values such as `02:00` to begin maintenance gating at a predictable local time.",
       tags: ["automation"],
     },
     "cron.maintenance.window.end": {
       label: "Cron Maintenance End",
-      help: "Maintenance window end time (exclusive) in `HH:MM` 24-hour format; `24:00` is allowed only for end-of-day windows.",
+      help: "Sets the exclusive maintenance window end time in `HH:MM` 24-hour format. Use `24:00` only for end-of-day windows that should run until midnight.",
       tags: ["automation"],
     },
     "cron.maintenance.window.timezone": {
@@ -27996,7 +27996,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "cron.maintenance.maintenanceAgents": {
       label: "Cron Maintenance Agents",
-      help: "Explicit agent-id allowlist reserved for maintenance windows. Example: [`ops-maint`, `cleanup-bot`]. Listed agents are blocked during normal runtime.",
+      help: "Use this explicit agent-id allowlist to reserve maintenance-only workers for the maintenance window. Example: [`ops-maint`, `cleanup-bot`]. Listed agents are blocked during normal runtime.",
       tags: ["automation"],
     },
     "hooks.enabled": {
