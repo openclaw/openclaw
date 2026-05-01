@@ -9,6 +9,7 @@ import {
 } from "../../media/web-media.js";
 import type { PollInput } from "../../polls.js";
 import type { PluginJitiLoaderCache } from "../jiti-loader-cache.js";
+import type { PluginOrigin } from "../plugin-origin.types.js";
 import {
   loadPluginBoundaryModule,
   resolvePluginRuntimeRecordByEntryBaseNames,
@@ -16,7 +17,7 @@ import {
 } from "./runtime-plugin-boundary.js";
 
 type WebChannelPluginRecord = {
-  origin?: string;
+  origin?: PluginOrigin;
   rootDir?: string;
   source: string;
 };
