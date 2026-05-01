@@ -407,6 +407,7 @@ function shouldSkipCompactionForNoRealConversation(params: {
   messages: AgentMessage[];
   observedTokenCount?: number;
   contextWindowTokens: number;
+  callerContextWindowTokens?: number;
   reserveTokens: number;
 }): boolean {
   if (containsRealConversationMessages(params.messages)) {
@@ -416,9 +417,15 @@ function shouldSkipCompactionForNoRealConversation(params: {
   if (observedTokenCount === undefined) {
     return true;
   }
-  const contextWindowTokens = Math.max(1, Math.floor(params.contextWindowTokens));
-  const reserveTokens = Math.min(contextWindowTokens - 1, Math.max(0, Math.floor(params.reserveTokens)));
-  const threshold = Math.max(1, contextWindowTokens - reserveTokens);
+  const thresholdContextWindowTokens = Math.max(
+    1,
+    Math.floor(params.callerContextWindowTokens ?? params.contextWindowTokens),
+  );
+  const reserveTokens =
+    params.callerContextWindowTokens === undefined
+      ? Math.max(0, Math.floor(params.reserveTokens))
+      : 0;
+  const threshold = Math.max(1, thresholdContextWindowTokens - reserveTokens);
   return observedTokenCount < threshold;
 }
 
@@ -1208,6 +1215,8 @@ async function compactEmbeddedPiSessionDirectOnce(
               messages: session.messages,
               observedTokenCount,
               contextWindowTokens: ctxInfo.tokens,
+              callerContextWindowTokens:
+                params.callerContextTokenBudget ?? params.contextTokenBudget,
               reserveTokens:
                 typeof settingsManager.getCompactionReserveTokens === "function"
                   ? settingsManager.getCompactionReserveTokens()

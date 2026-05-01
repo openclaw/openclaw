@@ -166,6 +166,7 @@ describe("handleCompactCommand", () => {
           space: "workspace-1",
           spawnedBy: "agent:main:parent",
           totalTokens: 12345,
+          contextTokens: 200_000,
         },
       } as HandleCommandsParams,
       true,
@@ -190,6 +191,7 @@ describe("handleCompactCommand", () => {
     expect(call.senderE164).toBe("+15551234567");
     expect(call.agentDir).toBe("/tmp/openclaw-agent-compact");
     expect(call.currentTokenCount).toBe(12_345);
+    expect(call.callerContextTokenBudget).toBe(200_000);
     expect(vi.mocked(resolveFreshSessionTotalTokens)).toHaveBeenCalledWith(
       expect.objectContaining({ sessionId: "session-1" }),
     );
