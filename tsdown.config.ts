@@ -252,6 +252,8 @@ function buildDockerE2eHarnessEntries(): Record<string, string> {
       "src/agents/pi-embedded-runner/run/runtime-context-prompt.ts",
     "auto-reply/reply/commands-crestodian": "src/auto-reply/reply/commands-crestodian.ts",
     "cli/run-main": "src/cli/run-main.ts",
+    "commitments/runtime": "src/commitments/runtime.ts",
+    "commitments/store": "src/commitments/store.ts",
     "config/config": "src/config/config.ts",
     "crestodian/crestodian": "src/crestodian/crestodian.ts",
     "crestodian/rescue-message": "src/crestodian/rescue-message.ts",
