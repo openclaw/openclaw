@@ -80,7 +80,7 @@ export function summarizeMattermostToolArgs(
   const maxChars = Math.max(40, options.maxChars ?? MATTERMOST_TOOL_ARGS_MAX_CHARS);
   let body: string;
   if (entries.length === 1) {
-    const [key, value] = entries[0]!;
+    const [key, value] = entries[0];
     const summarized = summarizeMattermostToolArgValue(value);
     if (summarized === undefined) {
       return undefined;
