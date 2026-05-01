@@ -25,6 +25,16 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
+type CodexDynamicToolHookContext = {
+  agentId?: string;
+  config?: EmbeddedRunAttemptParams["config"];
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+};
+
+type CodexToolResultHookContext = Omit<CodexDynamicToolHookContext, "config">;
+
 export type CodexDynamicToolBridge = {
   specs: CodexDynamicToolSpec[];
   handleToolCall: (
@@ -46,14 +56,9 @@ export type CodexDynamicToolBridge = {
 export function createCodexDynamicToolBridge(params: {
   tools: AnyAgentTool[];
   signal: AbortSignal;
-  hookContext?: {
-    agentId?: string;
-    config?: EmbeddedRunAttemptParams["config"];
-    sessionId?: string;
-    sessionKey?: string;
-    runId?: string;
-  };
+  hookContext?: CodexDynamicToolHookContext;
 }): CodexDynamicToolBridge {
+  const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const tools = params.tools.map((tool) =>
     isToolWrappedWithBeforeToolCallHook(tool)
       ? tool
@@ -70,11 +75,10 @@ export function createCodexDynamicToolBridge(params: {
   };
   const middlewareRunner = createAgentToolResultMiddlewareRunner({
     runtime: "codex",
-    ...params.hookContext,
+    ...toolResultHookContext,
   });
-  const legacyExtensionRunner = createCodexAppServerToolResultExtensionRunner(
-    params.hookContext ?? {},
-  );
+  const legacyExtensionRunner =
+    createCodexAppServerToolResultExtensionRunner(toolResultHookContext);
 
   return {
     specs: tools.map((tool) => ({
@@ -126,10 +130,10 @@ export function createCodexDynamicToolBridge(params: {
         void runAgentHarnessAfterToolCallHook({
           toolName: tool.name,
           toolCallId: call.callId,
-          runId: params.hookContext?.runId,
-          agentId: params.hookContext?.agentId,
-          sessionId: params.hookContext?.sessionId,
-          sessionKey: params.hookContext?.sessionKey,
+          runId: toolResultHookContext.runId,
+          agentId: toolResultHookContext.agentId,
+          sessionId: toolResultHookContext.sessionId,
+          sessionKey: toolResultHookContext.sessionKey,
           startArgs: args,
           result,
           startedAt,
@@ -149,10 +153,10 @@ export function createCodexDynamicToolBridge(params: {
         void runAgentHarnessAfterToolCallHook({
           toolName: tool.name,
           toolCallId: call.callId,
-          runId: params.hookContext?.runId,
-          agentId: params.hookContext?.agentId,
-          sessionId: params.hookContext?.sessionId,
-          sessionKey: params.hookContext?.sessionKey,
+          runId: toolResultHookContext.runId,
+          agentId: toolResultHookContext.agentId,
+          sessionId: toolResultHookContext.sessionId,
+          sessionKey: toolResultHookContext.sessionKey,
           startArgs: args,
           error: error instanceof Error ? error.message : String(error),
           startedAt,
@@ -168,6 +172,18 @@ export function createCodexDynamicToolBridge(params: {
         };
       }
     },
+  };
+}
+
+function toToolResultHookContext(
+  ctx: CodexDynamicToolHookContext | undefined,
+): CodexToolResultHookContext {
+  const { agentId, sessionId, sessionKey, runId } = ctx ?? {};
+  return {
+    ...(agentId && { agentId }),
+    ...(sessionId && { sessionId }),
+    ...(sessionKey && { sessionKey }),
+    ...(runId && { runId }),
   };
 }
 
