@@ -3831,48 +3831,36 @@ public struct ToolsEffectiveResult: Codable, Sendable {
 }
 
 public struct ToolsInvokeParams: Codable, Sendable {
-    public let name: String?
-    public let tool: String?
-    public let action: String?
+    public let name: String
     public let args: [String: AnyCodable]?
     public let sessionkey: String?
     public let agentid: String?
     public let confirm: Bool?
     public let idempotencykey: String?
-    public let dryrun: Bool?
 
     public init(
-        name: String?,
-        tool: String?,
-        action: String?,
+        name: String,
         args: [String: AnyCodable]?,
         sessionkey: String?,
         agentid: String?,
         confirm: Bool?,
-        idempotencykey: String?,
-        dryrun: Bool?)
+        idempotencykey: String?)
     {
         self.name = name
-        self.tool = tool
-        self.action = action
         self.args = args
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.confirm = confirm
         self.idempotencykey = idempotencykey
-        self.dryrun = dryrun
     }
 
     private enum CodingKeys: String, CodingKey {
         case name
-        case tool
-        case action
         case args
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case confirm
         case idempotencykey = "idempotencyKey"
-        case dryrun = "dryRun"
     }
 }
 

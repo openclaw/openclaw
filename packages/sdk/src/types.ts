@@ -115,13 +115,11 @@ export type SDKError = {
 };
 
 export type ToolInvokeParams = {
-  action?: string;
   args?: JsonObject;
   sessionKey?: string;
   agentId?: string;
   confirm?: boolean;
   idempotencyKey?: string;
-  dryRun?: boolean;
 };
 
 export type ToolInvokeResult = {

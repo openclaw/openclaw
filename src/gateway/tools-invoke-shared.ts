@@ -214,6 +214,18 @@ export async function invokeGatewayTool(params: {
   if (knownCoreTool && !tools.some((candidate) => candidate.name === toolName)) {
     ({ agentId, tools } = resolveTools(false));
   }
+  const requestedAgentId = normalizeOptionalString(params.input.agentId);
+  if (requestedAgentId && agentId && requestedAgentId !== agentId) {
+    return {
+      ok: false,
+      status: 400,
+      toolName,
+      error: {
+        type: "invalid_request",
+        message: `agent id "${requestedAgentId}" does not match session agent "${agentId}"`,
+      },
+    };
+  }
   const tool = applyOwnerOnlyToolPolicy(tools, params.senderIsOwner).find(
     (candidate) => candidate.name === toolName,
   );

@@ -377,15 +377,12 @@ export const ToolsEffectiveParamsSchema = Type.Object(
 
 export const ToolsInvokeParamsSchema = Type.Object(
   {
-    name: Type.Optional(NonEmptyString),
-    tool: Type.Optional(NonEmptyString),
-    action: Type.Optional(NonEmptyString),
+    name: NonEmptyString,
     args: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
     sessionKey: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
     confirm: Type.Optional(Type.Boolean()),
     idempotencyKey: Type.Optional(NonEmptyString),
-    dryRun: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );

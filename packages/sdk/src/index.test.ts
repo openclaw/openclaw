@@ -359,11 +359,9 @@ describe("OpenClaw SDK", () => {
     await expect(
       oc.tools.invoke("demo", {
         args: { mode: "test" },
-        action: "json",
         sessionKey: "agent:main:main",
         confirm: false,
         idempotencyKey: "tools-invoke-test",
-        dryRun: false,
       }),
     ).resolves.toMatchObject({ ok: true, toolName: "demo", output: { value: 1 } });
     expect(transport.calls).toEqual([
@@ -371,12 +369,10 @@ describe("OpenClaw SDK", () => {
         method: "tools.invoke",
         params: {
           name: "demo",
-          action: "json",
           args: { mode: "test" },
           sessionKey: "agent:main:main",
           confirm: false,
           idempotencyKey: "tools-invoke-test",
-          dryRun: false,
         },
         options: undefined,
       },

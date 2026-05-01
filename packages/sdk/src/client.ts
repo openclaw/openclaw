@@ -769,13 +769,11 @@ export class ToolsNamespace extends RpcNamespace {
   async invoke(name: string, params?: ToolInvokeParams): Promise<ToolInvokeResult> {
     return await this.call("invoke", {
       name,
-      ...(params?.action ? { action: params.action } : {}),
       ...(params?.args ? { args: params.args } : {}),
       ...(params?.sessionKey ? { sessionKey: params.sessionKey } : {}),
       ...(params?.agentId ? { agentId: params.agentId } : {}),
       ...(typeof params?.confirm === "boolean" ? { confirm: params.confirm } : {}),
       ...(params?.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-      ...(typeof params?.dryRun === "boolean" ? { dryRun: params.dryRun } : {}),
     });
   }
 }

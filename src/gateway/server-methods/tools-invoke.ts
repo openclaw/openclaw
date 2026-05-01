@@ -43,15 +43,12 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const requestedToolName = normalizeOptionalString(params.name ?? params.tool);
+    const requestedToolName = normalizeOptionalString(params.name);
     if (!requestedToolName) {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid tools.invoke params: name or tool required",
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid tools.invoke params: name required"),
       );
       return;
     }

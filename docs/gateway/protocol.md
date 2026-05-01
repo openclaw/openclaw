@@ -503,9 +503,10 @@ enumeration of `src/gateway/server-methods/*.ts`.
     including core, plugin, and channel tools.
 - Operators may call `tools.invoke` (`operator.write`) to invoke one available tool through the
   same gateway policy path as `/tools/invoke`.
-  - `name` is required for SDK callers; `tool` is accepted as the HTTP-compatible alias.
-    `action`, `args`, `sessionKey`, `agentId`, `confirm`, `idempotencyKey`, and reserved
-    `dryRun` are optional.
+  - `name` is required. `args`, `sessionKey`, `agentId`, `confirm`, and
+    `idempotencyKey` are optional.
+  - If both `sessionKey` and `agentId` are present, the resolved session agent must match
+    `agentId`.
   - The response is an SDK-facing envelope with `ok`, `toolName`, optional `output`, and typed
     `error` fields. Approval or policy refusals return `ok:false` in the payload rather than
     bypassing the gateway tool policy pipeline.

@@ -923,8 +923,7 @@ describe("tools.invoke Gateway RPC", () => {
     allowAgentsListForMain();
 
     const call = await invokeToolsRpc({
-      tool: "agents_list",
-      action: "json",
+      name: "agents_list",
       args: {},
       sessionKey: "main",
       idempotencyKey: "rpc-tool-test",
@@ -975,6 +974,33 @@ describe("tools.invoke Gateway RPC", () => {
       error: {
         code: "requires_approval",
         message: "Plugin approval required",
+      },
+    });
+  });
+
+  it("rejects mismatched session and agent scope", async () => {
+    cfg = {
+      agents: {
+        list: [
+          { id: "main", default: true, tools: { allow: ["agents_list"] } },
+          { id: "other", tools: { allow: ["agents_list"] } },
+        ],
+      },
+    };
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      sessionKey: "agent:main:main",
+      agentId: "other",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      toolName: "agents_list",
+      error: {
+        code: "validation_error",
+        message: 'agent id "other" does not match session agent "main"',
       },
     });
   });
