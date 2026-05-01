@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
+const PACKAGE_JSON = "package.json";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
@@ -73,6 +74,7 @@ describe("package acceptance workflow", () => {
 describe("package artifact reuse", () => {
   it("lets reusable Docker E2E consume an already resolved package artifact", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+    const packageJson = readFileSync(PACKAGE_JSON, "utf8");
     const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
@@ -112,6 +114,7 @@ describe("package artifact reuse", () => {
     expect(scheduler).toContain(
       '["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC]',
     );
+    expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
   });
 
   it("bounds shared Docker image pulls so package acceptance cannot stall forever", () => {

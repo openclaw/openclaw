@@ -32,7 +32,12 @@ normalize_npm_candidate() {
   esac
 }
 
-if [ -n "${BASELINE_SPEC// }" ]; then
+if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
+  if [ -z "${BASELINE_SPEC// }" ]; then
+    echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC is required for published upgrade survivor" >&2
+    exit 1
+  fi
+
   ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor}"
   mkdir -p "$ARTIFACT_DIR"
 

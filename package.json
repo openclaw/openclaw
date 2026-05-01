@@ -1514,7 +1514,7 @@
     "test:docker:pi-bundle-mcp-tools": "bash scripts/e2e/pi-bundle-mcp-tools-docker.sh",
     "test:docker:plugin-update": "bash scripts/e2e/plugin-update-unchanged-docker.sh",
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
-    "test:docker:published-upgrade-survivor": "env OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} bash scripts/e2e/upgrade-survivor-docker.sh",
+    "test:docker:published-upgrade-survivor": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "test:docker:rerun": "node scripts/docker-e2e-rerun.mjs",
     "test:docker:session-runtime-context": "bash scripts/e2e/session-runtime-context-docker.sh",
