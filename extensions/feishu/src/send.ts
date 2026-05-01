@@ -225,6 +225,9 @@ function extractInteractiveElementText(
   element: unknown,
   variables: Map<string, string>,
 ): string | undefined {
+  if (Array.isArray(element)) {
+    return extractInteractiveElementsText(element, variables) || undefined;
+  }
   if (!isRecord(element)) {
     return undefined;
   }
@@ -240,6 +243,18 @@ function extractInteractiveElementText(
   if (tag === "plain_text" && typeof element.content === "string") {
     return applyCardTemplateVariables(element.content, variables);
   }
+  if (tag === "text" && typeof element.text === "string") {
+    const renderedText = applyCardTemplateVariables(element.text, variables).trim();
+    return renderedText || undefined;
+  }
+  if (tag === "a" && typeof element.text === "string") {
+    const label = applyCardTemplateVariables(element.text, variables).trim();
+    if (!label) {
+      return undefined;
+    }
+    const href = typeof element.href === "string" ? element.href.trim() : "";
+    return href ? `${label} (${href})` : label;
+  }
   return undefined;
 }
 
@@ -250,11 +265,33 @@ function extractInteractiveElementsText(
   const texts: string[] = [];
   for (const element of elements) {
     const text = extractInteractiveElementText(element, variables);
-    if (text !== undefined) {
+    if (text) {
       texts.push(text);
     }
   }
   return texts.join("\n").trim();
+}
+
+function readInteractiveTitleTexts(
+  parsed: Record<string, unknown>,
+  variables: Map<string, string>,
+): string[] {
+  const header = isRecord(parsed.header) ? parsed.header : undefined;
+  const headerTitle = isRecord(header?.title) ? header.title : undefined;
+  const candidates = [headerTitle?.content, parsed.title];
+
+  const titles: string[] = [];
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    const title = applyCardTemplateVariables(candidate, variables).trim();
+    if (title) {
+      titles.push(title);
+      break;
+    }
+  }
+  return titles;
 }
 
 function readInteractiveElementArrays(parsed: Record<string, unknown>): unknown[][] {
@@ -292,14 +329,17 @@ function parseInteractiveCardContent(parsed: unknown): string {
   }
 
   const variables = readCardTemplateVariables(parsed);
+  const titleTexts = readInteractiveTitleTexts(parsed, variables);
   for (const elements of readInteractiveElementArrays(parsed)) {
-    const text = extractInteractiveElementsText(elements, variables);
+    const elementText = extractInteractiveElementsText(elements, variables);
+    const text = [...titleTexts, elementText].filter(Boolean).join("\n").trim();
     if (text) {
       return text;
     }
   }
 
-  return parseInteractivePostFallback(parsed) ?? INTERACTIVE_CARD_FALLBACK_TEXT;
+  const titleText = titleTexts.join("\n").trim();
+  return titleText || parseInteractivePostFallback(parsed) || INTERACTIVE_CARD_FALLBACK_TEXT;
 }
 
 function parseFeishuMessageContent(rawContent: string, msgType: string): string {
