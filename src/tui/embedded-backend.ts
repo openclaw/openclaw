@@ -1,8 +1,14 @@
 import { randomUUID } from "node:crypto";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
-import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveVisibleModelCatalog } from "../agents/model-catalog-visibility.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
@@ -314,14 +320,23 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   async listModels(): Promise<TuiModelChoice[]> {
-    const catalog = await loadGatewayModelCatalog();
+    const catalog = await loadGatewayModelCatalog({ mode: "cachePreferred" });
     const cfg = getRuntimeConfig();
-    const { allowedCatalog } = buildAllowedModelSet({
+    const workspaceDir =
+      resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
+      resolveDefaultAgentWorkspaceDir();
+    const visibleCatalog = resolveVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: DEFAULT_PROVIDER,
+      workspaceDir,
     });
-    const entries = allowedCatalog.length > 0 ? allowedCatalog : catalog;
+    const { allowedCatalog } = buildAllowedModelSet({
+      cfg,
+      catalog: visibleCatalog,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    const entries = allowedCatalog.length > 0 ? allowedCatalog : visibleCatalog;
     return entries.map((entry) => ({
       id: entry.id,
       name: entry.name ?? entry.id,
