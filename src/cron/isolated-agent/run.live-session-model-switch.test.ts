@@ -221,6 +221,29 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     });
   });
 
+  it("keeps the cron-selected live model as the reset default while trying fallback candidates", async () => {
+    runWithModelFallbackMock.mockImplementation(async ({ run }) => {
+      const result = await run("openai", "gpt-5.4");
+      return {
+        result,
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.4",
+      liveModelDefaultProvider: "anthropic",
+      liveModelDefaultModel: "claude-sonnet-4-6",
+    });
+  });
+
   it("returns error (not infinite loop) when LiveSessionModelSwitchError is thrown repeatedly", async () => {
     // If the runner somehow keeps throwing the same error (e.g. broken catalog)
     // it should not loop forever. The inner runPrompt itself will eventually
