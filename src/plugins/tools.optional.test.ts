@@ -1,7 +1,10 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 
 type MockRegistryToolEntry = {
   pluginId: string;
+  names?: string[];
   optional: boolean;
   source: string;
   factory: (ctx: unknown) => unknown;
@@ -93,6 +96,7 @@ function setMultiToolRegistry() {
 function createOptionalDemoEntry(): MockRegistryToolEntry {
   return {
     pluginId: "optional-demo",
+    names: ["optional_tool"],
     optional: true,
     source: "/tmp/optional-demo.js",
     factory: () => makeTool("optional_tool"),
@@ -108,6 +112,17 @@ function createMalformedTool(name: string) {
       return { content: [{ type: "text", text: "bad" }] };
     },
   };
+}
+
+function installConsoleMethodSpy(method: "log" | "warn") {
+  const spy = vi.fn();
+  loggingState.rawConsole = {
+    log: method === "log" ? spy : vi.fn(),
+    info: vi.fn(),
+    warn: method === "warn" ? spy : vi.fn(),
+    error: vi.fn(),
+  };
+  return spy;
 }
 
 function resolveWithConflictingCoreName(options?: { suppressNameConflicts?: boolean }) {
@@ -227,6 +242,10 @@ describe("resolvePluginTools optional tools", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest?.();
+    setLoggerOverride(null);
+    loggingState.rawConsole = null;
+    resetLogger();
+    vi.useRealTimers();
   });
 
   it("skips optional tools without explicit allowlist", () => {
@@ -340,6 +359,86 @@ describe("resolvePluginTools optional tools", () => {
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
     );
+  });
+
+  it("warns with plugin factory timing details when a factory is slow", () => {
+    vi.useFakeTimers({ now: 0 });
+    const warnSpy = installConsoleMethodSpy("warn");
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["optional_tool"],
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => {
+          vi.advanceTimersByTime(1200);
+          return makeTool("optional_tool");
+        },
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const message = String(warnSpy.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("[trace:plugin-tools] factory timings");
+    expect(message).toContain("totalMs=1200");
+    expect(message).toContain("optional-demo:1200ms@1200ms");
+    expect(message).toContain("names=[optional_tool]");
+    expect(message).toContain("result=single");
+    expect(message).toContain("count=1");
+  });
+
+  it("emits trace factory timings below the warn threshold when trace logging is enabled", () => {
+    vi.useFakeTimers({ now: 0 });
+    const logSpy = installConsoleMethodSpy("log");
+    setLoggerOverride({ level: "silent", consoleLevel: "trace" });
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["optional_tool"],
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => {
+          vi.advanceTimersByTime(5);
+          return makeTool("optional_tool");
+        },
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    const message = String(logSpy.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("[trace:plugin-tools] factory timings");
+    expect(message).toContain("totalMs=5");
+    expect(message).toContain("optional-demo:5ms@5ms");
+  });
+
+  it("does not log plugin factory timings for fast factories without trace logging", () => {
+    vi.useFakeTimers({ now: 0 });
+    const warnSpy = installConsoleMethodSpy("warn");
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        names: ["optional_tool"],
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        factory: () => {
+          vi.advanceTimersByTime(5);
+          return makeTool("optional_tool");
+        },
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("skips allowlisted optional malformed plugin tools", () => {
