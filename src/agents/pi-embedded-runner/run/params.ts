@@ -121,6 +121,12 @@ export type RunEmbeddedPiAgentParams = {
   model?: string;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
+  /**
+   * Stable caller-selected model for live-session reset-to-default checks.
+   * This may differ from provider/model while a fallback candidate is running.
+   */
+  liveModelDefaultProvider?: string;
+  liveModelDefaultModel?: string;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   authProfileId?: string;

@@ -481,6 +481,30 @@ describe("live model switch", () => {
       });
     });
 
+    it("switches a fallback attempt back to the caller-selected default after reset", async () => {
+      state.loadSessionStoreMock.mockReturnValue({
+        main: {
+          liveModelSwitchPending: true,
+        },
+      });
+
+      const { shouldSwitchToLiveModel } = await loadModule();
+
+      const result = shouldSwitchToLiveModel(
+        makeShouldSwitchParams({
+          currentProvider: "openai",
+          currentModel: "gpt-5.4",
+        }),
+      );
+
+      expect(result).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        authProfileId: undefined,
+        authProfileIdSource: undefined,
+      });
+    });
+
     it("clears the stale liveModelSwitchPending flag when models already match", async () => {
       const sessionEntry = {
         liveModelSwitchPending: true,

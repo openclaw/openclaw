@@ -83,6 +83,8 @@ export function buildEmbeddedRunBaseParams(params: {
     provider: params.provider,
     model: params.model,
     modelFallbacksOverride,
+    liveModelDefaultProvider: params.run.provider,
+    liveModelDefaultModel: params.run.model,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
     verboseLevel: params.run.verboseLevel,

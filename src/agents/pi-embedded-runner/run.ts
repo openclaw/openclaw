@@ -505,6 +505,9 @@ export async function runEmbeddedPiAgent(
         sessionKey: params.sessionKey,
         workspaceDir: resolvedWorkspace,
       });
+      const liveModelDefaultProvider =
+        normalizeOptionalString(params.liveModelDefaultProvider) ?? provider;
+      const liveModelDefaultModel = normalizeOptionalString(params.liveModelDefaultModel) ?? modelId;
       const agentHarness = selectAgentHarness({
         provider,
         modelId,
@@ -1421,8 +1424,8 @@ export async function runEmbeddedPiAgent(
             cfg: params.config,
             sessionKey: resolvedSessionKey,
             agentId: params.agentId,
-            defaultProvider: provider,
-            defaultModel: modelId,
+            defaultProvider: liveModelDefaultProvider,
+            defaultModel: liveModelDefaultModel,
             currentProvider: provider,
             currentModel: modelId,
             currentAuthProfileId: preferredProfileId,
