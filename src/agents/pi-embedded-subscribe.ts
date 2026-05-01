@@ -506,6 +506,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     typeof params.shouldEmitToolOutput === "function"
       ? params.shouldEmitToolOutput()
       : params.verboseLevel === "full";
+  const shouldEmitProviderInventoryToolOutput = () =>
+    typeof params.shouldEmitProviderInventoryToolOutput === "function"
+      ? params.shouldEmitProviderInventoryToolOutput()
+      : false;
   const formatToolOutputBlock = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -900,6 +904,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
+    shouldEmitProviderInventoryToolOutput,
     emitToolSummary,
     emitToolOutput,
     stripBlockTags,

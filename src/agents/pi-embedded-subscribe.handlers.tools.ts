@@ -341,28 +341,21 @@ async function collectEmittedToolOutputMediaUrls(
   return filterToolResultMediaUrls(toolName, mediaUrls, result);
 }
 
-const COMPACT_PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
+const PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
 
-function hasProviderInventoryDetails(result: unknown): boolean {
-  if (!result || typeof result !== "object") {
-    return false;
-  }
-  const details = readToolResultDetailsRecord(result);
-  return Array.isArray(details?.providers);
-}
-
-function shouldEmitCompactToolOutput(params: {
+function isProviderInventoryToolOutput(params: {
   toolName: string;
   result: unknown;
   outputText?: string;
 }): boolean {
-  if (!COMPACT_PROVIDER_INVENTORY_TOOLS.has(params.toolName)) {
+  if (!PROVIDER_INVENTORY_TOOLS.has(params.toolName) || !params.outputText?.trim()) {
     return false;
   }
-  if (!hasProviderInventoryDetails(params.result)) {
+  if (!params.result || typeof params.result !== "object") {
     return false;
   }
-  return Boolean(params.outputText?.trim());
+  const details = readToolResultDetailsRecord(params.result);
+  return Array.isArray(details?.providers);
 }
 
 function readExecApprovalPendingDetails(result: unknown): {
@@ -533,6 +526,7 @@ async function emitToolResultOutput(params: {
   const mediaUrls = mediaReply
     ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)
     : [];
+  const isProviderInventoryOutput = isProviderInventoryToolOutput({ toolName, result, outputText });
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
       toolName,
@@ -541,7 +535,8 @@ async function emitToolResultOutput(params: {
       hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
       builtinToolNames: ctx.builtinToolNames,
     }) &&
-    (ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText }));
+    (ctx.shouldEmitToolOutput() ||
+      (isProviderInventoryOutput && ctx.shouldEmitProviderInventoryToolOutput()));
   if (shouldEmitOutput) {
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, result);

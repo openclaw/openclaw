@@ -118,6 +118,7 @@ export type EmbeddedPiSubscribeContext = {
 
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
+  shouldEmitProviderInventoryToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   stripBlockTags: (
@@ -184,6 +185,7 @@ export type ToolHandlerParams = Pick<
   | "sessionId"
   | "agentId"
   | "toolResultFormat"
+  | "shouldEmitProviderInventoryToolOutput"
 >;
 
 export type ToolHandlerState = Pick<
@@ -220,6 +222,7 @@ export type ToolHandlerContext = {
   flushBlockReplyBuffer: () => void | Promise<void>;
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
+  shouldEmitProviderInventoryToolOutput: () => boolean;
   emitToolSummary: (toolName?: string, meta?: string) => void;
   emitToolOutput: (toolName?: string, meta?: string, output?: string, result?: unknown) => void;
   trimMessagingToolSent: () => void;
