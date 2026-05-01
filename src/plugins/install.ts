@@ -776,6 +776,7 @@ async function validatePackagePluginInstallSource(params: {
 async function scanAndLinkInstalledPackage(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   installedDir: string;
+  dependencyTreeRootDir?: string;
   pluginId: string;
   peerDependencies: Record<string, string>;
   logger: PluginInstallLogger;
@@ -785,7 +786,7 @@ async function scanAndLinkInstalledPackage(params: {
     scan: async () =>
       await params.runtime.scanInstalledPackageDependencyTree({
         logger: params.logger,
-        packageDir: params.installedDir,
+        packageDir: params.dependencyTreeRootDir ?? params.installedDir,
         pluginId: params.pluginId,
       }),
   });
@@ -803,6 +804,7 @@ async function scanAndLinkInstalledPackage(params: {
 export async function installPluginFromInstalledPackageDir(
   params: {
     packageDir: string;
+    dependencyTreeRootDir?: string;
   } & PackageInstallCommonParams,
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
@@ -823,6 +825,7 @@ export async function installPluginFromInstalledPackageDir(
   const postInstallError = await scanAndLinkInstalledPackage({
     runtime,
     installedDir: params.packageDir,
+    dependencyTreeRootDir: params.dependencyTreeRootDir,
     pluginId: validated.plugin.pluginId,
     peerDependencies: validated.plugin.peerDependencies,
     logger,
@@ -1197,6 +1200,7 @@ export async function installPluginFromNpmSpec(
   const result = await installPluginFromInstalledPackageDir({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     packageDir: installRoot,
+    dependencyTreeRootDir: npmRoot,
     logger,
     expectedPluginId,
     installPolicyRequest: {

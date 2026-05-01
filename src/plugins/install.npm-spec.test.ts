@@ -60,6 +60,7 @@ function writeInstalledNpmPlugin(params: {
   pluginId?: string;
   indexJs?: string;
   dependency?: { name: string; version: string };
+  hoistedDependency?: { name: string; version: string };
 }) {
   const pluginDir = path.join(params.npmRoot, "node_modules", params.packageName);
   fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
@@ -101,6 +102,18 @@ function writeInstalledNpmPlugin(params: {
       "utf-8",
     );
   }
+  if (params.hoistedDependency) {
+    const depDir = path.join(params.npmRoot, "node_modules", params.hoistedDependency.name);
+    fs.mkdirSync(depDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(depDir, "package.json"),
+      JSON.stringify({
+        name: params.hoistedDependency.name,
+        version: params.hoistedDependency.version,
+      }),
+      "utf-8",
+    );
+  }
   return pluginDir;
 }
 
@@ -114,6 +127,7 @@ function mockNpmViewAndInstall(params: {
   shasum?: string;
   indexJs?: string;
   dependency?: { name: string; version: string };
+  hoistedDependency?: { name: string; version: string };
 }) {
   runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
     if (JSON.stringify(argv) === JSON.stringify(npmViewArgv(params.spec))) {
@@ -146,7 +160,7 @@ beforeEach(() => {
 });
 
 describe("installPluginFromNpmSpec", () => {
-  it("installs npm plugins into .openclaw/npm with package-local dependencies", async () => {
+  it("installs npm plugins into .openclaw/npm", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
 
@@ -181,6 +195,32 @@ describe("installPluginFromNpmSpec", () => {
       npmRoot,
       spec: "@openclaw/voice-call@0.0.1",
     });
+  });
+
+  it("rejects npm installs with blocked hoisted transitive dependencies", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+
+    mockNpmViewAndInstall({
+      spec: "hoisted-plugin@1.0.0",
+      packageName: "hoisted-plugin",
+      version: "1.0.0",
+      pluginId: "hoisted-plugin",
+      npmRoot,
+      hoistedDependency: { name: "plain-crypto-js", version: "1.0.0" },
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "hoisted-plugin@1.0.0",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("plain-crypto-js");
+      expect(result.error).toContain("node_modules/plain-crypto-js");
+    }
   });
 
   it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
