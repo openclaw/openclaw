@@ -67,6 +67,10 @@ import type {
   AgentsListResult,
   AgentsFilesListResult,
   AgentIdentityResult,
+  CodexCompatibilityRecord,
+  CodexEventRecord,
+  CodexNativeStatus,
+  CodexProposalExecutionResult,
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
@@ -289,6 +293,17 @@ export class OpenClawApp extends LitElement {
   @state() sessionsPage = 0;
   @state() sessionsPageSize = 10;
   @state() sessionsActionsOpenKey: string | null = null;
+
+  @state() codexLoading = false;
+  @state() codexError: string | null = null;
+  @state() codexStatus: CodexNativeStatus | null = null;
+  @state() codexDoctor: CodexCompatibilityRecord | null = null;
+  @state() codexEventsLoading = false;
+  @state() codexEventsSessionKey: string | null = null;
+  @state() codexEvents: CodexEventRecord[] = [];
+  @state() codexBusyProposalId: string | null = null;
+  @state() codexExecutionResult: CodexProposalExecutionResult | null = null;
+  @state() codexExportText: string | null = null;
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;

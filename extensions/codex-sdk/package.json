@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/codex-sdk",
+  "version": "2026.5.1",
+  "description": "OpenClaw ACP runtime backend powered by the official Codex SDK",
+  "type": "module",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.27.1",
+    "@openai/codex-sdk": "0.128.0",
+    "ws": "8.19.0"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

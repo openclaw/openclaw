@@ -110,12 +110,14 @@ function resolveReadySession(
 
 function mockAcpManager(params: {
   runTurn: (params: unknown) => Promise<void>;
+  initializeSession?: (params: unknown) => Promise<unknown>;
   resolveSession?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
   }) => ReturnType<ReturnType<typeof acpManagerModule.getAcpSessionManager>["resolveSession"]>;
 }) {
   getAcpSessionManagerSpy.mockReturnValue({
+    initializeSession: params.initializeSession,
     runTurn: params.runTurn,
     resolveSession:
       params.resolveSession ??
@@ -260,6 +262,97 @@ describe("agentCommand ACP runtime routing", () => {
         durationMs: 5,
       },
     } as never);
+  });
+
+  it("auto-initializes configured ACP runtime agents on their main session", async () => {
+    await withTempHome(async (home) => {
+      const storePath = path.join(home, "sessions.json");
+      const workspace = path.join(home, "openclaw");
+      const cfg = createAcpEnabledConfig(home, storePath);
+      cfg.acp = {
+        enabled: true,
+        backend: "codex-sdk",
+        allowedAgents: ["codex", "codex-fast"],
+        dispatch: { enabled: true },
+      };
+      cfg.agents = {
+        defaults: {
+          model: { primary: "openai/gpt-5.3-codex" },
+          models: { "openai/gpt-5.3-codex": {} },
+          workspace,
+        },
+        list: [
+          {
+            id: "codex",
+            default: true,
+            workspace,
+            runtime: {
+              type: "acp",
+              acp: {
+                agent: "codex-fast",
+                backend: "codex-sdk",
+                mode: "persistent",
+                cwd: workspace,
+              },
+            },
+          },
+        ],
+      };
+      loadConfigSpy.mockReturnValue(cfg);
+
+      const runTurn = createRunTurnFromTextDeltas(["ACP_", "MAIN"]);
+      const initializeSession = vi.fn(async (paramsUnknown: unknown) => {
+        const params = paramsUnknown as {
+          agent: string;
+          backendId?: string;
+          cwd?: string;
+          mode: "persistent" | "oneshot";
+          sessionKey: string;
+        };
+        return {
+          runtime: {},
+          handle: {
+            backend: params.backendId,
+            cwd: params.cwd,
+            runtimeSessionName: params.sessionKey,
+          },
+          meta: {
+            backend: params.backendId ?? "codex-sdk",
+            agent: params.agent,
+            cwd: params.cwd,
+            runtimeSessionName: params.sessionKey,
+            mode: params.mode,
+            state: "idle",
+            lastActivityAt: Date.now(),
+          },
+        };
+      });
+      mockAcpManager({
+        initializeSession,
+        runTurn: (input: unknown) => runTurn(input),
+        resolveSession: (input) => ({ kind: "none", sessionKey: input.sessionKey }),
+      });
+
+      await agentCommand({ message: "ping", agentId: "codex" }, runtime);
+
+      expect(initializeSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agent: "codex-fast",
+          backendId: "codex-sdk",
+          cwd: workspace,
+          mode: "persistent",
+          sessionKey: "agent:codex:main",
+        }),
+      );
+      expect(runTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mode: "prompt",
+          sessionKey: "agent:codex:main",
+          text: "ping",
+        }),
+      );
+      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    });
   });
 
   it("routes ACP sessions through AcpSessionManager instead of embedded agent", async () => {

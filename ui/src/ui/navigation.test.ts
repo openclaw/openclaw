@@ -31,6 +31,7 @@ describe("iconForTab", () => {
     expect(iconForTab("channels")).toBe("link");
     expect(iconForTab("instances")).toBe("radio");
     expect(iconForTab("sessions")).toBe("fileText");
+    expect(iconForTab("codex")).toBe("fileCode");
     expect(iconForTab("cron")).toBe("loader");
     expect(iconForTab("skills")).toBe("zap");
     expect(iconForTab("nodes")).toBe("monitor");
@@ -58,6 +59,7 @@ describe("titleForTab", () => {
   it("returns expected titles", () => {
     expect(titleForTab("chat")).toBe("Chat");
     expect(titleForTab("overview")).toBe("Overview");
+    expect(titleForTab("codex")).toBe("Codex");
     expect(titleForTab("cron")).toBe("Cron Jobs");
   });
 });
@@ -72,6 +74,7 @@ describe("subtitleForTab", () => {
 
   it("returns descriptive subtitles", () => {
     expect(subtitleForTab("chat")).toContain("quick interventions");
+    expect(subtitleForTab("codex")).toContain("Native SDK runtime");
     expect(subtitleForTab("config")).toContain("openclaw.json");
   });
 });

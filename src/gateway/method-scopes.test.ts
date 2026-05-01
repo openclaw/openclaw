@@ -15,6 +15,9 @@ describe("method scope resolution", () => {
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
+    ["codex.status", ["operator.read"]],
+    ["codex.proposal.create", ["operator.write"]],
+    ["codex.proposal.execute", ["operator.write"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(expected);
   });

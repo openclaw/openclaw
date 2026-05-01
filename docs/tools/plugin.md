@@ -104,6 +104,7 @@ Important trust note:
 - [Zalo](/channels/zalo) — `@openclaw/zalo`
 - [Microsoft Teams](/channels/msteams) — `@openclaw/msteams`
 - Google Antigravity OAuth (provider auth) — bundled as `google-antigravity-auth` (disabled by default)
+- Codex SDK Runtime (ACP backend) — bundled as `codex-sdk` (disabled by default; see [Codex SDK Runtime](/plugins/codex-sdk))
 - Gemini CLI OAuth (provider auth) — bundled as `google-gemini-cli-auth` (disabled by default)
 - Qwen OAuth (provider auth) — bundled as `qwen-portal-auth` (disabled by default)
 - Copilot Proxy (provider auth) — local VS Code Copilot Proxy bridge; distinct from built-in `github-copilot` device login (bundled, disabled by default)
@@ -123,6 +124,55 @@ Plugins can register:
 - Optional config validation
 - **Skills** (by listing `skills` directories in the plugin manifest)
 - **Auto-reply commands** (execute without invoking the AI agent)
+
+### Codex SDK Runtime
+
+The bundled `codex-sdk` plugin is the native OpenClaw integration for Codex. It
+uses `@openai/codex-sdk` directly, registers the `codex-sdk` ACP backend, and
+adds operator surfaces around that backend:
+
+- `/codex ...` auto-reply commands for status, routes, sessions, inbox, and
+  doctor checks
+- `openclaw codex ...` CLI commands for config validation, backend
+  configuration, one-shot runs, compatibility records, proposal execution,
+  replay, export, and proposal inbox management
+- Gateway RPC methods under `codex.*`
+- an MCP backchannel injected into Codex SDK turns as
+  `mcp_servers.openclaw-codex`, exposing `openclaw_status`,
+  `openclaw_proposal`, and allowlisted `openclaw_gateway_request`
+- route aliases such as `codex`, `codex-fast`, `codex-deep`, `codex-review`,
+  `codex-test`, `codex-refactor`, `codex-docs`, `codex-ship`, and
+  `codex-worker`
+- a Control UI `Codex` tab for health, routes, proposals, execution, recent
+  sessions, and recorded event replay
+
+Use `openclaw codex configure` after installing/enabling the plugin to make it
+the active ACP backend and add a first-class `codex` agent entry wired to the
+SDK runtime.
+
+Codex auth stays with Codex: run `codex login` once, and the SDK backend uses
+that local Codex CLI/OAuth session. OpenClaw does not run a second OpenAI Codex
+OAuth flow for this backend unless you intentionally configure `apiKeyEnv` for
+API-key based deployments.
+
+The backchannel is enabled by default. Read/status methods and proposal writes
+are available out of the box; broader Gateway writes require explicit
+`backchannel.allowedMethods` configuration and the write token named by
+`backchannel.writeTokenEnv` (default:
+`OPENCLAW_CODEX_BACKCHANNEL_WRITE_TOKEN`).
+
+For release and standalone validation, run:
+
+```bash
+pnpm smoke:codex-sdk
+OPENCLAW_CODEX_LIVE_SMOKE=1 pnpm smoke:codex-sdk
+```
+
+The smoke script creates an isolated temporary OpenClaw profile, links the
+plugin, validates/doctor-checks the runtime, and, when live smoke is enabled,
+starts a loopback Gateway on a non-default port and sends one real OpenClaw
+`agent` turn through Codex. More detail lives in
+`extensions/codex-sdk/README.md`.
 
 Plugins run **in‑process** with the Gateway, so treat them as trusted code.
 Tool authoring guide: [Plugin agent tools](/plugins/agent-tools).

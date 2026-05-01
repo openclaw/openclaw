@@ -22,6 +22,14 @@ import { loadAgents, loadToolsCatalog, saveAgentsConfig } from "./controllers/ag
 import { loadChannels } from "./controllers/channels.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
 import {
+  executeCodexProposal,
+  exportCodexSession,
+  loadCodex,
+  loadCodexEvents,
+  runCodexDoctor,
+  updateCodexProposal,
+} from "./controllers/codex.ts";
+import {
   applyConfig,
   ensureAgentConfigEntry,
   findAgentConfigEntryIndex,
@@ -121,6 +129,7 @@ function createLazy<T>(loader: () => Promise<T>): () => T | null {
 
 const lazyAgents = createLazy(() => import("./views/agents.ts"));
 const lazyChannels = createLazy(() => import("./views/channels.ts"));
+const lazyCodex = createLazy(() => import("./views/codex.ts"));
 const lazyCron = createLazy(() => import("./views/cron.ts"));
 const lazyDebug = createLazy(() => import("./views/debug.ts"));
 const lazyInstances = createLazy(() => import("./views/instances.ts"));
@@ -761,6 +770,35 @@ export function renderApp(state: AppViewState) {
                   onRefresh: () => loadSessions(state),
                   onPatch: (key, patch) => patchSession(state, key, patch),
                   onDelete: (key) => deleteSessionAndRefresh(state, key),
+                }),
+              )
+            : nothing
+        }
+
+        ${
+          state.tab === "codex"
+            ? lazyRender(lazyCodex, (m) =>
+                m.renderCodex({
+                  loading: state.codexLoading,
+                  error: state.codexError,
+                  status: state.codexStatus,
+                  doctor: state.codexDoctor,
+                  eventsLoading: state.codexEventsLoading,
+                  eventsSessionKey: state.codexEventsSessionKey,
+                  events: state.codexEvents,
+                  busyProposalId: state.codexBusyProposalId,
+                  executionResult: state.codexExecutionResult,
+                  exportText: state.codexExportText,
+                  onRefresh: () => loadCodex(state),
+                  onDoctor: () => runCodexDoctor(state),
+                  onLoadEvents: (sessionKey) => loadCodexEvents(state, sessionKey),
+                  onProposalStatus: (id, status) => updateCodexProposal(state, id, status),
+                  onExecuteProposal: (id, route) => executeCodexProposal(state, id, { route }),
+                  onExportSession: (sessionKey, format) =>
+                    exportCodexSession(state, sessionKey, format),
+                  onClearExport: () => {
+                    state.codexExportText = null;
+                  },
                 }),
               )
             : nothing

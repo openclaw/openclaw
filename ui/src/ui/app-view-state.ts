@@ -16,6 +16,10 @@ import type {
   AgentIdentityResult,
   AttentionItem,
   ChannelsStatusSnapshot,
+  CodexCompatibilityRecord,
+  CodexEventRecord,
+  CodexNativeStatus,
+  CodexProposalExecutionResult,
   ConfigSnapshot,
   ConfigUiHints,
   HealthSummary,
@@ -191,6 +195,16 @@ export type AppViewState = {
   sessionsPage: number;
   sessionsPageSize: number;
   sessionsActionsOpenKey: string | null;
+  codexLoading: boolean;
+  codexError: string | null;
+  codexStatus: CodexNativeStatus | null;
+  codexDoctor: CodexCompatibilityRecord | null;
+  codexEventsLoading: boolean;
+  codexEventsSessionKey: string | null;
+  codexEvents: CodexEventRecord[];
+  codexBusyProposalId: string | null;
+  codexExecutionResult: CodexProposalExecutionResult | null;
+  codexExportText: string | null;
   usageLoading: boolean;
   usageResult: SessionsUsageResult | null;
   usageCostSummary: CostUsageSummary | null;

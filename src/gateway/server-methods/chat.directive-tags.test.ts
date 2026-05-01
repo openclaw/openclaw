@@ -14,6 +14,7 @@ const mockState = vi.hoisted(() => ({
   sessionId: "sess-1",
   mainSessionKey: "main",
   finalText: "[[reply_to_current]]",
+  blockTexts: [] as string[],
   triggerAgentRunStart: false,
   agentRunId: "run-agent-1",
   sessionEntry: {} as Record<string, unknown>,
@@ -55,6 +56,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
     async (params: {
       ctx: MsgContext;
       dispatcher: {
+        sendBlockReply: (payload: { text: string }) => boolean;
         sendFinalReply: (payload: { text: string }) => boolean;
         markComplete: () => void;
         waitForIdle: () => Promise<void>;
@@ -67,7 +69,12 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
       if (mockState.triggerAgentRunStart) {
         params.replyOptions?.onAgentRunStart?.(mockState.agentRunId);
       }
-      params.dispatcher.sendFinalReply({ text: mockState.finalText });
+      for (const text of mockState.blockTexts) {
+        params.dispatcher.sendBlockReply({ text });
+      }
+      if (mockState.finalText) {
+        params.dispatcher.sendFinalReply({ text: mockState.finalText });
+      }
       params.dispatcher.markComplete();
       await params.dispatcher.waitForIdle();
       return { ok: true };
@@ -215,6 +222,7 @@ async function runNonStreamingChatSend(params: {
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   afterEach(() => {
     mockState.finalText = "[[reply_to_current]]";
+    mockState.blockTexts = [];
     mockState.mainSessionKey = "main";
     mockState.triggerAgentRunStart = false;
     mockState.agentRunId = "run-agent-1";
@@ -333,6 +341,43 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       }),
     );
     expect(extractFirstTextBlock(payload)).toBe("");
+  });
+
+  it("chat.send persists block-only assistant replies as a reloadable webchat turn", async () => {
+    createTranscriptFixture("openclaw-chat-send-block-only-");
+    mockState.finalText = "";
+    mockState.blockTexts = ["first chunk", "second chunk"];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const payload = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-block-only",
+    });
+
+    expect(payload).toEqual(
+      expect.objectContaining({
+        runId: "idem-block-only",
+        state: "final",
+        message: expect.any(Object),
+      }),
+    );
+    expect(extractFirstTextBlock(payload)).toBe("first chunk\n\nsecond chunk");
+
+    const messages = fs
+      .readFileSync(mockState.transcriptPath, "utf-8")
+      .split(/\r?\n/)
+      .filter(Boolean)
+      .map((line) => JSON.parse(line) as { message?: { role?: string; content?: unknown } })
+      .map((entry) => entry.message)
+      .filter(Boolean);
+
+    expect(messages.map((message) => message?.role)).toEqual(["user", "assistant"]);
+    expect(messages[0]?.content).toBe("hello");
+    expect((messages[1]?.content as Array<{ text?: string }> | undefined)?.[0]?.text).toBe(
+      "first chunk\n\nsecond chunk",
+    );
   });
 
   it("rejects oversized chat.send session keys before dispatch", async () => {

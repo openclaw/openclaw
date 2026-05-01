@@ -477,6 +477,34 @@ Core ACP baseline:
 }
 ```
 
+For the native Codex SDK backend, use `backend: "codex-sdk"`. It accepts
+route aliases as ACP agent ids, so `codex`, `codex-fast`, `codex-deep`,
+`codex-review`, `codex-test`, `codex-refactor`, `codex-docs`, `codex-ship`,
+and `codex-worker` can all target the same SDK-backed runtime with different
+defaults:
+
+```json5
+{
+  acp: {
+    enabled: true,
+    dispatch: { enabled: true },
+    backend: "codex-sdk",
+    defaultAgent: "codex",
+    allowedAgents: [
+      "codex",
+      "codex-fast",
+      "codex-deep",
+      "codex-review",
+      "codex-test",
+      "codex-refactor",
+      "codex-docs",
+      "codex-ship",
+      "codex-worker",
+    ],
+  },
+}
+```
+
 Thread binding config is channel-adapter specific. Example for Discord:
 
 ```json5
@@ -504,6 +532,204 @@ If thread-bound ACP spawn does not work, verify the adapter feature flag first:
 - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
 
 See [Configuration Reference](/gateway/configuration-reference).
+
+## Plugin setup for Codex SDK backend
+
+The `codex-sdk` backend is for OpenClaw users who want Codex wired through the
+official `@openai/codex-sdk` package instead of the generic acpx harness path.
+It exposes Codex threads as normal OpenClaw ACP sessions, including persistent
+session ids, streamed agent output, tool/status updates, image attachments,
+runtime option controls, route-aware defaults, session/event history,
+compatibility records, proposal execution, replay/export, and a proposal inbox.
+
+### Codex auth
+
+The SDK backend uses the local Codex CLI auth store. Operators normally sign in
+once with Codex itself:
+
+```bash
+codex login
+```
+
+After that, OpenClaw does not need to run a second OpenAI Codex OAuth flow for
+the SDK backend. The plugin starts `@openai/codex-sdk`, which wraps the Codex
+CLI and inherits the existing Codex login/session. `apiKeyEnv` is only for
+deployments that intentionally want to provide a direct API key environment
+variable instead of relying on the local Codex login.
+
+Local workspace install during development:
+
+```bash
+openclaw plugins install ./extensions/codex-sdk
+openclaw codex config validate
+openclaw codex configure
+```
+
+Then verify backend health:
+
+```text
+/codex doctor
+/acp doctor
+```
+
+For a public standalone smoke that does not touch the default Gateway profile:
+
+```bash
+pnpm smoke:codex-sdk
+OPENCLAW_CODEX_LIVE_SMOKE=1 pnpm smoke:codex-sdk
+```
+
+The live mode starts a loopback Gateway on a non-default port, sends one
+OpenClaw `agent` RPC through the `codex` ACP agent, and verifies that Codex can
+call the injected `openclaw_status` MCP backchannel.
+
+Operator surfaces registered by the plugin:
+
+- Control UI `Codex` tab for health, routes, proposal inbox, execution,
+  recent sessions, replay, and export
+- `/codex status`, `/codex routes`, `/codex sessions`,
+  `/codex events <session-key>`, `/codex export <session-key>`,
+  `/codex inbox`, `/codex accept <proposal-id>`,
+  `/codex dismiss <proposal-id>`, `/codex execute <proposal-id>`, and
+  `/codex doctor`
+- `openclaw codex status`, `routes`, `sessions`, `inbox list`, `doctor`,
+  `events`, `export`, `config validate`, `configure`, `run`, and
+  `inbox execute`
+- Gateway RPC methods: `codex.status`, `codex.routes`, `codex.sessions`,
+  `codex.events`, `codex.session.export`, `codex.inbox`,
+  `codex.proposal.create`, `codex.proposal.update`,
+  `codex.proposal.execute`, and `codex.doctor`
+
+### Bidirectional Codex backchannel
+
+The plugin injects an OpenClaw MCP server into SDK-backed Codex turns through
+Codex CLI config key `mcp_servers.openclaw-codex`. That makes the relationship
+bidirectional:
+
+- OpenClaw starts and controls Codex turns through ACP.
+- Codex can call `openclaw_status` to read OpenClaw Codex state.
+- Codex can call `openclaw_proposal` to create operator-visible follow-up work
+  in the proposal inbox.
+- Codex can call `openclaw_gateway_request` for explicitly allowed Gateway RPC
+  methods.
+
+The default allowed Gateway methods are read-oriented Codex/session/status
+methods plus safe proposal writes: `codex.proposal.create` and
+`codex.proposal.update`. Broader write/admin Gateway calls require both an
+allowlist entry and a matching write token supplied through
+`OPENCLAW_CODEX_BACKCHANNEL_WRITE_TOKEN` unless
+`backchannel.requireWriteToken=false` is configured.
+
+`openclaw codex configure` writes both the global ACP backend settings and a
+first-class `agents.list[]` entry for `codex`, so the normal OpenClaw agent
+surfaces can route straight into the SDK backend.
+
+Typical plugin config:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "codex-sdk": {
+        enabled: true,
+        config: {
+          model: "gpt-5.5",
+          sandboxMode: "workspace-write",
+          approvalPolicy: "on-request",
+          modelReasoningEffort: "xhigh",
+          networkAccessEnabled: false,
+          webSearchMode: "disabled",
+          defaultRoute: "default",
+          backchannel: {
+            enabled: true,
+            requireWriteToken: true,
+            allowedMethods: [
+              "codex.status",
+              "codex.routes",
+              "codex.sessions",
+              "codex.events",
+              "codex.inbox",
+              "codex.proposal.create",
+              "codex.proposal.update",
+            ],
+          },
+          routes: {
+            deep: {
+              modelReasoningEffort: "high",
+              instructions: "Inspect architecture carefully and verify thoroughly.",
+            },
+            review: {
+              approvalPolicy: "on-request",
+              modelReasoningEffort: "high",
+              instructions: "Take a code-review stance and lead with findings.",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Advanced config:
+
+- `codexPath`: absolute path to a specific `codex` executable. Leave unset to
+  use the SDK-bundled CLI.
+- `cwd`: default working directory for Codex sessions.
+- `apiKeyEnv`: environment variable name used as the SDK API key source.
+- `inheritEnv` and `env`: control the environment passed to the Codex CLI
+  process.
+- `additionalDirectories`: extra directories Codex may access.
+- `defaultRoute`: native route used by the `codex` ACP target.
+- `routes`: route overrides keyed by route id. Defaults include `default`,
+  `fast`, `deep`, `review`, `test`, `refactor`, `docs`, `ship`, and `worker`.
+- `allowedAgents`: accepted ACP agent ids. If omitted, OpenClaw derives them
+  from route aliases.
+- `maxEventsPerSession`: SDK event retention per session file. Default: `400`.
+- `proposalInboxLimit`: retained `openclaw-proposal` inbox items. Default:
+  `200`.
+- `config`: extra Codex CLI config overrides passed through the SDK.
+- `backchannel`: MCP backchannel injected into Codex turns. Defaults to enabled
+  as `openclaw-codex`.
+  - `allowedMethods`: Gateway RPC allowlist visible to
+    `openclaw_gateway_request`.
+  - `readMethods`: methods treated as read-only by the backchannel.
+  - `safeWriteMethods`: write methods allowed without the broad write token.
+  - `requireWriteToken` and `writeTokenEnv`: gate non-read/non-safe-write
+    methods.
+  - `gatewayUrl`: optional Gateway WebSocket URL override. If omitted, the
+    plugin injects the local Gateway URL from OpenClaw config.
+  - `command`, `args`, and `env`: override the MCP server command when
+    embedding a custom backchannel.
+
+Route aliases are normalized for ACP ids. For example, `codex/deep` is exposed
+as `codex-deep` because ACP agent ids are alphanumeric plus `-` and `_`.
+
+Codex can suggest follow-up work by emitting a JSON fence:
+
+````text
+```openclaw-proposal
+{
+  "title": "Add smoke coverage for Codex routes",
+  "summary": "Verify route aliases and proposal inbox behavior.",
+  "actions": ["openclaw codex doctor --record", "openclaw codex inbox list"]
+}
+```
+````
+
+OpenClaw records those proposals under the plugin state directory so operators
+can accept, dismiss, or execute them from the Control UI, chat, CLI, or Gateway
+RPC. Executions are normal Codex SDK sessions, so their events can be replayed
+or exported later:
+
+```bash
+openclaw codex inbox execute <proposal-id> --route ship
+openclaw codex events <session-key>
+openclaw codex export <session-key> --format markdown
+```
+
+Use `codex-sdk` when you want the deepest Codex-specific OpenClaw integration.
+Use `acpx` when you want one backend that can target several harnesses.
 
 ## Plugin setup for acpx backend
 

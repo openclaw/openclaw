@@ -274,6 +274,18 @@ importers:
         specifier: ^4.3.6
         version: 4.3.6
 
+  extensions/codex-sdk:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: 1.27.1
+        version: 1.27.1(zod@4.3.6)
+      '@openai/codex-sdk':
+        specifier: 0.128.0
+        version: 0.128.0
+      ws:
+        specifier: 8.19.0
+        version: 8.19.0
+
   extensions/copilot-proxy: {}
 
   extensions/diagnostics-otel:
@@ -2040,6 +2052,51 @@ packages:
   '@octokit/webhooks@14.2.0':
     resolution: {integrity: sha512-da6KbdNCV5sr1/txD896V+6W0iamFWrvVl8cHkBSPT+YlvmT3DwXa4jxZnQc+gnuTEqSWbBeoSZYTayXH9wXcw==}
     engines: {node: '>= 20'}
+
+  '@openai/codex-sdk@0.128.0':
+    resolution: {integrity: sha512-Eao0LLA5x90qwU6SXYd21h4KxdCef1WpCvHFgKdbqzWMJ79lUvguGDGvx1RheP+zTdKGxJfJ6dulI5wSXoUBhQ==}
+    engines: {node: '>=18'}
+
+  '@openai/codex@0.128.0':
+    resolution: {integrity: sha512-+xp6ODmFfBNnexIWRHApEaPXot2j6gyM8A5we/5IS/uY4eYHj4arETct4hQ5M4eO+MK7JY3ZU4xhuobhlysr0A==}
+    engines: {node: '>=16'}
+    hasBin: true
+
+  '@openai/codex@0.128.0-darwin-arm64':
+    resolution: {integrity: sha512-w+6zohfHx/kHBdles/CyFKaY57u9I3nK8QI9+NrdwMliKA0b7xn13yblRNkMpe09j6vL1oAWoxYsMOQ/vjBGug==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [darwin]
+
+  '@openai/codex@0.128.0-darwin-x64':
+    resolution: {integrity: sha512-SDbn6fO22Puy8xmMIbZi4f2znMrUEPwABApke4mo+4ihaauwuVjeqzXvW5SPJz5ty/bG11/mSupQgReT7T8BBw==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [darwin]
+
+  '@openai/codex@0.128.0-linux-arm64':
+    resolution: {integrity: sha512-+SvH73H60qvCXFuQGP/EsmR//s1hHMBR22PvJkXvM/hdnTIGucx+JqRUjAWdmmQ1IU6j3kgwVvdLW/6ICB+M6w==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [linux]
+
+  '@openai/codex@0.128.0-linux-x64':
+    resolution: {integrity: sha512-2lnSPA05CRRuKAzFW8BCmmNCSieDcToLwfC2ALLbBYilGLgzhRibjlDglK9F1BkEzfohSSWJu4PBbRu/aG60lQ==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [linux]
+
+  '@openai/codex@0.128.0-win32-arm64':
+    resolution: {integrity: sha512-ECJvsqmYFdA9pn42xxK3Odp/G16AjmBW0BglX8L0PwPjqbstbmlew9bfHf7xvL+SNfNl4NmyotW0+RNo1phgaA==}
+    engines: {node: '>=16'}
+    cpu: [arm64]
+    os: [win32]
+
+  '@openai/codex@0.128.0-win32-x64':
+    resolution: {integrity: sha512-k3jmUAFrzkUtvjGTXvSKjQqJLLlzjxp/VoHJDYedgmXUn6j70HxK38IwapzmnYfiBiTuzETvGwjXHzZgzKjhoQ==}
+    engines: {node: '>=16'}
+    cpu: [x64]
+    os: [win32]
 
   '@opentelemetry/api-logs@0.213.0':
     resolution: {integrity: sha512-zRM5/Qj6G84Ej3F1yt33xBVY/3tnMxtL1fiDIxYbDWYaZ/eudVw3/PBiZ8G7JwUxXxjW8gU4g6LnOyfGKYHYgw==}
@@ -3836,6 +3893,7 @@ packages:
   basic-ftp@5.2.0:
     resolution: {integrity: sha512-VoMINM2rqJwJgfdHq6RiUudKt2BV+FY5ZFezP/ypmwayk68+NzzAQy4XXLlqsGD4MCzq3DrmNFD/uUmBJuGoXw==}
     engines: {node: '>=10.0.0'}
+    deprecated: Security vulnerability fixed in 5.2.1, please upgrade
 
   bcrypt-pbkdf@1.0.2:
     resolution: {integrity: sha512-qeFIXtP4MSoi6NLqO12WfqARWWuCKi2Rn/9hJLEmtB5yTNr9DqFWkJRCf2qShWzPeAMRnOgCrq0sg/KLv5ES9w==}
@@ -6580,6 +6638,7 @@ packages:
 
   uuid@8.3.2:
     resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
+    deprecated: uuid@10 and below is no longer supported.  For ESM codebases, update to uuid@latest.  For CommonJS codebases, use uuid@11 (but be aware this version will likely be deprecated in 2028).
     hasBin: true
 
   validate-npm-package-name@7.0.2:
@@ -8903,6 +8962,37 @@ snapshots:
       '@octokit/openapi-webhooks-types': 12.1.0
       '@octokit/request-error': 7.1.0
       '@octokit/webhooks-methods': 6.0.0
+
+  '@openai/codex-sdk@0.128.0':
+    dependencies:
+      '@openai/codex': 0.128.0
+
+  '@openai/codex@0.128.0':
+    optionalDependencies:
+      '@openai/codex-darwin-arm64': '@openai/codex@0.128.0-darwin-arm64'
+      '@openai/codex-darwin-x64': '@openai/codex@0.128.0-darwin-x64'
+      '@openai/codex-linux-arm64': '@openai/codex@0.128.0-linux-arm64'
+      '@openai/codex-linux-x64': '@openai/codex@0.128.0-linux-x64'
+      '@openai/codex-win32-arm64': '@openai/codex@0.128.0-win32-arm64'
+      '@openai/codex-win32-x64': '@openai/codex@0.128.0-win32-x64'
+
+  '@openai/codex@0.128.0-darwin-arm64':
+    optional: true
+
+  '@openai/codex@0.128.0-darwin-x64':
+    optional: true
+
+  '@openai/codex@0.128.0-linux-arm64':
+    optional: true
+
+  '@openai/codex@0.128.0-linux-x64':
+    optional: true
+
+  '@openai/codex@0.128.0-win32-arm64':
+    optional: true
+
+  '@openai/codex@0.128.0-win32-x64':
+    optional: true
 
   '@opentelemetry/api-logs@0.213.0':
     dependencies:

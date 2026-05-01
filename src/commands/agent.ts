@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("commands/agent");
 import {
   listAgentIds,
+  listAgentEntries,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
@@ -123,6 +124,42 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "fallbackNoticeReason",
   "claudeCliSessionId",
 ];
+
+type AgentAcpRuntimeDefaults = {
+  agent: string;
+  backendId?: string;
+  cwd?: string;
+  mode: "persistent" | "oneshot";
+};
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveAgentAcpRuntimeDefaults(
+  cfg: ReturnType<typeof loadConfig>,
+  agentId: string,
+): AgentAcpRuntimeDefaults | null {
+  const normalizedAgentId = normalizeAgentId(agentId);
+  const entry = listAgentEntries(cfg).find(
+    (candidate) => normalizeAgentId(candidate.id) === normalizedAgentId,
+  );
+  if (entry?.runtime?.type !== "acp") {
+    return null;
+  }
+  const runtimeConfig = entry.runtime.acp;
+  const acpAgent = normalizeOptionalString(runtimeConfig?.agent) ?? normalizedAgentId;
+  return {
+    agent: normalizeAgentId(acpAgent),
+    mode: runtimeConfig?.mode === "oneshot" ? "oneshot" : "persistent",
+    ...(normalizeOptionalString(runtimeConfig?.backend)
+      ? { backendId: normalizeOptionalString(runtimeConfig?.backend) }
+      : {}),
+    ...(normalizeOptionalString(runtimeConfig?.cwd)
+      ? { cwd: normalizeOptionalString(runtimeConfig?.cwd) }
+      : {}),
+  };
+}
 
 async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
   const persisted = await updateSessionStore(params.storePath, (store) => {
@@ -641,12 +678,28 @@ async function prepareAgentCommandExecution(
   const workspaceDir = workspace.dir;
   const runId = opts.runId?.trim() || sessionId;
   const acpManager = getAcpSessionManager();
-  const acpResolution = sessionKey
+  let acpResolution = sessionKey
     ? acpManager.resolveSession({
         cfg,
         sessionKey,
       })
     : null;
+  const acpRuntimeDefaults = resolveAgentAcpRuntimeDefaults(cfg, sessionAgentId);
+  if (sessionKey && acpResolution?.kind === "none" && acpRuntimeDefaults) {
+    const initialized = await acpManager.initializeSession({
+      cfg,
+      sessionKey,
+      agent: acpRuntimeDefaults.agent,
+      mode: acpRuntimeDefaults.mode,
+      ...(acpRuntimeDefaults.backendId ? { backendId: acpRuntimeDefaults.backendId } : {}),
+      cwd: acpRuntimeDefaults.cwd ?? workspaceDir,
+    });
+    acpResolution = {
+      kind: "ready",
+      sessionKey,
+      meta: initialized.meta,
+    };
+  }
 
   return {
     body,

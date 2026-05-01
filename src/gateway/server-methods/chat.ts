@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -75,6 +75,7 @@ type TranscriptAppendResult = {
   message?: Record<string, unknown>;
   error?: string;
 };
+type SessionAppendMessage = Parameters<SessionManager["appendMessage"]>[0];
 
 type AbortOrigin = "rpc" | "stop-command";
 
@@ -121,6 +122,11 @@ type ChatSendDeliveryEntry = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+};
+
+type DeliveredChatReply = {
+  payload: ReplyPayload;
+  kind: "block" | "final";
 };
 
 type ChatSendOriginatingRoute = {
@@ -703,6 +709,141 @@ function appendAssistantTranscriptMessage(params: {
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
   });
+}
+
+function buildUserTranscriptContent(params: {
+  message: string;
+  images: ChatImageContent[];
+}): string | Array<Record<string, unknown>> {
+  if (params.images.length === 0) {
+    return params.message;
+  }
+  const blocks: Array<Record<string, unknown>> = [];
+  const text = params.message.trim();
+  if (text) {
+    blocks.push({ type: "text", text: params.message });
+  }
+  for (const image of params.images) {
+    blocks.push({
+      type: "image",
+      source: {
+        type: "base64",
+        media_type: image.mimeType,
+        data: image.data,
+      },
+    });
+  }
+  return blocks;
+}
+
+function appendWebchatBlockTurnTranscriptMessages(params: {
+  userMessage: string;
+  userImages: ChatImageContent[];
+  assistantMessage: string;
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  createIfMissing?: boolean;
+  assistantIdempotencyKey?: string;
+}): TranscriptAppendResult {
+  const transcriptPath = resolveTranscriptPath({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+    agentId: params.agentId,
+  });
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+
+  if (!fs.existsSync(transcriptPath)) {
+    if (!params.createIfMissing) {
+      return { ok: false, error: "transcript file not found" };
+    }
+    const ensured = ensureTranscriptFile({
+      transcriptPath,
+      sessionId: params.sessionId,
+    });
+    if (!ensured.ok) {
+      return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+    }
+  }
+
+  if (
+    params.assistantIdempotencyKey &&
+    transcriptHasIdempotencyKey(transcriptPath, params.assistantIdempotencyKey)
+  ) {
+    return { ok: true };
+  }
+
+  const now = Date.now();
+  const userMessageBody = {
+    role: "user",
+    content: buildUserTranscriptContent({
+      message: params.userMessage,
+      images: params.userImages,
+    }),
+    timestamp: now,
+  } as SessionAppendMessage & Record<string, unknown>;
+  const assistantMessageBody = {
+    role: "assistant",
+    content: [{ type: "text", text: params.assistantMessage }],
+    timestamp: now,
+    stopReason: "stop",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    api: "openai-responses",
+    provider: "openclaw",
+    model: "gateway-injected",
+    ...(params.assistantIdempotencyKey ? { idempotencyKey: params.assistantIdempotencyKey } : {}),
+  } as SessionAppendMessage & Record<string, unknown>;
+
+  try {
+    const sessionManager = SessionManager.open(transcriptPath);
+    sessionManager.appendMessage(userMessageBody);
+    const messageId = sessionManager.appendMessage(assistantMessageBody);
+    return { ok: true, messageId, message: assistantMessageBody as Record<string, unknown> };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+function collectDeliveredAssistantReplyText(replies: DeliveredChatReply[]): {
+  text: string;
+  sourceKind?: "block" | "final";
+} {
+  const finalParts = replies
+    .filter((entry) => entry.kind === "final")
+    .map((entry) => entry.payload.text?.trim() ?? "")
+    .filter(Boolean);
+  if (finalParts.length > 0) {
+    return {
+      text: finalParts.join("\n\n").trim(),
+      sourceKind: "final",
+    };
+  }
+
+  const blockParts = replies
+    .filter((entry) => entry.kind === "block")
+    .map((entry) => entry.payload.text?.trim() ?? "")
+    .filter(Boolean);
+  return {
+    text: blockParts.join("\n\n").trim(),
+    sourceKind: blockParts.length > 0 ? "block" : undefined,
+  };
 }
 
 function collectSessionAbortPartials(params: {
@@ -1322,7 +1463,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId,
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
-      const deliveredReplies: Array<{ payload: ReplyPayload; kind: "block" | "final" }> = [];
+      const deliveredReplies: DeliveredChatReply[] = [];
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
@@ -1396,26 +1537,36 @@ export const chatHandlers: GatewayRequestHandlers = {
                 sessionKey: rawSessionKey,
               });
             } else {
-              const combinedReply = deliveredReplies
-                .filter((entry) => entry.kind === "final")
-                .map((entry) => entry.payload)
-                .map((part) => part.text?.trim() ?? "")
-                .filter(Boolean)
-                .join("\n\n")
-                .trim();
+              const combinedReply = collectDeliveredAssistantReplyText(deliveredReplies);
               let message: Record<string, unknown> | undefined;
-              if (combinedReply) {
+              if (combinedReply.text) {
                 const { storePath: latestStorePath, entry: latestEntry } =
                   loadSessionEntry(sessionKey);
                 const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
-                const appended = appendAssistantTranscriptMessage({
-                  message: combinedReply,
-                  sessionId,
-                  storePath: latestStorePath,
-                  sessionFile: latestEntry?.sessionFile,
-                  agentId,
-                  createIfMissing: true,
-                });
+                let appended: TranscriptAppendResult;
+                if (combinedReply.sourceKind === "block") {
+                  appended = appendWebchatBlockTurnTranscriptMessages({
+                    userMessage: parsedMessage,
+                    userImages: parsedImages,
+                    assistantMessage: combinedReply.text,
+                    sessionId,
+                    storePath: latestStorePath,
+                    sessionFile: latestEntry?.sessionFile,
+                    agentId,
+                    createIfMissing: true,
+                    assistantIdempotencyKey: `${clientRunId}:assistant`,
+                  });
+                } else {
+                  appended = appendAssistantTranscriptMessage({
+                    message: combinedReply.text,
+                    sessionId,
+                    storePath: latestStorePath,
+                    sessionFile: latestEntry?.sessionFile,
+                    agentId,
+                    createIfMissing: true,
+                    idempotencyKey: `${clientRunId}:assistant`,
+                  });
+                }
                 if (appended.ok) {
                   message = appended.message;
                 } else {
@@ -1425,7 +1576,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   const now = Date.now();
                   message = {
                     role: "assistant",
-                    content: [{ type: "text", text: combinedReply }],
+                    content: [{ type: "text", text: combinedReply.text }],
                     timestamp: now,
                     // Keep this compatible with Pi stopReason enums even though this message isn't
                     // persisted to the transcript due to the append failure.

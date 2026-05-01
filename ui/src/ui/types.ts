@@ -8,6 +8,136 @@ import type {
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 
+export type CodexSessionRecord = {
+  sessionKey: string;
+  backend: string;
+  agent: string;
+  routeId: string;
+  routeLabel: string;
+  model?: string;
+  modelReasoningEffort?: string;
+  cwd?: string;
+  threadId?: string;
+  lifecycle: "started" | "resumed" | "configured";
+  status: "active" | "error" | "closed";
+  createdAt: string;
+  updatedAt: string;
+  turnCount: number;
+  lastEventAt?: string;
+  lastError?: string;
+};
+
+export type CodexRuntimeEvent =
+  | { type: "text_delta"; text: string; stream?: "output" | "thought"; tag?: string }
+  | { type: "status"; text: string; tag?: string; used?: number; size?: number }
+  | {
+      type: "tool_call";
+      text: string;
+      tag?: string;
+      toolCallId?: string;
+      status?: string;
+      title?: string;
+    }
+  | { type: "done"; stopReason?: string }
+  | { type: "error"; message: string; code?: string; retryable?: boolean };
+
+export type CodexEventRecord = {
+  id: string;
+  at: string;
+  sessionKey: string;
+  backend: string;
+  routeId: string;
+  routeLabel: string;
+  threadId?: string;
+  sdkEventType: string;
+  mappedEvents: CodexRuntimeEvent[];
+};
+
+export type CodexProposalRecord = {
+  id: string;
+  at: string;
+  updatedAt?: string;
+  sessionKey: string;
+  routeId: string;
+  routeLabel: string;
+  title: string;
+  summary?: string;
+  body?: string;
+  actions?: string[];
+  status: "new" | "accepted" | "dismissed";
+  sourceEventId: string;
+  executedAt?: string;
+  executedSessionKey?: string;
+  executedThreadId?: string;
+  executionRouteId?: string;
+  lastExecutionError?: string;
+};
+
+export type CodexCompatibilityRecord = {
+  schemaVersion: 2;
+  id: string;
+  checkedAt: string;
+  ok: boolean;
+  backend: string;
+  sdkPackage: string;
+  sdkVersion: string;
+  defaultRoute: string;
+  checks: Array<{
+    id: string;
+    status: "pass" | "fail" | "warn" | "not_checked";
+    message: string;
+  }>;
+};
+
+export type CodexRouteSummary = {
+  id: string;
+  label: string;
+  aliases: string[];
+  model?: string;
+  modelReasoningEffort?: string;
+  sandboxMode?: string;
+  approvalPolicy?: string;
+  webSearchMode?: string;
+};
+
+export type CodexNativeStatus = {
+  backend: string;
+  healthy: boolean;
+  defaultRoute: string;
+  routes: CodexRouteSummary[];
+  sessions: CodexSessionRecord[];
+  inbox: CodexProposalRecord[];
+  backchannel: {
+    enabled: boolean;
+    server: string;
+    gatewayUrlConfigured: boolean;
+    stateDirConfigured: boolean;
+    allowedMethods: string[];
+    safeWriteMethods: string[];
+    requireWriteToken: boolean;
+    writeTokenEnv: string;
+  };
+};
+
+export type CodexSessionExport = {
+  sessionKey: string;
+  format: "json" | "markdown";
+  generatedAt: string;
+  session: CodexSessionRecord | null;
+  events: CodexEventRecord[];
+  text: string;
+};
+
+export type CodexProposalExecutionResult = {
+  proposal: CodexProposalRecord;
+  sessionKey: string;
+  route: CodexRouteSummary;
+  backendSessionId?: string;
+  events: CodexRuntimeEvent[];
+  text: string;
+  completedAt: string;
+};
+
 export type ChannelsStatusSnapshot = {
   ts: number;
   channelOrder: string[];

@@ -1,0 +1,185 @@
+{
+  "id": "codex-sdk",
+  "name": "Codex SDK Runtime",
+  "description": "ACP runtime backend powered by the official @openai/codex-sdk package.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "codexPath": { "type": "string" },
+      "cwd": { "type": "string" },
+      "model": { "type": "string" },
+      "sandboxMode": {
+        "type": "string",
+        "enum": ["read-only", "workspace-write", "danger-full-access"]
+      },
+      "approvalPolicy": {
+        "type": "string",
+        "enum": ["never", "on-request", "on-failure", "untrusted"]
+      },
+      "modelReasoningEffort": {
+        "type": "string",
+        "enum": ["minimal", "low", "medium", "high", "xhigh"]
+      },
+      "skipGitRepoCheck": { "type": "boolean" },
+      "networkAccessEnabled": { "type": "boolean" },
+      "webSearchMode": {
+        "type": "string",
+        "enum": ["disabled", "cached", "live"]
+      },
+      "baseUrl": { "type": "string" },
+      "apiKeyEnv": { "type": "string" },
+      "inheritEnv": { "type": "boolean" },
+      "env": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      },
+      "additionalDirectories": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "allowedAgents": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "defaultRoute": { "type": "string" },
+      "routes": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "model": { "type": "string" },
+            "sandboxMode": {
+              "type": "string",
+              "enum": ["read-only", "workspace-write", "danger-full-access"]
+            },
+            "approvalPolicy": {
+              "type": "string",
+              "enum": ["never", "on-request", "on-failure", "untrusted"]
+            },
+            "modelReasoningEffort": {
+              "type": "string",
+              "enum": ["minimal", "low", "medium", "high", "xhigh"]
+            },
+            "skipGitRepoCheck": { "type": "boolean" },
+            "networkAccessEnabled": { "type": "boolean" },
+            "webSearchMode": {
+              "type": "string",
+              "enum": ["disabled", "cached", "live"]
+            },
+            "additionalDirectories": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "instructions": { "type": "string" },
+            "aliases": {
+              "type": "array",
+              "items": { "type": "string" }
+            }
+          }
+        }
+      },
+      "maxEventsPerSession": { "type": "integer", "minimum": 1 },
+      "proposalInboxLimit": { "type": "integer", "minimum": 1 },
+      "config": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "backchannel": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "name": { "type": "string" },
+          "command": { "type": "string" },
+          "args": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "env": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "gatewayUrl": { "type": "string" },
+          "allowedMethods": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "readMethods": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "safeWriteMethods": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "requireWriteToken": { "type": "boolean" },
+          "writeTokenEnv": { "type": "string" },
+          "requestTimeoutMs": { "type": "integer", "minimum": 1 },
+          "maxPayloadBytes": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "codexPath": {
+      "label": "Codex CLI Path",
+      "help": "Optional absolute path to the codex executable. Leave unset to use the SDK-bundled CLI.",
+      "advanced": true
+    },
+    "model": {
+      "label": "Model",
+      "help": "Optional Codex model override for SDK-backed ACP turns."
+    },
+    "sandboxMode": {
+      "label": "Sandbox Mode",
+      "help": "Codex sandbox mode used by the SDK backend."
+    },
+    "approvalPolicy": {
+      "label": "Approval Policy",
+      "help": "Codex approval policy passed to the SDK backend."
+    },
+    "defaultRoute": {
+      "label": "Default Route",
+      "help": "Default native Codex route when an ACP session targets codex."
+    },
+    "routes": {
+      "label": "Routes",
+      "help": "Optional Codex route overrides for aliases such as codex-fast, codex-deep, codex-review, codex-test, codex-refactor, codex-docs, codex-ship, and codex-worker.",
+      "advanced": true
+    },
+    "maxEventsPerSession": {
+      "label": "Max Events Per Session",
+      "help": "Maximum Codex SDK events retained per session file.",
+      "advanced": true
+    },
+    "proposalInboxLimit": {
+      "label": "Proposal Inbox Limit",
+      "help": "Maximum openclaw-proposal records shown by default.",
+      "advanced": true
+    },
+    "backchannel": {
+      "label": "Codex Backchannel",
+      "help": "MCP server injected into Codex SDK turns so Codex can read OpenClaw status, create proposals, and call allowed Gateway methods.",
+      "advanced": true
+    },
+    "backchannel.requireWriteToken": {
+      "label": "Require Write Token",
+      "help": "Require a matching write token for non-read, non-proposal Gateway methods.",
+      "advanced": true
+    },
+    "backchannel.writeTokenEnv": {
+      "label": "Write Token Env",
+      "help": "Environment variable containing the operator write token for broad Gateway writes.",
+      "sensitive": true,
+      "advanced": true
+    },
+    "apiKeyEnv": {
+      "label": "API Key Env",
+      "help": "Optional environment variable name used as the SDK API key source.",
+      "sensitive": true,
+      "advanced": true
+    }
+  }
+}
