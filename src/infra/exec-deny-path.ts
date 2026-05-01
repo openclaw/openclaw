@@ -95,6 +95,21 @@ function isPathLikeArg(arg: string): boolean {
   return false;
 }
 
+function isSkippedCandidateArg(arg: string): boolean {
+  if (typeof arg !== "string" || arg.length === 0) {
+    return true;
+  }
+  // Skip flags. `--token=secret` is not a path; the env-style assignment is
+  // also not a path. Bare `-` and `--` separators are not paths.
+  if (arg.startsWith("-")) {
+    return true;
+  }
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(arg)) {
+    return true;
+  }
+  return false;
+}
+
 // Best-effort tokenization of a shell payload string. Respects single and
 // double quotes and a single layer of `\` escapes outside single quotes.
 // Does not attempt to handle heredocs, command substitution, `eval`, base64
@@ -125,6 +140,13 @@ export function tokenizeShellPayload(payload: string): string[] {
       continue;
     }
     if (!inSingle && !inDouble && /\s/.test(ch)) {
+      if (buf) {
+        out.push(buf);
+        buf = "";
+      }
+      continue;
+    }
+    if (!inSingle && !inDouble && /[;&|<>()]/.test(ch)) {
       if (buf) {
         out.push(buf);
         buf = "";
@@ -208,12 +230,19 @@ export function evaluateExecDenyPathMatch(params: {
   const cwd = typeof params.cwd === "string" && params.cwd.length > 0 ? params.cwd : null;
 
   for (const arg of candidates) {
-    if (!isPathLikeArg(arg)) {
+    if (isSkippedCandidateArg(arg)) {
+      continue;
+    }
+    if (!cwd && !isPathLikeArg(arg)) {
       continue;
     }
     const expanded = expandHomePrefix(arg, { home: homeDir });
     const resolved =
-      cwd && !path.isAbsolute(expanded) ? path.resolve(cwd, expanded) : path.resolve(expanded);
+      cwd && !path.isAbsolute(expanded)
+        ? path.resolve(cwd, expanded)
+        : path.isAbsolute(expanded)
+          ? path.resolve(expanded)
+          : expanded;
     const normalizedArg = normalizeMatchTarget(arg);
     const normalizedExpanded = normalizeMatchTarget(expanded);
     const normalizedResolved = normalizeMatchTarget(resolved);
