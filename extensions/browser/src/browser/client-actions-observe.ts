@@ -1,11 +1,7 @@
 import type { BrowserActionPathResult, BrowserActionTargetOk } from "./client-actions-types.js";
 import { buildProfileQuery, withBaseUrl } from "./client-actions-url.js";
 import { fetchBrowserJson } from "./client-fetch.js";
-import type {
-  BrowserConsoleMessage,
-  BrowserNetworkRequest,
-  BrowserPageError,
-} from "./pw-session.js";
+import type { BrowserConsoleMessage, BrowserNetworkRequest } from "./pw-session.js";
 
 function buildQuerySuffix(params: Array<[string, string | boolean | undefined]>): string {
   const query = new URLSearchParams();
@@ -50,23 +46,6 @@ export async function browserPdfSave(
     body: JSON.stringify({ targetId: opts.targetId }),
     timeoutMs: 20000,
   });
-}
-
-export async function browserPageErrors(
-  baseUrl: string | undefined,
-  opts: { targetId?: string; clear?: boolean; profile?: string } = {},
-): Promise<{ ok: true; targetId: string; url?: string; errors: BrowserPageError[] }> {
-  const suffix = buildQuerySuffix([
-    ["targetId", opts.targetId],
-    ["clear", typeof opts.clear === "boolean" ? opts.clear : undefined],
-    ["profile", opts.profile],
-  ]);
-  return await fetchBrowserJson<{
-    ok: true;
-    targetId: string;
-    url?: string;
-    errors: BrowserPageError[];
-  }>(withBaseUrl(baseUrl, `/errors${suffix}`), { timeoutMs: 20000 });
 }
 
 export async function browserRequests(
