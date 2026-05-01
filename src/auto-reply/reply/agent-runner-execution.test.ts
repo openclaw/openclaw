@@ -138,7 +138,12 @@ vi.mock("./agent-runner-utils.js", () => ({
   buildEmbeddedRunExecutionParams: (params: {
     provider: string;
     model: string;
-    run: { provider?: string; authProfileId?: string; authProfileIdSource?: "auto" | "user" };
+    run: {
+      provider?: string;
+      model?: string;
+      authProfileId?: string;
+      authProfileIdSource?: "auto" | "user";
+    };
   }) => ({
     embeddedContext: {},
     senderContext: {},
