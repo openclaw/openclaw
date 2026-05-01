@@ -1122,11 +1122,16 @@ export async function runMemoryIndex(opts: MemoryCommandOptions) {
           const vectorAvailable = postIndexStatus.vector?.available;
           const vectorLoadErr = postIndexStatus.vector?.loadError;
           if (vectorEnabled && vectorAvailable === false) {
-            const errDetail = vectorLoadErr ? `: ${vectorLoadErr}` : "";
+            let reason: string;
+            if (vectorLoadErr) {
+              reason = `sqlite-vec unavailable: ${vectorLoadErr}`;
+            } else {
+              reason = "embedding provider unavailable — no vector dimensions resolved";
+            }
             // Indexing still persisted chunks/FTS state; keep the command successful but
             // emit a stderr warning so operators and scripts can detect degraded recall.
             defaultRuntime.error(
-              `Memory index WARNING (${agentId}): chunks_vec not updated — sqlite-vec unavailable${errDetail}. Vector recall degraded.`,
+              `Memory index WARNING (${agentId}): chunks_vec not updated — ${reason}. Vector recall degraded.`,
             );
           } else {
             defaultRuntime.log(`Memory index updated (${agentId}).`);
