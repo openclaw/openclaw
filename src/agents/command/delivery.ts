@@ -374,6 +374,7 @@ export async function deliverAgentCommandResult(params: {
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
+        actionSinkContext: opts.actionSinkContext,
         onError: (err) => logDeliveryError(err),
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),

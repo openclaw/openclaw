@@ -357,6 +357,18 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
+  actionSinkContext?: ActionSinkDeliveryContext;
+};
+
+export type ActionSinkDeliveryContext = {
+  source: "approved_exec_completion";
+  approvalId: string;
+  idempotencyKey: string;
+  sessionKey: string;
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | number;
 };
 
 function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): string[] {

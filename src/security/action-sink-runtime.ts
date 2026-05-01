@@ -107,6 +107,77 @@ function parseExternalAllowlistEnv(value = process.env.OPENCLAW_ACTION_SINK_EXTE
     .filter((rule): rule is ExternalAllowlistRule => rule != null);
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function isApprovedExecCompletionFollowup(request: PolicyRequest): boolean {
+  if (request.actionType !== "completion_claim" || request.toolName !== "outbound.deliver") {
+    return false;
+  }
+  const context = request.context;
+  if (!isPlainRecord(context)) {
+    return false;
+  }
+  const marker = context.actionSinkContext;
+  if (!isPlainRecord(marker) || marker.source !== "approved_exec_completion") {
+    return false;
+  }
+
+  const approvalId = nonEmptyString(marker.approvalId);
+  const idempotencyKey = nonEmptyString(marker.idempotencyKey);
+  const sessionKey = nonEmptyString(marker.sessionKey);
+  const channel = nonEmptyString(marker.channel);
+  const to = nonEmptyString(marker.to);
+  if (!approvalId || !idempotencyKey || !sessionKey || !channel || !to) {
+    return false;
+  }
+  if (idempotencyKey !== `exec-approval-followup:${approvalId}`) {
+    return false;
+  }
+  if (sessionKey !== nonEmptyString(context.sessionKey)) {
+    return false;
+  }
+  if (request.actor?.sessionKey !== sessionKey) {
+    return false;
+  }
+  if (channel !== nonEmptyString(context.channel) || to !== nonEmptyString(context.to)) {
+    return false;
+  }
+  if (request.targetResource !== `${channel}:${to}`) {
+    return false;
+  }
+
+  const contextAccountId = nonEmptyString(context.accountId);
+  const markerAccountId = nonEmptyString(marker.accountId);
+  if (contextAccountId && markerAccountId !== contextAccountId) {
+    return false;
+  }
+  const contextThreadId = optionalString(context.threadId);
+  const markerThreadId = optionalString(marker.threadId);
+  if (contextThreadId && markerThreadId !== contextThreadId) {
+    return false;
+  }
+  return true;
+}
+
 export function createDefaultActionSinkPolicyConfig(): ActionSinkPolicyConfig {
   const fixture = createMissionControlActionSinkPolicyFixture();
   return parseActionSinkPolicyConfig({
@@ -132,7 +203,7 @@ export function createDefaultActionSinkPolicyModules(
     createExternalActionFirewallModule(config),
     createShellRiskPolicyModule(),
   ];
-  if (request.actionType === "completion_claim") {
+  if (request.actionType === "completion_claim" && !isApprovedExecCompletionFollowup(request)) {
     modules.push(createEvidenceGatePolicyModule(expectedEvidenceFromRequest(request)));
   }
   return modules;

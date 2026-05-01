@@ -50,6 +50,7 @@ export function buildOutboundDeliveryPolicyRequest(
       policySessionKey: params.session?.policyKey,
       threadId: params.threadId,
       replyToId: params.replyToId,
+      actionSinkContext: params.actionSinkContext,
     },
   };
 }

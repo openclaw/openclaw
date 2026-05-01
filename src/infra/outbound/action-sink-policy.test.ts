@@ -30,6 +30,40 @@ describe("outbound action-sink policy request builders", () => {
     expect(request.actionType).toBe("completion_claim");
   });
 
+  it("carries approved exec completion context for outbound delivery policy", () => {
+    const actionSinkContext = {
+      source: "approved_exec_completion" as const,
+      approvalId: "req-1",
+      idempotencyKey: "exec-approval-followup:req-1",
+      sessionKey: "agent:main:telegram:chat-1",
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      threadId: "topic-1",
+    };
+
+    const request = buildOutboundDeliveryPolicyRequest({
+      cfg: {} as never,
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      threadId: "topic-1",
+      payloads: [{ text: "The approved command completed successfully." }],
+      session: { key: "agent:main:telegram:chat-1", agentId: "main" },
+      actionSinkContext,
+    });
+
+    expect(request.actionType).toBe("completion_claim");
+    expect(request.context).toMatchObject({
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      sessionKey: "agent:main:telegram:chat-1",
+      threadId: "topic-1",
+      actionSinkContext,
+    });
+  });
+
   it("builds message action policy requests from normalized tool args", () => {
     const request = buildMessageActionPolicyRequest({
       channel: "discord",

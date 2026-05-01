@@ -1,6 +1,7 @@
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { ActionSinkDeliveryContext } from "../../infra/outbound/deliver.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
@@ -77,6 +78,7 @@ export type AgentCommandOpts = {
   spawnedBy?: SpawnedRunMetadata["spawnedBy"];
   deliveryTargetMode?: ChannelOutboundTargetMode;
   bestEffortDeliver?: boolean;
+  actionSinkContext?: ActionSinkDeliveryContext;
   abortSignal?: AbortSignal;
   lane?: string;
   runId?: string;

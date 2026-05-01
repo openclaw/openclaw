@@ -61,6 +61,86 @@ describe("action sink runtime enforcement", () => {
     ).rejects.toThrow("Completion/status claim requires review and QA evidence");
   });
 
+  it("allows approved exec completion follow-ups to the original outbound target", async () => {
+    await expect(
+      enforceActionSinkPolicy({
+        policyVersion: "v1",
+        actionType: "completion_claim",
+        toolName: "outbound.deliver",
+        targetResource: "telegram:chat-1",
+        payloadSummary: "The approved command completed successfully.",
+        actor: { id: "main", sessionKey: "agent:main:telegram:chat-1" },
+        context: {
+          channel: "telegram",
+          to: "chat-1",
+          accountId: "acct-1",
+          sessionKey: "agent:main:telegram:chat-1",
+          actionSinkContext: {
+            source: "approved_exec_completion",
+            approvalId: "req-1",
+            idempotencyKey: "exec-approval-followup:req-1",
+            sessionKey: "agent:main:telegram:chat-1",
+            channel: "telegram",
+            to: "chat-1",
+            accountId: "acct-1",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ decision: "allow" });
+  });
+
+  it("does not allow approved exec completion context for generic outbound tools", async () => {
+    await expect(
+      enforceActionSinkPolicy({
+        policyVersion: "v1",
+        actionType: "completion_claim",
+        toolName: "message.send",
+        targetResource: "telegram:chat-1",
+        payloadSummary: "The approved command completed successfully.",
+        actor: { id: "main", sessionKey: "agent:main:telegram:chat-1" },
+        context: {
+          channel: "telegram",
+          to: "chat-1",
+          sessionKey: "agent:main:telegram:chat-1",
+          actionSinkContext: {
+            source: "approved_exec_completion",
+            approvalId: "req-1",
+            idempotencyKey: "exec-approval-followup:req-1",
+            sessionKey: "agent:main:telegram:chat-1",
+            channel: "telegram",
+            to: "chat-1",
+          },
+        },
+      }),
+    ).rejects.toThrow("Completion/status claim requires review and QA evidence");
+  });
+
+  it("does not allow approved exec completion context for a different target", async () => {
+    await expect(
+      enforceActionSinkPolicy({
+        policyVersion: "v1",
+        actionType: "completion_claim",
+        toolName: "outbound.deliver",
+        targetResource: "telegram:chat-1",
+        payloadSummary: "The approved command completed successfully.",
+        actor: { id: "main", sessionKey: "agent:main:telegram:chat-1" },
+        context: {
+          channel: "telegram",
+          to: "chat-1",
+          sessionKey: "agent:main:telegram:chat-1",
+          actionSinkContext: {
+            source: "approved_exec_completion",
+            approvalId: "req-1",
+            idempotencyKey: "exec-approval-followup:req-1",
+            sessionKey: "agent:main:telegram:chat-1",
+            channel: "telegram",
+            to: "chat-2",
+          },
+        },
+      }),
+    ).rejects.toThrow("Completion/status claim requires review and QA evidence");
+  });
+
   it("allows environment-scoped external message targets", () => {
     process.env.OPENCLAW_ACTION_SINK_EXTERNAL_ALLOWLIST = "telegram:-1003872638243|message_send";
 

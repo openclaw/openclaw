@@ -32,6 +32,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { shouldDowngradeDeliveryToSessionOnly } from "../../infra/outbound/best-effort-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import type { ActionSinkDeliveryContext } from "../../infra/outbound/deliver.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   classifySessionKeyShape,
@@ -318,6 +319,107 @@ function dispatchAgentRunFromGateway(params: {
     });
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function normalizeContextString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizeOptionalContextString(value: unknown): string | undefined {
+  if (value == null) {
+    return undefined;
+  }
+  if (typeof value === "string" && value.trim()) {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function normalizeApprovedExecCompletionActionSinkContext(params: {
+  raw: unknown;
+  idempotencyKey: string;
+  deliver: boolean;
+  sessionKey?: string;
+  channel: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number | null;
+}): { ok: true; value?: ActionSinkDeliveryContext } | { ok: false; reason: string } {
+  if (params.raw == null) {
+    return { ok: true };
+  }
+  if (!isPlainRecord(params.raw)) {
+    return { ok: false, reason: "actionSinkContext must be an object" };
+  }
+  if (params.raw.source !== "approved_exec_completion") {
+    return { ok: false, reason: "unsupported actionSinkContext source" };
+  }
+  if (!params.deliver) {
+    return {
+      ok: false,
+      reason: "approved exec completion context requires outbound delivery",
+    };
+  }
+
+  const approvalId = normalizeContextString(params.raw.approvalId);
+  const idempotencyKey = normalizeContextString(params.raw.idempotencyKey);
+  const sessionKey = normalizeContextString(params.raw.sessionKey);
+  const channel = normalizeContextString(params.raw.channel);
+  const to = normalizeContextString(params.raw.to);
+  if (!approvalId || !idempotencyKey || !sessionKey || !channel || !to) {
+    return { ok: false, reason: "approved exec completion context is incomplete" };
+  }
+  if (idempotencyKey !== `exec-approval-followup:${approvalId}`) {
+    return { ok: false, reason: "approved exec completion idempotency key mismatch" };
+  }
+  if (idempotencyKey !== params.idempotencyKey) {
+    return { ok: false, reason: "approved exec completion context does not match request" };
+  }
+  if (!params.sessionKey || sessionKey !== params.sessionKey) {
+    return { ok: false, reason: "approved exec completion session mismatch" };
+  }
+  if (channel !== params.channel) {
+    return { ok: false, reason: "approved exec completion channel mismatch" };
+  }
+  if (!params.to || to !== params.to) {
+    return { ok: false, reason: "approved exec completion target mismatch" };
+  }
+
+  const accountId = normalizeOptionalContextString(params.raw.accountId);
+  if (params.accountId && accountId !== params.accountId) {
+    return { ok: false, reason: "approved exec completion account mismatch" };
+  }
+  const contextThreadId = normalizeOptionalContextString(params.raw.threadId);
+  const expectedThreadId =
+    params.threadId === undefined || params.threadId === null ? undefined : String(params.threadId);
+  if (expectedThreadId && contextThreadId !== expectedThreadId) {
+    return { ok: false, reason: "approved exec completion thread mismatch" };
+  }
+
+  return {
+    ok: true,
+    value: {
+      source: "approved_exec_completion",
+      approvalId,
+      idempotencyKey,
+      sessionKey,
+      channel,
+      to,
+      ...(params.accountId ? { accountId: params.accountId } : accountId ? { accountId } : {}),
+      ...(expectedThreadId
+        ? { threadId: expectedThreadId }
+        : contextThreadId
+          ? { threadId: contextThreadId }
+          : {}),
+    },
+  };
+}
+
 export const agentHandlers: GatewayRequestHandlers = {
   agent: async ({ params, respond, context, client, isWebchatConnect }) => {
     const p = params;
@@ -362,6 +464,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       bootstrapContextMode?: "full" | "lightweight";
       bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
       internalEvents?: AgentInternalEvent[];
+      actionSinkContext?: unknown;
       idempotencyKey: string;
       timeout?: number;
       bestEffortDeliver?: boolean;
@@ -875,6 +978,29 @@ export const agentHandlers: GatewayRequestHandlers = {
         : resolvedChannel);
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
+    const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
+    const actionSinkContextResult = normalizeApprovedExecCompletionActionSinkContext({
+      raw: request.actionSinkContext,
+      idempotencyKey: idem,
+      deliver,
+      sessionKey: resolvedSessionKey,
+      channel: resolvedChannel,
+      to: resolvedTo,
+      accountId: resolvedAccountId,
+      threadId: resolvedThreadId,
+    });
+    if (!actionSinkContextResult.ok) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid actionSinkContext: ${actionSinkContextResult.reason}`,
+        ),
+      );
+      return;
+    }
+    const actionSinkContext = actionSinkContextResult.value;
 
     // Register before the accepted ack so an immediate chat.abort/sessions.abort
     // cannot race the active-run entry. Agent RPC runs use the agent timeout;
@@ -953,7 +1079,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         }
       }
 
-      const resolvedThreadId = explicitThreadId ?? deliveryPlan.resolvedThreadId;
       const ingressAgentId =
         agentId &&
         (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
@@ -977,6 +1102,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           channel: resolvedChannel,
           accountId: resolvedAccountId,
           threadId: resolvedThreadId,
+          actionSinkContext,
           runContext: {
             messageChannel: originMessageChannel,
             accountId: resolvedAccountId,

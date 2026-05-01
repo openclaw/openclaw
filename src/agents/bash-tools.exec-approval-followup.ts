@@ -229,6 +229,19 @@ function buildAgentFollowupArgs(params: {
   turnSourceThreadId?: string | number;
 }) {
   const { deliveryTarget, sessionOnlyOriginChannel } = params;
+  const idempotencyKey = `exec-approval-followup:${params.approvalId}`;
+  const actionSinkContext = deliveryTarget.deliver
+    ? {
+        source: "approved_exec_completion" as const,
+        approvalId: params.approvalId,
+        idempotencyKey,
+        sessionKey: params.sessionKey,
+        channel: deliveryTarget.channel,
+        to: deliveryTarget.to,
+        ...(deliveryTarget.accountId ? { accountId: deliveryTarget.accountId } : {}),
+        ...(deliveryTarget.threadId !== undefined ? { threadId: deliveryTarget.threadId } : {}),
+      }
+    : undefined;
   return {
     sessionKey: params.sessionKey,
     message: buildExecApprovalFollowupPrompt(params.resultText),
@@ -250,7 +263,8 @@ function buildAgentFollowupArgs(params: {
       : sessionOnlyOriginChannel
         ? params.turnSourceThreadId
         : undefined,
-    idempotencyKey: `exec-approval-followup:${params.approvalId}`,
+    idempotencyKey,
+    ...(actionSinkContext ? { actionSinkContext } : {}),
   };
 }
 

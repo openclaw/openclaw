@@ -128,6 +128,20 @@ export const PollParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const AgentActionSinkContextSchema = Type.Object(
+  {
+    source: Type.Literal("approved_exec_completion"),
+    approvalId: NonEmptyString,
+    idempotencyKey: NonEmptyString,
+    sessionKey: NonEmptyString,
+    channel: NonEmptyString,
+    to: NonEmptyString,
+    accountId: Type.Optional(Type.String()),
+    threadId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentParamsSchema = Type.Object(
   {
     message: NonEmptyString,
@@ -162,6 +176,7 @@ export const AgentParamsSchema = Type.Object(
     ),
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
+    actionSinkContext: Type.Optional(AgentActionSinkContextSchema),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
   },

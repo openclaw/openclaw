@@ -106,6 +106,16 @@ describe("exec approval followup", () => {
         accountId: target.accountId,
         threadId: target.threadId,
         idempotencyKey: `exec-approval-followup:req-${target.channel}`,
+        actionSinkContext: {
+          source: "approved_exec_completion",
+          approvalId: `req-${target.channel}`,
+          idempotencyKey: `exec-approval-followup:req-${target.channel}`,
+          sessionKey: target.sessionKey,
+          channel: target.channel,
+          to: target.to,
+          accountId: target.accountId,
+          threadId: target.threadId,
+        },
       }),
       { expectFinal: true },
     );
