@@ -553,6 +553,9 @@ Two ways to start an ACP session:
   normalize OpenClaw Codex refs such as `openai-codex/gpt-5.4` to Codex
   ACP startup config before `session/new`; slash forms such as
   `openai-codex/gpt-5.4/high` also set Codex ACP reasoning effort.
+  `openai-codex/gpt-5.5` requires Codex ACP adapter `0.12.0` or newer
+  when the adapter command pins an explicit `@zed-industries/codex-acp`
+  version; older pinned adapters fail early with a clear upgrade hint.
   Other harnesses must advertise ACP `models` and support
   `session/set_model`; otherwise OpenClaw/acpx fails clearly instead of
   silently falling back to the target agent default.
@@ -783,15 +786,15 @@ roots.
 `/acp` has convenience commands and a generic setter. Equivalent
 operations:
 
-| Command                      | Maps to                              | Notes                                                                                                                                                                          |
-| ---------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to `reasoning_effort`. |
-| `/acp set thinking <level>`  | runtime config key `thinking`        | For Codex ACP, OpenClaw sends the corresponding `reasoning_effort` where the adapter supports one.                                                                             |
-| `/acp permissions <profile>` | runtime config key `approval_policy` | —                                                                                                                                                                              |
-| `/acp timeout <seconds>`     | runtime config key `timeout`         | —                                                                                                                                                                              |
-| `/acp cwd <path>`            | runtime cwd override                 | Direct update.                                                                                                                                                                 |
-| `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                          |
-| `/acp reset-options`         | clears all runtime overrides         | —                                                                                                                                                                              |
+| Command                      | Maps to                              | Notes                                                                                                                                                                                                                                                               |
+| ---------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to `reasoning_effort`; `gpt-5.5` is guarded to explicit `@zed-industries/codex-acp` `0.12.0+` adapter pins. |
+| `/acp set thinking <level>`  | runtime config key `thinking`        | For Codex ACP, OpenClaw sends the corresponding `reasoning_effort` where the adapter supports one.                                                                                                                                                                  |
+| `/acp permissions <profile>` | runtime config key `approval_policy` | —                                                                                                                                                                                                                                                                   |
+| `/acp timeout <seconds>`     | runtime config key `timeout`         | —                                                                                                                                                                                                                                                                   |
+| `/acp cwd <path>`            | runtime cwd override                 | Direct update.                                                                                                                                                                                                                                                      |
+| `/acp set <key> <value>`     | generic                              | `key=cwd` uses the cwd override path.                                                                                                                                                                                                                               |
+| `/acp reset-options`         | clears all runtime overrides         | —                                                                                                                                                                                                                                                                   |
 
 ## acpx harness, plugin setup, and permissions
 

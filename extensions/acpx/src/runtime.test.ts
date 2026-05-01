@@ -10,6 +10,7 @@ type TestSessionStore = {
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
 const CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@^0.12.0";
+const OLD_CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@0.11.1";
 const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 
 function makeRuntime(
@@ -220,6 +221,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   it("injects Codex ACP startup config into the scoped registry", () => {
     expect(__testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
     expect(__testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);
+    expect(__testing.readCodexAcpPackageVersionFromCommand(CODEX_ACP_COMMAND)).toBe("^0.12.0");
+    expect(__testing.supportsCodexAcpGpt55(CODEX_ACP_COMMAND)).toBe(true);
+    expect(__testing.supportsCodexAcpGpt55(OLD_CODEX_ACP_COMMAND)).toBe(false);
     expect(
       __testing.appendCodexAcpConfigOverrides(CODEX_ACP_COMMAND, {
         model: "gpt-5.4",
@@ -260,6 +264,38 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         model: "gpt-5.5",
       }),
     );
+  });
+
+  it("rejects gpt-5.5 startup for explicit pre-0.12 Codex ACP adapters", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? OLD_CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await expect(
+      runtime.ensureSession({
+        sessionKey: "agent:codex:acp:test",
+        agent: "codex",
+        mode: "persistent",
+        model: "openai-codex/gpt-5.5",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_INVALID_RUNTIME_OPTION",
+      message: expect.stringContaining("@zed-industries/codex-acp >= 0.12.0"),
+    });
+
+    expect(ensure).not.toHaveBeenCalled();
   });
 
   it("maps explicit Codex ACP thinking to startup reasoning effort", async () => {
@@ -323,6 +359,37 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       value: "gpt-5.4",
     });
     expect(setConfigOption).toHaveBeenCalledOnce();
+  });
+
+  it("rejects gpt-5.5 model config controls for explicit pre-0.12 Codex ACP adapters", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: OLD_CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+
+    await expect(
+      runtime.setConfigOption({
+        handle,
+        key: "model",
+        value: "openai-codex/gpt-5.5",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_INVALID_RUNTIME_OPTION",
+      message: expect.stringContaining("@zed-industries/codex-acp >= 0.12.0"),
+    });
+
+    expect(setConfigOption).not.toHaveBeenCalled();
   });
 
   it("normalizes Codex ACP slash reasoning suffixes to config controls", async () => {

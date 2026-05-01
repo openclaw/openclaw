@@ -201,6 +201,67 @@ function isCodexAcpPackageSpec(value: string): boolean {
   return /^@zed-industries\/codex-acp(?:@.+)?$/i.test(value.trim());
 }
 
+function readCodexAcpPackageVersionSpec(value: string): string | undefined {
+  const match = /^@zed-industries\/codex-acp(?:@(?<version>.+))?$/i.exec(value.trim());
+  const version = match?.groups?.version?.trim();
+  return version ? version : undefined;
+}
+
+function readCodexAcpPackageVersionFromCommand(command: string | undefined): string | undefined {
+  if (!command) {
+    return undefined;
+  }
+  for (const part of unwrapEnvCommand(splitCommandParts(command.trim()))) {
+    const version = readCodexAcpPackageVersionSpec(part);
+    if (version) {
+      return version;
+    }
+  }
+  return undefined;
+}
+
+function parseSemver(value: string): { major: number; minor: number; patch: number } | undefined {
+  const match = /(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)/.exec(value);
+  if (!match?.groups) {
+    return undefined;
+  }
+  return {
+    major: Number.parseInt(match.groups.major, 10),
+    minor: Number.parseInt(match.groups.minor, 10),
+    patch: Number.parseInt(match.groups.patch, 10),
+  };
+}
+
+function isCodexAcpGpt55Model(model: string | undefined): boolean {
+  return model === "gpt-5.5" || model?.startsWith("gpt-5.5-") === true;
+}
+
+function supportsCodexAcpGpt55(command: string | undefined): boolean {
+  const versionSpec = readCodexAcpPackageVersionFromCommand(command);
+  if (!versionSpec) {
+    return true;
+  }
+  const semver = parseSemver(versionSpec);
+  if (!semver) {
+    return true;
+  }
+  return semver.major > 0 || semver.minor >= 12;
+}
+
+function assertCodexAcpCommandSupportsModel(
+  command: string | undefined,
+  override: CodexAcpModelOverride | undefined,
+): void {
+  if (!isCodexAcpGpt55Model(override?.model) || supportsCodexAcpGpt55(command)) {
+    return;
+  }
+  const versionSpec = readCodexAcpPackageVersionFromCommand(command);
+  throw new AcpRuntimeError(
+    "ACP_INVALID_RUNTIME_OPTION",
+    `Codex ACP model "${override?.model}" requires @zed-industries/codex-acp >= 0.12.0; current command uses ${versionSpec}. Upgrade the Codex ACP adapter or use gpt-5.4.`,
+  );
+}
+
 function isCodexAcpCommand(command: string | undefined): boolean {
   if (!command) {
     return false;
@@ -489,6 +550,7 @@ export class AcpxRuntime implements AcpRuntime {
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
         ? normalizeCodexAcpModelOverride(input.model, input.thinking)
         : undefined;
+    assertCodexAcpCommandSupportsModel(command, codexModelOverride);
 
     if (!codexModelOverride) {
       return delegate.ensureSession(input);
@@ -549,6 +611,7 @@ export class AcpxRuntime implements AcpRuntime {
           return;
         }
         if (override) {
+          assertCodexAcpCommandSupportsModel(command, override);
           if (override.model) {
             await delegate.setConfigOption({
               ...input,
@@ -607,7 +670,9 @@ export const __testing = {
   assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
   isCodexAcpCommand,
+  readCodexAcpPackageVersionFromCommand,
   normalizeCodexAcpModelOverride,
+  supportsCodexAcpGpt55,
 };
 
 export type { AcpAgentRegistry, AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore };
