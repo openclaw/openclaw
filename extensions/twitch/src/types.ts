@@ -95,15 +95,6 @@ export interface TwitchChatMessage {
   chatType?: "group";
 }
 
-/**
- * Send result from Twitch client
- */
-export interface SendResult {
-  ok: boolean;
-  error?: string;
-  messageId?: string;
-}
-
 // Re-export core types for convenience
 export type {
   ChannelAccountSnapshot,

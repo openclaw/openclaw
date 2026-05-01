@@ -114,12 +114,3 @@ export async function requestXaiCodeExecution(params: {
     },
   );
 }
-
-export const __testing = {
-  buildXaiCodeExecutionPayload,
-  requestXaiCodeExecution,
-  resolveXaiCodeExecutionConfig,
-  resolveXaiCodeExecutionMaxTurns,
-  resolveXaiCodeExecutionModel,
-  XAI_DEFAULT_CODE_EXECUTION_MODEL,
-} as const;
