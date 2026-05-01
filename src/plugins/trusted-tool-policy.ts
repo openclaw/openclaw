@@ -28,6 +28,7 @@ export async function runTrustedToolPolicies(
           return sessionExtensionCache.get(cacheKey) as T | undefined;
         }
         const value = getPluginSessionExtensionSync<T>({
+          cfg: ctx.config,
           pluginId: registration.pluginId,
           sessionKey: ctx.sessionKey,
           namespace: normalizedNamespace,

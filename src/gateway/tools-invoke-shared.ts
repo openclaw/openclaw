@@ -255,6 +255,7 @@ export async function invokeGatewayTool(params: {
       toolCallId,
       ctx: {
         agentId,
+        config: params.cfg,
         sessionKey,
         loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },

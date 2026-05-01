@@ -1057,6 +1057,7 @@ export function createHookRunner(
                 return sessionExtensionCache.get(normalizedNamespace) as T | undefined;
               }
               const extension = getPluginSessionExtensionSync<T>({
+                cfg: baseCtx.config,
                 pluginId: reg.pluginId,
                 sessionKey: baseCtx.sessionKey,
                 namespace: normalizedNamespace,

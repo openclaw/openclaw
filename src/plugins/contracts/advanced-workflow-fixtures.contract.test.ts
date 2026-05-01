@@ -386,6 +386,58 @@ describe("advanced workflow plugin contract fixtures", () => {
     });
   });
 
+  it("reads trusted policy state from the caller config session store", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(resolvePreferredOpenClawTmpDir(), "openclaw-policy-config-fixture-"),
+    );
+    const storePath = path.join(stateDir, "sessions.json");
+    try {
+      const { config, registry } = createPluginRegistryFixture({ session: { store: storePath } });
+      registerTestPlugin({
+        registry,
+        config,
+        record: createPluginRecord({
+          id: "policy-gate-fixture",
+          name: "Policy Gate Fixture",
+          origin: "bundled",
+        }),
+        register(api) {
+          registerPolicyGateFixture(api, []);
+        },
+      });
+      setActivePluginRegistry(registry.registry);
+
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:policy-config-regression"] = {
+          sessionId: "session-policy-config",
+          updatedAt: Date.now(),
+          pluginExtensions: {
+            "policy-gate-fixture": {
+              policy: { locked: true, reason: "custom store policy" },
+            },
+          },
+        };
+        return undefined;
+      });
+
+      await expect(
+        runTrustedToolPolicies(
+          { toolName: "mutating_tool", params: {} },
+          {
+            config,
+            toolName: "mutating_tool",
+            sessionKey: "agent:main:policy-config-regression",
+          },
+        ),
+      ).resolves.toEqual({
+        block: true,
+        blockReason: "custom store policy",
+      });
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("schedules and cleans a background monitor wake-up while preserving heartbeat context", async () => {
     const scheduled: ReturnType<OpenClawPluginApi["scheduleSessionTurn"]>[] = [];
 

@@ -398,6 +398,7 @@ export type PluginHookReplyDispatchResult = {
 
 export type PluginHookToolContext = {
   agentId?: string;
+  config?: OpenClawConfig;
   sessionKey?: string;
   sessionId?: string;
   runId?: string;
