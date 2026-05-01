@@ -16,6 +16,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 }));
 
 function isSpeechRequestBody(value: unknown): value is {
+  [key: string]: unknown;
   model?: string;
   voice?: string;
   speed?: number;
@@ -25,6 +26,7 @@ function isSpeechRequestBody(value: unknown): value is {
 }
 
 function parseRequestBody(init: RequestInit | undefined): {
+  [key: string]: unknown;
   model?: string;
   voice?: string;
   speed?: number;
@@ -73,6 +75,9 @@ describe("buildOpenAISpeechProvider", () => {
             speed: 1.25,
             instructions: " Speak warmly ",
             responseFormat: " WAV ",
+            extraBody: {
+              lang: "en-US",
+            },
           },
         },
       },
@@ -86,6 +91,9 @@ describe("buildOpenAISpeechProvider", () => {
       speed: 1.25,
       instructions: "Speak warmly",
       responseFormat: "wav",
+      extraBody: {
+        lang: "en-US",
+      },
     });
   });
 
@@ -284,5 +292,40 @@ describe("buildOpenAISpeechProvider", () => {
     expect(result.outputFormat).toBe("wav");
     expect(result.fileExtension).toBe(".wav");
     expect(result.voiceCompatible).toBe(false);
+  });
+
+  it("passes extra_body config through to OpenAI-compatible speech requests", async () => {
+    const provider = buildOpenAISpeechProvider();
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = parseRequestBody(init);
+      expect(body).toMatchObject({
+        model: "custom-tts",
+        voice: "custom-voice",
+        lang: "en-US",
+        response_format: "mp3",
+      });
+      return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+    const result = await provider.synthesize({
+      text: "hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "sk-test",
+        baseUrl: "https://proxy.example.com/openai/v1",
+        model: "custom-tts",
+        voice: "custom-voice",
+        responseFormat: "mp3",
+        extra_body: {
+          lang: "en-US",
+        },
+      },
+      target: "audio-file",
+      timeoutMs: 1_000,
+    });
+
+    expect(result.outputFormat).toBe("mp3");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
