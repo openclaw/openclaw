@@ -14,6 +14,51 @@ const WebSearchSchema = {
       type: "number",
       description: "Number of results to return.",
       minimum: 1,
+      maximum: 20,
+    },
+    country: {
+      type: "string",
+      description: "2-letter country code for region-specific results.",
+    },
+    language: {
+      type: "string",
+      description: "ISO 639-1 language code for results.",
+    },
+    freshness: {
+      type: "string",
+      description: "Filter by time: day, week, month, or year.",
+    },
+    date_after: {
+      type: "string",
+      description: "Only results published after this date (YYYY-MM-DD).",
+    },
+    date_before: {
+      type: "string",
+      description: "Only results published before this date (YYYY-MM-DD).",
+    },
+    search_lang: {
+      type: "string",
+      description: "Brave search result language code.",
+    },
+    ui_lang: {
+      type: "string",
+      description: "Brave UI locale code in language-region format.",
+    },
+    domain_filter: {
+      type: "array",
+      items: { type: "string" },
+      description: "Perplexity native Search API domain filter.",
+    },
+    max_tokens: {
+      type: "number",
+      description: "Perplexity native Search API total content budget.",
+      minimum: 1,
+      maximum: 1000000,
+    },
+    max_tokens_per_page: {
+      type: "number",
+      description: "Perplexity native Search API max tokens extracted per page.",
+      minimum: 1,
     },
   },
 } satisfies Record<string, unknown>;
