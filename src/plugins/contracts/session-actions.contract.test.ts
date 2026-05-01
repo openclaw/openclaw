@@ -9,6 +9,7 @@ import { pluginHostHookHandlers } from "../../gateway/server-methods/plugin-host
 import type { GatewayClient, RespondFn } from "../../gateway/server-methods/types.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -759,5 +760,71 @@ describe("plugin session actions", () => {
         },
       }),
     ]);
+  });
+
+  it("blocks agent events from stale and non-activating plugin API closures", () => {
+    const observed: unknown[] = [];
+    const unsubscribe = onAgentEvent((event) => observed.push(event));
+    const { config, registry } = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "stale-event-plugin",
+        name: "Stale Event Plugin",
+        origin: "bundled",
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    try {
+      expect(
+        capturedApi?.emitAgentEvent({
+          runId: "stale-run",
+          stream: "approval",
+          data: { stale: true },
+        }),
+      ).toEqual({ emitted: false, reason: "plugin is not loaded" });
+
+      const inactiveRegistry = createPluginRegistry({
+        logger: {
+          info() {},
+          warn() {},
+          error() {},
+          debug() {},
+        },
+        runtime: {} as never,
+        activateGlobalSideEffects: false,
+      });
+      let inactiveApi: OpenClawPluginApi | undefined;
+      registerTestPlugin({
+        registry: inactiveRegistry,
+        config,
+        record: createPluginRecord({
+          id: "inactive-event-plugin",
+          name: "Inactive Event Plugin",
+          origin: "bundled",
+        }),
+        register(api) {
+          inactiveApi = api;
+        },
+      });
+      expect(
+        inactiveApi?.emitAgentEvent({
+          runId: "inactive-run",
+          stream: "approval",
+          data: { inactive: true },
+        }),
+      ).toEqual({ emitted: false, reason: "global side effects disabled" });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(observed).toEqual([]);
   });
 });

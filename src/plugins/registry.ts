@@ -2559,13 +2559,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerRuntimeLifecycle: (lifecycle) => registerRuntimeLifecycle(record, lifecycle),
               registerAgentEventSubscription: (subscription) =>
                 registerAgentEventSubscription(record, subscription),
-              emitAgentEvent: (event) =>
-                emitPluginAgentEvent({
+              emitAgentEvent: (event) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return { emitted: false, reason: "global side effects disabled" };
+                }
+                if (!shouldCommitWorkflowSideEffect()) {
+                  return { emitted: false, reason: "plugin is not loaded" };
+                }
+                return emitPluginAgentEvent({
                   pluginId: record.id,
                   pluginName: record.name,
                   origin: record.origin,
                   event,
-                }),
+                });
+              },
               setRunContext: (patch) =>
                 registryParams.activateGlobalSideEffects !== false &&
                 shouldCommitWorkflowSideEffect()
