@@ -60,7 +60,21 @@ export function resolveTelegramInlineButtonsScope(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): TelegramInlineButtonsScope {
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  // Embedded prompt prep calls this from raw config before the active runtime
+  // snapshot has resolved channel credentials. If channels.telegram.botToken is
+  // a non-env SecretRef, `resolveTelegramAccount` throws an unresolved-SecretRef
+  // error (#75433). Treat that as "no inline-button capability for prompt
+  // discovery" instead of crashing the embedded reply run; the runtime send
+  // path uses the resolved snapshot.
+  let account: ReturnType<typeof resolveTelegramAccount>;
+  try {
+    account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  } catch (err) {
+    if (err instanceof Error && /unresolved SecretRef/i.test(err.message)) {
+      return DEFAULT_INLINE_BUTTONS_SCOPE;
+    }
+    throw err;
+  }
   return resolveTelegramInlineButtonsScopeFromCapabilities(account.config.capabilities);
 }
 

@@ -1,7 +1,12 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it } from "vitest";
 import { buildTelegramInteractiveButtons } from "./button-types.js";
 import { describeTelegramInteractiveButtonBehavior } from "./button-types.test-helpers.js";
-import { resolveTelegramTargetChatType } from "./inline-buttons.js";
+import {
+  isTelegramInlineButtonsEnabled,
+  resolveTelegramInlineButtonsScope,
+  resolveTelegramTargetChatType,
+} from "./inline-buttons.js";
 
 describe("resolveTelegramTargetChatType", () => {
   it("returns 'direct' for positive numeric IDs", () => {
@@ -83,5 +88,44 @@ describe("buildTelegramInteractiveButtons callback rewrites", () => {
         },
       ],
     ]);
+  });
+});
+
+describe("resolveTelegramInlineButtonsScope (#75433 SecretRef tolerance)", () => {
+  // Embedded prompt prep calls this from raw config before the active runtime
+  // snapshot has resolved channel credentials. Returning a benign default
+  // instead of throwing keeps the embedded reply run alive.
+
+  it("returns the safe default scope when botToken is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramInlineButtonsScope({ cfg })).not.toThrow();
+    // The DEFAULT_INLINE_BUTTONS_SCOPE is "all" — the contract is just that
+    // we do not crash. Verify isTelegramInlineButtonsEnabled also tolerates
+    // the same condition (used by describeMessageTool's buttonsEnabled flag).
+    expect(() => isTelegramInlineButtonsEnabled({ cfg })).not.toThrow();
+  });
+
+  it("returns the safe default scope when scoped account token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            ops: {
+              botToken: { source: "exec", provider: "default", id: "telegram-ops" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramInlineButtonsScope({ cfg, accountId: "ops" })).not.toThrow();
+    expect(() => isTelegramInlineButtonsEnabled({ cfg, accountId: "ops" })).not.toThrow();
   });
 });

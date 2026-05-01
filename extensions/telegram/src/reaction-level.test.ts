@@ -136,4 +136,39 @@ describe("resolveTelegramReactionLevel", () => {
     const result = resolveTelegramReactionLevel({ cfg, accountId: "work" });
     expectMinimalFlags(result);
   });
+
+  // Regression for #75433: when channels.telegram.botToken is configured as
+  // an unresolved SecretRef, prompt-prep reaction guidance must NOT throw and
+  // crash the embedded reply run. Return the safe minimal default instead.
+  it("falls back to minimal when botToken is an unresolved SecretRef instead of throwing", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramReactionLevel({ cfg })).not.toThrow();
+    const result = resolveTelegramReactionLevel({ cfg });
+    expectMinimalFlags(result);
+  });
+
+  it("falls back to minimal when scoped account token is an unresolved SecretRef instead of throwing", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            ops: {
+              botToken: { source: "exec", provider: "default", id: "telegram-ops" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() => resolveTelegramReactionLevel({ cfg, accountId: "ops" })).not.toThrow();
+    const result = resolveTelegramReactionLevel({ cfg, accountId: "ops" });
+    expectMinimalFlags(result);
+  });
 });
