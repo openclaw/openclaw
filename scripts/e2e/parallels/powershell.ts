@@ -62,7 +62,8 @@ $env:OPENCLAW_PARALLELS_AGENT_CONFIG_PATCH = @'
 ${payloadJson}
 '@
 $env:OPENCLAW_PARALLELS_AGENT_CONFIG_PATH = $agentTurnConfigPatchPath
-node.exe -e @'
+$agentTurnConfigPatchScriptPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-agent-turn-config-patch.cjs'
+@'
 const fs = require("node:fs");
 const path = require("node:path");
 const configPath = process.env.OPENCLAW_PARALLELS_AGENT_CONFIG_PATH;
@@ -93,8 +94,10 @@ for (const op of payload.operations || []) {
 }
 fs.mkdirSync(path.dirname(configPath), { recursive: true });
 fs.writeFileSync(configPath, JSON.stringify(cfg, null, 2) + "\\n", { mode: 0o600 });
-'@
+'@ | Set-Content -Path $agentTurnConfigPatchScriptPath -Encoding UTF8
+node.exe $agentTurnConfigPatchScriptPath
 $agentTurnConfigPatchExit = $LASTEXITCODE
+Remove-Item $agentTurnConfigPatchScriptPath -Force -ErrorAction SilentlyContinue
 Remove-Item Env:OPENCLAW_PARALLELS_AGENT_CONFIG_PATCH -Force -ErrorAction SilentlyContinue
 Remove-Item Env:OPENCLAW_PARALLELS_AGENT_CONFIG_PATH -Force -ErrorAction SilentlyContinue
 if ($agentTurnConfigPatchExit -ne 0) { throw "agent turn config patch failed" }`;
