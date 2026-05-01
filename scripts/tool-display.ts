@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 import {
   TOOL_DISPLAY_CONFIG,
   serializeToolDisplayConfig,
-} from "../src/agents/tool-display-config.js";
+} from "../src/agents/tool-display-config.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");

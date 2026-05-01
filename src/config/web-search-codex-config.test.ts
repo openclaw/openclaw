@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObjectRaw } from "./validation.js";
-import { ToolsWebSearchSchema } from "./zod-schema.agent-runtime.js";
+import { validateConfigObjectRaw } from "./validation.ts";
+import { ToolsWebSearchSchema } from "./zod-schema.agent-runtime.ts";
 
 describe("web search Codex native config validation", () => {
   it("accepts tools.web.search.openaiCodex", async () => {
