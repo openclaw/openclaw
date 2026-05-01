@@ -109,6 +109,10 @@ function setup(config: Record<string, unknown>): Registered {
   return { methods, tools, service };
 }
 
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
+}
+
 async function registerVoiceCallCli(
   program: Command,
   pluginConfig: Record<string, unknown> = { provider: "mock" },
@@ -273,6 +277,26 @@ describe("voice-call plugin", () => {
       expect.stringContaining("Runtime not started; setup incomplete"),
     );
     expect(noopLogger.warn).toHaveBeenCalledWith(expect.stringContaining("TWILIO_ACCOUNT_SID"));
+  });
+
+  it("registers Twilio configs with SecretRef auth tokens", async () => {
+    const authToken = envRef("TWILIO_AUTH_TOKEN");
+    const { service } = setup({
+      enabled: true,
+      provider: "twilio",
+      fromNumber: "+15550001234",
+      twilio: {
+        accountSid: "AC123",
+        authToken,
+      },
+    });
+
+    await service?.start(createServiceContext());
+
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createVoiceCallRuntime).mock.calls[0]?.[0]?.config.twilio?.authToken).toEqual(
+      authToken,
+    );
   });
 
   it("still reports missing provider setup when a command needs the runtime", async () => {

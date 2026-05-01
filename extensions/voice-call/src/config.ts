@@ -2,6 +2,12 @@ import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES,
   type RealtimeVoiceAgentConsultToolPolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  buildSecretInputSchema,
+  hasConfiguredSecretInput,
+  normalizeResolvedSecretInputString,
+  type SecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 import { z } from "openclaw/plugin-sdk/zod";
 import { TtsAutoSchema, TtsConfigSchema, TtsModeSchema, TtsProviderSchema } from "../api.js";
 import { deepMergeDefined } from "./deep-merge.js";
@@ -39,6 +45,8 @@ export type InboundPolicy = z.infer<typeof InboundPolicySchema>;
 // Provider-Specific Configuration
 // -----------------------------------------------------------------------------
 
+const SecretInputSchema = buildSecretInputSchema();
+
 export const TelnyxConfigSchema = z
   .object({
     /** Telnyx API v2 key */
@@ -56,10 +64,12 @@ export const TwilioConfigSchema = z
     /** Twilio Account SID */
     accountSid: z.string().min(1).optional(),
     /** Twilio Auth Token */
-    authToken: z.string().min(1).optional(),
+    authToken: SecretInputSchema.optional(),
   })
   .strict();
-export type TwilioConfig = z.infer<typeof TwilioConfigSchema>;
+export type TwilioConfig = Omit<z.infer<typeof TwilioConfigSchema>, "authToken"> & {
+  authToken?: SecretInput;
+};
 
 export const PlivoConfigSchema = z
   .object({
@@ -393,13 +403,15 @@ export const VoiceCallConfigSchema = z
   .strict();
 
 export type VoiceCallConfig = z.infer<typeof VoiceCallConfigSchema>;
-type DeepPartial<T> =
-  T extends Array<infer U>
+type DeepPartial<T> = T extends SecretInput
+  ? T
+  : T extends Array<infer U>
     ? DeepPartial<U>[]
     : T extends object
       ? { [K in keyof T]?: DeepPartial<T[K]> }
       : T;
 export type VoiceCallConfigInput = DeepPartial<VoiceCallConfig>;
+const TWILIO_AUTH_TOKEN_PATH = "plugins.entries.voice-call.config.twilio.authToken";
 
 // -----------------------------------------------------------------------------
 // Configuration Helpers
@@ -456,6 +468,15 @@ function sanitizeVoiceCallProviderConfigs(
       (entry): entry is [string, Record<string, unknown>] => entry[1] !== undefined,
     ),
   );
+}
+
+export function resolveTwilioAuthToken(
+  config: Pick<VoiceCallConfig, "twilio">,
+): string | undefined {
+  return normalizeResolvedSecretInputString({
+    value: config.twilio?.authToken,
+    path: TWILIO_AUTH_TOKEN_PATH,
+  });
 }
 
 export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCallConfig {
@@ -608,7 +629,7 @@ export function validateProviderConfig(config: VoiceCallConfig): {
         "plugins.entries.voice-call.config.twilio.accountSid is required (or set TWILIO_ACCOUNT_SID env)",
       );
     }
-    if (!config.twilio?.authToken) {
+    if (!hasConfiguredSecretInput(config.twilio?.authToken)) {
       errors.push(
         "plugins.entries.voice-call.config.twilio.authToken is required (or set TWILIO_AUTH_TOKEN env)",
       );

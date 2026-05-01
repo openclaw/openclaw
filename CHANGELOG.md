@@ -109,6 +109,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Voice Call: resolve SecretRef-backed Twilio auth tokens and realtime/streaming provider API keys before initializing call providers, so SecretRef-backed voice-call credentials reach runtime as strings. (#73632) Thanks @VACInc.
 - Security/outbound: strip re-formed HTML tags during plain-text sanitization so nested tag fragments cannot leave a CodeQL-detected `<script>` sequence behind. Thanks @vincentkoc.
 - Security/secrets: compare credential bytes with padded timing-safe buffers instead of hashing candidate passwords before equality checks. Thanks @vincentkoc.
 - Security/QQBot: sanitize debug log arguments before writing to `console.*`, so gateway payload fields cannot forge extra log lines when debug logging is enabled. Thanks @vincentkoc.

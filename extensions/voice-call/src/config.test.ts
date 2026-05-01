@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  VoiceCallConfigSchema,
+  resolveTwilioAuthToken,
   validateProviderConfig,
   normalizeVoiceCallConfig,
   resolveVoiceCallConfig,
@@ -9,6 +11,10 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 function createBaseConfig(provider: "telnyx" | "twilio" | "plivo" | "mock"): VoiceCallConfig {
   return createVoiceCallBaseConfig({ provider });
+}
+
+function envRef(id: string) {
+  return { source: "env" as const, provider: "default", id };
 }
 
 function requireElevenLabsTtsConfig(config: Pick<VoiceCallConfig, "tts">) {
@@ -80,6 +86,24 @@ describe("validateProviderConfig", () => {
   });
 
   describe("twilio provider", () => {
+    it("accepts SecretRef-backed auth tokens before runtime resolution", () => {
+      const config = VoiceCallConfigSchema.parse({
+        enabled: true,
+        provider: "twilio",
+        fromNumber: "+15550001234",
+        twilio: {
+          accountSid: "AC123",
+          authToken: envRef("TWILIO_AUTH_TOKEN"),
+        },
+      });
+
+      expect(config.twilio?.authToken).toEqual(envRef("TWILIO_AUTH_TOKEN"));
+      expect(validateProviderConfig(config)).toMatchObject({ valid: true, errors: [] });
+      expect(() => resolveTwilioAuthToken(config)).toThrow(
+        'plugins.entries.voice-call.config.twilio.authToken: unresolved SecretRef "env:default:TWILIO_AUTH_TOKEN"',
+      );
+    });
+
     it("passes validation with mixed config and env vars", () => {
       process.env.TWILIO_AUTH_TOKEN = "secret";
       let config = createBaseConfig("twilio");
