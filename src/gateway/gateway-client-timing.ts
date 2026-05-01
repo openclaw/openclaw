@@ -37,13 +37,10 @@ const KNOWN_TIMING_STAGES = new Set<GatewayClientTimingStage>([
   "command_complete",
 ]);
 
+const SAFE_TIMING_STRING = /^[A-Za-z0-9_.:-]{1,120}$/;
+
 function isGatewayClientTimingStage(value: string): value is GatewayClientTimingStage {
-  for (const known of KNOWN_TIMING_STAGES) {
-    if (known === value) {
-      return true;
-    }
-  }
-  return false;
+  return KNOWN_TIMING_STAGES.has(value as GatewayClientTimingStage);
 }
 
 export function isGatewayClientTimingDebugEnabled(
@@ -52,19 +49,27 @@ export function isGatewayClientTimingDebugEnabled(
   return env[OPENCLAW_GATEWAY_CLIENT_TIMING_DEBUG] === "1";
 }
 
+function sanitizeTimingString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!SAFE_TIMING_STRING.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function resolveErrorCode(err: Error): string | undefined {
-  const gatewayCode = Reflect.get(err, "gatewayCode");
-  if (typeof gatewayCode === "string" && gatewayCode.trim()) {
-    return gatewayCode.trim();
+  const gatewayCode = sanitizeTimingString(Reflect.get(err, "gatewayCode"));
+  if (gatewayCode) {
+    return gatewayCode;
   }
   const code = Reflect.get(err, "code");
   if (typeof code === "number" && Number.isFinite(code)) {
     return String(code);
   }
-  if (typeof code === "string" && code.trim()) {
-    return code.trim();
-  }
-  return undefined;
+  return sanitizeTimingString(code);
 }
 
 export function sanitizeGatewayClientTimingPayload(
@@ -82,27 +87,27 @@ export function sanitizeGatewayClientTimingPayload(
   if (ok === null) {
     return null;
   }
-  const method = input.method;
-  if (typeof method !== "string") {
+  const method = sanitizeTimingString(input.method);
+  if (!method) {
     return null;
   }
-  const requestKind = input.requestKind;
-  if (typeof requestKind !== "string") {
+  const requestKind = sanitizeTimingString(input.requestKind);
+  if (!requestKind) {
     return null;
   }
   const out: GatewayClientTimingEvent = {
     stage,
-    elapsedMs: Math.round(elapsedMs),
+    elapsedMs: Math.max(0, Math.round(elapsedMs)),
     ok,
     method,
     requestKind,
   };
-  const errorName = input.errorName;
-  if (typeof errorName === "string" && errorName.length > 0) {
+  const errorName = sanitizeTimingString(input.errorName);
+  if (errorName) {
     out.errorName = errorName;
   }
-  const errorCode = input.errorCode;
-  if (typeof errorCode === "string" && errorCode.length > 0) {
+  const errorCode = sanitizeTimingString(input.errorCode);
+  if (errorCode) {
     out.errorCode = errorCode;
   }
   return out;
@@ -139,15 +144,13 @@ export function createGatewayClientTimingSession(
   if (!isGatewayClientTimingDebugEnabled(env)) {
     return undefined;
   }
+  const baseMethod = sanitizeTimingString(method) ?? "unknown";
+  const baseRequestKind = sanitizeTimingString(requestKind) ?? "unknown";
   const t0 = performance.now();
   return {
     emit(stage, ok, err, opts) {
-      const resolvedMethod =
-        typeof opts?.method === "string" && opts.method.length > 0 ? opts.method : method;
-      const resolvedRequestKind =
-        typeof opts?.requestKind === "string" && opts.requestKind.length > 0
-          ? opts.requestKind
-          : requestKind;
+      const resolvedMethod = sanitizeTimingString(opts?.method) ?? baseMethod;
+      const resolvedRequestKind = sanitizeTimingString(opts?.requestKind) ?? baseRequestKind;
       emitGatewayClientTimingEvent(
         {
           stage,
@@ -157,7 +160,7 @@ export function createGatewayClientTimingSession(
           requestKind: resolvedRequestKind,
           ...(err
             ? {
-                errorName: err.name,
+                errorName: sanitizeTimingString(err.name),
                 errorCode: resolveErrorCode(err),
               }
             : {}),
