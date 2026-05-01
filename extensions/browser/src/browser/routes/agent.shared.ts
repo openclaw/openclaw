@@ -107,6 +107,7 @@ type RouteWithTabParams<T> = {
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   targetId?: string;
+  enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabContext) => Promise<T>;
 };
 
@@ -119,6 +120,17 @@ export async function withRouteTabContext<T>(
   }
   try {
     const tab = await profileCtx.ensureTabAvailable(params.targetId);
+    if (params.enforceCurrentUrlAllowed) {
+      await assertBrowserNavigationResultAllowed({
+        url: tab.url,
+        ...withBrowserNavigationPolicy(params.ctx.state().resolved.ssrfPolicy, {
+          browserProxyMode: resolveBrowserNavigationProxyMode({
+            resolved: params.ctx.state().resolved,
+            profile: profileCtx.profile,
+          }),
+        }),
+      });
+    }
     return await params.run({
       profileCtx,
       tab,
@@ -171,6 +183,7 @@ type RouteWithPwParams<T> = {
   ctx: BrowserRouteContext;
   targetId?: string;
   feature: string;
+  enforceCurrentUrlAllowed?: boolean;
   run: (ctx: RouteTabPwContext) => Promise<T>;
 };
 
@@ -182,6 +195,7 @@ export async function withPlaywrightRouteContext<T>(
     res: params.res,
     ctx: params.ctx,
     targetId: params.targetId,
+    enforceCurrentUrlAllowed: params.enforceCurrentUrlAllowed,
     run: async ({ profileCtx, tab, cdpUrl, resolveTabUrl }) => {
       const pw = await requirePwAi(params.res, params.feature);
       if (!pw) {

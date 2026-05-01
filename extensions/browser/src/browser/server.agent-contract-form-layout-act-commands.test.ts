@@ -11,6 +11,8 @@ import {
 import {
   getBrowserControlServerTestState,
   getPwMocks,
+  setBrowserControlServerSsrFPolicy,
+  setBrowserControlServerTabUrl,
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch, type BrowserTestFetch } from "./test-support/fetch.js";
 
@@ -437,6 +439,26 @@ describe("browser control server", () => {
         path: expect.stringContaining("safe-trace.zip"),
       }),
     );
+  });
+
+  it("blocks guarded debug and export routes for disallowed current tab URLs", async () => {
+    setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+    setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+    const base = await startServerAndBase();
+
+    const consoleRes = await realFetch(`${base}/console?targetId=abcd1234`);
+    expect(consoleRes.status).toBe(400);
+    await expect(consoleRes.json()).resolves.toMatchObject({
+      error: expect.stringMatching(/blocked/i),
+    });
+    expect(pwMocks.getConsoleMessagesViaPlaywright).not.toHaveBeenCalled();
+
+    const responseBody = await postJson<{ error?: string }>(`${base}/response/body`, {
+      targetId: "abcd1234",
+      url: "**/api/data",
+    });
+    expect(responseBody.error).toMatch(/blocked/i);
+    expect(pwMocks.responseBodyViaPlaywright).not.toHaveBeenCalled();
   });
 
   it("wait/download rejects traversal path outside downloads dir", async () => {
