@@ -130,7 +130,9 @@ function waitForTerminalEventHandlers(params: {
       resolve("timeout");
     }, PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
   });
-  timeout?.unref?.();
+  if (timeout) {
+    timeout.unref?.();
+  }
   return Promise.race([settled, timedOut]).then(() => {
     if (timeout) {
       clearTimeout(timeout);
