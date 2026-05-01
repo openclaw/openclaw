@@ -95,10 +95,22 @@ export function assertPathIsNotSymlink(targetPath, label) {
   }
 }
 
-function isPathInside(parentPath, childPath) {
+function isDirectChildPath(parentPath, childPath) {
   const relativePath = path.relative(parentPath, childPath);
   return (
-    relativePath.length > 0 && !relativePath.startsWith("..") && !path.isAbsolute(relativePath)
+    relativePath.length > 0 &&
+    !relativePath.startsWith("..") &&
+    !path.isAbsolute(relativePath) &&
+    !relativePath.includes(path.sep)
+  );
+}
+
+function isLegacyBundledRuntimeDepsNodeModulesPath(targetPath, repoRoot, linkedPath) {
+  const legacyRuntimeDepsRoot = path.resolve(repoRoot, ".local", "bundled-plugin-runtime-deps");
+  const resolvedLinkedPath = path.resolve(path.dirname(targetPath), linkedPath);
+  return (
+    path.basename(resolvedLinkedPath) === "node_modules" &&
+    isDirectChildPath(legacyRuntimeDepsRoot, path.dirname(resolvedLinkedPath))
   );
 }
 
@@ -116,18 +128,13 @@ export function removeLegacyBundledRuntimeDepsSymlink(targetPath, repoRoot) {
     return false;
   }
 
-  const legacyRuntimeDepsRoot = path.resolve(repoRoot, ".local", "bundled-plugin-runtime-deps");
   let linkedPath;
   try {
     linkedPath = fs.readlinkSync(targetPath);
   } catch {
     return false;
   }
-  const resolvedLinkedPath = path.resolve(path.dirname(targetPath), linkedPath);
-  if (
-    path.basename(resolvedLinkedPath) !== "node_modules" ||
-    !isPathInside(legacyRuntimeDepsRoot, resolvedLinkedPath)
-  ) {
+  if (!isLegacyBundledRuntimeDepsNodeModulesPath(targetPath, repoRoot, linkedPath)) {
     return false;
   }
 
