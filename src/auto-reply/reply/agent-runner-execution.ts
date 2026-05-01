@@ -1421,6 +1421,8 @@ export async function runAgentTurnWithFallback(params: {
                 transcriptPrompt: params.transcriptCommandBody,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
+                forceMessageTool:
+                  params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
