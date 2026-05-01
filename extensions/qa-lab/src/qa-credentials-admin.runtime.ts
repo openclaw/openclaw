@@ -61,7 +61,6 @@ const listCredentialsResponseSchema = z.object({
 
 export type QaCredentialAdminListStatus = z.infer<typeof listStatusSchema>;
 export type QaCredentialRecord = z.infer<typeof credentialRecordSchema>;
-export type QaCredentialListResponse = z.infer<typeof listCredentialsResponseSchema>;
 
 export class QaCredentialAdminError extends Error {
   code: string;

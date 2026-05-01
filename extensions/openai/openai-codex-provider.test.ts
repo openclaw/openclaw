@@ -225,13 +225,13 @@ describe("openai codex provider", () => {
             access:
               "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoiYWNjdC1kZXZpY2UtMTIzIn19.signature",
             refresh: "device-refresh-token",
+            accountId: "acct-device-123",
           },
         },
       ],
       defaultModel: "openai-codex/gpt-5.5",
     });
     expect(result?.profiles[0]?.credential).not.toHaveProperty("idToken");
-    expect(result?.profiles[0]?.credential).not.toHaveProperty("accountId");
   });
 
   it("does not log the device pairing code in remote mode", async () => {
