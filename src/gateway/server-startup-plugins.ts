@@ -290,7 +290,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
     baseMethods: params.baseMethods,
     pluginIds: params.startupPluginIds,
     pluginLookUpTable: params.pluginLookUpTable,
-    installBundledRuntimeDeps: true,
+    installBundledRuntimeDeps: false,
     bundledRuntimeDepsRepairError: prestageResult.repairError,
     preferSetupRuntimeForChannelPlugins: params.preferSetupRuntimeForChannelPlugins,
     suppressPluginInfoLogs: params.suppressPluginInfoLogs,
