@@ -2305,6 +2305,100 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(result).toEqual({ installedSpecs: [] });
   });
 
+  it("does not scan every bundled manifest when the requested package-level deps are already materialized", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.29" }),
+    );
+    const alphaRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    const betaRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "beta",
+      deps: { "beta-runtime": "2.0.0" },
+      enabledByDefault: true,
+    });
+    const betaManifestPath = path.join(betaRoot, "openclaw.plugin.json");
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(alphaRoot, { env });
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    writeInstalledPackage(installRoot, "beta-runtime", "2.0.0");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@2.0.0"]);
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "alpha",
+      pluginRoot: alphaRoot,
+      installDeps: () => {
+        throw new Error("already materialized package-level deps should not reinstall");
+      },
+    });
+
+    expect(result).toEqual({ installedSpecs: [] });
+    expect(
+      readFileSyncSpy.mock.calls.filter(
+        (call) => path.resolve(String(call[0])) === betaManifestPath,
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("does not skip missing manifest runtime deps when package deps are materialized", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.29" }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "5.0.0", typebox: "1.1.34" },
+      runtimeDependencies: {
+        localMemoryEmbedding: ["node-llama-cpp@3.18.1"],
+      },
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    writeInstalledPackage(installRoot, "chokidar", "5.0.0");
+    writeInstalledPackage(installRoot, "typebox", "1.1.34");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["chokidar@5.0.0", "typebox@1.1.34"]);
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "local" },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@5.0.0", "node-llama-cpp@3.18.1", "typebox@1.1.34"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["chokidar@5.0.0", "node-llama-cpp@3.18.1", "typebox@1.1.34"],
+        installSpecs: ["chokidar@5.0.0", "node-llama-cpp@3.18.1", "typebox@1.1.34"],
+      },
+    ]);
+  });
+
   it("accepts generated package-level runtime-deps supersets without reinstalling", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();

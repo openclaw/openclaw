@@ -59,7 +59,10 @@ import {
   parseInstallableRuntimeDep,
   type RuntimeDepEntry,
 } from "./bundled-runtime-deps-specs.js";
-import { normalizePluginsConfigWithResolver } from "./config-normalization-shared.js";
+import {
+  normalizePluginsConfigWithResolver,
+  type NormalizePluginId,
+} from "./config-normalization-shared.js";
 
 export {
   createBundledRuntimeDepsInstallArgs,
@@ -205,6 +208,37 @@ function createBundledRuntimeDepsPlan(params: {
   };
 }
 
+function arePackageLevelRuntimeDepsAlreadyMaterialized(params: {
+  installRoot: string;
+  packageRoot: string;
+  pluginDeps: readonly RuntimeDepEntry[];
+}): boolean {
+  const installSpecs = createBundledRuntimeDepsInstallSpecs({
+    deps: [...params.pluginDeps, ...collectMirroredPackageRuntimeDeps(params.packageRoot)],
+  });
+  return installSpecs.length > 0 && isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs);
+}
+
+function collectPackageLevelRuntimeDepsForPlugin(params: {
+  extensionsDir: string;
+  pluginId: string;
+  pluginDepEntries: readonly RuntimeDepEntry[];
+  config?: OpenClawConfig;
+  manifestCache: BundledPluginRuntimeDepsManifestCache;
+  normalizePluginId?: NormalizePluginId;
+}): { deps: readonly RuntimeDepEntry[]; conflicts: readonly RuntimeDepConflict[] } {
+  if (!params.config) {
+    return { deps: params.pluginDepEntries, conflicts: [] };
+  }
+  return collectBundledPluginRuntimeDeps({
+    extensionsDir: params.extensionsDir,
+    config: params.config,
+    pluginIds: new Set([params.pluginId]),
+    manifestCache: params.manifestCache,
+    ...(params.normalizePluginId ? { normalizePluginId: params.normalizePluginId } : {}),
+  });
+}
+
 export function scanBundledPluginRuntimeDeps(params: {
   packageRoot: string;
   config?: OpenClawConfig;
@@ -342,6 +376,25 @@ export function ensureBundledPluginRuntimeDeps(params: {
     packageRoot && path.resolve(installRoot) !== path.resolve(params.pluginRoot);
   let deps = pluginDepEntries;
   if (usePackageLevelPlan && packageRoot) {
+    const requestedPluginPlan = collectPackageLevelRuntimeDepsForPlugin({
+      extensionsDir,
+      pluginId: params.pluginId,
+      pluginDepEntries,
+      ...(params.config ? { config: params.config } : {}),
+      manifestCache,
+      ...(normalizePluginId ? { normalizePluginId } : {}),
+    });
+    if (
+      requestedPluginPlan.conflicts.length === 0 &&
+      arePackageLevelRuntimeDepsAlreadyMaterialized({
+        installRoot,
+        packageRoot,
+        pluginDeps: requestedPluginPlan.deps,
+      })
+    ) {
+      removeLegacyRuntimeDepsManifest(installRoot);
+      return createBundledRuntimeDepsEnsureResult([]);
+    }
     const packagePlan = collectBundledPluginRuntimeDeps({
       extensionsDir,
       ...(params.config ? { config: params.config } : {}),
