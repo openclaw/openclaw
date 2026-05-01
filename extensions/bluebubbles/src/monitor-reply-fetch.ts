@@ -17,6 +17,8 @@ const DEFAULT_REPLY_FETCH_TIMEOUT_MS = 5_000;
 // punctuation set below; 128 chars is comfortable headroom (CWE-20).
 const REPLY_TO_ID_PATTERN = /^[A-Za-z0-9._:-]+$/;
 const REPLY_TO_ID_MAX_LENGTH = 128;
+const PART_INDEX_REPLY_TO_ID_PATTERN = /^p:\d{1,10}\/([A-Za-z0-9._:-]+)$/;
+const PART_INDEX_REPLY_TO_ID_MAX_LENGTH = REPLY_TO_ID_MAX_LENGTH + "p:".length + 10 + "/".length;
 
 export type BlueBubblesReplyFetchResult = {
   body?: string;
@@ -110,6 +112,18 @@ function sanitizeReplyToId(raw: string): string | null {
   return bare;
 }
 
+function normalizePartIndexReplyToIdAlias(raw: string, bareReplyToId: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.length > PART_INDEX_REPLY_TO_ID_MAX_LENGTH) {
+    return null;
+  }
+  const match = PART_INDEX_REPLY_TO_ID_PATTERN.exec(trimmed);
+  if (!match || match[1] !== bareReplyToId) {
+    return null;
+  }
+  return trimmed;
+}
+
 async function runFetch(
   params: FetchBlueBubblesReplyContextParams,
   replyToId: string,
@@ -163,11 +177,11 @@ async function runFetch(
       timestamp: Date.now(),
     };
     rememberBlueBubblesReplyCache(cacheEntry);
-    const originalReplyToId = params.replyToId.trim();
-    if (originalReplyToId && originalReplyToId !== replyToId) {
+    const partIndexReplyToId = normalizePartIndexReplyToIdAlias(params.replyToId, replyToId);
+    if (partIndexReplyToId) {
       rememberBlueBubblesReplyCache({
         ...cacheEntry,
-        messageId: originalReplyToId,
+        messageId: partIndexReplyToId,
       });
     }
     return { body, sender };
