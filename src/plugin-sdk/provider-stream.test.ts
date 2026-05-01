@@ -275,7 +275,7 @@ describe("buildProviderStreamFamilyHooks", () => {
       config: { thinkingConfig: { thinkingBudget: -1 } },
       reasoning: { effort: "high" },
     });
-    expect(capturedPayload?.messages).toEqual([{ role: "user", content: "hello" }]);
+    expect((capturedPayload as { messages?: unknown } | undefined)?.messages).toEqual([{ role: "user", content: "hello" }]);
 
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({
