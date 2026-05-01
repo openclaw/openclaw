@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
+import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
@@ -30,7 +31,9 @@ import {
   clearGatewayModelPricingCacheState,
   getCachedGatewayModelPricing,
   getGatewayModelPricingCacheMeta as getGatewayModelPricingCacheMetaState,
+  loadPricingCacheFromDisk,
   replaceGatewayModelPricingCache,
+  savePricingCacheToDisk,
   type CachedModelPricing,
   type CachedPricingTier,
 } from "./model-pricing-cache-state.js";
@@ -76,12 +79,44 @@ const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const LITELLM_PRICING_URL =
   "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
 const CACHE_TTL_MS = 24 * 60 * 60_000;
-const FETCH_TIMEOUT_MS = 60_000;
+const FETCH_TIMEOUT_MS = 10_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
 const log = createSubsystemLogger("gateway").child("model-pricing");
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let inFlightRefresh: Promise<void> | null = null;
+
+// ---------------------------------------------------------------------------
+// Circuit breaker — prevents hammering degraded external pricing services
+// ---------------------------------------------------------------------------
+const CIRCUIT_BREAKER_FAILURE_THRESHOLD = 3;
+const CIRCUIT_BREAKER_OPEN_DURATION_MS = 10 * 60_000; // 10 minutes
+
+let consecutiveFetchFailures = 0;
+let circuitOpenUntil = 0;
+
+function isPricingCircuitOpen(): boolean {
+  return Date.now() < circuitOpenUntil;
+}
+
+function recordPricingFetchSuccess(): void {
+  consecutiveFetchFailures = 0;
+}
+
+function recordPricingFetchFailure(): void {
+  consecutiveFetchFailures++;
+  if (consecutiveFetchFailures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
+    circuitOpenUntil = Date.now() + CIRCUIT_BREAKER_OPEN_DURATION_MS;
+    log.warn(
+      `pricing: circuit breaker opened after ${consecutiveFetchFailures} consecutive failures — pausing fetches for 10 min`,
+    );
+  }
+}
+
+function resetPricingCircuitBreakerForTest(): void {
+  consecutiveFetchFailures = 0;
+  circuitOpenUntil = 0;
+}
 
 function clearRefreshTimer(): void {
   if (!refreshTimer) {
@@ -385,6 +420,30 @@ function normalizeExternalPricingPolicy(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function loadBundledManifestPricingPolicies(): Map<string, ExternalPricingPolicy> {
+  const policies = new Map<string, ExternalPricingPolicy>();
+  for (const { manifest } of listOpenClawPluginManifestMetadata()) {
+    const modelPricing = isRecord(manifest.modelPricing) ? manifest.modelPricing : undefined;
+    const providers = isRecord(modelPricing?.providers) ? modelPricing.providers : undefined;
+    if (!providers) {
+      continue;
+    }
+    for (const [provider, rawPolicy] of Object.entries(providers)) {
+      const policy = isRecord(rawPolicy)
+        ? normalizeExternalPricingPolicy(rawPolicy as PluginManifestModelPricingProvider)
+        : undefined;
+      if (policy) {
+        policies.set(provider, policy);
+      }
+    }
+  }
+  return policies;
+}
+
 function filterActiveManifestRegistry(params: {
   registry: PluginManifestRegistry;
   index: PluginRegistrySnapshot;
@@ -558,14 +617,15 @@ function buildExternalCatalogCandidates(params: {
 
   for (const model of applyModelIdTransforms(ref.model, transforms)) {
     const candidate = modelKey(provider, model);
-    candidates.add(
-      source === "openRouter"
-        ? canonicalizeOpenRouterLookupId(candidate, {
-            allowManifestNormalization: params.allowManifestNormalization ?? true,
-            allowPluginNormalization: params.allowPluginNormalization ?? true,
-          })
-        : candidate,
-    );
+    candidates.add(candidate);
+    if (source === "openRouter") {
+      candidates.add(
+        canonicalizeOpenRouterLookupId(candidate, {
+          allowManifestNormalization: params.allowManifestNormalization ?? true,
+          allowPluginNormalization: params.allowPluginNormalization ?? true,
+        }),
+      );
+    }
   }
 
   if (sourcePolicy?.passthroughProviderModel && ref.model.includes("/")) {
@@ -1115,13 +1175,30 @@ export async function refreshGatewayModelPricingCache(params: {
   }
   const fetchImpl = params.fetchImpl ?? fetch;
   inFlightRefresh = (async () => {
+    // Attempt to warm from disk cache first. If a fresh cache exists, populate
+    // in-memory state immediately without any live network fetch, then schedule
+    // the next background refresh for when the cache TTL expires.
+    // Note: loadPricingCacheFromDisk() is a no-op in Vitest environments.
+    const warmedFromDisk = await warmFromDiskCacheIfFresh();
+    if (warmedFromDisk) {
+      scheduleRefresh({ config: params.config, fetchImpl });
+      return;
+    }
+
     const manifestMetadata = resolveModelPricingManifestMetadata({
       config: params.config,
       pluginLookUpTable: params.pluginLookUpTable,
       manifestRegistry: params.manifestRegistry,
     });
     const normalizationOptions = getPricingModelNormalizationOptions(params.config);
-    const pricingContext = loadManifestPricingContext(manifestMetadata.activeRegistry);
+    const pricingContext = loadManifestPricingContext(manifestMetadata.allRegistry);
+    if (params.config.plugins?.enabled !== false) {
+      for (const [provider, policy] of loadBundledManifestPricingPolicies()) {
+        if (!pricingContext.policies.has(provider)) {
+          pricingContext.policies.set(provider, policy);
+        }
+      }
+    }
     const allRefs = collectConfiguredModelPricingRefs(params.config, {
       manifestRegistry: manifestMetadata.allRegistry,
     });
@@ -1143,6 +1220,16 @@ export async function refreshGatewayModelPricingCache(params: {
     if (refs.length === 0) {
       replaceGatewayModelPricingCache(seededPricing);
       clearRefreshTimer();
+      return;
+    }
+
+    // Circuit breaker — skip live fetch when too many consecutive failures.
+    if (isPricingCircuitOpen()) {
+      const remainingSec = Math.ceil((circuitOpenUntil - Date.now()) / 1000);
+      log.warn(
+        `pricing: circuit open — skipping live fetch (${remainingSec}s remaining), using cached data`,
+      );
+      scheduleRefresh({ config: params.config, fetchImpl });
       return;
     }
 
@@ -1183,7 +1270,6 @@ export async function refreshGatewayModelPricingCache(params: {
         allowManifestNormalization: normalizationOptions.allowManifestNormalization,
         allowPluginNormalization: normalizationOptions.allowPluginNormalization,
       });
-
       // 2. Try LiteLLM (may contain tiered pricing)
       const litellmPricing = resolveLiteLLMPricingForRef({
         ref,
@@ -1216,6 +1302,7 @@ export async function refreshGatewayModelPricingCache(params: {
     // single-source outage from silently dropping pricing for models that
     // depended on the failed source.
     if (openRouterFailed || litellmFailed) {
+      recordPricingFetchFailure();
       const existingMeta = getGatewayModelPricingCacheMetaState();
       if (nextPricing.size === 0 && existingMeta.size > 0) {
         // Both sources failed — retain the entire existing cache.
@@ -1236,9 +1323,18 @@ export async function refreshGatewayModelPricingCache(params: {
           }
         }
       }
+    } else {
+      // Both sources succeeded — reset failure counter.
+      recordPricingFetchSuccess();
     }
 
-    replaceGatewayModelPricingCache(nextPricing);
+    const nowCachedAt = Date.now();
+    replaceGatewayModelPricingCache(nextPricing, nowCachedAt);
+    // Persist to disk asynchronously — non-blocking, non-fatal.
+    if (!openRouterFailed && !litellmFailed) {
+      void savePricingCacheToDisk("openrouter", nextPricing, nowCachedAt).catch(() => {});
+      void savePricingCacheToDisk("litellm", nextPricing, nowCachedAt).catch(() => {});
+    }
     scheduleRefresh({ config: params.config, fetchImpl });
   })();
 
@@ -1247,6 +1343,46 @@ export async function refreshGatewayModelPricingCache(params: {
   } finally {
     inFlightRefresh = null;
   }
+}
+
+async function warmFromDiskCacheIfFresh(): Promise<boolean> {
+  const now = Date.now();
+  const [openrouterCache, litellmCache] = await Promise.all([
+    loadPricingCacheFromDisk("openrouter"),
+    loadPricingCacheFromDisk("litellm"),
+  ]);
+  const openrouterFresh = openrouterCache !== null && now - openrouterCache.cachedAt < CACHE_TTL_MS;
+  const litellmFresh = litellmCache !== null && now - litellmCache.cachedAt < CACHE_TTL_MS;
+  if (!openrouterFresh && !litellmFresh) {
+    return false;
+  }
+  // At least one source has a fresh cache — merge and populate in-memory state.
+  const merged = new Map<string, CachedModelPricing>();
+  if (openrouterFresh && openrouterCache) {
+    for (const [key, pricing] of openrouterCache.pricing) {
+      merged.set(key, pricing);
+    }
+  }
+  if (litellmFresh && litellmCache) {
+    for (const [key, pricing] of litellmCache.pricing) {
+      // Prefer openrouter for flat pricing unless litellm has tiered data.
+      const existing = merged.get(key);
+      if (existing && pricing.tieredPricing) {
+        merged.set(key, { ...existing, tieredPricing: pricing.tieredPricing });
+      } else if (!existing) {
+        merged.set(key, pricing);
+      }
+    }
+  }
+  const earliestCachedAt = Math.min(
+    openrouterFresh && openrouterCache ? openrouterCache.cachedAt : Infinity,
+    litellmFresh && litellmCache ? litellmCache.cachedAt : Infinity,
+  );
+  replaceGatewayModelPricingCache(merged, earliestCachedAt);
+  log.info(
+    `pricing: loaded ${merged.size} entries from disk cache (age ${Math.round((now - earliestCachedAt) / 60_000)}min)`,
+  );
+  return true;
 }
 
 export function startGatewayModelPricingRefresh(params: {
@@ -1286,4 +1422,5 @@ export function __resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
   clearRefreshTimer();
   inFlightRefresh = null;
+  resetPricingCircuitBreakerForTest();
 }

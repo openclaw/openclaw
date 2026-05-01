@@ -13,6 +13,8 @@ export type ReadinessResult = {
   ready: boolean;
   failing: string[];
   uptimeMs: number;
+  /** When ready=false, describes which startup step is blocking readiness. */
+  startupBlockedReason?: string;
   eventLoop?: GatewayEventLoopHealth;
 };
 
@@ -50,7 +52,12 @@ export function createReadinessChecker(deps: {
     const uptimeMs = now - startedAt;
     if (deps.getStartupPending?.()) {
       return withEventLoopHealth(
-        { ready: false, failing: ["startup-sidecars"], uptimeMs },
+        {
+          ready: false,
+          failing: ["startup-sidecars"],
+          startupBlockedReason: "sidecars-pending",
+          uptimeMs,
+        },
         deps.getEventLoopHealth,
       );
     }
