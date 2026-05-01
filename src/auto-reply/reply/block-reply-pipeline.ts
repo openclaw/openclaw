@@ -162,7 +162,7 @@ export function createBlockReplyPipeline(params: {
         //  - re-sending media that was already delivered via block path
         // When the callback returns void (legacy callers), fall back to
         // media-only tracking for backwards compatibility.
-        if (callbackResult && callbackResult.sentMediaUrls) {
+        if (typeof callbackResult === "object" && callbackResult.sentMediaUrls) {
           for (const mediaUrl of callbackResult.sentMediaUrls) {
             sentMediaUrls.add(mediaUrl);
           }
