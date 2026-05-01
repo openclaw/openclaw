@@ -1195,6 +1195,8 @@ openclaw logs --follow
 
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
     Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
+    For guild messaging, `guilds.<id>.users` and `guilds.<id>.roles` are evaluated together for member access; a sender can pass via either allowlist.
+    `allowBots` is orthogonal and only determines whether bot-authored messages are admitted at all, with mention checks when set to `mentions`.
 
   </Accordion>
 
