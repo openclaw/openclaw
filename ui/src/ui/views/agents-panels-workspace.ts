@@ -12,6 +12,7 @@ export type WorkspacePanelProps = {
   fileContent: string | null;
   editedContent: string | null;
   onNavigate: (path: string) => void;
+  onRefresh: () => void;
   onSelectFile: (path: string) => void;
   onContentChange: (content: string) => void;
   onSaveFile: (content: string) => void;
@@ -75,11 +76,7 @@ function renderToolbar(props: WorkspacePanelProps) {
       >
         <span class="btn-icon">${icons.arrowDown}</span> Download
       </button>
-      <button
-        class="btn btn--sm"
-        ?disabled=${props.loading}
-        @click=${() => props.onNavigate(props.currentPath)}
-      >
+      <button class="btn btn--sm" ?disabled=${props.loading} @click=${() => props.onRefresh()}>
         <span class="btn-icon">${icons.refresh}</span> Refresh
       </button>
     </div>

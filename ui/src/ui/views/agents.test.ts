@@ -128,6 +128,7 @@ function createProps(overrides: Partial<AgentsProps> = {}): AgentsProps {
     onAgentSkillsDisableAll: () => undefined,
     onSetDefault: () => undefined,
     onWorkspaceNavigate: () => undefined,
+    onWorkspaceRefresh: () => undefined,
     onWorkspaceSelectFile: () => undefined,
     onWorkspaceContentChange: () => undefined,
     onWorkspaceSaveFile: () => undefined,

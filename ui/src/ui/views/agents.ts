@@ -137,6 +137,7 @@ export type AgentsProps = {
   onAgentSkillsDisableAll: (agentId: string) => void;
   onSetDefault: (agentId: string) => void;
   onWorkspaceNavigate: (path: string) => void;
+  onWorkspaceRefresh: () => void;
   onWorkspaceSelectFile: (path: string) => void;
   onWorkspaceContentChange: (content: string) => void;
   onWorkspaceSaveFile: (content: string) => void;
@@ -300,6 +301,7 @@ export function renderAgents(props: AgentsProps) {
                     fileContent: props.workspaceFileContent,
                     editedContent: props.workspaceEditedContent,
                     onNavigate: props.onWorkspaceNavigate,
+                    onRefresh: props.onWorkspaceRefresh,
                     onSelectFile: props.onWorkspaceSelectFile,
                     onContentChange: props.onWorkspaceContentChange,
                     onSaveFile: props.onWorkspaceSaveFile,
