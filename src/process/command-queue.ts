@@ -270,7 +270,7 @@ function drainLane(lane: string) {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
         const idx = pickNextIndex(state.queue);
-        const entry = state.queue.splice(idx, 1)[0] as QueueEntry;
+        const entry = state.queue.splice(idx, 1)[0];
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
