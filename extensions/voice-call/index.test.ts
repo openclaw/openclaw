@@ -63,6 +63,7 @@ function createRuntimeStub(callId = "call-1"): VoiceCallRuntime {
       endCall: vi.fn(async () => ({ success: true })),
       getCall: vi.fn((id: string) => (id === callId ? { callId } : undefined)),
       getCallByProviderCallId: vi.fn(() => undefined),
+      getActiveCalls: vi.fn(() => [{ callId }]),
     } as unknown as VoiceCallRuntime["manager"],
     webhookServer: {} as VoiceCallRuntime["webhookServer"],
     webhookUrl: "http://127.0.0.1:3334/voice/webhook",
@@ -284,6 +285,26 @@ describe("voice-call plugin", () => {
     expect(payload.callId).toBe("call-1");
   });
 
+  it("preserves mode on legacy voicecall.start", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({
+      params: { message: "Hi", mode: "conversation", to: "+15550001234" },
+      respond,
+    });
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith("+15550001234", undefined, {
+      message: "Hi",
+      mode: "conversation",
+    });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
   it("returns call status", async () => {
     const { methods } = setup({ provider: "mock" });
     const handler = methods.get("voicecall.status") as
@@ -485,6 +506,22 @@ describe("voice-call plugin", () => {
       expect(parsed.checks).toContainEqual(
         expect.objectContaining({ id: "webhook-exposure", ok: false }),
       );
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("CLI status lists active calls without a call id", async () => {
+    const program = new Command();
+    const stdout = captureStdout();
+    await registerVoiceCallCli(program);
+
+    try {
+      await program.parseAsync(["voicecall", "status", "--json"], { from: "user" });
+      const parsed = JSON.parse(stdout.output()) as {
+        calls?: Array<{ callId?: string }>;
+      };
+      expect(parsed.calls).toEqual([expect.objectContaining({ callId: "call-1" })]);
     } finally {
       stdout.restore();
     }

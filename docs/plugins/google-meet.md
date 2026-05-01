@@ -1267,7 +1267,7 @@ Also verify:
 `googlemeet doctor [session-id]` prints the session, node, in-call state,
 manual action reason, realtime provider connection, `realtimeReady`, audio
 input/output activity, last audio timestamps, byte counters, and browser URL.
-Use `googlemeet status [session-id]` when you need the raw JSON. Use
+Use `googlemeet status [session-id] --json` when you need the raw JSON. Use
 `googlemeet doctor --oauth` when you need to verify Google Meet OAuth refresh
 without exposing tokens; add `--meeting` or `--create-space` when you need a
 Google Meet API proof as well.

@@ -76,7 +76,7 @@ export async function joinMeetViaVoiceCallGateway(params: {
       "voicecall.start",
       {
         to: params.dialInNumber,
-        message: params.config.voiceCall.introMessage,
+        message: params.config.voiceCall.introMessage ?? params.config.realtime.introMessage,
         mode: "conversation",
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },

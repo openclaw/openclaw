@@ -594,6 +594,39 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("accepts --json on session status", async () => {
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        runtime: {
+          status: () => ({
+            found: true,
+            sessions: [
+              {
+                id: "meet_1",
+                url: "https://meet.google.com/abc-defg-hij",
+                state: "active",
+                transport: "twilio",
+                mode: "realtime",
+                participantIdentity: "Twilio PSTN participant",
+                createdAt: "2026-04-25T00:00:00.000Z",
+                updatedAt: "2026-04-25T00:00:01.000Z",
+                realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
+                notes: [],
+              },
+            ],
+          }),
+        },
+      }).parseAsync(["googlemeet", "status", "--json"], { from: "user" });
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        found: true,
+        sessions: [{ id: "meet_1", transport: "twilio" }],
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("prints a dry-run export manifest without writing files", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();

@@ -19,6 +19,7 @@ Primary doc:
 ```bash
 openclaw voicecall setup
 openclaw voicecall smoke
+openclaw voicecall status --json
 openclaw voicecall status --call-id <id>
 openclaw voicecall call --to "+15555550123" --message "Hello" --mode notify
 openclaw voicecall continue --call-id <id> --message "Any questions?"
@@ -32,6 +33,9 @@ scripts:
 ```bash
 openclaw voicecall setup --json
 ```
+
+`status` prints active calls as JSON by default. Pass `--call-id <id>` to inspect
+one call.
 
 For external providers (`twilio`, `telnyx`, `plivo`), setup must resolve a public
 webhook URL from `publicUrl`, a tunnel, or Tailscale exposure. A loopback/private
