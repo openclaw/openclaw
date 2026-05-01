@@ -496,6 +496,22 @@ export const dispatchTelegramMessage = async ({
       });
       resolvedSecret = resolution.value;
     }
+    let resolvedHeaders: Record<string, string> | undefined;
+    if (sinkCfg.headers) {
+      const resolved: Record<string, string> = {};
+      for (const [key, val] of Object.entries(sinkCfg.headers)) {
+        const resolution = await resolveConfiguredSecretInputString({
+          config: cfg,
+          env: process.env,
+          value: val,
+          path: `channels.telegram.reasoningStreamSink.headers.${key}`,
+        });
+        if (resolution.value !== undefined) {
+          resolved[key] = resolution.value;
+        }
+      }
+      resolvedHeaders = resolved;
+    }
     reasoningStreamSink = createReasoningStreamSink({
       config: sinkCfg,
       context: {
@@ -505,6 +521,7 @@ export const dispatchTelegramMessage = async ({
         sessionKey: ctxPayload.SessionKey,
       },
       resolvedSecret,
+      resolvedHeaders,
       warn: logVerbose,
     });
   }

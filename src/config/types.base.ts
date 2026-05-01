@@ -358,8 +358,8 @@ export type ReasoningStreamSinkConfig = {
    * `X-Openclaw-Signature: sha256=<hex>` so the receiver can verify authenticity.
    */
   secret?: SecretInput;
-  /** Extra HTTP headers merged into every request (e.g. Authorization). */
-  headers?: Record<string, string>;
+  /** Extra HTTP headers merged into every request (e.g. Authorization). Values are SecretInput and resolved before use. */
+  headers?: Record<string, SecretInput>;
   /** Per-request timeout in milliseconds. Default: 5000. */
   timeoutMs?: number;
 };

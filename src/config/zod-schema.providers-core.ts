@@ -373,7 +373,7 @@ export const TelegramAccountSchemaBase = z
       .object({
         url: z.string().url(),
         secret: SecretInputSchema.optional().register(sensitive),
-        headers: z.record(z.string(), z.string()).optional(),
+        headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
         timeoutMs: z.number().int().positive().optional(),
       })
       .strict()

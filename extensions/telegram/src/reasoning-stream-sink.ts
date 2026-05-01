@@ -47,18 +47,20 @@ export function createReasoningStreamSink(params: {
   config: ReasoningStreamSinkConfig;
   context: ReasoningStreamSinkContext;
   resolvedSecret?: string;
+  resolvedHeaders?: Record<string, string>;
   warn?: (message: string) => void;
 }): ReasoningStreamSinkHandle {
-  const { config, context, resolvedSecret, warn } = params;
+  const { config, context, resolvedSecret, resolvedHeaders, warn } = params;
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const streamId = crypto.randomBytes(4).toString("hex");
   let started = false;
+  let lastSnapshot = "";
 
   function post(payload: ReasoningStreamSinkEvent): void {
     const body = JSON.stringify(payload);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
-      ...config.headers,
+      ...resolvedHeaders,
     };
     if (resolvedSecret) {
       const sig = crypto.createHmac("sha256", resolvedSecret).update(body).digest("hex");
@@ -87,7 +89,9 @@ export function createReasoningStreamSink(params: {
 
   return {
     onToken(text: string): void {
-      if (!text) {
+      const delta = text.startsWith(lastSnapshot) ? text.slice(lastSnapshot.length) : text;
+      lastSnapshot = text;
+      if (!delta) {
         return;
       }
       if (!started) {
@@ -105,7 +109,7 @@ export function createReasoningStreamSink(params: {
       post({
         event: "reasoning_stream",
         streamId,
-        text,
+        text: delta,
         timestamp: Date.now(),
       });
     },
