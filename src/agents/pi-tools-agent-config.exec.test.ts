@@ -1,9 +1,10 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 
 function createExecHostDefaultsConfig(
@@ -39,6 +40,10 @@ describe("Agent-specific exec tool defaults", () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
   });
 
+  afterEach(() => {
+    resetProcessRegistryForTests();
+  });
+
   it("should run exec synchronously when process is denied", async () => {
     const cfg: OpenClawConfig = {
       tools: {
@@ -67,6 +72,41 @@ describe("Agent-specific exec tool defaults", () => {
 
     const resultDetails = result?.details as { status?: string } | undefined;
     expect(resultDetails?.status).toBe("completed");
+  });
+
+  it("auto-backgrounds long exec commands even when process is denied", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        deny: ["process"],
+        exec: {
+          host: "gateway",
+          security: "full",
+          ask: "off",
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main",
+      agentDir: "/tmp/agent-main",
+    });
+    expect(tools.some((tool) => tool.name === "process")).toBe(false);
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+
+    const result = await execTool?.execute("call-long", {
+      command: `${JSON.stringify(process.execPath)} -e "setTimeout(() => {}, 250)"`,
+      yieldMs: 10,
+      timeout: 1,
+    });
+
+    const resultDetails = result?.details as { status?: string } | undefined;
+    expect(resultDetails?.status).toBe("running");
+    const resultText = result?.content?.find((item) => item.type === "text")?.text ?? "";
+    expect(resultText).not.toContain("Use process");
+    expect(resultText).toContain("completion wake");
   });
 
   it("routes implicit auto exec to gateway without a sandbox runtime", async () => {

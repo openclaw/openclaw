@@ -1386,6 +1386,7 @@ export function createExecTool(
     120_000,
   );
   const allowBackground = defaults?.allowBackground ?? true;
+  const processToolAvailable = defaults?.processToolAvailable ?? true;
   const defaultTimeoutSec =
     typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
       ? defaults.timeoutSec
@@ -1817,7 +1818,11 @@ export function createExecTool(
                 type: "text",
                 text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
                   run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
+                }). ${
+                  processToolAvailable
+                    ? "Use process (list/poll/log/write/kill/clear/remove) for follow-up."
+                    : "The process tool is unavailable; rely on completion wake notifications or the command timeout for follow-up."
+                }`,
               },
             ],
             details: {
