@@ -80,14 +80,35 @@ async function removeScheduledSessionTurn(params: {
   name?: string;
 }): Promise<boolean> {
   try {
-    await callGatewayTool("cron.remove", {}, { id: params.jobId }, { scopes: [ADMIN_SCOPE] });
-    return true;
+    const result = await callGatewayTool(
+      "cron.remove",
+      {},
+      { id: params.jobId },
+      { scopes: [ADMIN_SCOPE] },
+    );
+    return didCronRemoveJob(result);
   } catch (error) {
     log.warn(
       `plugin session turn cleanup failed (${formatScheduleLogContext(params)}): ${formatErrorMessage(error)}`,
     );
     return false;
   }
+}
+
+function unwrapGatewayPayload(value: unknown): unknown {
+  if (!isCronJobRecord(value)) {
+    return value;
+  }
+  const payload = value.payload;
+  return isCronJobRecord(payload) ? payload : value;
+}
+
+function didCronRemoveJob(value: unknown): boolean {
+  const result = unwrapGatewayPayload(value);
+  if (!isCronJobRecord(result)) {
+    return false;
+  }
+  return result.ok !== false && result.removed === true;
 }
 
 function normalizeCronJobId(value: unknown): string | undefined {
@@ -165,14 +186,16 @@ function readCronListHasMore(value: unknown): boolean {
   return isCronJobRecord(value) && value.hasMore === true;
 }
 
-async function listAllCronJobsForPluginTagCleanup(): Promise<Record<string, unknown>[]> {
+async function listAllCronJobsForPluginTagCleanup(
+  query: string,
+): Promise<Record<string, unknown>[]> {
   const jobs: Record<string, unknown>[] = [];
   let offset = 0;
   for (;;) {
     const listResult = await callGatewayTool(
       "cron.list",
       {},
-      { includeDisabled: true, limit: 200, ...(offset > 0 ? { offset } : {}) },
+      { includeDisabled: true, limit: 200, query, ...(offset > 0 ? { offset } : {}) },
       { scopes: [ADMIN_SCOPE] },
     );
     jobs.push(...readCronListJobs(listResult));
@@ -332,7 +355,7 @@ export async function unschedulePluginSessionTurnsByTag(params: {
   });
   let jobs: Record<string, unknown>[];
   try {
-    jobs = await listAllCronJobsForPluginTagCleanup();
+    jobs = await listAllCronJobsForPluginTagCleanup(namePrefix);
   } catch (error) {
     log.warn(`plugin session turn untag-list failed: ${formatErrorMessage(error)}`);
     return { removed: 0, failed: 1 };
@@ -350,8 +373,12 @@ export async function unschedulePluginSessionTurnsByTag(params: {
       continue;
     }
     try {
-      await callGatewayTool("cron.remove", {}, { id }, { scopes: [ADMIN_SCOPE] });
-      removed += 1;
+      const result = await callGatewayTool("cron.remove", {}, { id }, { scopes: [ADMIN_SCOPE] });
+      if (didCronRemoveJob(result)) {
+        removed += 1;
+      } else {
+        failed += 1;
+      }
     } catch (error) {
       log.warn(
         `plugin session turn untag-remove failed: id=${id} error=${formatErrorMessage(error)}`,

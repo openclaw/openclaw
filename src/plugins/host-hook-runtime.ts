@@ -457,6 +457,9 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
   if (!shouldCleanup()) {
     return failures;
   }
+  const registryRecordKeys = new Set<string>();
+  const schedulerJobKey = (pluginId: string, jobId: string, sessionKey: string) =>
+    `${pluginId}\0${jobId}\0${sessionKey}`;
   if (params.records) {
     for (const record of params.records) {
       if (!shouldCleanup()) {
@@ -473,6 +476,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       if (params.sessionKey && sessionKey !== params.sessionKey) {
         continue;
       }
+      registryRecordKeys.add(schedulerJobKey(record.pluginId, jobId, sessionKey));
       const liveGeneration = getPluginSessionSchedulerJobGeneration({
         pluginId: record.pluginId,
         jobId,
@@ -530,7 +534,6 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         expectedGeneration: record.generation,
       });
     }
-    return failures;
   }
   const pluginIds = params.pluginId ? [params.pluginId] : [...state.schedulerJobsByPlugin.keys()];
   for (const pluginId of pluginIds) {
@@ -546,6 +549,9 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         return failures;
       }
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+        continue;
+      }
+      if (registryRecordKeys.has(schedulerJobKey(pluginId, jobId, record.job.sessionKey))) {
         continue;
       }
       if (params.excludeJobKeys?.has(makePluginSessionSchedulerJobKey(pluginId, jobId))) {
