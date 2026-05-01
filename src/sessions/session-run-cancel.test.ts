@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
+  clearSessionRunCancelTarget,
   emitSessionRunCancel,
   onSessionRunCancel,
   requestSessionRunCancel,
@@ -86,6 +87,108 @@ describe("session-run cancel fan-out seam", () => {
       onSessionRunCancel(target("agent:main:main", "run-1"), rejecting);
 
       emitSessionRunCancel(target("agent:main:main", "run-1"));
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(rejecting).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("sticky cancellation (late handler registration)", () => {
+    it("replays terminal cancel to handler registered after emit", () => {
+      const t = target("agent:main:main", "run-1");
+      const reason = { source: "chat-abort", message: "user stopped" };
+
+      // Core aborts before any plugin handler is registered.
+      emitSessionRunCancel(t, reason);
+
+      // Late handler must still observe the terminal cancel.
+      const lateHandler = vi.fn();
+      onSessionRunCancel(t, lateHandler);
+
+      expect(lateHandler).toHaveBeenCalledTimes(1);
+      expect(lateHandler).toHaveBeenCalledWith(t, reason);
+    });
+
+    it("replays to multiple late handlers", () => {
+      const t = target("agent:main:main", "run-1");
+
+      emitSessionRunCancel(t, { source: "server-close" });
+
+      const handler1 = vi.fn();
+      const handler2 = vi.fn();
+      onSessionRunCancel(t, handler1);
+      onSessionRunCancel(t, handler2);
+
+      expect(handler1).toHaveBeenCalledTimes(1);
+      expect(handler2).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps terminal cancel reason from first emit when multiple emits occur", () => {
+      const t = target("agent:main:main", "run-1");
+
+      emitSessionRunCancel(t, { source: "first", message: "original" });
+      // Second emit should not overwrite terminal reason (first wins).
+      emitSessionRunCancel(t, { source: "second", message: "override" });
+
+      const lateHandler = vi.fn();
+      onSessionRunCancel(t, lateHandler);
+
+      expect(lateHandler).toHaveBeenCalledWith(t, { source: "first", message: "original" });
+    });
+
+    it("clears terminal cancel so later handlers receive normal registration", () => {
+      const t = target("agent:main:main", "run-1");
+
+      emitSessionRunCancel(t, { source: "chat-abort" });
+      clearSessionRunCancelTarget(t);
+
+      // After clearing, new registrations follow the normal path.
+      const handler = vi.fn();
+      onSessionRunCancel(t, handler);
+      expect(handler).not.toHaveBeenCalled();
+      expect(__testing.handlerCount(t)).toBe(1);
+    });
+
+    it("clears terminal state on __testing.reset", () => {
+      const t = target("agent:main:main", "run-1");
+
+      emitSessionRunCancel(t, { source: "test" });
+      expect(__testing.terminalCancelCount()).toBe(1);
+
+      __testing.reset();
+
+      const handler = vi.fn();
+      onSessionRunCancel(t, handler);
+      expect(handler).not.toHaveBeenCalled();
+      expect(__testing.terminalCancelCount()).toBe(0);
+    });
+
+    it("late handler that throws does not prevent others from replaying", () => {
+      const t = target("agent:main:main", "run-1");
+      emitSessionRunCancel(t);
+
+      const noisy = vi.fn(() => {
+        throw new Error("late boom");
+      });
+      const healthy = vi.fn();
+
+      expect(() => onSessionRunCancel(t, noisy)).not.toThrow();
+      onSessionRunCancel(t, healthy);
+
+      expect(noisy).toHaveBeenCalledTimes(1);
+      expect(healthy).toHaveBeenCalledTimes(1);
+    });
+
+    it("late async handler rejections are swallowed", async () => {
+      const t = target("agent:main:main", "run-1");
+      emitSessionRunCancel(t);
+
+      const rejecting = vi.fn(async () => {
+        throw new Error("async late boom");
+      });
+      onSessionRunCancel(t, rejecting);
+
       await Promise.resolve();
       await Promise.resolve();
 

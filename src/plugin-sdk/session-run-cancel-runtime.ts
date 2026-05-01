@@ -8,8 +8,13 @@
 //
 // The seam is intentionally plugin-neutral: `{ kind: "session_run",
 // sessionKey, runId }` is the only target shape.
+//
+// emitSessionRunCancel is deliberately NOT exported here — it is a core-internal
+// emission hook, never part of the plugin trust boundary. Plugins that need to
+// observe a cancellation use onSessionRunCancel; plugins that need to request
+// one use requestSessionRunCancel. Only core call-sites (chat-abort, server
+// lifecycle) may call emitSessionRunCancel directly.
 export {
-  emitSessionRunCancel,
   onSessionRunCancel,
   requestSessionRunCancel,
   type RequestSessionRunCancelResult,
