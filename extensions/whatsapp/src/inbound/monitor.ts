@@ -50,7 +50,7 @@ const RECONNECT_IN_PROGRESS_ERROR = "no active socket - reconnection in progress
 const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
 export const WHATSAPP_GROUP_METADATA_CACHE_MAX_ENTRIES = 500;
 
-export type WhatsAppGroupMetadataCacheEntry = {
+type WhatsAppGroupMetadataCacheEntry = {
   subject?: string;
   expires: number;
 };
@@ -118,7 +118,7 @@ function isNonEmptyString(value: string | undefined): value is string {
   return Boolean(value);
 }
 
-export type MonitorWebInboxOptions = {
+type MonitorWebInboxOptions = {
   cfg: OpenClawConfig;
   verbose: boolean;
   accountId: string;
