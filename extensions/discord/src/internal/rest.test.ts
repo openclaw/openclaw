@@ -41,6 +41,76 @@ describe("RequestClient", () => {
     expect(client.queueSize).toBe(0);
   });
 
+  it("dispatches critical interaction callbacks before older background requests", async () => {
+    const firstResponse = createDeferred<Response>();
+    const responses = new Map<string, Promise<Response>>([
+      ["/guilds/g1/roles", firstResponse.promise],
+      ["/interactions/123/token/callback", Promise.resolve(createJsonResponse({ ok: "critical" }))],
+      ["/guilds/g2/roles", Promise.resolve(createJsonResponse({ ok: "background" }))],
+    ]);
+    const fetchSpy = vi.fn(async (input: string | URL | Request) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const path = new URL(url).pathname.replace(/^\/api\/v\d+/, "");
+      const response = responses.get(path);
+      if (!response) {
+        throw new Error(`unexpected request ${path}`);
+      }
+      return await response;
+    });
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: { maxConcurrency: 1 },
+    });
+
+    const first = client.get("/guilds/g1/roles");
+    const background = client.get("/guilds/g2/roles");
+    const critical = client.post("/interactions/123/token/callback", { body: { type: 5 } });
+
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(critical).resolves.toEqual({ ok: "critical" });
+    await expect(background).resolves.toEqual({ ok: "background" });
+    expect(fetchSpy.mock.calls.map(([input]) => new URL(readRequestUrl(input)).pathname)).toEqual([
+      "/api/v10/guilds/g1/roles",
+      "/api/v10/interactions/123/token/callback",
+      "/api/v10/guilds/g2/roles",
+    ]);
+  });
+
+  it("drops stale background requests instead of replaying obsolete reads", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () => await firstResponse.promise);
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: {
+        maxConcurrency: 1,
+        lanes: { background: { staleAfterMs: 50 } },
+      },
+    });
+
+    const first = client.get("/guilds/g1/roles");
+    const stale = client.get("/guilds/g2/roles");
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(51);
+    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(stale).rejects.toThrow(/Dropped stale background request/);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(client.getSchedulerMetrics()).toEqual(
+      expect.objectContaining({
+        droppedByLane: expect.objectContaining({ background: 1 }),
+        queueSize: 0,
+      }),
+    );
+  });
+
   it("runs independent route buckets concurrently", async () => {
     const channelResponse = createDeferred<Response>();
     const guildResponse = createDeferred<Response>();
@@ -508,3 +578,7 @@ describe("RequestClient", () => {
     expect(form.get("payload_json")).toBeNull();
   });
 });
+
+function readRequestUrl(input: string | URL | Request): string {
+  return typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+}
