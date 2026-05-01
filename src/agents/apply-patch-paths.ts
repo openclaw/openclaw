@@ -1,3 +1,5 @@
+import path from "node:path";
+
 /**
  * Lightweight path extractor for the `apply_patch` envelope grammar.
  *
@@ -41,16 +43,25 @@ function readPatchText(input: unknown): string | undefined {
   return undefined;
 }
 
-function pushPath(target: string[], seen: Set<string>, raw: string): void {
+function normalizePatchPath(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
+    return undefined;
+  }
+  const normalized = path.normalize(trimmed);
+  return normalized && normalized !== "." ? normalized : undefined;
+}
+
+function pushPath(target: string[], seen: Set<string>, raw: string): void {
+  const normalized = normalizePatchPath(raw);
+  if (!normalized) {
     return;
   }
-  if (seen.has(trimmed)) {
+  if (seen.has(normalized)) {
     return;
   }
-  seen.add(trimmed);
-  target.push(trimmed);
+  seen.add(normalized);
+  target.push(normalized);
 }
 
 function readMarkerPath(line: string | undefined, marker: string): string | undefined {

@@ -80,6 +80,25 @@ describe("extractApplyPatchTargetPaths", () => {
     expect(extractApplyPatchTargetPaths(patch)).toEqual(["same.ts"]);
   });
 
+  it("normalizes derived paths before de-duplicating them", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: safe/../secret.ts",
+      "+x",
+      "*** Update File: ./src//old.ts",
+      "*** Move to: src/temp/../renamed.ts",
+      "@@",
+      "+y",
+      "*** Delete File: secret.ts",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual([
+      "secret.ts",
+      "src/old.ts",
+      "src/renamed.ts",
+    ]);
+  });
+
   it("handles CRLF line endings", () => {
     const patch = ["*** Begin Patch", "*** Add File: crlf.ts", "+x", "*** End Patch"].join("\r\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual(["crlf.ts"]);
