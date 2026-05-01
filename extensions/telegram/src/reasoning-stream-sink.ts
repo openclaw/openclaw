@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import type { ReasoningStreamSinkConfig } from "openclaw/plugin-sdk/config-types";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -53,10 +57,12 @@ export function createReasoningStreamSink(params: {
   const { config, context, resolvedSecret, resolvedHeaders, warn } = params;
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const streamId = crypto.randomBytes(4).toString("hex");
+  const policy = ssrfPolicyFromHttpBaseUrlAllowedHostname(config.url);
   let started = false;
   let lastSnapshot = "";
+  let chain: Promise<void> = Promise.resolve();
 
-  function post(payload: ReasoningStreamSinkEvent): void {
+  async function post(payload: ReasoningStreamSinkEvent): Promise<void> {
     const body = JSON.stringify(payload);
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -66,25 +72,29 @@ export function createReasoningStreamSink(params: {
       const sig = crypto.createHmac("sha256", resolvedSecret).update(body).digest("hex");
       headers["X-Openclaw-Signature"] = `sha256=${sig}`;
     }
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    fetch(config.url, {
-      method: "POST",
-      headers,
-      body,
-      signal: controller.signal,
-    })
-      .then((res) => {
-        if (!res.ok) {
-          warn?.(`reasoning stream sink: unexpected status ${res.status} from ${config.url}`);
-        }
-      })
-      .catch((err: unknown) => {
-        warn?.(`reasoning stream sink: POST failed: ${String(err)}`);
-      })
-      .finally(() => {
-        clearTimeout(timer);
+    let release: (() => Promise<void>) | undefined;
+    try {
+      const result = await fetchWithSsrFGuard({
+        url: config.url,
+        init: { method: "POST", headers, body },
+        timeoutMs,
+        policy,
       });
+      release = result.release;
+      if (!result.response.ok) {
+        warn?.(
+          `reasoning stream sink: unexpected status ${result.response.status} from ${config.url}`,
+        );
+      }
+    } catch (err: unknown) {
+      warn?.(`reasoning stream sink: POST failed: ${String(err)}`);
+    } finally {
+      await release?.();
+    }
+  }
+
+  function enqueue(payload: ReasoningStreamSinkEvent): void {
+    chain = chain.then(() => post(payload)).catch(() => undefined);
   }
 
   return {
@@ -96,7 +106,7 @@ export function createReasoningStreamSink(params: {
       }
       if (!started) {
         started = true;
-        post({
+        enqueue({
           event: "reasoning_start",
           streamId,
           chatId: context.chatId,
@@ -106,7 +116,7 @@ export function createReasoningStreamSink(params: {
           timestamp: Date.now(),
         });
       }
-      post({
+      enqueue({
         event: "reasoning_stream",
         streamId,
         text: delta,
@@ -117,7 +127,7 @@ export function createReasoningStreamSink(params: {
       if (!started) {
         return;
       }
-      post({
+      enqueue({
         event: "reasoning_end",
         streamId,
         timestamp: Date.now(),
