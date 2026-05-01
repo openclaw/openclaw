@@ -253,6 +253,62 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
   });
 
+  it("loads deferred startup plugins before channel sidecars", async () => {
+    const events: string[] = [];
+    const loadedPluginRegistry = {
+      plugins: [{ id: "acpx", status: "loaded" }],
+      typedHooks: [],
+    } as never;
+    const loadStartupPlugins = vi.fn(async () => {
+      events.push("load-startup-plugins");
+      return {
+        pluginRegistry: loadedPluginRegistry,
+        gatewayMethods: ["ping", "acp.spawn"],
+      };
+    });
+    const onStartupPluginsLoading = vi.fn(() => {
+      events.push("startup-loading");
+    });
+    const onStartupPluginsLoaded = vi.fn(() => {
+      events.push("startup-loaded");
+    });
+    const startGatewaySidecars = vi.fn(async (params) => {
+      events.push("sidecars");
+      expect(params.pluginRegistry).toBe(loadedPluginRegistry);
+      return { pluginServices: null };
+    });
+
+    await startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({
+          pluginRegistry: {
+            plugins: [],
+            typedHooks: [],
+          } as never,
+          loadStartupPlugins,
+          onStartupPluginsLoading,
+          onStartupPluginsLoaded,
+        }),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    );
+
+    expect(events).toEqual([
+      "startup-loading",
+      "load-startup-plugins",
+      "startup-loaded",
+      "sidecars",
+    ]);
+    expect(loadStartupPlugins).toHaveBeenCalledTimes(1);
+    expect(onStartupPluginsLoaded).toHaveBeenCalledWith({
+      pluginRegistry: loadedPluginRegistry,
+      gatewayMethods: ["ping", "acp.spawn"],
+    });
+    expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
+      expect.objectContaining({ loadedPluginIds: ["acpx"] }),
+    );
+  });
+
   it("keeps the qmd memory backend lazy by default", async () => {
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),

@@ -342,6 +342,31 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
   });
 
+  it("can defer runtime-deps staging and startup plugin loading until after HTTP bind", async () => {
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await expect(
+      prepareGatewayPluginBootstrap({
+        cfgAtStart: {},
+        startupRuntimeConfig: {},
+        minimalTestGateway: false,
+        log,
+        loadRuntimePlugins: false,
+      }),
+    ).resolves.toMatchObject({
+      baseGatewayMethods: ["ping"],
+      startupPluginIds: ["telegram"],
+      runtimePluginsLoaded: false,
+    });
+
+    expect(loadPluginLookUpTable).toHaveBeenCalledOnce();
+    expect(scanBundledPluginRuntimeDeps).not.toHaveBeenCalled();
+    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
+    expect(prepareBundledPluginRuntimeLoadRoot).not.toHaveBeenCalled();
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+  });
+
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
     const sourceConfig = {
       channels: {
