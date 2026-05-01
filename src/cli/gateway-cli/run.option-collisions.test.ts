@@ -110,9 +110,13 @@ vi.mock("../../infra/gateway-lock.js", () => ({
   GatewayLockError: class GatewayLockError extends Error {},
 }));
 
-vi.mock("../../infra/supervisor-markers.js", () => ({
-  detectRespawnSupervisor: () => null,
-}));
+vi.mock("../../infra/supervisor-markers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/supervisor-markers.js")>();
+  return {
+    ...actual,
+    detectRespawnSupervisor: () => null,
+  };
+});
 
 vi.mock("../../infra/ports.js", () => ({
   formatPortDiagnostics: () => [],
