@@ -2221,7 +2221,6 @@ describe("memory plugin e2e", () => {
     expect(detectCategory("Random note")).toBe("other");
   });
 
-
   // ============================================================================
   // memory_refresh tests
   // ============================================================================
@@ -2233,7 +2232,6 @@ describe("memory plugin e2e", () => {
     queryWhere: ReturnType<typeof vi.fn>;
     tableAdd: ReturnType<typeof vi.fn>;
     tableDelete: ReturnType<typeof vi.fn>;
-    // oxlint-disable-next-line typescript/no-explicit-any
     registeredTools: any[];
   }) {
     return {
@@ -2257,7 +2255,6 @@ describe("memory plugin e2e", () => {
         error: vi.fn(),
         debug: vi.fn(),
       },
-      // oxlint-disable-next-line typescript/no-explicit-any
       registerTool: (tool: any, toolOpts: any) => {
         opts.registeredTools.push({ tool, opts: toolOpts });
       },
@@ -2313,7 +2310,9 @@ describe("memory plugin e2e", () => {
     vi.resetModules();
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
       },
     }));
     vi.doMock("@lancedb/lancedb", () => ({
@@ -2331,7 +2330,6 @@ describe("memory plugin e2e", () => {
 
     try {
       const { default: memoryPlugin } = await import("./index.js");
-      // oxlint-disable-next-line typescript/no-explicit-any
       const registeredTools: any[] = [];
       const mockApi = buildMockApiForRefresh({
         dbPath: getDbPath(),
@@ -2342,7 +2340,6 @@ describe("memory plugin e2e", () => {
         tableDelete,
         registeredTools,
       });
-      // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
 
       const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
@@ -2394,7 +2391,9 @@ describe("memory plugin e2e", () => {
     vi.resetModules();
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
       },
     }));
     vi.doMock("@lancedb/lancedb", () => ({
@@ -2414,14 +2413,12 @@ describe("memory plugin e2e", () => {
 
     try {
       const { default: memoryPlugin } = await import("./index.js");
-      // oxlint-disable-next-line typescript/no-explicit-any
       const registeredTools: any[] = [];
 
       // Use tmpDir for audit log by temporarily pointing homedir there
       const originalHome = process.env.HOME;
       process.env.HOME = getTmpDir();
 
-      // oxlint-disable-next-line typescript/no-explicit-any
       let result: any;
       try {
         const mockApi = buildMockApiForRefresh({
@@ -2433,7 +2430,6 @@ describe("memory plugin e2e", () => {
           tableDelete,
           registeredTools,
         });
-        // oxlint-disable-next-line typescript/no-explicit-any
         memoryPlugin.register(mockApi as any);
 
         const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
@@ -2509,7 +2505,9 @@ describe("memory plugin e2e", () => {
     vi.resetModules();
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
       },
     }));
     vi.doMock("@lancedb/lancedb", () => ({
@@ -2527,7 +2525,6 @@ describe("memory plugin e2e", () => {
 
     try {
       const { default: memoryPlugin } = await import("./index.js");
-      // oxlint-disable-next-line typescript/no-explicit-any
       const registeredTools: any[] = [];
       const mockApi = buildMockApiForRefresh({
         dbPath: getDbPath(),
@@ -2538,7 +2535,6 @@ describe("memory plugin e2e", () => {
         tableDelete,
         registeredTools,
       });
-      // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
 
       const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
@@ -2601,7 +2597,9 @@ describe("memory plugin e2e", () => {
     vi.resetModules();
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
       },
     }));
     vi.doMock("@lancedb/lancedb", () => ({
@@ -2619,7 +2617,6 @@ describe("memory plugin e2e", () => {
 
     try {
       const { default: memoryPlugin } = await import("./index.js");
-      // oxlint-disable-next-line typescript/no-explicit-any
       const registeredTools: any[] = [];
       const mockApi = buildMockApiForRefresh({
         dbPath: getDbPath(),
@@ -2630,7 +2627,6 @@ describe("memory plugin e2e", () => {
         tableDelete,
         registeredTools,
       });
-      // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
 
       const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
@@ -2701,7 +2697,9 @@ describe("memory plugin e2e", () => {
     vi.resetModules();
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
       },
     }));
     vi.doMock("@lancedb/lancedb", () => ({
@@ -2719,7 +2717,6 @@ describe("memory plugin e2e", () => {
 
     try {
       const { default: memoryPlugin } = await import("./index.js");
-      // oxlint-disable-next-line typescript/no-explicit-any
       const registeredTools: any[] = [];
       const mockApi = buildMockApiForRefresh({
         dbPath: getDbPath(),
@@ -2730,7 +2727,6 @@ describe("memory plugin e2e", () => {
         tableDelete,
         registeredTools,
       });
-      // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
 
       const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
@@ -2779,7 +2775,9 @@ describe("memory plugin e2e", () => {
     vi.resetModules();
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
       },
     }));
     vi.doMock("@lancedb/lancedb", () => ({
@@ -2797,7 +2795,6 @@ describe("memory plugin e2e", () => {
 
     try {
       const { default: memoryPlugin } = await import("./index.js");
-      // oxlint-disable-next-line typescript/no-explicit-any
       const registeredTools: any[] = [];
       const mockApi = buildMockApiForRefresh({
         dbPath: getDbPath(),
@@ -2808,7 +2805,6 @@ describe("memory plugin e2e", () => {
         tableDelete,
         registeredTools,
       });
-      // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
 
       const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
@@ -2877,7 +2873,9 @@ describe("memory plugin e2e", () => {
     vi.resetModules();
     vi.doMock("openai", () => ({
       default: class MockOpenAI {
-        embeddings = { create: embeddingsCreate };
+        post = vi.fn((_path: string, opts: { body?: unknown }) =>
+          invokeEmbeddingCreate(embeddingsCreate, opts.body),
+        );
       },
     }));
     vi.doMock("@lancedb/lancedb", () => ({
@@ -2895,7 +2893,6 @@ describe("memory plugin e2e", () => {
 
     try {
       const { default: memoryPlugin } = await import("./index.js");
-      // oxlint-disable-next-line typescript/no-explicit-any
       const registeredTools: any[] = [];
       const mockApi = buildMockApiForRefresh({
         dbPath: getDbPath(),
@@ -2906,7 +2903,6 @@ describe("memory plugin e2e", () => {
         tableDelete,
         registeredTools,
       });
-      // oxlint-disable-next-line typescript/no-explicit-any
       memoryPlugin.register(mockApi as any);
 
       const refreshTool = registeredTools.find((t) => t.opts?.name === "memory_refresh")?.tool;
