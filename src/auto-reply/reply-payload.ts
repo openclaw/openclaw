@@ -1,3 +1,4 @@
+import type { InternalToolOutputShape } from "../agents/tool-output-shapes.js";
 import type {
   InteractiveReply,
   MessagePresentation,
@@ -46,6 +47,13 @@ export type ReplyPayload = {
   isCompactionNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /**
+   * Tags a tool-result payload as carrying an internal shape (e.g. provider
+   * inventory) whose visibility on non-direct chat surfaces is restricted.
+   * The reply dispatcher reads this to suppress text on shared surfaces
+   * while still allowing direct/DM delivery. Refs #75166.
+   */
+  internalShape?: InternalToolOutputShape;
 };
 
 export type ReplyPayloadMetadata = {

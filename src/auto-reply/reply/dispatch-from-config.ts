@@ -1109,6 +1109,19 @@ export async function dispatchReplyFromConfig(
       ) {
         return null;
       }
+      // Defense-in-depth for #75166: tool-result payloads tagged as
+      // operator-environment inventory (e.g. image/video provider lists)
+      // must not surface as visible text on non-direct chat surfaces, even
+      // when verbose progress is otherwise enabled. Direct/DM operators
+      // still receive full visibility so the inventory remains a useful
+      // operator affordance where it does not leak into shared rooms.
+      if (payload.internalShape === "provider-inventory" && ctx.ChatType !== "direct") {
+        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+        if (!hasMedia) {
+          return null;
+        }
+        return { ...payload, text: undefined };
+      }
       if (shouldSendToolSummaries) {
         return payload;
       }
