@@ -7,6 +7,7 @@ import {
   resolveExecutable,
   resolveExecutableFromPathEnv,
   resolveExecutablePath,
+  resolveExecutablePathCandidate,
 } from "./executable-path.js";
 
 function restoreEnvValue(name: string, value: string | undefined): void {
@@ -86,6 +87,23 @@ describe("executable path helpers", () => {
       expect(resolveExecutablePath("~/missing-tool", { env: { HOME: homeDir } })).toBeUndefined();
     });
   });
+
+  it.runIf(process.platform !== "win32")("normalizes POSIX absolute executable candidates", () => {
+    expect(resolveExecutablePathCandidate("/usr/bin/../../bin/sh")).toBe("/bin/sh");
+    expect(resolveExecutablePathCandidate("/usr/bin/./env")).toBe("/usr/bin/env");
+  });
+
+  it.runIf(process.platform === "win32")(
+    "normalizes Windows absolute executable candidates",
+    () => {
+      expect(
+        resolveExecutablePathCandidate(String.raw`C:\Tools\..\..\Windows\System32\cmd.exe`),
+      ).toBe(String.raw`C:\Windows\System32\cmd.exe`);
+      expect(resolveExecutablePathCandidate(String.raw`C:\Tools\.\runner.exe`)).toBe(
+        String.raw`C:\Tools\runner.exe`,
+      );
+    },
+  );
 
   it("does not treat drive-less rooted windows paths as cwd-relative executables", () => {
     if (process.platform !== "win32") {
