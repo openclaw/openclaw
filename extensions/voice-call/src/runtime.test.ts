@@ -216,12 +216,16 @@ describe("createVoiceCallRuntime lifecycle", () => {
     },
   );
 
-  it("fails closed when Twilio publicUrl points at a local-only webhook", async () => {
+  it.each([
+    "http://127.0.0.1:3334/voice/webhook",
+    "http://[::1]:3334/voice/webhook",
+    "http://[fd00::1]/voice/webhook",
+  ])("fails closed when Twilio publicUrl %s points at a local-only webhook", async (publicUrl) => {
     await expect(
       createVoiceCallRuntime({
         config: createExternalProviderConfig({
           provider: "twilio",
-          publicUrl: "http://127.0.0.1:3334/voice/webhook",
+          publicUrl,
         }),
         coreConfig: {} as CoreConfig,
         agentRuntime: {} as never,

@@ -1481,48 +1481,55 @@ describe("google-meet plugin", () => {
     );
   });
 
-  it("reports local voice-call publicUrl as unusable for Twilio transport", async () => {
-    vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
-    vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
-    vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
-    const { tools } = setup(
-      { defaultTransport: "twilio" },
-      {
-        fullConfig: {
-          plugins: {
-            allow: ["google-meet", "voice-call"],
-            entries: {
-              "voice-call": {
-                enabled: true,
-                config: {
-                  provider: "twilio",
-                  publicUrl: "http://127.0.0.1:3334/voice/webhook",
+  it.each([
+    "http://127.0.0.1:3334/voice/webhook",
+    "http://[::1]:3334/voice/webhook",
+    "http://[fd00::1]/voice/webhook",
+  ])(
+    "reports local voice-call publicUrl %s as unusable for Twilio transport",
+    async (publicUrl) => {
+      vi.stubEnv("TWILIO_ACCOUNT_SID", "AC123");
+      vi.stubEnv("TWILIO_AUTH_TOKEN", "secret");
+      vi.stubEnv("TWILIO_FROM_NUMBER", "+15550001234");
+      const { tools } = setup(
+        { defaultTransport: "twilio" },
+        {
+          fullConfig: {
+            plugins: {
+              allow: ["google-meet", "voice-call"],
+              entries: {
+                "voice-call": {
+                  enabled: true,
+                  config: {
+                    provider: "twilio",
+                    publicUrl,
+                  },
                 },
               },
             },
           },
         },
-      },
-    );
-    const tool = tools[0] as {
-      execute: (
-        id: string,
-        params: unknown,
-      ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
-    };
+      );
+      const tool = tools[0] as {
+        execute: (
+          id: string,
+          params: unknown,
+        ) => Promise<{ details: { ok?: boolean; checks?: unknown[] } }>;
+      };
 
-    const result = await tool.execute("id", { action: "setup_status" });
+      const result = await tool.execute("id", { action: "setup_status" });
 
-    expect(result.details.ok).toBe(false);
-    expect(result.details.checks).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "twilio-voice-call-webhook",
-          ok: false,
-        }),
-      ]),
-    );
-  });
+      expect(result.details.ok).toBe(false);
+      expect(result.details.checks).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "twilio-voice-call-webhook",
+            ok: false,
+          }),
+        ]),
+      );
+    },
+  );
 
   it("opens local Chrome Meet in observe-only mode without BlackHole checks", async () => {
     const originalPlatform = process.platform;

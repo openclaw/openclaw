@@ -594,13 +594,17 @@ describe("voice-call plugin", () => {
     }
   });
 
-  it("CLI setup rejects local public webhook URLs for Twilio", async () => {
+  it.each([
+    "http://127.0.0.1:3334/voice/webhook",
+    "http://[::1]:3334/voice/webhook",
+    "http://[fd00::1]/voice/webhook",
+  ])("CLI setup rejects local public webhook URL %s for Twilio", async (publicUrl) => {
     const program = new Command();
     const stdout = captureStdout();
     await registerVoiceCallCli(program, {
       provider: "twilio",
       fromNumber: "+15550001234",
-      publicUrl: "http://127.0.0.1:3334/voice/webhook",
+      publicUrl,
       twilio: {
         accountSid: "AC123",
         authToken: "token",
