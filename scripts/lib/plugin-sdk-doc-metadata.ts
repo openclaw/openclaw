@@ -101,6 +101,9 @@ export const pluginSdkDocMetadata = {
   "runtime-store": {
     category: "runtime",
   },
+  "agent-config-helpers": {
+    category: "runtime",
+  },
   "allow-from": {
     category: "utilities",
   },
