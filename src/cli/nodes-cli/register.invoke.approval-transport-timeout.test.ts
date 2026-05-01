@@ -74,7 +74,7 @@ describe("exec approval transport timeout (#12098)", () => {
 
   it("fix: user-specified timeout larger than approval is preserved", async () => {
     const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
-    const userTimeout = 200_000;
+    const userTimeout = approvalTransportFloorMs + 10_000;
     // Mirror the production code: parseTimeoutMs preserves valid large values
     const transportTimeoutMs = Math.max(
       parseTimeoutMs(String(userTimeout)) ?? 0,
