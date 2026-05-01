@@ -193,7 +193,10 @@ function isFollowedByMarkdownReferenceLink(
   if (closingIndex === -1) {
     return false;
   }
-  return hasNonWhitespaceBeforeOnLine(text, index);
+  const secondLabelBody = text.slice(afterIndex + 1, closingIndex);
+  return (
+    hasNonWhitespaceBeforeOnLine(text, index) || !isCompleteAllowlistedEmotionBody(secondLabelBody)
+  );
 }
 
 function isSecondLabelInMarkdownReferenceLink(text: string, index: number): boolean {
@@ -207,7 +210,10 @@ function isSecondLabelInMarkdownReferenceLink(text: string, index: number): bool
   if (text.slice(previousOpenIndex + 1, index - 1).includes("\n")) {
     return false;
   }
-  return hasNonWhitespaceBeforeOnLine(text, previousOpenIndex);
+  const body = text.slice(index + 1, text.indexOf("]", index + 1));
+  return (
+    hasNonWhitespaceBeforeOnLine(text, previousOpenIndex) || !isCompleteAllowlistedEmotionBody(body)
+  );
 }
 
 function isLikelyEmotionTag(text: string, index: number, rawTag: string, body: string): boolean {

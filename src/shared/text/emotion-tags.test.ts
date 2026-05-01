@@ -51,6 +51,7 @@ describe("stripEmotionTags", () => {
   test("does not strip markdown reference link labels", () => {
     const numberedReference = stripEmotionTags("See [fast][1] before choosing.");
     const namedReference = stripEmotionTags("Read [clear][docs] next.");
+    const lineStartReference = stripEmotionTags("[clear][docs] starts this paragraph.");
     const allowlistedNamedReference = stripEmotionTags("See [fast][clear] before choosing.");
     const adjacentEmotionTags = stripEmotionTags("[fast][softly] go now.");
 
@@ -59,6 +60,10 @@ describe("stripEmotionTags", () => {
       changed: false,
     });
     expect(namedReference).toEqual({ text: "Read [clear][docs] next.", changed: false });
+    expect(lineStartReference).toEqual({
+      text: "[clear][docs] starts this paragraph.",
+      changed: false,
+    });
     expect(allowlistedNamedReference).toEqual({
       text: "See [fast][clear] before choosing.",
       changed: false,
