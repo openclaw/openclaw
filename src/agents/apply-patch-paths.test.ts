@@ -85,6 +85,27 @@ describe("extractApplyPatchTargetPaths", () => {
     expect(extractApplyPatchTargetPaths(patch)).toEqual(["crlf.ts"]);
   });
 
+  it("matches indented hunk headers the same way as the apply_patch executor", () => {
+    const patch = [
+      "  *** Begin Patch",
+      "  *** Add File: src/new.ts",
+      "+x",
+      "  *** Delete File: src/dead.ts",
+      "  *** Update File: src/old.ts",
+      "  *** Move to: src/renamed.ts",
+      "@@",
+      "-old",
+      "+new",
+      "  *** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual([
+      "src/new.ts",
+      "src/dead.ts",
+      "src/old.ts",
+      "src/renamed.ts",
+    ]);
+  });
+
   it("ignores markers outside of the envelope grammar", () => {
     expect(
       extractApplyPatchTargetPaths(
