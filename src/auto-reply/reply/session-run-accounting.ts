@@ -1,7 +1,8 @@
 import type { EmbeddedPiRunResult } from "../../agents/pi-embedded-runner/types.js";
 import { deriveSessionTotalTokens, type NormalizedUsage } from "../../agents/usage.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { updateSessionStoreEntry, type SessionEntry } from "../../config/sessions.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { logVerbose } from "../../globals.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 
@@ -85,10 +86,15 @@ export async function persistSystemSentAfterSuccess(
     !hasMetaError &&
     (hasNonErrorPayload || hasSentViaMessagingTool || hasSuccessfulStopReason)
   ) {
-    await updateSessionStoreEntry({
-      storePath,
-      sessionKey,
-      update: async () => ({ systemSent: true }),
-    });
+    try {
+      await updateSessionStoreEntry({
+        storePath,
+        sessionKey,
+        update: async () => ({ systemSent: true }),
+      });
+      sessionEntry.systemSent = true;
+    } catch (err) {
+      logVerbose(`failed to persist systemSent marker: ${String(err)}`);
+    }
   }
 }

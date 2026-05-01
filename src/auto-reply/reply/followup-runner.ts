@@ -388,7 +388,7 @@ export function createFollowupRunner(params: {
           provider: providerUsed,
           model: modelUsed,
           contextTokensOverride: agentCfgContextTokens,
-          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+          fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
 
@@ -412,7 +412,7 @@ export function createFollowupRunner(params: {
       await persistSystemSentAfterSuccess({
         storePath,
         sessionKey,
-        sessionEntry,
+        sessionEntry: activeSessionEntry,
         runResult,
       });
 
@@ -453,7 +453,7 @@ export function createFollowupRunner(params: {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
           cfg: runtimeConfig,
-          sessionEntry,
+          sessionEntry: activeSessionEntry,
           sessionStore,
           sessionKey,
           storePath,

@@ -12,6 +12,7 @@ const compactEmbeddedPiSessionMock = vi.fn();
 const routeReplyMock = vi.fn();
 const isRoutableChannelMock = vi.fn();
 const runPreflightCompactionIfNeededMock = vi.fn();
+const persistSystemSentAfterSuccessMock = vi.fn();
 const resolveCommandSecretRefsViaGatewayMock = vi.fn();
 const resolveQueuedReplyExecutionConfigMock = vi.fn();
 const resolveProviderFollowupFallbackRouteMock = vi.fn();
@@ -252,7 +253,7 @@ async function persistSystemSentAfterSuccessForFollowupTest(
   const registeredStore = FOLLOWUP_TEST_SESSION_STORES.get(storePath);
   const store = registeredStore ?? loadSessionStore(storePath, { skipCache: true });
   const entry = store[sessionKey];
-  if (!entry || entry.systemSent === true) {
+  if (!entry || entry.systemSent === true || sessionEntry?.systemSent === true) {
     return;
   }
   const payloadArray = runResult.payloads ?? [];
@@ -313,7 +314,8 @@ async function loadFreshFollowupRunnerModuleForTest() {
   vi.doMock("./session-run-accounting.js", () => ({
     persistRunSessionUsage: persistRunSessionUsageForFollowupTest,
     incrementRunCompactionCount: incrementRunCompactionCountForFollowupTest,
-    persistSystemSentAfterSuccess: persistSystemSentAfterSuccessForFollowupTest,
+    persistSystemSentAfterSuccess: (...args: unknown[]) =>
+      persistSystemSentAfterSuccessMock(...args),
   }));
   vi.doMock("./agent-runner-memory.js", () => ({
     runMemoryFlushIfNeeded: async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
@@ -409,6 +411,7 @@ beforeEach(() => {
   runEmbeddedPiAgentMock.mockReset();
   compactEmbeddedPiSessionMock.mockReset();
   runPreflightCompactionIfNeededMock.mockReset();
+  persistSystemSentAfterSuccessMock.mockReset();
   resolveCommandSecretRefsViaGatewayMock.mockReset();
   resolveQueuedReplyExecutionConfigMock.mockReset();
   resolveProviderFollowupFallbackRouteMock.mockReset();
@@ -423,6 +426,10 @@ beforeEach(() => {
   );
   runPreflightCompactionIfNeededMock.mockImplementation(
     async (params: { sessionEntry?: SessionEntry }) => params.sessionEntry,
+  );
+  persistSystemSentAfterSuccessMock.mockImplementation(
+    async (...args: Parameters<typeof persistSystemSentAfterSuccessForFollowupTest>) =>
+      await persistSystemSentAfterSuccessForFollowupTest(...args),
   );
   resolveCommandSecretRefsViaGatewayMock.mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
@@ -1367,6 +1374,47 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
       const store = loadSessionStore(storePath, { skipCache: true });
       expect(store[sessionKey]?.systemSent).toBe(true);
     }
+  });
+
+  it("persists systemSent against the active session entry after preflight refresh", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-systemsent-refresh-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    const staleSessionEntry: SessionEntry = {
+      sessionId: "session-stale",
+      updatedAt: Date.now(),
+      systemSent: true,
+    };
+    const activeSessionEntry: SessionEntry = {
+      sessionId: "session-active",
+      updatedAt: Date.now(),
+      systemSent: false,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: activeSessionEntry };
+    await saveSessionStore(storePath, sessionStore);
+    registerFollowupTestSessionStore(storePath, sessionStore);
+
+    runPreflightCompactionIfNeededMock.mockImplementationOnce(async () => activeSessionEntry);
+
+    await runMessagingCase({
+      agentResult: {
+        payloads: [],
+        meta: { durationMs: 1, stopReason: "stop" },
+      },
+      runnerOverrides: {
+        sessionEntry: staleSessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      },
+    });
+
+    expect(persistSystemSentAfterSuccessMock).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionEntry: activeSessionEntry }),
+    );
+    expect(sessionStore[sessionKey]?.systemSent).toBe(true);
   });
 
   it("does not send cross-channel payload content to dispatcher when origin routing fails", async () => {
