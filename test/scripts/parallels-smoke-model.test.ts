@@ -462,6 +462,7 @@ console.log(JSON.stringify(result));
     expect(script).toContain("windowsModelProviderTimeoutScript(this.auth.modelId)");
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
     expect(script).toContain("parallels-windows-smoke-retry-$attempt");
+    expect(script).toContain("agent turn attempt $attempt failed or finished without OK response");
     expect(script).not.toContain("$config.models.providers");
     expect(script).not.toContain("timeoutSeconds = 300");
     expect(script).toContain('"$sessionId.jsonl"');
