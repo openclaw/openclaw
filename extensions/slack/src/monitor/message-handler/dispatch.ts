@@ -1135,12 +1135,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           await sleep(statusReactionTiming.errorHoldMs);
           if (anyReplyDelivered) {
             await statusReactions.clear();
-            return;
           }
-          await statusReactions.restoreInitial();
         })();
-      } else {
-        void statusReactions.restoreInitial();
       }
     } else if (anyReplyDelivered) {
       await statusReactions.setDone();
