@@ -142,6 +142,56 @@ describe("plugin session extension SessionEntry projection", () => {
     );
   });
 
+  it("rejects duplicate promoted SessionEntry slot keys across registrations", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "slot-owner", name: "Slot Owner" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "first promoted slot",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+        api.registerSessionExtension({
+          namespace: "recovery",
+          description: "same plugin duplicate slot",
+          sessionEntrySlotKey: " approvalSnapshot ",
+        });
+      },
+    });
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({ id: "slot-colliding-plugin", name: "Slot Colliding" }),
+      register(api) {
+        api.registerSessionExtension({
+          namespace: "workflow",
+          description: "cross-plugin duplicate slot",
+          sessionEntrySlotKey: "approvalSnapshot",
+        });
+      },
+    });
+
+    expect(registry.registry.sessionExtensions ?? []).toHaveLength(1);
+    expect(registry.registry.sessionExtensions?.[0]?.extension.sessionEntrySlotKey).toBe(
+      "approvalSnapshot",
+    );
+    expect(registry.registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "slot-owner",
+          message: "sessionEntrySlotKey already registered: approvalSnapshot",
+        }),
+        expect.objectContaining({
+          pluginId: "slot-colliding-plugin",
+          message: "sessionEntrySlotKey already registered: approvalSnapshot",
+        }),
+      ]),
+    );
+  });
+
   it("clears promoted SessionEntry slots with plugin-owned session state", async () => {
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
