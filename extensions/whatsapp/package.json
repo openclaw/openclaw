@@ -7,7 +7,6 @@
     "@whiskeysockets/baileys": "7.0.0-rc.9",
     "https-proxy-agent": "^9.0.0",
     "jimp": "^1.6.1",
-    "qrcode": "1.5.4",
     "typebox": "1.1.36",
     "undici": "8.1.0"
   },

@@ -1458,9 +1458,6 @@ importers:
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
-      qrcode:
-        specifier: 1.5.4
-        version: 1.5.4
       typebox:
         specifier: 1.1.36
         version: 1.1.36

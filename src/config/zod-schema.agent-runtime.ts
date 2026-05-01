@@ -306,10 +306,10 @@ const CodexAllowedDomainsSchema = z
 
 const CodexUserLocationSchema = z
   .object({
-    country: TrimmedOptionalConfigStringSchema,
-    region: TrimmedOptionalConfigStringSchema,
-    city: TrimmedOptionalConfigStringSchema,
-    timezone: TrimmedOptionalConfigStringSchema,
+    country: TrimmedOptionalConfigStringSchema.optional(),
+    region: TrimmedOptionalConfigStringSchema.optional(),
+    city: TrimmedOptionalConfigStringSchema.optional(),
+    timezone: TrimmedOptionalConfigStringSchema.optional(),
   })
   .strict()
   .transform((value) => {
