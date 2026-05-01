@@ -3422,6 +3422,36 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toBe(false);
   });
 
+  it("expires legacy PID-alive locks without starttime or createdAtMs when lock files are stale", () => {
+    expect(
+      shouldRemoveRuntimeDepsLock(
+        { pid: 1, lockDirMtimeMs: 1_000, ownerFileMtimeMs: 2_000 },
+        602_001,
+        () => true,
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps fresh legacy PID-alive locks without starttime or createdAtMs", () => {
+    expect(
+      shouldRemoveRuntimeDepsLock(
+        { pid: 1, lockDirMtimeMs: 1_000, ownerFileMtimeMs: 2_000 },
+        602_000,
+        () => true,
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps PID-alive locks with createdAtMs even when mtimes are stale", () => {
+    expect(
+      shouldRemoveRuntimeDepsLock(
+        { pid: 1, createdAtMs: 2_000, lockDirMtimeMs: 1_000, ownerFileMtimeMs: 1_000 },
+        Number.MAX_SAFE_INTEGER,
+        () => true,
+      ),
+    ).toBe(false);
+  });
+
   it("does not expire fresh ownerless runtime-deps install locks", () => {
     expect(shouldRemoveRuntimeDepsLock({ lockDirMtimeMs: 1_000 }, 31_000, () => true)).toBe(false);
   });
@@ -3512,6 +3542,50 @@ describe("ensureBundledPluginRuntimeDeps", () => {
 
     expect(result).toEqual({
       installedSpecs: ["@mariozechner/pi-ai@0.70.2"],
+    });
+    expect(calls).toHaveLength(1);
+    expect(fs.existsSync(lockDir)).toBe(false);
+  });
+
+  it("removes stale legacy PID-alive runtime-deps install locks before repairing deps", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "browser");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "browser-runtime": "1.0.0",
+        },
+      }),
+    );
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env: {} });
+    const lockDir = path.join(installRoot, ".openclaw-runtime-deps.lock");
+    fs.mkdirSync(lockDir, { recursive: true });
+    const ownerPath = path.join(lockDir, "owner.json");
+    fs.writeFileSync(ownerPath, JSON.stringify({ pid: process.pid }), "utf8");
+    fs.utimesSync(ownerPath, new Date(0), new Date(0));
+    fs.utimesSync(lockDir, new Date(0), new Date(0));
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      installDeps: (params) => {
+        calls.push(params);
+        fs.mkdirSync(path.join(params.installRoot, "node_modules", "browser-runtime"), {
+          recursive: true,
+        });
+        fs.writeFileSync(
+          path.join(params.installRoot, "node_modules", "browser-runtime", "package.json"),
+          JSON.stringify({ name: "browser-runtime", version: "1.0.0" }),
+        );
+      },
+      pluginId: "browser",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["browser-runtime@1.0.0"],
     });
     expect(calls).toHaveLength(1);
     expect(fs.existsSync(lockDir)).toBe(false);

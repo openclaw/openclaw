@@ -39,6 +39,12 @@ The package manager owns dependency convergence:
 In practice, OpenClaw should decide what needs to exist. `pnpm` or `npm` should
 make the filesystem match that decision.
 
+OpenClaw also owns the per-install-root coordination lock. Package managers
+protect their own install transaction, but they do not serialize OpenClaw's
+manifest writes, isolated-stage copy/rename, final validation, or plugin import
+against another Gateway, doctor, or CLI process touching the same runtime
+dependency root.
+
 ## Effective plugin plan
 
 The effective plugin plan is derived from config plus discovered plugin
@@ -90,7 +96,11 @@ skip package-manager work.
 
 Commands that edit config, enable plugins, or repair doctor findings can enter
 plugin plan mode once, materialize the newly required bundled dependencies, then
-return to the normal command flow.
+return to the normal command flow. Local `openclaw onboard` and
+`openclaw configure` do this automatically after they successfully write config,
+so the next Gateway run does not discover missing bundled plugin packages after
+startup has already begun. Remote onboarding/configure stays read-only for local
+runtime deps.
 
 ## Hot reload rule
 
@@ -132,6 +142,12 @@ output enabled for the generated install root.
 After install, OpenClaw validates the staged dependency tree before making it
 visible to the runtime dependency root. Isolated staging is copied into the
 runtime dependency root and validated again.
+
+The whole repair/materialization section is guarded by an install-root lock.
+Current lock owners record PID, process start-time when available, and creation
+time. Legacy locks without process start-time or creation-time evidence are only
+reclaimed by filesystem age, so recycled Docker PID 1 locks recover without
+expiring normal long-running current installs by age alone.
 
 ## Install roots
 

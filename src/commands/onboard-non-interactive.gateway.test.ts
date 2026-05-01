@@ -9,6 +9,7 @@ import { createThrowingRuntime } from "./onboard-non-interactive.test-helpers.js
 import type { installGatewayDaemonNonInteractive } from "./onboard-non-interactive/local/daemon-install.js";
 
 const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+const preparePostConfigBundledRuntimeDepsMock = vi.hoisted(() => vi.fn(async () => {}));
 const testConfigStore = new Map<string, OpenClawConfig>();
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
@@ -129,6 +130,10 @@ vi.mock("./onboard-non-interactive/local/daemon-install.js", () => ({
 
 vi.mock("./health.js", () => ({
   healthCommand: healthCommandMock,
+}));
+
+vi.mock("./post-config-runtime-deps.js", () => ({
+  preparePostConfigBundledRuntimeDeps: preparePostConfigBundledRuntimeDepsMock,
 }));
 
 vi.mock("../daemon/service.js", () => ({
@@ -316,6 +321,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     gatewayServiceMock.isLoaded.mockClear();
     gatewayServiceMock.readRuntime.mockClear();
     readLastGatewayErrorLineMock.mockClear();
+    preparePostConfigBundledRuntimeDepsMock.mockClear();
   });
 
   it("writes gateway token auth into config", async () => {
@@ -350,6 +356,14 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg?.tools?.profile).toBe("coding");
       expect(cfg?.gateway?.auth?.mode).toBe("token");
       expect(cfg?.gateway?.auth?.token).toBe(token);
+      expect(preparePostConfigBundledRuntimeDepsMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          config: expect.objectContaining({
+            gateway: expect.objectContaining({ mode: "local" }),
+          }),
+          runtime,
+        }),
+      );
     });
   }, 60_000);
 
@@ -408,6 +422,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.mode).toBe("remote");
       expect(cfg.gateway?.remote?.url).toBe(`ws://127.0.0.1:${port}`);
       expect(cfg.gateway?.remote?.token).toBe(token);
+      expect(preparePostConfigBundledRuntimeDepsMock).not.toHaveBeenCalled();
     });
   }, 60_000);
 
