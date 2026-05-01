@@ -61,17 +61,36 @@ export function resolveSessionCompactionCheckpointReason(params: {
 }
 
 const SESSION_HEADER_READ_MAX_BYTES = 64 * 1024;
+const SESSION_TAIL_READ_INITIAL_BYTES = 64 * 1024;
+
+type AsyncTranscriptFileHandle = Awaited<ReturnType<typeof fs.open>>;
+
+async function readFileRangeAsync(
+  fileHandle: AsyncTranscriptFileHandle,
+  position: number,
+  length: number,
+): Promise<Buffer> {
+  const buffer = Buffer.alloc(length);
+  let offset = 0;
+  while (offset < length) {
+    const { bytesRead } = await fileHandle.read(buffer, offset, length - offset, position + offset);
+    if (bytesRead <= 0) {
+      break;
+    }
+    offset += bytesRead;
+  }
+  return offset === length ? buffer : buffer.subarray(0, offset);
+}
 
 async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Promise<string | null> {
-  let fileHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
+  let fileHandle: AsyncTranscriptFileHandle | undefined;
   try {
     fileHandle = await fs.open(sessionFile, "r");
-    const buffer = Buffer.alloc(SESSION_HEADER_READ_MAX_BYTES);
-    const { bytesRead } = await fileHandle.read(buffer, 0, buffer.length, 0);
-    if (bytesRead <= 0) {
+    const buffer = await readFileRangeAsync(fileHandle, 0, SESSION_HEADER_READ_MAX_BYTES);
+    if (buffer.length <= 0) {
       return null;
     }
-    const chunk = buffer.toString("utf-8", 0, bytesRead);
+    const chunk = buffer.toString("utf-8");
     const firstLine = chunk
       .split(/\r?\n/)
       .map((line) => line.trim())
@@ -90,6 +109,82 @@ async function readSessionIdFromTranscriptHeaderAsync(sessionFile: string): Prom
       await fileHandle.close().catch(() => undefined);
     }
   }
+}
+
+function parseTranscriptLineId(
+  line: string,
+): { kind: "session" } | { kind: "entry"; id: string } | null {
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown };
+    if (parsed.type === "session") {
+      return { kind: "session" };
+    }
+    if (typeof parsed.id === "string" && parsed.id.trim()) {
+      return { kind: "entry", id: parsed.id.trim() };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export async function readSessionLeafIdFromTranscriptAsync(
+  sessionFile: string,
+  maxBytes = MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES,
+): Promise<string | null> {
+  let fileHandle: AsyncTranscriptFileHandle | undefined;
+  try {
+    fileHandle = await fs.open(sessionFile, "r");
+    const stat = await fileHandle.stat();
+    if (!stat.isFile() || stat.size <= 0) {
+      return null;
+    }
+
+    const requestedMaxBytes = Number.isFinite(maxBytes)
+      ? Math.max(1024, Math.floor(maxBytes))
+      : MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES;
+    const maxReadableBytes = Math.min(stat.size, requestedMaxBytes);
+    let readLength = Math.min(maxReadableBytes, SESSION_TAIL_READ_INITIAL_BYTES);
+    while (readLength > 0) {
+      const readStart = Math.max(0, stat.size - readLength);
+      const buffer = await readFileRangeAsync(fileHandle, readStart, readLength);
+      const lines = buffer.toString("utf-8").split(/\r?\n/);
+      // If we did not read from the beginning, the first line may be a suffix of
+      // a larger JSONL entry. Ignore it and grow the window if no complete entry
+      // is found.
+      const candidateLines = readStart > 0 ? lines.slice(1) : lines;
+      for (let i = candidateLines.length - 1; i >= 0; i -= 1) {
+        const line = candidateLines[i]?.trim();
+        if (!line) {
+          continue;
+        }
+        const parsed = parseTranscriptLineId(line);
+        if (!parsed) {
+          continue;
+        }
+        if (parsed.kind === "session") {
+          return null;
+        }
+        return parsed.id;
+      }
+
+      if (readStart === 0) {
+        return null;
+      }
+      const nextReadLength = Math.min(maxReadableBytes, readLength * 2);
+      if (nextReadLength === readLength) {
+        return null;
+      }
+      readLength = nextReadLength;
+    }
+  } catch {
+    return null;
+  } finally {
+    if (fileHandle) {
+      await fileHandle.close().catch(() => undefined);
+    }
+  }
+  return null;
 }
 
 /**
@@ -165,7 +260,7 @@ export function captureCompactionCheckpointSnapshot(params: {
  * (see issue #75414).
  */
 export async function captureCompactionCheckpointSnapshotAsync(params: {
-  sessionManager: Pick<SessionManager, "getLeafId">;
+  sessionManager?: Pick<SessionManager, "getLeafId">;
   sessionFile: string;
   maxBytes?: number;
 }): Promise<CapturedCompactionCheckpointSnapshot | null> {
@@ -174,7 +269,11 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
       ? params.sessionManager.getLeafId.bind(params.sessionManager)
       : null;
   const sessionFile = params.sessionFile.trim();
-  if (!getLeafId || !sessionFile) {
+  if (!sessionFile || (params.sessionManager && !getLeafId)) {
+    return null;
+  }
+  const liveLeafId = getLeafId ? getLeafId() : undefined;
+  if (getLeafId && !liveLeafId) {
     return null;
   }
   const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES;
@@ -184,10 +283,6 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
       return null;
     }
   } catch {
-    return null;
-  }
-  const leafId = getLeafId();
-  if (!leafId) {
     return null;
   }
   const parsedSessionFile = path.parse(sessionFile);
@@ -201,7 +296,8 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     return null;
   }
   const sessionId = await readSessionIdFromTranscriptHeaderAsync(snapshotFile);
-  if (!sessionId) {
+  const leafId = liveLeafId ?? (await readSessionLeafIdFromTranscriptAsync(snapshotFile, maxBytes));
+  if (!sessionId || !leafId) {
     try {
       await fs.unlink(snapshotFile);
     } catch {

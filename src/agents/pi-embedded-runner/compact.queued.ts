@@ -6,6 +6,7 @@ import {
   captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
+  readSessionLeafIdFromTranscriptAsync,
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
@@ -116,7 +117,6 @@ export async function compactEmbeddedPiSession(
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         checkpointSnapshot = engineOwnsCompaction
           ? await captureCompactionCheckpointSnapshotAsync({
-              sessionManager: SessionManager.open(params.sessionFile),
               sessionFile: params.sessionFile,
             })
           : null;
@@ -200,7 +200,7 @@ export async function compactEmbeddedPiSession(
             try {
               const postLeafId =
                 postCompactionLeafId ??
-                SessionManager.open(postCompactionSessionFile).getLeafId() ??
+                (await readSessionLeafIdFromTranscriptAsync(postCompactionSessionFile)) ??
                 undefined;
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,

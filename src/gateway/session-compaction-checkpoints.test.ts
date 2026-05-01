@@ -12,6 +12,7 @@ import {
   cleanupCompactionCheckpointSnapshot,
   MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES,
   persistSessionCompactionCheckpoint,
+  readSessionLeafIdFromTranscriptAsync,
 } from "./session-compaction-checkpoints.js";
 
 const tempDirs: string[] = [];
@@ -138,6 +139,56 @@ describe("session-compaction-checkpoints", () => {
       expect(fsSync.existsSync(snapshot!.sessionFile)).toBe(false);
       expect(fsSync.existsSync(sessionFile!)).toBe(true);
     } finally {
+      copyFileSyncSpy.mockRestore();
+      sessionManagerOpenSpy.mockRestore();
+    }
+  });
+
+  test("async capture derives session metadata without synchronous SessionManager.open", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-metadata-"));
+    tempDirs.push(dir);
+
+    const session = SessionManager.create(dir, dir);
+    session.appendMessage({
+      role: "user",
+      content: "derive checkpoint metadata",
+      timestamp: Date.now(),
+    });
+    session.appendMessage({
+      role: "assistant",
+      content: "metadata derived",
+      api: "responses",
+      provider: "openai",
+      model: "gpt-test",
+      timestamp: Date.now(),
+    } as unknown as AssistantMessage);
+
+    const sessionFile = session.getSessionFile();
+    const sessionId = session.getSessionId();
+    const leafId = session.getLeafId();
+    expect(sessionFile).toBeTruthy();
+    expect(sessionId).toBeTruthy();
+    expect(leafId).toBeTruthy();
+    await fs.appendFile(sessionFile!, "\nnot-json\n", "utf-8");
+
+    const copyFileSyncSpy = vi.spyOn(fsSync, "copyFileSync");
+    const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
+    let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> = null;
+    try {
+      expect(await readSessionLeafIdFromTranscriptAsync(sessionFile!)).toBe(leafId);
+      snapshot = await captureCompactionCheckpointSnapshotAsync({
+        sessionFile: sessionFile!,
+      });
+
+      expect(copyFileSyncSpy).not.toHaveBeenCalled();
+      expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
+      expect(snapshot).not.toBeNull();
+      expect(snapshot?.sessionId).toBe(sessionId);
+      expect(snapshot?.leafId).toBe(leafId);
+      expect(snapshot?.sessionFile).not.toBe(sessionFile);
+      expect(snapshot?.sessionFile).toContain(".checkpoint.");
+    } finally {
+      await cleanupCompactionCheckpointSnapshot(snapshot);
       copyFileSyncSpy.mockRestore();
       sessionManagerOpenSpy.mockRestore();
     }
