@@ -13,7 +13,7 @@ export const noopLogger = {
   debug: vi.fn(),
 };
 
-export type GoogleMeetTestNodeListResult = {
+type GoogleMeetTestNodeListResult = {
   nodes: Array<{
     nodeId: string;
     displayName?: string;
