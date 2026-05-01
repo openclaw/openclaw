@@ -4,6 +4,32 @@ import { describe, expect, it } from "vitest";
 import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
 
 describe("createAnthropicPayloadLogger", () => {
+  it("accepts max bytes env override while logging payloads", async () => {
+    const lines: string[] = [];
+    const logger = createAnthropicPayloadLogger({
+      env: {
+        OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1",
+        OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_BYTES: "1024",
+      },
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+        flush: async () => undefined,
+      },
+    });
+    expect(logger).not.toBeNull();
+
+    const streamFn: StreamFn = ((model, __, options) => {
+      options?.onPayload?.({ messages: [] }, model);
+      return {} as never;
+    }) as StreamFn;
+
+    const wrapped = logger?.wrapStreamFn(streamFn);
+    await wrapped?.({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
+
+    expect(lines).toHaveLength(1);
+  });
+
   it("sanitizes credential fields and image base64 payload data before writing logs", async () => {
     const lines: string[] = [];
     const logger = createAnthropicPayloadLogger({

@@ -70,10 +70,24 @@ type CacheTraceInit = {
 type CacheTraceConfig = {
   enabled: boolean;
   filePath: string;
+  maxFileBytes: number | undefined;
   includeMessages: boolean;
   includePrompt: boolean;
   includeSystem: boolean;
 };
+
+const DEFAULT_CACHE_TRACE_MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
 
 type CacheTraceWriter = QueuedFileWriter;
 
@@ -94,17 +108,21 @@ function resolveCacheTraceConfig(params: CacheTraceInit): CacheTraceConfig {
   const includePrompt = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) ?? config?.includePrompt;
   const includeSystem = parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) ?? config?.includeSystem;
 
+  const envMaxFileBytes = parsePositiveInteger(env.OPENCLAW_CACHE_TRACE_MAX_BYTES);
+  const maxFileBytes = envMaxFileBytes ?? config?.maxFileBytes ?? DEFAULT_CACHE_TRACE_MAX_FILE_BYTES;
+
   return {
     enabled,
     filePath,
+    maxFileBytes,
     includeMessages: includeMessages ?? true,
     includePrompt: includePrompt ?? true,
     includeSystem: includeSystem ?? true,
   };
 }
 
-function getWriter(filePath: string): CacheTraceWriter {
-  return getQueuedFileWriter(writers, filePath);
+function getWriter(filePath: string, maxFileBytes: number | undefined): CacheTraceWriter {
+  return getQueuedFileWriter(writers, filePath, { maxFileBytes });
 }
 
 function stableStringify(value: unknown, seen: WeakSet<object> = new WeakSet()): string {
@@ -184,7 +202,7 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg.filePath);
+  const writer = params.writer ?? getWriter(cfg.filePath, cfg.maxFileBytes);
   let seq = 0;
 
   const base: Omit<CacheTraceEvent, "ts" | "seq" | "stage"> = buildAgentTraceBase(params);

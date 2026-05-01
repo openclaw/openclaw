@@ -351,6 +351,7 @@ export const OpenClawSchema = z
           .object({
             enabled: z.boolean().optional(),
             filePath: z.string().optional(),
+            maxFileBytes: z.number().int().positive().optional(),
             includeMessages: z.boolean().optional(),
             includePrompt: z.boolean().optional(),
             includeSystem: z.boolean().optional(),

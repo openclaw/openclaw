@@ -31,7 +31,21 @@ type PayloadLogEvent = {
 type PayloadLogConfig = {
   enabled: boolean;
   filePath: string;
+  maxFileBytes: number | undefined;
 };
+
+const DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_FILE_BYTES = 100 * 1024 * 1024;
+
+function parsePositiveInteger(value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return undefined;
+  }
+  return parsed;
+}
 
 type PayloadLogWriter = QueuedFileWriter;
 
@@ -44,11 +58,14 @@ function resolvePayloadLogConfig(env: NodeJS.ProcessEnv): PayloadLogConfig {
   const filePath = fileOverride
     ? resolveUserPath(fileOverride)
     : path.join(resolveStateDir(env), "logs", "anthropic-payload.jsonl");
-  return { enabled, filePath };
+  const maxFileBytes =
+    parsePositiveInteger(env.OPENCLAW_ANTHROPIC_PAYLOAD_LOG_MAX_BYTES) ??
+    DEFAULT_ANTHROPIC_PAYLOAD_LOG_MAX_FILE_BYTES;
+  return { enabled, filePath, maxFileBytes };
 }
 
-function getWriter(filePath: string): PayloadLogWriter {
-  return getQueuedFileWriter(writers, filePath);
+function getWriter(filePath: string, maxFileBytes: number | undefined): PayloadLogWriter {
+  return getQueuedFileWriter(writers, filePath, { maxFileBytes });
 }
 
 function formatError(error: unknown): string | undefined {
@@ -112,7 +129,7 @@ export function createAnthropicPayloadLogger(params: {
     return null;
   }
 
-  const writer = params.writer ?? getWriter(cfg.filePath);
+  const writer = params.writer ?? getWriter(cfg.filePath, cfg.maxFileBytes);
   const base: Omit<PayloadLogEvent, "ts" | "stage"> = {
     runId: params.runId,
     sessionId: params.sessionId,

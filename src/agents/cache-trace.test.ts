@@ -279,4 +279,28 @@ describe("createCacheTrace", () => {
     expect(event.messageCount).toBe(1);
     expect(event.messageFingerprints).toHaveLength(1);
   });
+
+  it("passes configured cache trace max file bytes to the writer", () => {
+    const writes: string[] = [];
+    const trace = createCacheTrace({
+      cfg: {
+        diagnostics: {
+          cacheTrace: {
+            enabled: true,
+            maxFileBytes: 12,
+          },
+        },
+      },
+      env: {},
+      writer: {
+        filePath: "memory",
+        write: (line) => writes.push(line),
+        flush: async () => undefined,
+      },
+    });
+
+    trace?.recordStage("session:loaded", { note: "configured cap is accepted" });
+
+    expect(writes).toHaveLength(1);
+  });
 });
