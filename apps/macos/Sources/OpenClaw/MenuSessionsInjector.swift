@@ -227,7 +227,10 @@ extension MenuSessionsInjector {
 
         if case .connecting = ControlChannel.shared.state {
             menu.insertItem(
-                self.makeMessageItem(text: "Connecting…", symbolName: "circle.dashed", width: width),
+                self.makeMessageItem(
+                    text: "Connecting…",
+                    symbolName: "circle.dashed",
+                    width: width),
                 at: cursor)
             cursor += 1
             return
