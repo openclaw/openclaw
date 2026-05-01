@@ -1,0 +1,200 @@
+name: ZekeBot Image Builds
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zekebot-image-builds-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  REGISTRY: ghcr.io
+
+jobs:
+  metadata:
+    name: Resolve image metadata
+    runs-on: ubuntu-24.04
+    outputs:
+      created: ${{ steps.meta.outputs.created }}
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+      short_sha: ${{ steps.meta.outputs.short_sha }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Resolve tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          build_date="$(date -u +'%Y.%-m.%d')"
+          image_tag="zb-${build_date}-${short_sha}"
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if [[ ! "${image_tag}" =~ ^zb-[0-9]{4}\.[1-9][0-9]?\.[0-9]{2}-[0-9a-f]{12}$ ]]; then
+            echo "::error::Invalid ZekeBot image tag: ${image_tag}"
+            exit 1
+          fi
+          case "${image_tag}" in
+            latest|*:latest)
+              echo "::error::S2 must not move latest tags"
+              exit 1
+              ;;
+          esac
+          {
+            echo "short_sha=${short_sha}"
+            echo "image_tag=${image_tag}"
+            echo "created=${created}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## ZekeBot image build"
+            echo
+            echo "- Tag: \`${image_tag}\`"
+            echo "- Source SHA: \`${GITHUB_SHA}\`"
+            echo "- Platform: \`linux/amd64\`"
+            echo "- Latest promotion: not performed by S2"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  build-primary:
+    name: Build ${{ matrix.name }}
+    needs: metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: gateway
+            dockerfile: Dockerfile
+            image: ghcr.io/openzeke/zekebot
+            cache_scope: zekebot-gateway
+            build_args: |
+              OPENCLAW_EXTENSIONS=diagnostics-otel
+          - name: sandbox
+            dockerfile: Dockerfile.sandbox
+            image: ghcr.io/openzeke/zekebot-sandbox
+            cache_scope: zekebot-sandbox
+            build_args: ""
+          - name: sandbox-browser
+            dockerfile: Dockerfile.sandbox-browser
+            image: ghcr.io/openzeke/zekebot-sandbox-browser
+            cache_scope: zekebot-sandbox-browser
+            build_args: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
+          build-args: ${{ matrix.build_args }}
+          tags: ${{ matrix.image }}:${{ needs.metadata.outputs.image_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/openzeke/zekebot
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.image_tag }}
+            org.opencontainers.image.created=${{ needs.metadata.outputs.created }}
+            org.opencontainers.image.licenses=MIT
+          sbom: true
+          provenance: mode=max
+          push: true
+
+  build-sandbox-common:
+    name: Build sandbox-common
+    needs: [metadata, build-primary]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push sandbox-common
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
+        with:
+          context: .
+          file: Dockerfile.sandbox-common
+          platforms: linux/amd64
+          cache-from: type=gha,scope=zekebot-sandbox-common
+          cache-to: type=gha,mode=max,scope=zekebot-sandbox-common
+          build-args: |
+            BASE_IMAGE=ghcr.io/openzeke/zekebot-sandbox:${{ needs.metadata.outputs.image_tag }}
+          tags: ghcr.io/openzeke/zekebot-sandbox-common:${{ needs.metadata.outputs.image_tag }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/openzeke/zekebot
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.metadata.outputs.image_tag }}
+            org.opencontainers.image.created=${{ needs.metadata.outputs.created }}
+            org.opencontainers.image.licenses=MIT
+          sbom: true
+          provenance: mode=max
+          push: true
+
+  summarize:
+    name: Summarize image build
+    needs: [metadata, build-primary, build-sandbox-common]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail on build failure
+        if: needs.build-primary.result != 'success' || needs.build-sandbox-common.result != 'success'
+        run: |
+          echo "::error::One or more ZekeBot image builds failed"
+          exit 1
+
+      - name: Summarize images
+        env:
+          IMAGE_TAG: ${{ needs.metadata.outputs.image_tag }}
+        run: |
+          {
+            echo "## Published ZekeBot images"
+            echo
+            echo "- \`ghcr.io/openzeke/zekebot:${IMAGE_TAG}\`"
+            echo "- \`ghcr.io/openzeke/zekebot-sandbox:${IMAGE_TAG}\`"
+            echo "- \`ghcr.io/openzeke/zekebot-sandbox-common:${IMAGE_TAG}\`"
+            echo "- \`ghcr.io/openzeke/zekebot-sandbox-browser:${IMAGE_TAG}\`"
+            echo
+            echo "No latest tags are written by this workflow."
+          } >> "$GITHUB_STEP_SUMMARY"
