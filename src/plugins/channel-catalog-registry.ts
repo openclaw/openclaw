@@ -1,4 +1,4 @@
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import {
   loadPluginManifest,
   type PluginPackageChannel,
@@ -21,12 +21,13 @@ export function listChannelCatalogEntries(
     origin?: PluginOrigin;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    discovery?: PluginDiscoveryResult;
   } = {},
 ): PluginChannelCatalogEntry[] {
-  return discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  }).candidates.flatMap((candidate) => {
+  const discovery =
+    params.discovery ??
+    discoverOpenClawPlugins({ workspaceDir: params.workspaceDir, env: params.env });
+  return discovery.candidates.flatMap((candidate) => {
     if (params.origin && candidate.origin !== params.origin) {
       return [];
     }

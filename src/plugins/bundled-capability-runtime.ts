@@ -8,7 +8,8 @@ import {
 } from "./bundled-compat.js";
 import { resolveBundledPluginRepoEntryPath } from "./bundled-plugin-metadata.js";
 import { createCapturedPluginRegistration } from "./captured-registration.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
+import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -197,6 +198,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   pluginIds: readonly string[];
   env?: PluginLoadOptions["env"];
   pluginSdkResolution?: PluginSdkResolutionPreference;
+  discovery?: PluginDiscoveryResult;
 }) {
   const env = params.env ?? process.env;
   const pluginIds = new Set(params.pluginIds);
@@ -233,9 +235,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
     });
   };
 
-  const discovery = discoverOpenClawPlugins({
-    env,
-  });
+  const discovery = params.discovery ?? discoverOpenClawPlugins({ env });
   const manifestRegistry = loadPluginManifestRegistry({
     config: buildBundledCapabilityRuntimeConfig(params.pluginIds, env),
     env,
