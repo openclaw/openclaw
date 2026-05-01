@@ -8,6 +8,7 @@ import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
+  readRecentSessionMessages,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -499,6 +500,66 @@ describe("readSessionMessages", () => {
     expect(marker.__openclaw?.kind).toBe("compaction");
     expect(marker.__openclaw?.id).toBe("comp-1");
     expect(typeof marker.timestamp).toBe("number");
+  });
+
+  test("reads recent messages from the transcript tail without loading the whole file", () => {
+    const sessionId = "test-session-recent-tail";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "middle" } },
+      { message: { role: "user", content: "recent" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    const out = readRecentSessionMessages(sessionId, storePath, undefined, {
+      maxMessages: 2,
+      maxBytes: 1024,
+    });
+
+    expect(out).toEqual([
+      expect.objectContaining({
+        role: "user",
+        content: "recent",
+        __openclaw: expect.objectContaining({ seq: 3 }),
+      }),
+      expect.objectContaining({
+        role: "assistant",
+        content: "latest",
+        __openclaw: expect.objectContaining({ seq: 4 }),
+      }),
+    ]);
+  });
+
+  test("bounds recent-message reads for large append-only transcripts", () => {
+    const sessionId = "test-session-recent-large";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 2500 }, (_, index) =>
+        JSON.stringify({
+          message: {
+            role: index % 2 === 0 ? "user" : "assistant",
+            content: `message ${index} ${"x".repeat(700)}`,
+          },
+        }),
+      ),
+      JSON.stringify({ message: { role: "assistant", content: "tail" } }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      const out = readRecentSessionMessages(sessionId, storePath, undefined, {
+        maxMessages: 1,
+        maxBytes: 64 * 1024,
+      });
+      expect(out).toHaveLength(1);
+      expect(out[0]).toMatchObject({ role: "assistant", content: "tail" });
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   test("reads only the active branch when transcript rewrites abandon older entries", () => {
