@@ -452,8 +452,8 @@ console.log(JSON.stringify(result));
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
-    expect(script).toContain("$config.models.providers");
-    expect(script).toContain("timeoutSeconds = 300");
+    expect(script).not.toContain("$config.models.providers");
+    expect(script).not.toContain("timeoutSeconds = 300");
     expect(script).toContain("parallels-windows-smoke.jsonl");
   });
 
