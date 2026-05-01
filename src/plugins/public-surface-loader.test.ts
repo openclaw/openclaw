@@ -38,7 +38,10 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("./native-module-require.js", () => ({
       isJavaScriptModulePath: (modulePath: string) =>
         modulePath.endsWith(".js") || modulePath.endsWith(".mjs") || modulePath.endsWith(".cjs"),
-      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
+      tryNativeRequireJavaScriptModule: () => ({
+        ok: true,
+        moduleExport: { marker: "windows-dist-ok" },
+      }),
     }));
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.resetModules();
@@ -117,7 +120,10 @@ describe("bundled plugin public surface loader", () => {
     vi.doMock("./native-module-require.js", () => ({
       isJavaScriptModulePath: (modulePath: string) =>
         modulePath.endsWith(".js") || modulePath.endsWith(".mjs") || modulePath.endsWith(".cjs"),
-      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
+      tryNativeRequireJavaScriptModule: (modulePath: string) => ({
+        ok: true,
+        moduleExport: { marker: path.basename(path.dirname(modulePath)) },
+      }),
     }));
     vi.resetModules();
 

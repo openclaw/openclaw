@@ -7,6 +7,7 @@ import { sameFileIdentity } from "../infra/file-identity.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { prepareBuiltBundledPluginPublicSurfaceLocation } from "./bundled-public-surface-runtime-root.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
+import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
 import {
   isBundledPluginExtensionPath,
@@ -112,6 +113,12 @@ function getJiti(modulePath: string) {
 
 function loadPublicSurfaceModule(modulePath: string): unknown {
   const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
+  if (tryNative) {
+    const nativeModule = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
+    if (nativeModule.ok) {
+      return nativeModule.moduleExport;
+    }
+  }
   if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
     return sourceArtifactRequire(modulePath);
   }
