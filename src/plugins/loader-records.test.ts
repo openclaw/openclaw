@@ -7,7 +7,7 @@ describe("plugin loader records", () => {
       id: "kitchen-sink",
       name: "Kitchen Sink",
       source: "/tmp/kitchen-sink/index.js",
-      origin: "external",
+      origin: "global",
       enabled: true,
       channelIds: ["kitchen-sink-channel"],
       configSchema: false,
