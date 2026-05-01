@@ -135,7 +135,6 @@ export type NormalizedEvent = z.infer<typeof NormalizedEventSchema>;
 // -----------------------------------------------------------------------------
 
 export const CallDirectionSchema = z.enum(["outbound", "inbound"]);
-export type CallDirection = z.infer<typeof CallDirectionSchema>;
 
 // -----------------------------------------------------------------------------
 // Call Record

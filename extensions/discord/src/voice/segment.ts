@@ -18,6 +18,7 @@ import {
 import type { DiscordVoiceSpeakerContextResolver } from "./speaker-context.js";
 import { synthesizeVoiceReplyAudio, transcribeVoiceAudio } from "./tts.js";
 
+const DISCORD_VOICE_MESSAGE_PROVIDER = "discord-voice";
 const logger = createSubsystemLogger("discord/voice");
 
 export async function processDiscordVoiceSegment(params: {
@@ -89,6 +90,7 @@ export async function processDiscordVoiceSegment(params: {
       sessionKey: entry.route.sessionKey,
       agentId: entry.route.agentId,
       messageChannel: "discord",
+      messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
       senderIsOwner: speaker.senderIsOwner,
       allowModelOverride: Boolean(modelOverride),
       model: modelOverride,
