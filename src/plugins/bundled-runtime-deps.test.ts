@@ -1145,6 +1145,7 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     name: string;
     config: Parameters<typeof createBundledRuntimeDepsPackagePlan>[0]["config"];
     includeConfiguredChannels: boolean;
+    includeEnabledByDefaultPlugins?: boolean;
     expectedDeps: string[];
   };
 
@@ -1329,18 +1330,43 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
       includeConfiguredChannels: false,
       expectedDeps: ["alpha-runtime@1.0.0"],
     },
+    {
+      name: "can omit default-enabled bundled plugins for post-config repair",
+      config: {},
+      includeConfiguredChannels: true,
+      includeEnabledByDefaultPlugins: false,
+      expectedDeps: [],
+    },
+    {
+      name: "includes configured channels when default-enabled plugins are omitted",
+      config: { channels: { telegram: { botToken: "123:abc" } } },
+      includeConfiguredChannels: true,
+      includeEnabledByDefaultPlugins: false,
+      expectedDeps: ["telegram-runtime@2.0.0"],
+    },
+    {
+      name: "includes configured provider deps when default-enabled plugins are omitted",
+      config: { agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } } },
+      includeConfiguredChannels: false,
+      includeEnabledByDefaultPlugins: false,
+      expectedDeps: ["bedrock-runtime@3.0.0"],
+    },
   ];
 
-  it.each(cases)("$name", ({ config, includeConfiguredChannels, expectedDeps }) => {
-    const result = createBundledRuntimeDepsPackagePlan({
-      packageRoot: setupPolicyPackageRoot(),
-      config,
-      includeConfiguredChannels,
-    });
+  it.each(cases)(
+    "$name",
+    ({ config, includeConfiguredChannels, includeEnabledByDefaultPlugins, expectedDeps }) => {
+      const result = createBundledRuntimeDepsPackagePlan({
+        packageRoot: setupPolicyPackageRoot(),
+        config,
+        includeConfiguredChannels,
+        ...(includeEnabledByDefaultPlugins !== undefined ? { includeEnabledByDefaultPlugins } : {}),
+      });
 
-    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(expectedDeps);
-    expect(result.conflicts).toEqual([]);
-  });
+      expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(expectedDeps);
+      expect(result.conflicts).toEqual([]);
+    },
+  );
 
   it("honors deny and disabled entries when scanning an explicit effective plugin set", () => {
     const packageRoot = setupPolicyPackageRoot();

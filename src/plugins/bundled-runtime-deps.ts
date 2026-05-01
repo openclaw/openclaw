@@ -92,6 +92,7 @@ export type BundledRuntimeDepsPackagePlanParams = {
   pluginIds?: readonly string[];
   exactPluginIds?: readonly string[];
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -367,6 +368,9 @@ export function createBundledRuntimeDepsPackagePlan(
     ...(!exactPluginIds && params.includeConfiguredChannels !== undefined
       ? { includeConfiguredChannels: params.includeConfiguredChannels }
       : {}),
+    ...(!exactPluginIds && params.includeEnabledByDefaultPlugins !== undefined
+      ? { includeEnabledByDefaultPlugins: params.includeEnabledByDefaultPlugins }
+      : {}),
     manifestCache,
     ...(normalizePluginId ? { normalizePluginId } : {}),
   });
@@ -394,6 +398,7 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
   pluginIds?: readonly string[];
   exactPluginIds?: readonly string[];
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   env: NodeJS.ProcessEnv;
   installDeps?: (params: BundledRuntimeDepsInstallParams) => Promise<void> | void;
   onProgress?: (message: string) => void;
