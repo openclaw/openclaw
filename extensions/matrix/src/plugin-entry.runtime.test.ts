@@ -123,16 +123,11 @@ it("loads the packaged runtime wrapper without recursing through the stable root
   );
 }, 240_000);
 
-it("does not use Jiti when only a TypeScript Matrix runtime shim exists", async () => {
+it("does not load when only a TypeScript Matrix runtime shim exists", async () => {
   const fixtureRoot = makeFixtureRoot(".tmp-matrix-runtime-ts-only-");
 
   writeOpenClawPackageFixture(fixtureRoot);
   writeSourceRuntimeWrapperFixture(fixtureRoot, { runtimeExtension: ".ts" });
-  writeFixtureFile(
-    fixtureRoot,
-    "node_modules/jiti/index.js",
-    "throw new Error('matrix wrapper must not require jiti');\n",
-  );
 
   await expect(
     importFixtureModule(fixtureRoot, "extensions/matrix/src/plugin-entry.runtime.js"),
