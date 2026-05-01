@@ -202,4 +202,21 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
     expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
   });
+
+  it("runs remaining cleanup when one cleanup hook fails", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
+    closeClaudeLiveSessionForContextMock.mockRejectedValueOnce(new Error("live cleanup failed"));
+
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        cleanupCliLiveSessionOnRunEnd: true,
+        cleanupBundleMcpOnRunEnd: true,
+      }),
+    ).resolves.toMatchObject({ payloads: [{ text: "real reply" }] });
+
+    expect(closeClaudeLiveSessionForContextMock).toHaveBeenCalledTimes(1);
+    expect(closeMcpLoopbackServerMock).toHaveBeenCalledTimes(1);
+  });
 });
