@@ -58,6 +58,28 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("message_tool_only");
   });
 
+  it("overrides requested message_tool_only when bot is @mentioned", () => {
+    // Discord and Slack pre-resolve delivery mode to message_tool_only
+    // without WasMentioned context, then pass it as `requested`.
+    // When @mentioned, the override must punch through even with an
+    // explicit requested mode.
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "group", WasMentioned: true },
+        requested: "message_tool_only",
+      }),
+    ).toBe("automatic");
+    // WasMentioned: false should not override
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: { ChatType: "channel", WasMentioned: false },
+        requested: "message_tool_only",
+      }),
+    ).toBe("message_tool_only");
+  });
+
   it("honors config and explicit requested mode", () => {
     expect(
       resolveSourceReplyDeliveryMode({
