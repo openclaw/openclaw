@@ -1133,6 +1133,8 @@ Expected Twilio state:
   `twilio-voice-call-credentials`, and `twilio-voice-call-webhook` checks.
 - `voicecall` is available in the CLI after Gateway reload.
 - The returned session has `transport: "twilio"` and a `twilio.voiceCallId`.
+- `openclaw logs --follow` shows DTMF TwiML served before realtime TwiML, then a
+  realtime bridge with the initial greeting queued.
 - `googlemeet leave <sessionId>` hangs up the delegated voice call.
 
 ## Troubleshooting
@@ -1407,6 +1409,10 @@ participant:
   active.
 - Run `openclaw voicecall tail` and check that Twilio webhooks are arriving at
   the Gateway.
+- Run `openclaw logs --follow` and look for the Twilio Meet sequence: Google
+  Meet delegates the join, Voice Call stores pre-connect DTMF TwiML, serves
+  that initial TwiML, then serves realtime TwiML and starts the realtime bridge
+  with `initialGreeting=queued`.
 - Re-run `openclaw googlemeet setup --transport twilio`; a green setup check is
   required but does not prove the meeting PIN sequence is correct.
 - Confirm the dial-in number belongs to the same Meet invitation and region as
@@ -1414,9 +1420,9 @@ participant:
 - Increase the leading pauses in `--dtmf-sequence` if Meet answers slowly, for
   example `wwww123456#`.
 - If the participant joins but you do not hear the greeting, check
-  `openclaw voicecall tail` for a Twilio stream start followed by realtime
-  provider readiness. The greeting is now generated from the initial
-  `voicecall.start` message after the stream connects.
+  `openclaw logs --follow` for realtime TwiML, realtime bridge startup, and
+  `initialGreeting=queued`. The greeting is generated from the initial
+  `voicecall.start` message after the realtime bridge connects.
 
 If webhooks do not arrive, debug the Voice Call plugin first: the provider must
 reach `plugins.entries.voice-call.config.publicUrl` or the configured tunnel.

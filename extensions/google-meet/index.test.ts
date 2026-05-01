@@ -977,6 +977,7 @@ describe("google-meet plugin", () => {
       config: expect.objectContaining({ defaultTransport: "twilio" }),
       dialInNumber: "+15551234567",
       dtmfSequence: "123456#",
+      logger: expect.objectContaining({ info: expect.any(Function) }),
       message: "Say exactly: I'm here and listening.",
     });
   });

@@ -258,6 +258,9 @@ export class RealtimeCallHandler {
     }
 
     const { callId, initialGreetingInstructions } = registration;
+    console.log(
+      `[voice-call] Realtime bridge starting for call ${callId} (providerCallId=${callSid}, initialGreeting=${initialGreetingInstructions ? "queued" : "absent"})`,
+    );
     let callEndEmitted = false;
     const emitCallEnd = (reason: "completed" | "error") => {
       if (callEndEmitted) {
@@ -396,6 +399,9 @@ export class RealtimeCallHandler {
     }
 
     const initialGreeting = this.extractInitialGreeting(callRecord);
+    console.log(
+      `[voice-call] Realtime call ${callRecord.callId} initial greeting ${initialGreeting ? "queued" : "absent"}`,
+    );
     if (callRecord.metadata) {
       delete callRecord.metadata.initialMessage;
     }

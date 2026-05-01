@@ -456,7 +456,11 @@ export class TwilioProvider implements VoiceCallProvider {
     if (!storedTwiml) {
       return null;
     }
+    const kind = this.notifyCalls.has(view.callIdFromQuery) ? "notify" : "pre-connect";
     this.deleteStoredTwiml(view.callIdFromQuery);
+    console.log(
+      `[voice-call] Twilio initial TwiML consumed for call ${view.callIdFromQuery} (kind=${kind}, callSid=${view.callSid ?? "unknown"})`,
+    );
     return storedTwiml;
   }
 
@@ -550,8 +554,14 @@ export class TwilioProvider implements VoiceCallProvider {
     if (input.inlineTwiml) {
       this.twimlStorage.set(input.callId, input.inlineTwiml);
       this.notifyCalls.add(input.callId);
+      console.log(
+        `[voice-call] Stored Twilio initial TwiML for call ${input.callId} (kind=notify)`,
+      );
     } else if (input.preConnectTwiml) {
       this.twimlStorage.set(input.callId, input.preConnectTwiml);
+      console.log(
+        `[voice-call] Stored Twilio initial TwiML for call ${input.callId} (kind=pre-connect)`,
+      );
     }
 
     // Build request params - always use URL-based TwiML.

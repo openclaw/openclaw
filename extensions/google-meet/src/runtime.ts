@@ -403,6 +403,7 @@ export class GoogleMeetRuntime {
               config: this.params.config,
               dialInNumber,
               dtmfSequence,
+              logger: this.params.logger,
               message:
                 mode === "realtime"
                   ? (request.message ??

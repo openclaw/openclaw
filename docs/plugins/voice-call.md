@@ -723,6 +723,7 @@ Then inspect runtime state:
 ```bash
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
+openclaw logs --follow
 ```
 
 Common causes:
@@ -775,6 +776,19 @@ For Twilio calls, Voice Call serves the DTMF TwiML first, redirects back to the
 webhook, then opens the realtime media stream so the saved intro is generated
 after the phone participant has joined the meeting.
 
+Use `openclaw logs --follow` for the live phase trace. A healthy Twilio Meet
+join logs this order:
+
+- Google Meet delegates the Twilio join to Voice Call.
+- Voice Call stores pre-connect DTMF TwiML.
+- Twilio initial TwiML is consumed and served before realtime handling.
+- Voice Call serves realtime TwiML for the Twilio call.
+- The realtime bridge starts with the initial greeting queued.
+
+`openclaw voicecall tail` still shows persisted call records; it is useful for
+call state and transcripts, but not every webhook/realtime transition appears
+there.
+
 ### Realtime call has no speech
 
 Confirm only one audio mode is enabled. `realtime.enabled` and
@@ -785,8 +799,8 @@ For realtime Twilio calls, also verify:
 - A realtime provider plugin is loaded and registered.
 - `realtime.provider` is unset or names a registered provider.
 - The provider API key is available to the Gateway process.
-- `openclaw voicecall tail` shows the media stream accepted and realtime
-  provider readiness before the initial greeting.
+- `openclaw logs --follow` shows realtime TwiML served, the realtime bridge
+  started, and the initial greeting queued.
 
 ## Related
 
