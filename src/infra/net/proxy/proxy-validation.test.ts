@@ -212,7 +212,7 @@ describe("proxy validation", () => {
     ]);
   });
 
-  it("passes denied checks when the proxy returns an explicit deny HTTP status", async () => {
+  it("fails denied checks when the destination returns HTTP 403", async () => {
     const result = await runProxyValidation({
       config: {
         enabled: true,
@@ -224,13 +224,14 @@ describe("proxy validation", () => {
       fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 403 }),
     });
 
-    expect(result.ok).toBe(true);
+    expect(result.ok).toBe(false);
     expect(result.checks).toEqual([
       {
         kind: "denied",
         url: "http://127.0.0.1/",
-        ok: true,
+        ok: false,
         status: 403,
+        error: "Denied destination returned HTTP 403; expected the proxy to block the connection",
       },
     ]);
   });

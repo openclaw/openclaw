@@ -188,10 +188,6 @@ function isValidHttpTargetUrl(value: string): boolean {
   }
 }
 
-function isExplicitProxyDenyStatus(status: number): boolean {
-  return status === 403;
-}
-
 async function runAllowedCheck(params: {
   url: string;
   proxyUrl: string;
@@ -254,14 +250,6 @@ async function runDeniedCheck(params: {
       targetUrl: params.url,
       timeoutMs: params.timeoutMs,
     });
-    if (isExplicitProxyDenyStatus(result.status)) {
-      return {
-        kind: "denied",
-        url: params.url,
-        ok: true,
-        status: result.status,
-      };
-    }
     return {
       kind: "denied",
       url: params.url,
