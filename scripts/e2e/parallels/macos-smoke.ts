@@ -479,7 +479,7 @@ class MacosSmoke {
     this.status.freshAgent = "pass";
     if (this.discordEnabled()) {
       this.status.freshDiscord = "fail";
-      await this.phase("fresh.discord-config", 180, () => this.configureDiscord());
+      await this.phase("fresh.discord-config", 600, () => this.configureDiscord());
       await this.phase("fresh.discord-roundtrip", 180, () => this.runDiscordRoundtrip("fresh"));
       this.status.freshDiscord = "pass";
     }
@@ -536,7 +536,7 @@ class MacosSmoke {
     this.status.upgradeAgent = "pass";
     if (this.discordEnabled()) {
       this.status.upgradeDiscord = "fail";
-      await this.phase("upgrade.discord-config", 180, () => this.configureDiscord());
+      await this.phase("upgrade.discord-config", 600, () => this.configureDiscord());
       await this.phase("upgrade.discord-roundtrip", 180, () => this.runDiscordRoundtrip("upgrade"));
       this.status.upgradeDiscord = "pass";
     }

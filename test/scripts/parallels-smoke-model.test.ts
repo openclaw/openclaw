@@ -87,7 +87,7 @@ describe("Parallels smoke model selection", () => {
     const providerAuth = readFileSync(TS_PATHS.providerAuth, "utf8");
 
     expect(providerAuth).toContain("OPENCLAW_PARALLELS_OPENAI_MODEL");
-    expect(providerAuth).toContain("openai/gpt-5.4");
+    expect(providerAuth).toContain("openai/gpt-5.5");
     expect(providerAuth).toContain('authChoice: "openai-api-key"');
     expect(providerAuth).toContain('authChoice: "apiKey"');
     expect(providerAuth).toContain('authChoice: "minimax-global-api"');
@@ -225,7 +225,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       apiKeyValue: "sk-openai",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: "openai/gpt-5.4",
+      modelId: "openai/gpt-5.5",
     });
 
     expect(
@@ -363,6 +363,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(macos).not.toContain("Authorization: Bot");
     expect(discord).toContain("Authorization: Bot");
     expect(discord).toContain('"--silent"');
+    expect(discord).toContain("plugins deps --repair");
     expect(discord).toContain("channels status --probe --json");
     expect(discord).toContain("Stop ${this.input.vmName} after successful Discord smoke");
   });
