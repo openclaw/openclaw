@@ -1186,6 +1186,7 @@ async function agentCommandInternal(
           opts.bootstrapContextRunKind !== "cron" &&
           opts.bootstrapContextRunKind !== "heartbeat" &&
           !opts.internalEvents?.length,
+        preserveRuntimeModel: opts.bootstrapContextRunKind === "heartbeat",
       });
       sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
     }
