@@ -9,8 +9,11 @@ export type AssembleResult = {
   /** Estimated total tokens in assembled context */
   estimatedTokens: number;
   /**
-   * Declares whether the assembled messages are the authoritative prompt for
-   * overflow prechecks. Defaults to "assembled".
+   * Declares which message set overflow prechecks should treat as authoritative.
+   * "assembled" means the returned messages are already windowed and complete;
+   * "preassembly_may_overflow" asks the runner to also check pre-assembly
+   * session history because the context engine may hide an overflow risk.
+   * Defaults to "assembled".
    */
   promptAuthority?: "assembled" | "preassembly_may_overflow";
   /** Optional context-engine-provided instructions prepended to the runtime system prompt */

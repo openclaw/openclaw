@@ -353,6 +353,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(sawPrompt).toBe(true);
     expect(result.promptError).toBeNull();
     expect(result.promptErrorSource).toBeNull();
+    expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
   });
 
   it("honors context engines that opt into preassembly overflow authority", async () => {
@@ -387,6 +388,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(sawPrompt).toBe(false);
     expect(result.promptErrorSource).toBe("precheck");
     expect(result.preflightRecovery?.route).toBe("compact_only");
+    expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
   });
 
   it("keeps gateway model runs independent from agent context and session history", async () => {
