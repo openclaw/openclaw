@@ -173,6 +173,7 @@ const jiti = createJiti(import.meta.url, {
   alias: buildPluginSdkAliasMap(import.meta.url),
   interopDefault: true,
   tryNative: false,
+  fsCache: process.env.OPENCLAW_JITI_CACHE_DIR?.trim() || true,
   extensions: JITI_EXTENSIONS,
 });
 

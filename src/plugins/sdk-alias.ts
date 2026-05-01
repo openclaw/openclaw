@@ -676,6 +676,11 @@ export function resolvePluginRuntimeModulePath(
   return null;
 }
 
+export function resolveJitiFsCache(): boolean | string {
+  const dir = process.env.OPENCLAW_JITI_CACHE_DIR?.trim();
+  return dir || true;
+}
+
 export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
   const hasAliases = Object.keys(aliasMap).length > 0;
   const jitiAliasMap = hasAliases ? normalizePluginLoaderAliasMapForJiti(aliasMap) : aliasMap;
@@ -684,6 +689,7 @@ export function buildPluginLoaderJitiOptions(aliasMap: Record<string, string>) {
     // Prefer Node's native sync ESM loader for built dist/*.js modules so
     // bundled plugins and plugin-sdk subpaths stay on the canonical module graph.
     tryNative: true,
+    fsCache: resolveJitiFsCache(),
     extensions: [".ts", ".tsx", ".mts", ".cts", ".mtsx", ".ctsx", ".js", ".mjs", ".cjs", ".json"],
     ...(hasAliases
       ? {
