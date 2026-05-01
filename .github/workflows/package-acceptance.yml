@@ -64,6 +64,11 @@ on:
         required: false
         default: ""
         type: string
+      published_upgrade_survivor_baseline:
+        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        required: false
+        default: openclaw@latest
+        type: string
       telegram_mode:
         description: Optional Telegram QA lane for the resolved package candidate
         required: true
@@ -128,6 +133,11 @@ on:
         description: Comma/space separated Docker lanes when suite_profile=custom
         required: false
         default: ""
+        type: string
+      published_upgrade_survivor_baseline:
+        description: Published OpenClaw package baseline for the published-upgrade-survivor Docker lane
+        required: false
+        default: openclaw@latest
         type: string
       telegram_mode:
         description: Optional Telegram QA lane for the resolved package candidate
@@ -413,6 +423,7 @@ jobs:
           SOURCE: ${{ inputs.source }}
           SUITE_PROFILE: ${{ inputs.suite_profile }}
           WORKFLOW_REF: ${{ inputs.workflow_ref }}
+          PUBLISHED_UPGRADE_SURVIVOR_BASELINE: ${{ inputs.published_upgrade_survivor_baseline }}
         shell: bash
         run: |
           {
@@ -426,6 +437,7 @@ jobs:
             echo "- Version: \`${PACKAGE_VERSION}\`"
             echo "- SHA-256: \`${PACKAGE_SHA256}\`"
             echo "- Profile: \`${SUITE_PROFILE}\`"
+            echo "- Published upgrade survivor baseline: \`${PUBLISHED_UPGRADE_SURVIVOR_BASELINE}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
   docker_acceptance:
@@ -438,6 +450,7 @@ jobs:
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
       include_openwebui: ${{ needs.resolve_package.outputs.include_openwebui == 'true' }}
       docker_lanes: ${{ needs.resolve_package.outputs.docker_lanes }}
+      published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       include_live_suites: ${{ needs.resolve_package.outputs.include_live_suites == 'true' }}
       live_models_only: false
