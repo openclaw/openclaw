@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { capturePluginRegistration } from "./captured-registration.js";
+import {
+  capturePluginRegistration,
+  createCapturedPluginRegistration,
+} from "./captured-registration.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
 describe("captured plugin registration", () => {
@@ -93,12 +96,25 @@ describe("captured plugin registration", () => {
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {
     let scheduleSessionTurn: OpenClawPluginApi["scheduleSessionTurn"] | undefined;
-    const captured = capturePluginRegistration({
-      register(api) {
-        scheduleSessionTurn = api.scheduleSessionTurn;
-      },
+    let registerSessionSchedulerJob: OpenClawPluginApi["registerSessionSchedulerJob"] | undefined;
+    const captured = createCapturedPluginRegistration({
+      id: "captured-custom-plugin",
     });
+    registerSessionSchedulerJob = captured.api.registerSessionSchedulerJob;
+    scheduleSessionTurn = captured.api.scheduleSessionTurn;
 
+    expect(
+      registerSessionSchedulerJob?.({
+        id: "captured-job",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      }),
+    ).toEqual({
+      id: "captured-job",
+      pluginId: "captured-custom-plugin",
+      sessionKey: "agent:main:main",
+      kind: "session-turn",
+    });
     await expect(
       scheduleSessionTurn?.({
         sessionKey: "agent:main:main",
@@ -108,10 +124,16 @@ describe("captured plugin registration", () => {
       }),
     ).resolves.toEqual({
       id: "captured-session-turn-1",
-      pluginId: "captured-plugin-registration",
+      pluginId: "captured-custom-plugin",
       sessionKey: "agent:main:main",
       kind: "session-turn",
     });
-    expect(captured.sessionSchedulerJobs).toEqual([]);
+    expect(captured.sessionSchedulerJobs).toEqual([
+      {
+        id: "captured-job",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      },
+    ]);
   });
 });
