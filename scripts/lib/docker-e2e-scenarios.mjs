@@ -10,6 +10,7 @@ const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_PROFILE_TIMEOUT_MS = 20 * 60 * 1000;
 const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
+const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor";
 
 export const LIVE_RETRY_PATTERNS = [
   /529\b/i,
@@ -278,7 +279,7 @@ export const mainLanes = [
       weight: 3,
     },
   ),
-  npmLane("upgrade-survivor", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor", {
+  npmLane("upgrade-survivor", upgradeSurvivorCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 20 * 60 * 1000,
     weight: 3,
@@ -547,7 +548,7 @@ const releasePathPackageUpdateCoreLanes = [
       weight: 3,
     },
   ),
-  npmLane("upgrade-survivor", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor", {
+  npmLane("upgrade-survivor", upgradeSurvivorCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 20 * 60 * 1000,
     weight: 3,

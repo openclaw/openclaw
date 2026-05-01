@@ -194,6 +194,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         }),
         expect.objectContaining({
           name: "upgrade-survivor",
+          command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor",
           stateScenario: "upgrade-survivor",
         }),
         expect.objectContaining({
