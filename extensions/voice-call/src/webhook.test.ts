@@ -1159,7 +1159,7 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       processEvent: vi.fn(),
     } as unknown as CallManager;
 
-    let currentStreamSid: string | null = "MZ-new";
+    let currentStreamSid: string | null = "MZ-old";
     const twilioProvider = createTwilioStreamingProvider({
       registerCallStream: (_callSid: string, streamSid: string) => {
         currentStreamSid = streamSid;
@@ -1195,16 +1195,23 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
       config: {
         onDisconnect?: (providerCallId: string, streamSid: string) => void;
         onConnect?: (providerCallId: string, streamSid: string) => void;
+        onTranscriptionReady?: (providerCallId: string, streamSid: string) => void;
       };
     };
     if (!mediaHandler) {
       throw new Error("expected webhook server to expose a media stream handler");
     }
 
-    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-old");
+    await vi.advanceTimersByTimeAsync(1_000);
+    mediaHandler.config.onConnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);
     expect(endCall).not.toHaveBeenCalled();
+    expect(speakInitialMessage).not.toHaveBeenCalled();
+
+    mediaHandler.config.onTranscriptionReady?.("CA-stream-1", "MZ-new");
+    expect(speakInitialMessage).toHaveBeenCalledTimes(1);
+    expect(speakInitialMessage).toHaveBeenCalledWith("CA-stream-1");
 
     mediaHandler.config.onDisconnect?.("CA-stream-1", "MZ-new");
     await vi.advanceTimersByTimeAsync(2_100);
