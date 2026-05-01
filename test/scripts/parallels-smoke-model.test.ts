@@ -414,6 +414,8 @@ console.log(JSON.stringify(result));
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
+    expect(script).toContain("models.providers.openai");
+    expect(script).toContain('"timeoutSeconds":300');
   });
 
   it("waits through transient Windows restoring state before VM operations", () => {

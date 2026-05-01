@@ -883,6 +883,8 @@ Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
 Invoke-OpenClaw config set tools.profile minimal
 if ($LASTEXITCODE -ne 0) { throw "tools profile config set failed" }
+Invoke-OpenClaw config set models.providers.openai '{"baseUrl":"https://api.openai.com/v1","models":[],"timeoutSeconds":300}' --strict-json
+if ($LASTEXITCODE -ne 0) { throw "openai provider timeout config set failed" }
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $args = ${psArray([
