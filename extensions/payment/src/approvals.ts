@@ -34,7 +34,11 @@ type ExecuteMachinePaymentParams = {
 
 function formatAmount(amountCents: number, currency: string): string {
   const major = (amountCents / 100).toFixed(2);
-  return `$${major} ${currency.toUpperCase()}`;
+  const upper = currency.toUpperCase();
+  if (upper === "USD") {
+    return `$${major} USD`;
+  }
+  return `${upper} ${major}`;
 }
 
 export function describeIssueApproval(params: IssueVirtualCardParams): string {
@@ -92,20 +96,38 @@ function handleBeforeToolCall(event: BeforeToolCallEvent): BeforeToolCallResult 
   const action = params["action"];
 
   if (action === "issue_virtual_card") {
+    // Block on malformed / incomplete params — refuse to prompt for approval
+    // on a request that cannot be meaningfully described.
+    const amount = params["amount"] as Record<string, unknown> | undefined;
+    const merchant = params["merchant"] as Record<string, unknown> | undefined;
+    const hasRequiredFields =
+      params["providerId"] !== undefined &&
+      params["fundingSourceId"] !== undefined &&
+      amount !== undefined &&
+      amount["amountCents"] !== undefined &&
+      amount["currency"] !== undefined &&
+      merchant !== undefined &&
+      merchant["name"] !== undefined;
+
+    if (!hasRequiredFields) {
+      return {
+        block: true,
+        blockReason:
+          "payment.issue_virtual_card requires providerId, amount.amountCents, amount.currency, merchant.name, and fundingSourceId — refusing to prompt for approval on an incomplete request",
+      };
+    }
+
     const issueParams: IssueVirtualCardParams = {
-      providerId: String(params["providerId"] ?? "unknown"),
+      providerId: String(params["providerId"]),
       amount: {
-        amountCents: Number((params["amount"] as Record<string, unknown>)?.["amountCents"] ?? 0),
-        currency: String((params["amount"] as Record<string, unknown>)?.["currency"] ?? "usd"),
+        amountCents: Number(amount["amountCents"]),
+        currency: String(amount["currency"]),
       },
       merchant: {
-        name: String((params["merchant"] as Record<string, unknown>)?.["name"] ?? "unknown"),
-        url:
-          (params["merchant"] as Record<string, unknown>)?.["url"] !== undefined
-            ? String((params["merchant"] as Record<string, unknown>)?.["url"])
-            : undefined,
+        name: String(merchant["name"]),
+        url: merchant["url"] !== undefined ? String(merchant["url"]) : undefined,
       },
-      fundingSourceId: String(params["fundingSourceId"] ?? "unknown"),
+      fundingSourceId: String(params["fundingSourceId"]),
     };
 
     return {
@@ -119,11 +141,26 @@ function handleBeforeToolCall(event: BeforeToolCallEvent): BeforeToolCallResult 
   }
 
   if (action === "execute_machine_payment") {
+    // Block on malformed / incomplete params.
+    const hasRequiredFields =
+      params["providerId"] !== undefined &&
+      params["targetUrl"] !== undefined &&
+      params["method"] !== undefined &&
+      params["fundingSourceId"] !== undefined;
+
+    if (!hasRequiredFields) {
+      return {
+        block: true,
+        blockReason:
+          "payment.execute_machine_payment requires providerId, targetUrl, method, and fundingSourceId — refusing to prompt for approval on an incomplete request",
+      };
+    }
+
     const executeParams: ExecuteMachinePaymentParams = {
-      providerId: String(params["providerId"] ?? "unknown"),
-      targetUrl: String(params["targetUrl"] ?? "unknown"),
-      method: String(params["method"] ?? "POST"),
-      fundingSourceId: String(params["fundingSourceId"] ?? "unknown"),
+      providerId: String(params["providerId"]),
+      targetUrl: String(params["targetUrl"]),
+      method: String(params["method"]),
+      fundingSourceId: String(params["fundingSourceId"]),
     };
 
     return {

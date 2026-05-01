@@ -21,6 +21,7 @@
 import type { Command } from "commander";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PaymentManager } from "./payments.js";
+import { redactHandle, redactMachinePaymentResult } from "./redact.js";
 
 // ---------------------------------------------------------------------------
 // Output helpers
@@ -208,7 +209,7 @@ export function buildPaymentCli(program: Command, manager: PaymentManager): void
             writeLine("[DRY RUN] Would issue virtual card:");
             writeLine(`  Provider:       ${opts.provider}`);
             writeLine(`  Funding source: ${opts.fundingSource}`);
-            writeLine(`  Amount:         ${amountCents} ${opts.currency.toUpperCase()} cents`);
+            writeLine(`  Amount:         ${amountCents} cents (${opts.currency.toUpperCase()})`);
             writeLine(`  Merchant:       ${opts.merchantName}`);
             writeLine("");
             writeLine("Run with --yes to proceed with actual issuance.");
@@ -230,16 +231,7 @@ export function buildPaymentCli(program: Command, manager: PaymentManager): void
             ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
           });
 
-          // Strip secrets
-          const redacted = {
-            id: handle.id,
-            provider: handle.provider,
-            rail: handle.rail,
-            status: handle.status,
-            validUntil: handle.validUntil,
-            display: handle.display,
-            fillSentinels: handle.fillSentinels,
-          };
+          const redacted = redactHandle(handle);
 
           if (opts.json) {
             writeJson({ handle: redacted });
@@ -299,8 +291,27 @@ export function buildPaymentCli(program: Command, manager: PaymentManager): void
           process.exit(1);
         }
 
+        // Parse --data early (before dry-run / --yes branch) so malformed JSON
+        // surfaces immediately regardless of whether --yes is present.
+        let body: unknown;
+        if (opts.data !== undefined) {
+          try {
+            body = JSON.parse(opts.data);
+          } catch {
+            writeError("payment execute: --data must be valid JSON");
+            process.exit(1);
+          }
+        }
+
         // Dry-run (no --yes)
         if (!opts.yes) {
+          const bodyDisplay =
+            body === undefined
+              ? "no body"
+              : (() => {
+                  const s = JSON.stringify(body);
+                  return s.length > 500 ? `${s.slice(0, 500)}... (truncated)` : s;
+                })();
           const summary = {
             action: "execute_machine_payment",
             dryRun: true,
@@ -308,6 +319,7 @@ export function buildPaymentCli(program: Command, manager: PaymentManager): void
             fundingSource: opts.fundingSource,
             targetUrl: opts.targetUrl,
             method,
+            body: body,
           };
           if (opts.json) {
             writeJson(summary);
@@ -317,21 +329,11 @@ export function buildPaymentCli(program: Command, manager: PaymentManager): void
             writeLine(`  Funding source: ${opts.fundingSource}`);
             writeLine(`  Target URL:     ${opts.targetUrl}`);
             writeLine(`  Method:         ${method}`);
+            writeLine(`  Body:           ${bodyDisplay}`);
             writeLine("");
             writeLine("Run with --yes to proceed with actual execution.");
           }
           return;
-        }
-
-        // Parse optional body
-        let body: unknown;
-        if (opts.data !== undefined) {
-          try {
-            body = JSON.parse(opts.data);
-          } catch {
-            writeError("payment execute: --data must be valid JSON");
-            process.exit(1);
-          }
         }
 
         // Live execution
@@ -345,13 +347,7 @@ export function buildPaymentCli(program: Command, manager: PaymentManager): void
             ...(opts.idempotencyKey !== undefined ? { idempotencyKey: opts.idempotencyKey } : {}),
           });
 
-          // Strip MPP token — only return safe fields
-          const redacted = {
-            handleId: result.handleId,
-            targetUrl: result.targetUrl,
-            outcome: result.outcome,
-            receipt: result.receipt,
-          };
+          const redacted = redactMachinePaymentResult(result);
 
           if (opts.json) {
             writeJson({ result: redacted });
@@ -381,17 +377,7 @@ export function buildPaymentCli(program: Command, manager: PaymentManager): void
     .action(async (opts: { handleId: string; json?: boolean }) => {
       try {
         const handle = await manager.getStatus(opts.handleId);
-
-        // Strip secrets
-        const redacted = {
-          id: handle.id,
-          provider: handle.provider,
-          rail: handle.rail,
-          status: handle.status,
-          validUntil: handle.validUntil,
-          display: handle.display,
-          fillSentinels: handle.fillSentinels,
-        };
+        const redacted = redactHandle(handle);
 
         if (opts.json) {
           writeJson({ handle: redacted });

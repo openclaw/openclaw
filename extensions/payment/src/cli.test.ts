@@ -433,6 +433,101 @@ describe("openclaw payment execute — dry-run", () => {
     expect(parsed.dryRun).toBe(true);
     expect(manager.executeMachinePayment).not.toHaveBeenCalled();
   });
+
+  it("dry-run output includes a body line", async () => {
+    const { stdout } = await runCli(manager, [
+      "payment",
+      "execute",
+      "--provider",
+      "mock",
+      "--funding-source",
+      "fs-card-001",
+      "--target-url",
+      "https://example.com/pay",
+      "--method",
+      "POST",
+    ]);
+    expect(stdout.toLowerCase()).toContain("body");
+  });
+
+  it("dry-run output shows parsed body when --data is provided", async () => {
+    const { stdout } = await runCli(manager, [
+      "payment",
+      "execute",
+      "--provider",
+      "mock",
+      "--funding-source",
+      "fs-card-001",
+      "--target-url",
+      "https://example.com/pay",
+      "--method",
+      "POST",
+      "--data",
+      '{"amount":500}',
+    ]);
+    expect(stdout).toContain("amount");
+    expect(stdout).toContain("500");
+  });
+
+  it("dry-run JSON output includes body field when --data is provided", async () => {
+    const { stdout } = await runCli(manager, [
+      "payment",
+      "execute",
+      "--provider",
+      "mock",
+      "--funding-source",
+      "fs-card-001",
+      "--target-url",
+      "https://example.com/pay",
+      "--method",
+      "POST",
+      "--data",
+      '{"key":"value"}',
+      "--json",
+    ]);
+    const parsed = JSON.parse(stdout);
+    expect(parsed.body).toEqual({ key: "value" });
+  });
+
+  it("exits non-zero with helpful message when --data is malformed JSON", async () => {
+    const { stderr } = await runCli(manager, [
+      "payment",
+      "execute",
+      "--provider",
+      "mock",
+      "--funding-source",
+      "fs-card-001",
+      "--target-url",
+      "https://example.com/pay",
+      "--method",
+      "POST",
+      "--data",
+      "{not json",
+    ]);
+    expect(stderr).toContain("--data");
+    expect(stderr).toContain("valid JSON");
+    expect(manager.executeMachinePayment).not.toHaveBeenCalled();
+  });
+
+  it("--data validation runs before any manager call even without --yes", async () => {
+    const { stderr } = await runCli(manager, [
+      "payment",
+      "execute",
+      "--provider",
+      "mock",
+      "--funding-source",
+      "fs-card-001",
+      "--target-url",
+      "https://example.com/pay",
+      "--method",
+      "POST",
+      "--data",
+      "{bad",
+      // no --yes — ensures we fail early, not at execution time
+    ]);
+    expect(stderr).toContain("--data");
+    expect(manager.executeMachinePayment).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------

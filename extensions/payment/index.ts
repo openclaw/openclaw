@@ -13,8 +13,29 @@ export default definePluginEntry({
     let config;
     try {
       config = parsePaymentConfig(api.pluginConfig ?? {});
-    } catch {
-      config = defaultPaymentConfig();
+    } catch (err) {
+      // The empty-config / no-config case must NOT silently fall back to mock.
+      // If the user explicitly disabled the plugin (no config), use the safe default
+      // and emit a notice. If they tried to configure it but failed schema, surface.
+      const isEmptyConfig =
+        api.pluginConfig === undefined ||
+        api.pluginConfig === null ||
+        (typeof api.pluginConfig === "object" && Object.keys(api.pluginConfig).length === 0);
+
+      if (isEmptyConfig) {
+        // No user config — quietly use safe default (mock, disabled).
+        config = defaultPaymentConfig();
+      } else {
+        // Real parse failure — surface the error so the user notices.
+        // TODO: swap to api.logger once it's a stable plugin-sdk surface.
+        // eslint-disable-next-line no-console
+        console.error(
+          "[payment] failed to parse plugin config; falling back to safe default. " +
+            "Fix the config in openclaw.json. Error:",
+          err,
+        );
+        config = defaultPaymentConfig();
+      }
     }
 
     const manager = createManager(config);

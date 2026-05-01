@@ -275,6 +275,170 @@ describe("describeExecuteApproval helper", () => {
 });
 
 // ---------------------------------------------------------------------------
+// issue_virtual_card — block on malformed params
+// ---------------------------------------------------------------------------
+
+describe("before_tool_call hook — issue_virtual_card blocks on malformed params", () => {
+  const handler = makeHandler();
+
+  it("returns block: true when amount is missing", () => {
+    const result = handler(
+      makeEvent("payment", {
+        action: "issue_virtual_card",
+        providerId: "mock",
+        fundingSourceId: "card-001",
+        // amount intentionally omitted
+        merchant: { name: "Acme Corp" },
+        purchaseIntent: "A".repeat(120),
+      }),
+      FAKE_CTX,
+    ) as any;
+    expect(result).toBeDefined();
+    expect(result.block).toBe(true);
+    expect(result.requireApproval).toBeUndefined();
+  });
+
+  it("returns block: true when merchant is missing", () => {
+    const result = handler(
+      makeEvent("payment", {
+        action: "issue_virtual_card",
+        providerId: "mock",
+        fundingSourceId: "card-001",
+        amount: { amountCents: 500, currency: "usd" },
+        // merchant intentionally omitted
+        purchaseIntent: "A".repeat(120),
+      }),
+      FAKE_CTX,
+    ) as any;
+    expect(result.block).toBe(true);
+    expect(result.requireApproval).toBeUndefined();
+  });
+
+  it("returns block: true when providerId is missing", () => {
+    const result = handler(
+      makeEvent("payment", {
+        action: "issue_virtual_card",
+        // providerId intentionally omitted
+        fundingSourceId: "card-001",
+        amount: { amountCents: 500, currency: "usd" },
+        merchant: { name: "Acme Corp" },
+      }),
+      FAKE_CTX,
+    ) as any;
+    expect(result.block).toBe(true);
+  });
+
+  it("returns requireApproval when all required fields are present", () => {
+    const result = handler(
+      makeEvent("payment", {
+        action: "issue_virtual_card",
+        providerId: "mock",
+        fundingSourceId: "card-001",
+        amount: { amountCents: 500, currency: "usd" },
+        merchant: { name: "Acme Corp" },
+        purchaseIntent: "A".repeat(120),
+      }),
+      FAKE_CTX,
+    ) as any;
+    expect(result.requireApproval).toBeDefined();
+    expect(result.block).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// execute_machine_payment — block on malformed params
+// ---------------------------------------------------------------------------
+
+describe("before_tool_call hook — execute_machine_payment blocks on malformed params", () => {
+  const handler = makeHandler();
+
+  it("returns block: true when targetUrl is missing", () => {
+    const result = handler(
+      makeEvent("payment", {
+        action: "execute_machine_payment",
+        providerId: "mock",
+        fundingSourceId: "card-001",
+        method: "POST",
+        // targetUrl intentionally omitted
+      }),
+      FAKE_CTX,
+    ) as any;
+    expect(result).toBeDefined();
+    expect(result.block).toBe(true);
+    expect(result.requireApproval).toBeUndefined();
+  });
+
+  it("returns block: true when method is missing", () => {
+    const result = handler(
+      makeEvent("payment", {
+        action: "execute_machine_payment",
+        providerId: "mock",
+        fundingSourceId: "card-001",
+        targetUrl: "https://example.com/pay",
+        // method intentionally omitted
+      }),
+      FAKE_CTX,
+    ) as any;
+    expect(result.block).toBe(true);
+  });
+
+  it("returns requireApproval when all required fields are present", () => {
+    const result = handler(
+      makeEvent("payment", {
+        action: "execute_machine_payment",
+        providerId: "mock",
+        fundingSourceId: "card-001",
+        targetUrl: "https://example.com/pay",
+        method: "POST",
+      }),
+      FAKE_CTX,
+    ) as any;
+    expect(result.requireApproval).toBeDefined();
+    expect(result.block).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// formatAmount — currency formatting
+// ---------------------------------------------------------------------------
+
+describe("describeIssueApproval — currency formatting", () => {
+  it("EUR amounts do NOT include a dollar sign", () => {
+    const desc = describeIssueApproval({
+      providerId: "mock",
+      amount: { amountCents: 500, currency: "eur" },
+      merchant: { name: "Widget Co" },
+      fundingSourceId: "fs-xyz",
+    });
+    expect(desc).not.toContain("$");
+    expect(desc).toContain("EUR");
+    expect(desc).toContain("5.00");
+  });
+
+  it("USD amounts include a dollar sign", () => {
+    const desc = describeIssueApproval({
+      providerId: "mock",
+      amount: { amountCents: 500, currency: "usd" },
+      merchant: { name: "Widget Co" },
+      fundingSourceId: "fs-xyz",
+    });
+    expect(desc).toContain("$");
+    expect(desc).toContain("USD");
+  });
+
+  it("GBP amounts do NOT include a dollar sign", () => {
+    const desc = describeIssueApproval({
+      providerId: "mock",
+      amount: { amountCents: 1000, currency: "gbp" },
+      merchant: { name: "UK Store" },
+      fundingSourceId: "fs-gbp",
+    });
+    expect(desc).not.toContain("$");
+    expect(desc).toContain("GBP");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // registerPaymentApprovalsHook integration
 // ---------------------------------------------------------------------------
 

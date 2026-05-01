@@ -19,7 +19,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PaymentManager } from "./payments.js";
-import type { CredentialHandle, MachinePaymentResult } from "./types.js";
+import { redactHandle, redactMachinePaymentResult } from "./redact.js";
 
 // ---------------------------------------------------------------------------
 // TypeBox action schemas
@@ -88,42 +88,6 @@ export const PaymentToolInput = Type.Union([
 export type PaymentToolInputType = Static<typeof PaymentToolInput>;
 
 // ---------------------------------------------------------------------------
-// Result helpers — strip secrets before returning
-// ---------------------------------------------------------------------------
-
-/**
- * Redact a CredentialHandle to remove any PAN/CVV/token fields.
- * Only safe display fields + fillSentinels are included.
- */
-function redactHandle(handle: CredentialHandle): CredentialHandle {
-  return {
-    id: handle.id,
-    provider: handle.provider,
-    rail: handle.rail,
-    status: handle.status,
-    ...(handle.providerRequestId !== undefined
-      ? { providerRequestId: handle.providerRequestId }
-      : {}),
-    ...(handle.validUntil !== undefined ? { validUntil: handle.validUntil } : {}),
-    ...(handle.display !== undefined ? { display: handle.display } : {}),
-    // fillSentinels are safe — they contain only sentinel keys, no card data
-    ...(handle.fillSentinels !== undefined ? { fillSentinels: handle.fillSentinels } : {}),
-  };
-}
-
-/**
- * Redact a MachinePaymentResult to remove any sensitive token fields.
- */
-function redactMachinePaymentResult(result: MachinePaymentResult): MachinePaymentResult {
-  return {
-    handleId: result.handleId,
-    targetUrl: result.targetUrl,
-    outcome: result.outcome,
-    ...(result.receipt !== undefined ? { receipt: result.receipt } : {}),
-  };
-}
-
-// ---------------------------------------------------------------------------
 // Handler dispatch
 // ---------------------------------------------------------------------------
 
@@ -165,7 +129,8 @@ async function handlePaymentTool(
       });
 
       const redacted = redactHandle(handle);
-      const fillSentinels = redacted.fillSentinels;
+      // fillSentinels extracted from handle directly (same value; redactHandle includes them)
+      const fillSentinels = handle.fillSentinels;
       const usageHint =
         "Pass these sentinel values into the `browser.act` tool's `fill` action. " +
         "The payment plugin will substitute real card values inside the `before_tool_call` " +
