@@ -962,6 +962,26 @@ function mergePluginTrustList(runtimeList: string[], sourceList: readonly string
   return merged.length === runtimeList.length ? runtimeList : merged;
 }
 
+function pluginLoadOptionsMatchCacheKey(
+  options: PluginLoadOptions,
+  expectedCacheKey: string,
+  resolvedCacheKey?: string,
+): boolean {
+  const cacheKey = resolvedCacheKey ?? resolvePluginLoadCacheContext(options).cacheKey;
+  if (cacheKey === expectedCacheKey) {
+    return true;
+  }
+  if (options.installBundledRuntimeDeps !== false) {
+    return false;
+  }
+  return (
+    resolvePluginLoadCacheContext({
+      ...options,
+      installBundledRuntimeDeps: undefined,
+    }).cacheKey === expectedCacheKey
+  );
+}
+
 function getCompatibleActivePluginRegistry(
   options: PluginLoadOptions = {},
 ): PluginRegistry | undefined {
@@ -978,13 +998,11 @@ function getCompatibleActivePluginRegistry(
   }
   const activeRuntimeSubagentMode = getActivePluginRuntimeSubagentMode();
   const loadContext = resolvePluginLoadCacheContext(options);
-  if (loadContext.cacheKey === activeCacheKey) {
+  if (pluginLoadOptionsMatchCacheKey(options, activeCacheKey, loadContext.cacheKey)) {
     return activeRegistry;
   }
   const tryExactVariant = (variant: PluginLoadOptions): PluginRegistry | undefined => {
-    return resolvePluginLoadCacheContext(variant).cacheKey === activeCacheKey
-      ? activeRegistry
-      : undefined;
+    return pluginLoadOptionsMatchCacheKey(variant, activeCacheKey) ? activeRegistry : undefined;
   };
   const activeCoreGatewayMethodNames = getActivePluginCoreGatewayMethodNames();
   const tryCompatibleVariant = (variant: PluginLoadOptions): PluginRegistry | undefined => {
@@ -1002,10 +1020,13 @@ function getCompatibleActivePluginRegistry(
     ) {
       return undefined;
     }
-    return resolvePluginLoadCacheContext({
-      ...variant,
-      coreGatewayHandlers: createSyntheticCoreGatewayHandlers(activeCoreGatewayMethodNames),
-    }).cacheKey === activeCacheKey
+    return pluginLoadOptionsMatchCacheKey(
+      {
+        ...variant,
+        coreGatewayHandlers: createSyntheticCoreGatewayHandlers(activeCoreGatewayMethodNames),
+      },
+      activeCacheKey,
+    )
       ? activeRegistry
       : undefined;
   };
@@ -1045,13 +1066,16 @@ function getCompatibleActivePluginRegistry(
     loadContext.runtimeSubagentMode === "default" &&
     activeRuntimeSubagentMode === "gateway-bindable"
   ) {
-    return tryActivationExactVariant({
+    const gatewayBindableVariant = {
       ...options,
       runtimeOptions: {
         ...options.runtimeOptions,
         allowGatewaySubagentBinding: true,
       },
-    });
+    };
+    return options.installBundledRuntimeDeps === false
+      ? tryActivationCompatibleVariant(gatewayBindableVariant)
+      : tryActivationExactVariant(gatewayBindableVariant);
   }
   return undefined;
 }

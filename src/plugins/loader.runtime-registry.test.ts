@@ -258,6 +258,43 @@ describe("getCompatibleActivePluginRegistry", () => {
     ).toBe(registry);
   });
 
+  it("reuses a gateway-bindable active registry when helper loads skip runtime dependency repair", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+        "sessions.list": () => undefined,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayLoadOptions);
+    setActivePluginRegistry(
+      registry,
+      cacheKey,
+      "gateway-bindable",
+      gatewayLoadOptions.workspaceDir,
+      Object.keys(gatewayLoadOptions.coreGatewayHandlers),
+    );
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: gatewayLoadOptions.config,
+        workspaceDir: gatewayLoadOptions.workspaceDir,
+        runtimeOptions: gatewayLoadOptions.runtimeOptions,
+        installBundledRuntimeDeps: false,
+      }),
+    ).toBe(registry);
+  });
+
   it("does not let default-mode helper loads inherit gateway-bindable registries via synthetic handlers", () => {
     const registry = createEmptyPluginRegistry();
     const gatewayLoadOptions = {
@@ -291,6 +328,42 @@ describe("getCompatibleActivePluginRegistry", () => {
         workspaceDir: gatewayLoadOptions.workspaceDir,
       }),
     ).toBeUndefined();
+  });
+
+  it("lets skip-runtime-deps default helper loads reuse gateway-bindable registries via synthetic handlers", () => {
+    const registry = createEmptyPluginRegistry();
+    const gatewayLoadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+      coreGatewayHandlers: {
+        "sessions.get": () => undefined,
+        "sessions.list": () => undefined,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(gatewayLoadOptions);
+    setActivePluginRegistry(
+      registry,
+      cacheKey,
+      "gateway-bindable",
+      gatewayLoadOptions.workspaceDir,
+      Object.keys(gatewayLoadOptions.coreGatewayHandlers),
+    );
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: gatewayLoadOptions.config,
+        workspaceDir: gatewayLoadOptions.workspaceDir,
+        installBundledRuntimeDeps: false,
+      }),
+    ).toBe(registry);
   });
 });
 
