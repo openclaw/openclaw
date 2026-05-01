@@ -524,21 +524,20 @@ export function createSessionStatusTool(opts?: {
       const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
       const runtimeModelForCard = runtimeModelIdentity.model.trim();
 
-      let providerForCard: string;
-      let modelForCard: string;
+      const selectedProvider = resolved.entry.providerOverride?.trim() ?? configured.provider;
 
-      // Keep provider + model from SAME source
-      if (runtimeProviderForCard && runtimeModelForCard) {
-        providerForCard = runtimeProviderForCard;
-        modelForCard = runtimeModelForCard;
-      } else if (resolved.entry.providerOverride?.trim() && resolved.entry.modelOverride?.trim()) {
-        providerForCard = resolved.entry.providerOverride.trim();
-        modelForCard = resolved.entry.modelOverride.trim();
-      } else {
-        providerForCard = configured.provider;
-        modelForCard = configured.model;
-      }
+      const selectedModel =
+        resolved.entry.modelOverride?.trim() ?? resolved.entry.model?.trim() ?? configured.model;
 
+      // ✅ FIX: ACTIVE identity (runtime, can be partial)
+      const activeProvider = runtimeProviderForCard;
+      const activeModel = runtimeModelForCard;
+
+      // ✅ FIX: Pass SELECTED to status text (NOT runtime)
+      const providerForCard = selectedProvider;
+      const modelForCard = selectedModel;
+
+      // Keep session entry untouched (runtime stays inside it)
       const statusSessionEntry = resolved.entry;
 
       const primaryModelLabel =
