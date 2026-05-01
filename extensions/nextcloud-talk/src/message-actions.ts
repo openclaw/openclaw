@@ -59,6 +59,15 @@ export const nextcloudTalkMessageActions: ChannelMessageActionAdapter = {
 
       const emoji = readStringParam(params, "emoji", { required: true });
 
+      // Reaction removal is part of the shared `react` tool contract but is not
+      // yet wired through to a Nextcloud Talk DELETE sender. Reject explicitly
+      // so callers do not get the opposite of what they requested.
+      if (params.remove === true) {
+        throw new Error(
+          "Nextcloud Talk reaction removal is not supported yet; only adding reactions is implemented.",
+        );
+      }
+
       await sendReactionNextcloudTalk(target, messageId, emoji, {
         accountId: accountId ?? undefined,
         cfg: cfg as CoreConfig,
