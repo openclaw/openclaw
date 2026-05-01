@@ -611,7 +611,10 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   const forceDocument =
     readBooleanParam(params, "forceDocument") ?? readBooleanParam(params, "asDocument") ?? false;
   const asVoice =
-    readBooleanParam(params, "asVoice") ?? readBooleanParam(params, "audioAsVoice") ?? false;
+    readBooleanParam(params, "asVoice") ??
+    readBooleanParam(params, "audioAsVoice") ??
+    parsed.audioAsVoice ??
+    false;
   const bestEffort = readBooleanParam(params, "bestEffort");
   const silent = readBooleanParam(params, "silent");
 
