@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import { prepareBuiltBundledPluginPublicSurfaceLocation } from "../plugins/bundled-public-surface-runtime-root.js";
 import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
@@ -135,36 +134,12 @@ export type FacadeModuleLocation = {
   boundaryRoot: string;
 };
 
-function prepareFacadeLocationForBundledRuntimeDeps(params: {
-  location: FacadeModuleLocation;
-  runtimeDeps?: {
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  };
-}): FacadeModuleLocation {
-  if (!params.runtimeDeps) {
-    return params.location;
-  }
-  return prepareBuiltBundledPluginPublicSurfaceLocation({
-    location: params.location,
-    pluginId: params.runtimeDeps.pluginId,
-    ...(params.runtimeDeps.env ? { env: params.runtimeDeps.env } : {}),
-  });
-}
-
 export function loadFacadeModuleAtLocationSync<T extends object>(params: {
   location: FacadeModuleLocation;
   trackedPluginId: string | (() => string);
-  runtimeDeps?: {
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  };
   loadModule?: (modulePath: string) => T;
 }): T {
-  const location = prepareFacadeLocationForBundledRuntimeDeps({
-    location: params.location,
-    ...(params.runtimeDeps ? { runtimeDeps: params.runtimeDeps } : {}),
-  });
+  const location = params.location;
   const cached = loadedFacadeModules.get(location.modulePath);
   if (cached) {
     return cached as T;
@@ -229,10 +204,6 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
   return loadFacadeModuleAtLocationSync({
     location,
     trackedPluginId: params.trackedPluginId ?? params.dirName,
-    runtimeDeps: {
-      pluginId: params.dirName,
-      ...(params.env ? { env: params.env } : {}),
-    },
   });
 }
 
@@ -240,7 +211,6 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
   dirName: string;
   artifactBasename: string;
   trackedPluginId?: string | (() => string);
-  env?: NodeJS.ProcessEnv;
 }): Promise<T> {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
@@ -248,13 +218,7 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const preparedLocation = prepareFacadeLocationForBundledRuntimeDeps({
-    location,
-    runtimeDeps: {
-      pluginId: params.dirName,
-      ...(params.env ? { env: params.env } : {}),
-    },
-  });
+  const preparedLocation = location;
   const cached = loadedFacadeModules.get(preparedLocation.modulePath);
   if (cached) {
     return cached as T;

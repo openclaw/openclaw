@@ -5,6 +5,7 @@ import {
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   loadSessionStore,
   resolveSessionStoreEntry,
@@ -38,7 +39,7 @@ import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
 import { resolveMatrixStoredSessionMeta } from "../session-store-metadata.js";
 import { resolveMatrixMonitorAccessState } from "./access-state.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
-import { resolveMatrixAllowListMatch } from "./allowlist.js";
+import { normalizeMatrixUserId, resolveMatrixAllowListMatch } from "./allowlist.js";
 import {
   resolveMatrixMonitorLiveUserAllowlist,
   type MatrixResolvedAllowlistEntry,
@@ -740,6 +741,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           isRoom,
         });
         const {
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
           groupAllowConfigured,
@@ -1148,6 +1150,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId: _threadRootId,
           thread,
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };
@@ -1202,6 +1205,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId: _threadRootId,
         thread,
+        effectiveAllowFrom,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
@@ -1828,107 +1832,152 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onReplyStart: typingCallbacks.onReplyStart,
           onIdle: typingCallbacks.onIdle,
         });
+      const pinnedMainDmOwner = isDirectMessage
+        ? resolvePinnedMainDmOwnerFromAllowlist({
+            dmScope: cfg.session?.dmScope,
+            allowFrom: effectiveAllowFrom,
+            normalizeEntry: normalizeMatrixUserId,
+          })
+        : null;
 
-      const { dispatchResult } = await core.channel.turn.runPrepared({
+      const turnResult = await core.channel.turn.run({
         channel: "matrix",
         accountId: _route.accountId,
-        routeSessionKey: _route.sessionKey,
-        storePath,
-        ctxPayload,
-        recordInboundSession: core.channel.session.recordInboundSession,
-        record: {
-          updateLastRoute: isDirectMessage
-            ? {
-                sessionKey: _route.mainSessionKey,
-                channel: "matrix",
-                to: `room:${roomId}`,
-                accountId: _route.accountId,
+        raw: event,
+        adapter: {
+          ingest: () => ({
+            id: _messageId,
+            rawText: bodyText,
+            textForAgent: ctxPayload.BodyForAgent,
+            textForCommands: ctxPayload.CommandBody,
+            raw: event,
+          }),
+          resolveTurn: () => ({
+            channel: "matrix",
+            accountId: _route.accountId,
+            routeSessionKey: _route.sessionKey,
+            storePath,
+            ctxPayload,
+            recordInboundSession: core.channel.session.recordInboundSession,
+            record: {
+              updateLastRoute: isDirectMessage
+                ? {
+                    sessionKey: _route.mainSessionKey,
+                    channel: "matrix",
+                    to: `room:${roomId}`,
+                    accountId: _route.accountId,
+                    mainDmOwnerPin: pinnedMainDmOwner
+                      ? {
+                          ownerRecipient: pinnedMainDmOwner,
+                          senderRecipient: normalizeMatrixUserId(senderId),
+                          onSkip: ({
+                            ownerRecipient,
+                            senderRecipient,
+                          }: {
+                            ownerRecipient: string;
+                            senderRecipient: string;
+                          }) => {
+                            logVerboseMessage(
+                              `matrix: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                            );
+                          },
+                        }
+                      : undefined,
+                  }
+                : undefined,
+              onRecordError: (err) => {
+                logger.warn("failed updating session meta", {
+                  error: String(err),
+                  storePath,
+                  sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
+                });
+              },
+            },
+            onPreDispatchFailure: () =>
+              core.channel.reply.settleReplyDispatcher({
+                dispatcher,
+                onSettled: () => {
+                  markRunComplete();
+                  markDispatchIdle();
+                },
+              }),
+            runDispatch: async () => {
+              if (
+                sharedDmContextNotice &&
+                markTrackedRoomIfFirst(sharedDmContextNoticeRooms, roomId)
+              ) {
+                client
+                  .sendMessage(roomId, {
+                    msgtype: "m.notice",
+                    body: sharedDmContextNotice,
+                  })
+                  .catch((err) => {
+                    logVerboseMessage(
+                      `matrix: failed sending shared DM session notice room=${roomId}: ${String(err)}`,
+                    );
+                  });
               }
-            : undefined,
-          onRecordError: (err) => {
-            logger.warn("failed updating session meta", {
-              error: String(err),
-              storePath,
-              sessionKey: ctxPayload.SessionKey ?? _route.sessionKey,
-            });
-          },
-        },
-        onPreDispatchFailure: () =>
-          core.channel.reply.settleReplyDispatcher({
-            dispatcher,
-            onSettled: () => {
-              markRunComplete();
-              markDispatchIdle();
+
+              return await core.channel.reply.withReplyDispatcher({
+                dispatcher,
+                onSettled: () => {
+                  markDispatchIdle();
+                },
+                run: async () => {
+                  try {
+                    return await core.channel.reply.dispatchReplyFromConfig({
+                      ctx: ctxPayload,
+                      cfg,
+                      dispatcher,
+                      replyOptions: {
+                        ...replyOptions,
+                        skillFilter: roomConfig?.skills,
+                        // Keep block streaming enabled when explicitly requested, even
+                        // with draft previews on. The draft remains the live preview
+                        // for the current assistant block, while block deliveries
+                        // finalize completed blocks into their own preserved events.
+                        disableBlockStreaming: !blockStreamingEnabled,
+                        onPartialReply: draftStream
+                          ? (payload) => {
+                              latestDraftFullText = payload.text ?? "";
+                              suppressPreviewToolProgressForAnswerText(latestDraftFullText);
+                              updateDraftFromLatestFullText();
+                            }
+                          : undefined,
+                        onBlockReplyQueued: draftStream
+                          ? (payload, context) => {
+                              if (payload.isCompactionNotice === true) {
+                                return;
+                              }
+                              queueDraftBlockBoundary(payload, context);
+                            }
+                          : undefined,
+                        // Reset draft boundary bookkeeping on assistant message
+                        // boundaries so post-tool blocks stream from a fresh
+                        // cumulative payload (payload.text resets upstream).
+                        onAssistantMessageStart: draftStream
+                          ? () => {
+                              resetDraftBlockOffsets();
+                              resetPreviewToolProgress();
+                            }
+                          : undefined,
+                        ...buildPreviewToolProgressReplyOptions(),
+                        onModelSelected,
+                      },
+                    });
+                  } finally {
+                    markRunComplete();
+                  }
+                },
+              });
             },
           }),
-        runDispatch: async () => {
-          if (sharedDmContextNotice && markTrackedRoomIfFirst(sharedDmContextNoticeRooms, roomId)) {
-            client
-              .sendMessage(roomId, {
-                msgtype: "m.notice",
-                body: sharedDmContextNotice,
-              })
-              .catch((err) => {
-                logVerboseMessage(
-                  `matrix: failed sending shared DM session notice room=${roomId}: ${String(err)}`,
-                );
-              });
-          }
-
-          return await core.channel.reply.withReplyDispatcher({
-            dispatcher,
-            onSettled: () => {
-              markDispatchIdle();
-            },
-            run: async () => {
-              try {
-                return await core.channel.reply.dispatchReplyFromConfig({
-                  ctx: ctxPayload,
-                  cfg,
-                  dispatcher,
-                  replyOptions: {
-                    ...replyOptions,
-                    skillFilter: roomConfig?.skills,
-                    // Keep block streaming enabled when explicitly requested, even
-                    // with draft previews on. The draft remains the live preview
-                    // for the current assistant block, while block deliveries
-                    // finalize completed blocks into their own preserved events.
-                    disableBlockStreaming: !blockStreamingEnabled,
-                    onPartialReply: draftStream
-                      ? (payload) => {
-                          latestDraftFullText = payload.text ?? "";
-                          suppressPreviewToolProgressForAnswerText(latestDraftFullText);
-                          updateDraftFromLatestFullText();
-                        }
-                      : undefined,
-                    onBlockReplyQueued: draftStream
-                      ? (payload, context) => {
-                          if (payload.isCompactionNotice === true) {
-                            return;
-                          }
-                          queueDraftBlockBoundary(payload, context);
-                        }
-                      : undefined,
-                    // Reset draft boundary bookkeeping on assistant message
-                    // boundaries so post-tool blocks stream from a fresh
-                    // cumulative payload (payload.text resets upstream).
-                    onAssistantMessageStart: draftStream
-                      ? () => {
-                          resetDraftBlockOffsets();
-                          resetPreviewToolProgress();
-                        }
-                      : undefined,
-                    ...buildPreviewToolProgressReplyOptions(),
-                    onModelSelected,
-                  },
-                });
-              } finally {
-                markRunComplete();
-              }
-            },
-          });
         },
       });
+      if (!turnResult.dispatched) {
+        return;
+      }
+      const { dispatchResult } = turnResult;
       const { queuedFinal, counts } = dispatchResult;
       if (finalReplyDeliveryFailed) {
         if (retryableReplyDeliveryFailed) {

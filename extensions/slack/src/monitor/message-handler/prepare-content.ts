@@ -6,7 +6,7 @@ import type { SlackFile, SlackMessageEvent } from "../../types.js";
 import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "../media-types.js";
 import type { SlackThreadStarter } from "../thread.js";
 
-export type SlackResolvedMessageContent = {
+type SlackResolvedMessageContent = {
   rawBody: string;
   effectiveDirectMedia: SlackMediaResult[] | null;
 };

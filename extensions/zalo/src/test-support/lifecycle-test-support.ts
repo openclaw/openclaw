@@ -10,7 +10,7 @@ function resolveLifecycleAllowFrom(params: {
   return params.allowFrom ?? (params.dmPolicy === "open" ? ["*"] : undefined);
 }
 
-export function createLifecycleConfig(params: {
+function createLifecycleConfig(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -38,7 +38,7 @@ export function createLifecycleConfig(params: {
   } as OpenClawConfig;
 }
 
-export function createLifecycleAccount(params: {
+function createLifecycleAccount(params: {
   accountId: string;
   dmPolicy: "open" | "pairing";
   allowFrom?: string[];
@@ -257,13 +257,23 @@ export function createImageLifecycleCore() {
             updateLastRoute: resolved.record?.updateLastRoute,
             onRecordError: resolved.record?.onRecordError ?? (() => undefined),
           });
+          if ("runDispatch" in resolved) {
+            const dispatchResult = await resolved.runDispatch();
+            return {
+              admission: { kind: "dispatch" as const },
+              dispatched: true,
+              ctxPayload: resolved.ctxPayload,
+              routeSessionKey: resolved.routeSessionKey,
+              dispatchResult,
+            };
+          }
           const dispatchResult = await resolved.dispatchReplyWithBufferedBlockDispatcher({
             ctx: resolved.ctxPayload,
             cfg: resolved.cfg,
             dispatcherOptions: {
               ...resolved.dispatcherOptions,
-              deliver: async (payload, info) => {
-                await resolved.delivery.deliver(payload, info);
+              deliver: async (...args: Parameters<typeof resolved.delivery.deliver>) => {
+                await resolved.delivery.deliver(...args);
               },
               onError: resolved.delivery.onError,
             },
@@ -349,7 +359,7 @@ export async function settleAsyncWork(): Promise<void> {
   }
 }
 
-export async function postWebhookUpdate(params: {
+async function postWebhookUpdate(params: {
   baseUrl: string;
   path: string;
   secret: string;

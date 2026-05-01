@@ -513,14 +513,14 @@ openclaw plugins install <package-name>
 ```
 
 <Info>
-For npm-sourced installs, `openclaw plugins install` runs project-local `npm install --ignore-scripts` (no lifecycle scripts), ignoring inherited global npm install settings. Keep plugin dependency trees pure JS/TS and avoid packages that require `postinstall` builds.
+For npm-sourced installs, `openclaw plugins install` installs the package under `~/.openclaw/npm` with lifecycle scripts disabled. Keep plugin dependency trees pure JS/TS and avoid packages that require `postinstall` builds.
 </Info>
 
 <Note>
-Bundled OpenClaw-owned plugins are the only startup repair exception: when a packaged install sees one enabled by plugin config, legacy channel config, or its bundled default-enabled manifest, startup installs that plugin's missing runtime dependencies before import. Operators can inspect or repair that stage with `openclaw plugins deps`. Third-party plugins should not rely on startup installs; keep using the explicit plugin installer.
+Gateway startup does not install plugin dependencies. npm/git/ClawHub install flows own dependency convergence; local plugins must already have their dependencies installed.
 </Note>
 
-Bundled package-level runtime deps are explicit metadata, not inferred from built JavaScript at gateway startup. If a shared OpenClaw root dependency must be available inside the external bundled-plugin runtime mirror, declare it in `openclaw.bundle.mirroredRootRuntimeDependencies` in the root package manifest.
+Bundled package metadata is explicit, not inferred from built JavaScript at gateway startup. Runtime dependencies belong in the plugin package that owns them; packaged OpenClaw startup never repairs or mirrors plugin dependencies.
 
 ## Related
 

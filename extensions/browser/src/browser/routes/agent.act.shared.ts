@@ -1,4 +1,4 @@
-export const ACT_KINDS = [
+const ACT_KINDS = [
   "batch",
   "click",
   "clickCoords",
@@ -24,8 +24,8 @@ export function isActKind(value: unknown): value is ActKind {
   return (ACT_KINDS as readonly string[]).includes(value);
 }
 
-export type ClickButton = "left" | "right" | "middle";
-export type ClickModifier = "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift";
+type ClickButton = "left" | "right" | "middle";
+type ClickModifier = "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift";
 
 const ALLOWED_CLICK_MODIFIERS = new Set<ClickModifier>([
   "Alt",

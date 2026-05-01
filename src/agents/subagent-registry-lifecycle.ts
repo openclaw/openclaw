@@ -441,7 +441,7 @@ export function createSubagentRegistryLifecycleController(params: {
     retryDeferredCompletedAnnounces(cleanupParams.runId);
   };
 
-  const retireRunModeBundleMcpRuntime = (cleanupParams: {
+  const retireRunModeBundleMcpRuntime = async (cleanupParams: {
     runId: string;
     entry: SubagentRunRecord;
     reason: string;
@@ -449,7 +449,7 @@ export function createSubagentRegistryLifecycleController(params: {
     if (cleanupParams.entry.spawnMode === "session") {
       return;
     }
-    void retireSessionMcpRuntimeForSessionKey({
+    await retireSessionMcpRuntimeForSessionKey({
       sessionKey: cleanupParams.entry.childSessionKey,
       reason: cleanupParams.reason,
       onError: (error, sessionId) => {
@@ -772,7 +772,7 @@ export function createSubagentRegistryLifecycleController(params: {
       onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
     });
 
-    retireRunModeBundleMcpRuntime({
+    await retireRunModeBundleMcpRuntime({
       runId: completeParams.runId,
       entry,
       reason: "subagent-run-complete",

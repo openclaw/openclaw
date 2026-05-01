@@ -540,6 +540,15 @@ export function loadPluginManifestRegistry(
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
+  let installRecords = params.installRecords;
+  let installRecordsLoaded = Boolean(params.installRecords);
+  const getInstallRecords = (): Record<string, PluginInstallRecord> => {
+    if (!installRecordsLoaded) {
+      installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
+      installRecordsLoaded = true;
+    }
+    return installRecords ?? {};
+  };
 
   const discovery = params.candidates
     ? {
@@ -550,6 +559,7 @@ export function loadPluginManifestRegistry(
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
         env,
+        installRecords: getInstallRecords(),
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
@@ -557,15 +567,6 @@ export function loadPluginManifestRegistry(
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
-  let installRecords = params.installRecords;
-  let installRecordsLoaded = Boolean(params.installRecords);
-  const getInstallRecords = (): Record<string, PluginInstallRecord> => {
-    if (!installRecordsLoaded) {
-      installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
-      installRecordsLoaded = true;
-    }
-    return installRecords ?? {};
-  };
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";

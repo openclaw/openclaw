@@ -17,8 +17,8 @@ import type {
 import { normalizeMattermostBaseUrl } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
-export type MattermostTokenSource = "env" | "config" | "none";
-export type MattermostBaseUrlSource = "env" | "config" | "none";
+type MattermostTokenSource = "env" | "config" | "none";
+type MattermostBaseUrlSource = "env" | "config" | "none";
 
 export type ResolvedMattermostAccount = {
   accountId: string;
@@ -138,10 +138,4 @@ export function resolveMattermostReplyToMode(
     return "off";
   }
   return account.config.replyToMode ?? "off";
-}
-
-export function listEnabledMattermostAccounts(cfg: OpenClawConfig): ResolvedMattermostAccount[] {
-  return listMattermostAccountIds(cfg)
-    .map((accountId) => resolveMattermostAccount({ cfg, accountId }))
-    .filter((account) => account.enabled);
 }

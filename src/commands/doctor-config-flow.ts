@@ -135,15 +135,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  if (params.runtime && params.prompter) {
-    const { maybeRepairBundledPluginRuntimeDeps } =
-      await import("./doctor-bundled-plugin-runtime-deps.js");
-    await maybeRepairBundledPluginRuntimeDeps({
-      runtime: params.runtime,
-      prompter: params.prompter,
-      config: candidate,
-      includeConfiguredChannels: true,
-    });
+  const { collectPluginToolAllowlistWarnings } =
+    await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
+  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
+    cfg: candidate,
+    env: process.env,
+  });
+  if (pluginToolAllowlistWarnings.length > 0) {
+    note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
   const hasConfiguredChannels = collectConfiguredChannelIds(candidate).length > 0;

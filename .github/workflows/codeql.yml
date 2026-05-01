@@ -35,8 +35,8 @@ permissions:
   security-events: write
 
 jobs:
-  critical-security:
-    name: Critical Security (${{ matrix.category }})
+  security-high:
+    name: Security High (${{ matrix.category }})
     if: ${{ (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'security') }}
     runs-on: ${{ matrix.runs_on }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
@@ -89,4 +89,4 @@ jobs:
       - name: Analyze
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
-          category: "/codeql-critical-security/${{ matrix.category }}"
+          category: "/codeql-security-high/${{ matrix.category }}"

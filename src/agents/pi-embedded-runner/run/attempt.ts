@@ -10,6 +10,7 @@ import {
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -228,6 +229,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
@@ -268,7 +270,7 @@ import {
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
-  hasPromptSubmissionContent,
+  resolvePromptSubmissionSkipReason,
   shouldWarnOnOrphanedUserRepair,
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
@@ -319,6 +321,11 @@ import { buildAttemptReplayMetadata } from "./incomplete-turn.js";
 import { resolveLlmIdleTimeoutMs, streamWithIdleTimeout } from "./llm-idle-timeout.js";
 import { resolveMessageMergeStrategy } from "./message-merge-strategy.js";
 import {
+  MID_TURN_PRECHECK_ERROR_MESSAGE,
+  isMidTurnPrecheckSignal,
+  type MidTurnPrecheckRequest,
+} from "./midturn-precheck.js";
+import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
@@ -347,7 +354,6 @@ export {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 export {
-  buildSessionsYieldContextMessage,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
   stripSessionsYieldArtifacts,
@@ -494,6 +500,57 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   return stripRuntimeContextCustomMessages(normalized);
 }
 
+function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") {
+    return false;
+  }
+  const record = message as unknown as { stopReason?: unknown; errorMessage?: unknown };
+  return record.stopReason === "error" && record.errorMessage === MID_TURN_PRECHECK_ERROR_MESSAGE;
+}
+
+function removeTrailingMidTurnPrecheckAssistantError(params: {
+  activeSession: { agent: { state: { messages: AgentMessage[] } } };
+  sessionManager: ReturnType<typeof guardSessionManager>;
+}): void {
+  const messages = params.activeSession.agent.state.messages;
+  if (isMidTurnPrecheckAssistantError(messages.at(-1))) {
+    params.activeSession.agent.state.messages = messages.slice(0, -1);
+  }
+
+  const mutableSessionManager = params.sessionManager as unknown as {
+    fileEntries?: Array<{
+      type?: string;
+      id?: string;
+      parentId?: string | null;
+      message?: AgentMessage;
+    }>;
+    byId?: Map<string, unknown>;
+    leafId?: string | null;
+    _rewriteFile?: () => void;
+  };
+  const lastEntry = mutableSessionManager.fileEntries?.at(-1);
+  if (lastEntry?.type !== "message" || !isMidTurnPrecheckAssistantError(lastEntry.message)) {
+    if (isMidTurnPrecheckAssistantError(params.activeSession.agent.state.messages.at(-1))) {
+      log.warn(
+        "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but could not locate matching persisted SessionManager entry",
+      );
+    }
+    return;
+  }
+  if (typeof mutableSessionManager._rewriteFile !== "function") {
+    log.warn(
+      "[context-overflow-midturn-precheck] removed synthetic assistant error from active session but SessionManager rewrite hook is unavailable",
+    );
+    return;
+  }
+  mutableSessionManager.fileEntries?.pop();
+  if (lastEntry.id) {
+    mutableSessionManager.byId?.delete(lastEntry.id);
+  }
+  mutableSessionManager.leafId = lastEntry.parentId ?? null;
+  mutableSessionManager._rewriteFile();
+}
+
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
@@ -508,6 +565,13 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   return params.toolsAllow.some(
     (toolName) => toolName === "bundle-mcp" || toolName.includes(TOOL_NAME_SEPARATOR),
   );
+}
+
+export function resolveAttemptToolPolicyMessageProvider(params: {
+  messageProvider?: string;
+  messageChannel?: string;
+}): string | undefined {
+  return params.messageProvider ?? params.messageChannel;
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -728,7 +792,7 @@ export async function runEmbeddedAttempt(
                 elevated: params.bashElevated,
               },
               sandbox,
-              messageProvider: params.messageChannel ?? params.messageProvider,
+              messageProvider: resolveAttemptToolPolicyMessageProvider(params),
               agentAccountId: params.agentAccountId,
               messageTo: params.messageTo,
               messageThreadId: params.messageThreadId,
@@ -947,7 +1011,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
-      messageProvider: params.messageChannel ?? params.messageProvider,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
@@ -974,7 +1038,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
-      messageProvider: params.messageChannel ?? params.messageProvider,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
@@ -1464,21 +1528,51 @@ export async function runEmbeddedAttempt(
       }
       let prePromptMessageCount = activeSession.messages.length;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
+      let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
+        "assembled";
       abortSessionForYield = () => {
         yieldAbortSettled = Promise.resolve(activeSession.abort());
       };
       queueYieldInterruptForSession = () => {
         queueSessionsYieldInterruptMessage(activeSession);
       };
+      const contextTokenBudgetForGuard = Math.max(
+        1,
+        Math.floor(
+          params.contextTokenBudget ??
+            params.model.contextWindow ??
+            params.model.maxTokens ??
+            DEFAULT_CONTEXT_TOKENS,
+        ),
+      );
+      const toolResultMaxCharsForGuard = resolveLiveToolResultMaxChars({
+        contextWindowTokens: contextTokenBudgetForGuard,
+        cfg: params.config,
+        agentId: sessionAgentId,
+      });
+      const midTurnPrecheckEnabled =
+        params.config?.agents?.defaults?.compaction?.midTurnPrecheck?.enabled === true;
+      let pendingMidTurnPrecheckRequest: MidTurnPrecheckRequest | null = null;
+      const onMidTurnPrecheck = (request: MidTurnPrecheckRequest) => {
+        pendingMidTurnPrecheckRequest = request;
+      };
       if (!activeContextEngine || activeContextEngine.info.ownsCompaction !== true) {
         removeToolResultContextGuard = installToolResultContextGuard({
           agent: activeSession.agent,
-          contextWindowTokens: Math.max(
-            1,
-            Math.floor(
-              params.model.contextWindow ?? params.model.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-            ),
-          ),
+          contextWindowTokens: contextTokenBudgetForGuard,
+          ...(midTurnPrecheckEnabled
+            ? {
+                midTurnPrecheck: {
+                  enabled: true,
+                  contextTokenBudget: contextTokenBudgetForGuard,
+                  reserveTokens: () => settingsManager.getCompactionReserveTokens(),
+                  toolResultMaxChars: toolResultMaxCharsForGuard,
+                  getSystemPrompt: () => systemPromptText,
+                  getPrePromptMessageCount: () => prePromptMessageCount,
+                  onMidTurnPrecheck,
+                },
+              }
+            : {}),
         });
       } else {
         removeToolResultContextGuard = installContextEngineLoopHook({
@@ -1600,11 +1694,19 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
-        provider: params.provider,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-      });
+      const hasExplicitSseTransport = [
+        (params.streamParams as { transport?: unknown } | undefined)?.transport,
+        (params.model as { params?: { transport?: unknown } }).params?.transport,
+      ]
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .includes("sse");
+      const shouldUseWebSocketTransport =
+        !hasExplicitSseTransport &&
+        shouldUseOpenAIWebSocketTransport({
+          provider: params.provider,
+          modelApi: params.model.api,
+          modelBaseUrl: params.model.baseUrl,
+        });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({
             provider: params.provider,
@@ -1972,7 +2074,11 @@ export async function runEmbeddedAttempt(
 
         if (activeContextEngine) {
           try {
-            unwindowedContextEngineMessagesForPrecheck = activeSession.messages.slice();
+            // Snapshot before assemble: the assemble contract does not require
+            // the input array to be treated immutably, so an engine that windows
+            // history in place would otherwise leave the precheck reading
+            // already-windowed messages instead of the true pre-assembly state.
+            const preassemblyContextEngineMessagesForPrecheck = activeSession.messages.slice();
             const assembled = await assembleAttemptContextEngine({
               contextEngine: activeContextEngine,
               sessionId: params.sessionId,
@@ -1989,6 +2095,11 @@ export async function runEmbeddedAttempt(
             }
             if (assembled.messages !== activeSession.messages) {
               activeSession.agent.state.messages = assembled.messages;
+            }
+            contextEnginePromptAuthority = assembled.promptAuthority ?? "assembled";
+            if (contextEnginePromptAuthority === "preassembly_may_overflow") {
+              unwindowedContextEngineMessagesForPrecheck =
+                preassemblyContextEngineMessagesForPrecheck;
             }
             if (assembled.systemPromptAddition) {
               systemPromptText = prependSystemPromptAddition({
@@ -2024,19 +2135,6 @@ export async function runEmbeddedAttempt(
         err.name = "TimeoutError";
         return err;
       };
-      const makeAbortError = (signal: AbortSignal): Error => {
-        const reason = getAbortReason(signal);
-        // If the reason is already an Error, preserve it to keep the original message
-        // (e.g., "LLM idle timeout (<n>s): no response from model" instead of "aborted")
-        if (reason instanceof Error) {
-          const err = new Error(reason.message, { cause: reason });
-          err.name = "AbortError";
-          return err;
-        }
-        const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-        err.name = "AbortError";
-        return err;
-      };
       const abortCompaction = () => {
         if (!activeSession.isCompacting) {
           return;
@@ -2068,29 +2166,8 @@ export async function runEmbeddedAttempt(
         idleTimedOut = true;
         abortRun(true, error);
       };
-      const abortable = <T>(promise: Promise<T>): Promise<T> => {
-        const signal = runAbortController.signal;
-        if (signal.aborted) {
-          return Promise.reject(makeAbortError(signal));
-        }
-        return new Promise<T>((resolve, reject) => {
-          const onAbort = () => {
-            signal.removeEventListener("abort", onAbort);
-            reject(makeAbortError(signal));
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          promise.then(
-            (value) => {
-              signal.removeEventListener("abort", onAbort);
-              resolve(value);
-            },
-            (err) => {
-              signal.removeEventListener("abort", onAbort);
-              reject(err);
-            },
-          );
-        });
-      };
+      const abortable = <T>(promise: Promise<T>): Promise<T> =>
+        abortableWithSignal(runAbortController.signal, promise);
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
@@ -2140,6 +2217,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTexts,
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
+        getHeartbeatToolResponse,
         getPendingToolMediaReply,
         getSuccessfulCronAdds,
         getReplayState,
@@ -2271,8 +2349,68 @@ export async function runEmbeddedAttempt(
       // Hook runner was already obtained earlier before tool creation
       const hookAgentId = sessionAgentId;
 
+      const activeSessionManager = sessionManager;
       let preflightRecovery: EmbeddedRunAttemptResult["preflightRecovery"];
       let promptErrorSource: "prompt" | "compaction" | "precheck" | null = null;
+      const handleMidTurnPrecheckRequest = (request: MidTurnPrecheckRequest) => {
+        const logMidTurnPrecheck = (route: string, extra?: string) => {
+          log.warn(
+            `[context-overflow-midturn-precheck] sessionKey=${params.sessionKey ?? params.sessionId} ` +
+              `provider=${params.provider}/${params.modelId} route=${route} ` +
+              `estimatedPromptTokens=${request.estimatedPromptTokens} ` +
+              `promptBudgetBeforeReserve=${request.promptBudgetBeforeReserve} ` +
+              `overflowTokens=${request.overflowTokens} ` +
+              `toolResultReducibleChars=${request.toolResultReducibleChars} ` +
+              `effectiveReserveTokens=${request.effectiveReserveTokens} ` +
+              `prePromptMessageCount=${prePromptMessageCount} ` +
+              (extra ? `${extra} ` : "") +
+              `sessionFile=${params.sessionFile}`,
+          );
+        };
+        if (request.route === "truncate_tool_results_only") {
+          const contextTokenBudget = params.contextTokenBudget ?? DEFAULT_CONTEXT_TOKENS;
+          const toolResultMaxChars = resolveLiveToolResultMaxChars({
+            contextWindowTokens: contextTokenBudget,
+            cfg: params.config,
+            agentId: sessionAgentId,
+          });
+          const truncationResult = truncateOversizedToolResultsInSessionManager({
+            sessionManager: activeSessionManager,
+            contextWindowTokens: contextTokenBudget,
+            maxCharsOverride: toolResultMaxChars,
+            sessionFile: params.sessionFile,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          });
+          if (truncationResult.truncated) {
+            preflightRecovery = {
+              route: "truncate_tool_results_only",
+              source: "mid-turn",
+              handled: true,
+              truncatedCount: truncationResult.truncatedCount,
+            };
+            const sessionContext = activeSessionManager.buildSessionContext();
+            activeSession.agent.state.messages = sessionContext.messages;
+            logMidTurnPrecheck(
+              request.route,
+              `handled=true truncatedCount=${truncationResult.truncatedCount}`,
+            );
+          } else {
+            preflightRecovery = { route: "compact_only", source: "mid-turn" };
+            promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+            promptErrorSource = "precheck";
+            logMidTurnPrecheck(
+              "compact_only",
+              `truncateFallbackReason=${truncationResult.reason ?? "unknown"}`,
+            );
+          }
+        } else {
+          preflightRecovery = { route: request.route, source: "mid-turn" };
+          promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
+          promptErrorSource = "precheck";
+          logMidTurnPrecheck(request.route);
+        }
+      };
       let skipPromptSubmission = false;
       try {
         const promptStartedAt = Date.now();
@@ -2534,23 +2672,26 @@ export async function runEmbeddedAttempt(
             transcriptLeafId,
           });
 
-          if (
-            !skipPromptSubmission &&
-            !promptSubmission.runtimeOnly &&
-            !hasPromptSubmissionContent({
-              prompt: promptSubmission.prompt,
-              messages: activeSession.messages,
-              imageCount: imageResult.images.length,
-            })
-          ) {
+          const promptSkipReason = skipPromptSubmission
+            ? null
+            : resolvePromptSubmissionSkipReason({
+                prompt: promptSubmission.prompt,
+                messages: activeSession.messages,
+                runtimeOnly: promptSubmission.runtimeOnly,
+                imageCount: imageResult.images.length,
+              });
+          if (promptSkipReason) {
             skipPromptSubmission = true;
-            log.info(
-              `embedded run prompt skipped: empty prompt/history/images ` +
-                `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
-                `provider=${params.provider}/${params.modelId}`,
-            );
+            const skipContext =
+              `runId=${params.runId} sessionId=${params.sessionId} trigger=${params.trigger} ` +
+              `provider=${params.provider}/${params.modelId}`;
+            if (promptSkipReason === "blank_user_prompt") {
+              log.warn(`embedded run prompt skipped: blank user prompt ${skipContext}`);
+            } else {
+              log.info(`embedded run prompt skipped: empty prompt/history/images ${skipContext}`);
+            }
             trajectoryRecorder?.recordEvent("prompt.skipped", {
-              reason: "empty_prompt_history_images",
+              reason: promptSkipReason,
               prompt: promptSubmission.prompt,
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
@@ -2632,7 +2773,9 @@ export async function runEmbeddedAttempt(
 
           const preemptiveCompaction = shouldPreemptivelyCompactBeforePrompt({
             messages: activeSession.messages,
-            unwindowedMessages: unwindowedContextEngineMessagesForPrecheck,
+            ...(contextEnginePromptAuthority === "preassembly_may_overflow"
+              ? { unwindowedMessages: unwindowedContextEngineMessagesForPrecheck }
+              : {}),
             systemPrompt: systemPromptText,
             prompt: effectivePrompt,
             contextTokenBudget,
@@ -2782,6 +2925,8 @@ export async function runEmbeddedAttempt(
             if (yieldMessage) {
               await persistSessionsYieldContextMessage(activeSession, yieldMessage);
             }
+          } else if (isMidTurnPrecheckSignal(err)) {
+            handleMidTurnPrecheckRequest(err.request);
           } else {
             promptError = err;
             promptErrorSource = "prompt";
@@ -2790,6 +2935,20 @@ export async function runEmbeddedAttempt(
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
           );
+        }
+
+        if (pendingMidTurnPrecheckRequest) {
+          const request = pendingMidTurnPrecheckRequest;
+          pendingMidTurnPrecheckRequest = null;
+          removeTrailingMidTurnPrecheckAssistantError({
+            activeSession,
+            sessionManager,
+          });
+          if (!preflightRecovery && promptErrorSource !== "precheck") {
+            promptError = null;
+            promptErrorSource = null;
+            handleMidTurnPrecheckRequest(request);
+          }
         }
 
         // Capture snapshot before compaction wait so we have complete messages if timeout occurs
@@ -3279,6 +3438,7 @@ export async function runEmbeddedAttempt(
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
+        heartbeatToolResponse: getHeartbeatToolResponse(),
         toolMediaUrls: pendingToolMediaReply?.mediaUrls,
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,
         successfulCronAdds: getSuccessfulCronAdds(),

@@ -270,7 +270,7 @@ describe("installed plugin index", () => {
     });
   });
 
-  it("tags deprecated implicit startup sidecars for legacy plugins", () => {
+  it("does not classify legacy plugins as startup sidecars", () => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     writePluginManifest(rootDir, {
@@ -290,9 +290,9 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]).toMatchObject({
       pluginId: "legacy-sidecar",
       startup: {
-        sidecar: true,
+        sidecar: false,
       },
-      compat: ["legacy-implicit-startup-sidecar"],
+      compat: [],
     });
   });
 
@@ -326,9 +326,9 @@ describe("installed plugin index", () => {
     expect(records[0]).toMatchObject({
       pluginId: "stale-record",
       startup: {
-        sidecar: true,
+        sidecar: false,
       },
-      compat: ["legacy-implicit-startup-sidecar"],
+      compat: [],
     });
   });
 
@@ -394,7 +394,7 @@ describe("installed plugin index", () => {
     expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
   });
 
-  it("does not classify or tag explicit startup opt-outs as deprecated implicit sidecars", () => {
+  it("keeps explicit startup opt-outs out of startup sidecars", () => {
     const rootDir = makeTempDir();
     writeRuntimeEntry(rootDir);
     writePluginManifest(rootDir, {
@@ -787,6 +787,45 @@ describe("installed plugin index", () => {
         resolvedName: "@vendor/demo-plugin",
         resolvedVersion: "1.2.3",
         integrity: "sha512-installed",
+      },
+    });
+  });
+
+  it("discovers installed plugin packages from persisted install records", async () => {
+    const fixture = createRichPluginFixture();
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        demo: {
+          source: "git",
+          spec: "git:file:///tmp/demo.git@abc123",
+          installPath: fixture.rootDir,
+          gitUrl: "file:///tmp/demo.git",
+          gitCommit: "abc123",
+        },
+      },
+      { stateDir },
+    );
+
+    const index = loadInstalledPluginIndex({
+      env: hermeticEnv({
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    });
+
+    expect(index.plugins).toHaveLength(1);
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "demo",
+      origin: "global",
+      rootDir: fs.realpathSync.native(fixture.rootDir),
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
+        source: "git",
+        installPath: fixture.rootDir,
+        gitCommit: "abc123",
       },
     });
   });

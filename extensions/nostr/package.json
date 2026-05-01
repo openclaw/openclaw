@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "nostr-tools": "^2.23.3",
-    "zod": "^4.3.6"
+    "zod": "^4.4.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
@@ -54,9 +54,6 @@
     },
     "build": {
       "openclawVersion": "2026.4.25"
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
     },
     "release": {
       "publishToClawHub": true,

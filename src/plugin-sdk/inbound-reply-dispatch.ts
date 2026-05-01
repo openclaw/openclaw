@@ -11,9 +11,11 @@ import {
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
+  runChannelTurn,
   runPreparedChannelTurn,
 } from "../channels/turn/kernel.js";
-import type { PreparedChannelTurn } from "../channels/turn/types.js";
+import type { PreparedChannelTurn, RunChannelTurnParams } from "../channels/turn/types.js";
+export type { ChannelTurnRecordOptions } from "../channels/turn/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
@@ -31,6 +33,13 @@ export async function runPreparedInboundReplyTurn<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ) {
   return await runPreparedChannelTurn(params);
+}
+
+/** Run a channel turn through shared ingest, record, dispatch, and finalize ordering. */
+export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
+  params: RunChannelTurnParams<TRaw, TDispatchResult>,
+) {
+  return await runChannelTurn(params);
 }
 
 export {

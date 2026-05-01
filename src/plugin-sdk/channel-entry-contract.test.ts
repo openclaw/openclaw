@@ -24,6 +24,7 @@ function createApi(registrationMode: PluginRegistrationMode): OpenClawPluginApi 
     registrationMode,
     runtime: { registrationMode } as unknown as PluginRuntime,
     registerChannel: vi.fn(),
+    registerTool: vi.fn(),
   } as unknown as OpenClawPluginApi;
 }
 
@@ -90,6 +91,46 @@ function createBundledChannelEntry(params: {
 }
 
 describe("defineBundledChannelEntry", () => {
+  it("runs tool registrations without channel sidecar hydration during tool discovery", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-entry-tools-"));
+    tempDirs.push(tempRoot);
+    const runtimeMarker = path.join(tempRoot, "runtime-loaded");
+    const pluginId = "bundled-tool-discovery";
+    const { importerPath } = writeBundledChannelFixture({
+      pluginRoot: path.join(tempRoot, "dist", "extensions", pluginId),
+      pluginId,
+      runtimeMarker,
+    });
+    const registerCliMetadata = vi.fn<(api: OpenClawPluginApi) => void>();
+    const registerFull = vi.fn<(api: OpenClawPluginApi) => void>((api) => {
+      api.registerTool(
+        {
+          name: "channel_tool",
+          label: "Channel Tool",
+          description: "channel tool",
+          parameters: {},
+          execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+        },
+        { name: "channel_tool" },
+      );
+    });
+    const entry = createBundledChannelEntry({
+      importerPath,
+      pluginId,
+      registerCliMetadata,
+      registerFull,
+    });
+
+    const api = createApi("tool-discovery");
+    entry.register(api);
+
+    expect(api.registerChannel).not.toHaveBeenCalled();
+    expect(registerCliMetadata).not.toHaveBeenCalled();
+    expect(registerFull).toHaveBeenCalledWith(api);
+    expect(api.registerTool).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(runtimeMarker)).toBe(false);
+  });
+
   it("loads runtime sidecars during discovery registration", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-entry-runtime-"));
     tempDirs.push(tempRoot);
@@ -173,7 +214,7 @@ async function expectBuiltArtifactNodeRequireFastPath(
     const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.cjs");
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
     // CommonJS so `nodeRequire` succeeds without falling back to jiti, even
-    // after runtime-deps mirroring writes a `type: "module"` package boundary.
+    // inside built plugin artifacts with a `type: "module"` package boundary.
     fs.writeFileSync(sidecarPath, "module.exports = { sentinel: 7 };\n", "utf8");
 
     expect(
@@ -296,7 +337,6 @@ describe("loadBundledEntryExportSync", () => {
             specifier: "./helper.ts",
             exportName: "load",
           },
-          { installRuntimeDeps: false },
         ),
       ).toBe(42);
       expect(jitiLoad).toHaveBeenCalledWith(
@@ -357,9 +397,9 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("emits non-negative jiti sub-step timings on the built-artifact load path", async () => {
-    // Built artifacts prefer `nodeRequire`, but runtime-deps staging can still
-    // make Node reject a sidecar and fall back through jiti. The profile line
-    // must never report negative or missing jiti sub-step timings either way.
+    // Built artifacts prefer `nodeRequire`, but Node can still reject a sidecar
+    // and fall back through jiti. The profile line must never report negative
+    // or missing jiti sub-step timings either way.
     await expectBuiltArtifactNodeRequireFastPath("built-artifact-profile-fast-path");
   });
 

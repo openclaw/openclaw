@@ -498,8 +498,8 @@ openclaw infer image generate \
 ```
 
 This covers CLI argument parsing, config/default-agent resolution, bundled
-plugin activation, on-demand bundled runtime-dependency repair, the shared
-image-generation runtime, and the live provider request.
+plugin activation, the shared image-generation runtime, and the live provider
+request. Plugin dependencies are expected to be present before runtime load.
 
 ## Music generation live
 

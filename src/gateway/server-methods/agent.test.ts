@@ -12,6 +12,7 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
 import { agentHandlers } from "./agent.js";
 import { chatHandlers } from "./chat.js";
 import { expectSubagentFollowupReactivation } from "./subagent-followup.test-helpers.js";
@@ -25,6 +26,7 @@ const mocks = vi.hoisted(() => ({
   updateSessionStore: vi.fn(),
   agentCommand: vi.fn(),
   registerAgentRunContext: vi.fn(),
+  emitAgentEvent: vi.fn(),
   performGatewaySessionReset: vi.fn(),
   getLatestSubagentRunByChildSessionKey: vi.fn(),
   replaceSubagentRunAfterSteer: vi.fn(),
@@ -102,6 +104,7 @@ vi.mock("../../auto-reply/reply/session-reset-prompt.js", async () => {
 });
 
 vi.mock("../../infra/agent-events.js", () => ({
+  emitAgentEvent: mocks.emitAgentEvent,
   registerAgentRunContext: mocks.registerAgentRunContext,
   onAgentEvent: vi.fn(),
 }));
@@ -1107,6 +1110,38 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("rejects strict delivery with a missing target before dispatching the agent", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "strict missing delivery target",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: "telegram",
+        bestEffortDeliver: false,
+        idempotencyKey: "test-strict-delivery-missing-target",
+      },
+      {
+        reqId: "strict-delivery-missing-target",
+        respond,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("requires target"),
+      }),
+    );
+  });
+
   it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
@@ -1175,6 +1210,21 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("invalid agent params"),
       }),
     );
+  });
+
+  it("forwards one-shot bundle MCP cleanup from agent RPC into the runner", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "cleanup probe",
+      sessionKey: "agent:main:subagent:cleanup-probe",
+      idempotencyKey: "test-idem-agent-cleanup-bundle-mcp",
+      cleanupBundleMcpOnRunEnd: true,
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it.each(
@@ -1449,6 +1499,7 @@ describe("gateway agent handler", () => {
         payloads: [],
         meta: { durationMs: 100, aborted: true },
       });
+      const context = makeContext();
 
       await invokeAgent(
         {
@@ -1456,7 +1507,7 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:main",
           idempotencyKey: "task-registry-agent-run-aborted",
         },
-        { reqId: "task-registry-agent-run-aborted" },
+        { context, reqId: "task-registry-agent-run-aborted" },
       );
 
       await waitForAssertion(() => {
@@ -1465,6 +1516,11 @@ describe("gateway agent handler", () => {
           childSessionKey: "agent:main:main",
           status: "timed_out",
           terminalSummary: "aborted",
+        });
+        expect(context.dedupe.get("agent:task-registry-agent-run-aborted")?.payload).toMatchObject({
+          runId: "task-registry-agent-run-aborted",
+          status: "timeout",
+          summary: "aborted",
         });
       });
     });
@@ -1478,6 +1534,7 @@ describe("gateway agent handler", () => {
       const abortError = new Error("This operation was aborted");
       abortError.name = "AbortError";
       mocks.agentCommand.mockRejectedValueOnce(abortError);
+      const context = makeContext();
 
       await invokeAgent(
         {
@@ -1485,7 +1542,7 @@ describe("gateway agent handler", () => {
           sessionKey: "agent:main:main",
           idempotencyKey: "task-registry-agent-run-abort-error",
         },
-        { reqId: "task-registry-agent-run-abort-error" },
+        { context, reqId: "task-registry-agent-run-abort-error" },
       );
 
       await waitForAssertion(() => {
@@ -1494,6 +1551,13 @@ describe("gateway agent handler", () => {
           childSessionKey: "agent:main:main",
           status: "timed_out",
           error: "AbortError: This operation was aborted",
+        });
+        expect(
+          context.dedupe.get("agent:task-registry-agent-run-abort-error")?.payload,
+        ).toMatchObject({
+          runId: "task-registry-agent-run-abort-error",
+          status: "timeout",
+          summary: "aborted",
         });
       });
     });
@@ -2892,6 +2956,69 @@ describe("gateway agent handler chat.abort integration", () => {
     );
     expect(capturedSignal?.aborted).toBe(true);
     expect(context.chatAbortControllers.has(runId)).toBe(false);
+  });
+
+  it("keeps the sessions.abort wait snapshot after late agent completion", async () => {
+    prime();
+    let capturedSignal: AbortSignal | undefined;
+    let resolveRun:
+      | ((value: { payloads: Array<{ text: string }>; meta: { durationMs: number } }) => void)
+      | undefined;
+    mocks.agentCommand.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      capturedSignal = opts.abortSignal;
+      return new Promise((resolve) => {
+        resolveRun = resolve;
+      });
+    });
+
+    const context = makeContext();
+    const runId = "idem-abort-snapshot-wins";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId },
+    );
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    expect(capturedSignal?.aborted).toBe(true);
+
+    setGatewayDedupeEntry({
+      dedupe: context.dedupe,
+      key: `agent:${runId}`,
+      entry: {
+        ts: 100,
+        ok: true,
+        payload: {
+          runId,
+          status: "timeout",
+          stopReason: "rpc",
+          endedAt: 100,
+        },
+      },
+    });
+
+    resolveRun?.({ payloads: [{ text: "late ok" }], meta: { durationMs: 1 } });
+
+    await waitForAssertion(() => {
+      expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
+        runId,
+        status: "timeout",
+        stopReason: "rpc",
+        endedAt: 100,
+      });
+    });
   });
 
   it("chat.abort without runId aborts the active agent run for the sessionKey", async () => {

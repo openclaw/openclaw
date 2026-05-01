@@ -346,6 +346,10 @@ const SOURCE_TEST_TARGETS = new Map([
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
   ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
+  [
+    "src/commitments/model-selection.runtime.ts",
+    ["src/commitments/runtime.test.ts", "src/agents/model-selection.test.ts"],
+  ],
   ["src/agents/live-model-turn-probes.ts", ["src/agents/live-model-turn-probes.test.ts"]],
   [
     "src/plugins/provider-auth-choice.ts",
@@ -508,13 +512,7 @@ function toScopedIncludePattern(arg, cwd) {
 }
 
 function isSkippedImportGraphDirectory(name) {
-  return (
-    name === ".git" ||
-    name === "dist" ||
-    name === "node_modules" ||
-    name === "vendor" ||
-    name.startsWith(".openclaw-runtime-deps")
-  );
+  return name === ".git" || name === "dist" || name === "node_modules" || name === "vendor";
 }
 
 function listImportGraphFiles(cwd, directory, files = []) {

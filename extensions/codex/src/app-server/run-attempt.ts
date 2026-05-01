@@ -44,7 +44,11 @@ import {
 } from "./client-factory.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -87,7 +91,18 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
+const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
+const CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES = [
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "update_plan",
+] as const;
+const LOG_FIELD_MAX_LENGTH = 160;
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
@@ -129,6 +144,93 @@ type CodexSteeringQueueOptions = {
   steeringMode?: "all" | "one-at-a-time";
   debounceMs?: number;
 };
+
+type DynamicToolTimeoutDetails = {
+  responseMessage: string;
+  consoleMessage: string;
+  meta: Record<string, unknown>;
+};
+
+function normalizeLogField(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value
+    .replaceAll(String.fromCharCode(27), " ")
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .replaceAll("\t", " ")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > LOG_FIELD_MAX_LENGTH
+    ? `${normalized.slice(0, LOG_FIELD_MAX_LENGTH - 3)}...`
+    : normalized;
+}
+
+function readNumericTimeoutMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, Math.floor(parsed));
+    }
+  }
+  return undefined;
+}
+
+function formatDynamicToolTimeoutDetails(params: {
+  call: CodexDynamicToolCallParams;
+  timeoutMs: number;
+}): DynamicToolTimeoutDetails {
+  const tool = normalizeLogField(params.call.tool) ?? "unknown";
+  const baseMeta: Record<string, unknown> = {
+    tool: params.call.tool,
+    toolCallId: params.call.callId,
+    threadId: params.call.threadId,
+    turnId: params.call.turnId,
+    timeoutMs: params.timeoutMs,
+    timeoutKind: "codex_dynamic_tool_rpc",
+  };
+
+  if (tool !== "process" || !isJsonObject(params.call.arguments)) {
+    return {
+      responseMessage: `OpenClaw dynamic tool call timed out after ${params.timeoutMs}ms while running tool ${tool}.`,
+      consoleMessage: `codex dynamic tool timeout: tool=${tool} toolTimeoutMs=${params.timeoutMs}; per-tool-call watchdog, not session idle`,
+      meta: baseMeta,
+    };
+  }
+
+  const action = normalizeLogField(params.call.arguments.action);
+  const sessionId = normalizeLogField(params.call.arguments.sessionId);
+  const requestedTimeoutMs = readNumericTimeoutMs(params.call.arguments.timeout);
+  const actionPart = action ? ` action=${action}` : "";
+  const sessionPart = sessionId ? ` sessionId=${sessionId}` : "";
+  const requestedPart =
+    requestedTimeoutMs === undefined ? "" : ` requestedWaitMs=${requestedTimeoutMs}`;
+  const retryHint =
+    action === "poll"
+      ? "; repeated lines usually mean process-poll retry churn, not model progress"
+      : "";
+  const responseTarget =
+    action || sessionId
+      ? ` while waiting for process${actionPart}${sessionPart}`
+      : " while waiting for the process tool";
+
+  return {
+    responseMessage: `OpenClaw dynamic tool call timed out after ${params.timeoutMs}ms${responseTarget}. This is a tool RPC timeout, not a session idle timeout.`,
+    consoleMessage: `codex process tool timeout:${actionPart}${sessionPart} toolTimeoutMs=${params.timeoutMs}${requestedPart}; per-tool-call watchdog, not session idle${retryHint}`,
+    meta: {
+      ...baseMeta,
+      processAction: action,
+      processSessionId: sessionId,
+      processRequestedTimeoutMs: requestedTimeoutMs,
+    },
+  };
+}
 
 function createCodexSteeringQueue(params: {
   client: CodexAppServerClient;
@@ -226,10 +328,12 @@ export async function runCodexAppServerAttempt(
       hookTimeoutSec?: number;
     };
     turnCompletionIdleTimeoutMs?: number;
+    turnTerminalIdleTimeoutMs?: number;
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
+  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
@@ -279,6 +383,7 @@ export async function runCodexAppServerAttempt(
     sandbox,
     runAbortController,
     sessionAgentId,
+    pluginConfig,
     onYieldDetected: () => {
       yieldDetected = true;
     },
@@ -471,8 +576,13 @@ export async function runCodexAppServerAttempt(
   const turnCompletionIdleTimeoutMs = resolveCodexTurnCompletionIdleTimeoutMs(
     options.turnCompletionIdleTimeoutMs,
   );
+  const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
+    options.turnTerminalIdleTimeoutMs,
+  );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
+  let turnTerminalIdleTimer: ReturnType<typeof setTimeout> | undefined;
+  let turnTerminalIdleWatchArmed = false;
   let turnCompletionLastActivityAt = Date.now();
   let turnCompletionLastActivityReason = "startup";
   let activeAppServerTurnRequests = 0;
@@ -481,6 +591,13 @@ export async function runCodexAppServerAttempt(
     if (turnCompletionIdleTimer) {
       clearTimeout(turnCompletionIdleTimer);
       turnCompletionIdleTimer = undefined;
+    }
+  };
+
+  const clearTurnTerminalIdleTimer = () => {
+    if (turnTerminalIdleTimer) {
+      clearTimeout(turnTerminalIdleTimer);
+      turnTerminalIdleTimer = undefined;
     }
   };
 
@@ -520,6 +637,42 @@ export async function runCodexAppServerAttempt(
     runAbortController.abort("turn_completion_idle_timeout");
   };
 
+  const fireTurnTerminalIdleTimeout = () => {
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnTerminalIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    if (idleMs < turnTerminalIdleTimeoutMs) {
+      scheduleTurnTerminalIdleWatch();
+      return;
+    }
+    timedOut = true;
+    turnCompletionIdleTimedOut = true;
+    turnCompletionIdleTimeoutMessage =
+      "codex app-server turn idle timed out waiting for turn/completed";
+    projector?.markTimedOut();
+    trajectoryRecorder?.recordEvent("turn.terminal_idle_timeout", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnTerminalIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+    });
+    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for terminal event", {
+      threadId: thread.threadId,
+      turnId,
+      idleMs,
+      timeoutMs: turnTerminalIdleTimeoutMs,
+      lastActivityReason: turnCompletionLastActivityReason,
+    });
+    runAbortController.abort("turn_terminal_idle_timeout");
+  };
+
   function scheduleTurnCompletionIdleWatch() {
     clearTurnCompletionIdleTimer();
     if (
@@ -536,6 +689,22 @@ export async function runCodexAppServerAttempt(
     turnCompletionIdleTimer.unref?.();
   }
 
+  function scheduleTurnTerminalIdleWatch() {
+    clearTurnTerminalIdleTimer();
+    if (
+      completed ||
+      runAbortController.signal.aborted ||
+      !turnTerminalIdleWatchArmed ||
+      activeAppServerTurnRequests > 0
+    ) {
+      return;
+    }
+    const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
+    const delayMs = Math.max(1, turnTerminalIdleTimeoutMs - elapsedMs);
+    turnTerminalIdleTimer = setTimeout(fireTurnTerminalIdleTimeout, delayMs);
+    turnTerminalIdleTimer.unref?.();
+  }
+
   const touchTurnCompletionActivity = (reason: string, options?: { arm?: boolean }) => {
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
@@ -543,6 +712,7 @@ export async function runCodexAppServerAttempt(
       turnCompletionIdleWatchArmed = true;
     }
     scheduleTurnCompletionIdleWatch();
+    scheduleTurnTerminalIdleWatch();
   };
 
   const emitLifecycleStart = () => {
@@ -595,6 +765,7 @@ export async function runCodexAppServerAttempt(
         }
         completed = true;
         clearTurnCompletionIdleTimer();
+        clearTurnTerminalIdleTimer();
         resolveCompletion?.();
       }
     }
@@ -839,6 +1010,7 @@ export async function runCodexAppServerAttempt(
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
+  turnTerminalIdleWatchArmed = true;
   touchTurnCompletionActivity("turn:start");
 
   const timeout = setTimeout(
@@ -1005,6 +1177,7 @@ export async function runCodexAppServerAttempt(
     userInputBridge?.cancelPending();
     clearTimeout(timeout);
     clearTurnCompletionIdleTimer();
+    clearTurnTerminalIdleTimer();
     notificationCleanup();
     requestCleanup();
     nativeHookRelay?.unregister();
@@ -1042,17 +1215,14 @@ async function handleDynamicToolCallWithTimeout(params: {
     const timeoutMs = Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_TIMEOUT_MS, params.timeoutMs));
     timeout = setTimeout(() => {
       timedOut = true;
-      const message = `OpenClaw dynamic tool call timed out after ${timeoutMs}ms.`;
-      controller.abort(new Error(message));
+      const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
+      controller.abort(new Error(timeoutDetails.responseMessage));
       params.onTimeout?.();
       embeddedAgentLog.warn("codex dynamic tool call timed out", {
-        tool: params.call.tool,
-        toolCallId: params.call.callId,
-        threadId: params.call.threadId,
-        turnId: params.call.turnId,
-        timeoutMs,
+        ...timeoutDetails.meta,
+        consoleMessage: timeoutDetails.consoleMessage,
       });
-      resolve(failedDynamicToolResponse(message));
+      resolve(failedDynamicToolResponse(timeoutDetails.responseMessage));
     }, timeoutMs);
     timeout.unref?.();
   });
@@ -1162,6 +1332,7 @@ type DynamicToolBuildParams = {
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
   sessionAgentId: string | undefined;
+  pluginConfig: CodexPluginConfig;
   onYieldDetected: () => void;
 };
 
@@ -1217,6 +1388,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
       workspaceDir: input.effectiveWorkspace,
     }),
+    suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
@@ -1226,6 +1398,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
+    enableHeartbeatTool: params.trigger === "heartbeat",
+    forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
       input.onYieldDetected();
       emitCodexAppServerEvent(params, {
@@ -1235,7 +1409,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const visionFilteredTools = filterToolsForVisionInputs(allTools, {
+  const profiledTools = applyCodexDynamicToolProfile(allTools, input.pluginConfig);
+  const visionFilteredTools = filterToolsForVisionInputs(profiledTools, {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
@@ -1254,6 +1429,26 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function applyCodexDynamicToolProfile<T extends { name: string }>(
+  tools: T[],
+  config: CodexPluginConfig,
+): T[] {
+  const excludes = new Set<string>();
+  const profile = config.codexDynamicToolsProfile ?? "native-first";
+  if (profile === "native-first") {
+    for (const name of CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES) {
+      excludes.add(name);
+    }
+  }
+  for (const name of config.codexDynamicToolsExclude ?? []) {
+    const trimmed = name.trim();
+    if (trimmed) {
+      excludes.add(trimmed);
+    }
+  }
+  return excludes.size === 0 ? tools : tools.filter((tool) => !excludes.has(tool.name));
 }
 
 async function withCodexStartupTimeout<T>(params: {
@@ -1301,6 +1496,16 @@ function resolveCodexTurnCompletionIdleTimeoutMs(value: number | undefined): num
   }
   if (!Number.isFinite(value)) {
     return CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(value));
+}
+
+function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
+  if (value === undefined) {
+    return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
+  }
+  if (!Number.isFinite(value)) {
+    return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
   }
   return Math.max(1, Math.floor(value));
 }
@@ -1417,7 +1622,9 @@ function handleApprovalRequest(params: {
 export const __testing = {
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
+  CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
+  applyCodexDynamicToolProfile,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {

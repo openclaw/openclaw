@@ -134,6 +134,26 @@ function createTestRuntime(overrides?: {
         recordInboundSession,
       },
       turn: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+          const input = await params.adapter.ingest(params.raw);
+          if (!input) {
+            return {
+              admission: { kind: "drop" as const, reason: "ingest-null" },
+              dispatched: false,
+            };
+          }
+          const eventClass = {
+            kind: "message" as const,
+            canStartAgentTurn: true,
+          };
+          const turn = await params.adapter.resolveTurn(input, eventClass, {});
+          if (!("runDispatch" in turn)) {
+            throw new Error("feishu comment test runtime only supports prepared turns");
+          }
+          return await runPrepared(
+            turn as Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0],
+          );
+        }) as unknown as PluginRuntime["channel"]["turn"]["run"],
         runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
       },
       pairing: {

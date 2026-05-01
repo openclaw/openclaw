@@ -1,0 +1,103 @@
+---
+summary: "How OpenClaw installs plugin packages and resolves plugin dependencies"
+read_when:
+  - You are debugging plugin package installs
+  - You are changing plugin startup, doctor, or package-manager install behavior
+  - You are maintaining packaged OpenClaw installs or bundled plugin manifests
+title: "Plugin dependency resolution"
+sidebarTitle: "Dependencies"
+---
+
+# Plugin dependency resolution
+
+OpenClaw keeps plugin dependency work at install/update time. Runtime loading
+does not run package managers, repair dependency trees, or mutate the OpenClaw
+package directory.
+
+## Responsibility split
+
+Plugin packages own their dependency graph:
+
+- runtime dependencies live in the plugin package `dependencies` or
+  `optionalDependencies`
+- SDK/core imports are peer or supplied OpenClaw imports
+- local development plugins bring their own already-installed dependencies
+- npm and git plugins are installed into OpenClaw-owned package roots
+
+OpenClaw owns only the plugin lifecycle:
+
+- discover the plugin source
+- install or update the package when explicitly requested
+- record the install metadata
+- load the plugin entrypoint
+- fail with an actionable error when dependencies are missing
+
+## Install roots
+
+OpenClaw uses stable per-source roots:
+
+- npm packages install under `~/.openclaw/npm`
+- git packages clone under `~/.openclaw/git`
+- local/path/archive installs are copied or referenced without dependency repair
+
+npm installs run in the npm root with:
+
+```bash
+npm install --prefix ~/.openclaw/npm <spec> --omit=dev --ignore-scripts --no-audit --no-fund
+```
+
+git installs clone or refresh the repository, then run:
+
+```bash
+npm install --omit=dev --ignore-scripts --no-audit --no-fund
+```
+
+The installed plugin then loads from that package directory, so package-local
+`node_modules` resolution works the same way it does for a normal Node package.
+
+## Local plugins
+
+Local plugins are treated as developer-controlled directories. OpenClaw does not
+run `npm install`, `pnpm install`, or dependency repair for them. If a local
+plugin has dependencies, install them in that plugin before loading it.
+
+TypeScript local plugins can use the emergency Jiti path. Packaged JavaScript
+plugins load through native import/require instead of Jiti.
+
+## Startup and reload
+
+Gateway startup and config reload never install plugin dependencies. They read
+the plugin install records, compute the entrypoint, and load it.
+
+If a dependency is missing at runtime, the plugin fails to load and the error
+should point the operator to an explicit fix:
+
+```bash
+openclaw plugins update <id>
+openclaw plugins install <source>
+openclaw doctor --fix
+```
+
+`doctor --fix` can clean legacy OpenClaw-generated dependency state and install
+configured downloadable plugins that are missing from the local install records.
+It does not repair dependencies for an already-installed local plugin.
+
+## Bundled plugins
+
+Lightweight and core-critical bundled plugins are shipped as part of OpenClaw.
+They should either have no heavy runtime dependency tree or be moved out to a
+downloadable package on ClawHub/npm.
+
+Bundled plugin manifests must not request dependency staging. Large or optional
+plugin functionality should be packaged as a normal plugin and installed through
+the same npm/git/ClawHub path as third-party plugins.
+
+## Legacy cleanup
+
+Older OpenClaw versions generated bundled-plugin dependency roots at startup or
+during doctor repair. Current doctor cleanup removes those stale directories and
+symlinks when `--fix` is used, including old `plugin-runtime-deps` roots,
+`.openclaw-runtime-deps*` manifests, generated plugin `node_modules`, install
+stage directories, and package-local pnpm stores.
+
+These paths are legacy debris only. New installs should not create them.

@@ -1,10 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
@@ -93,6 +91,19 @@ function collectBundledChannelEntrypointOffenders(
   return offenders;
 }
 
+function listSourceBundledPluginRoots(): string[] {
+  const extensionsDir = path.resolve("extensions");
+  return fs
+    .readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(extensionsDir, entry.name))
+    .filter(
+      (entryPath) =>
+        fs.existsSync(path.join(entryPath, "package.json")) ||
+        fs.existsSync(path.join(entryPath, "openclaw.plugin.json")),
+    );
+}
+
 afterEach(() => {
   vi.resetModules();
   vi.doUnmock("../../plugins/bundled-channel-runtime.js");
@@ -105,9 +116,7 @@ afterEach(() => {
 });
 
 describe("bundled channel entry shape guards", () => {
-  const bundledPluginRoots = loadPluginManifestRegistry({ config: {} })
-    .plugins.filter((plugin) => plugin.origin === "bundled")
-    .map((plugin) => plugin.rootDir);
+  const bundledPluginRoots = listSourceBundledPluginRoots();
 
   it("treats missing bundled discovery results as empty", async () => {
     vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
@@ -565,190 +574,6 @@ describe("bundled channel entry shape guards", () => {
       delete testGlobal.__bundledSetupOnlyPluginLoaded;
     }
   });
-
-  it("does not load bundled setup entries through external staged runtime deps during discovery", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-setup-runtime-deps-"));
-    const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-stage-"));
-    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    const previousPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
-    const pluginDir = path.join(root, "dist", "extensions", "alpha");
-    const testGlobal = globalThis as typeof globalThis & {
-      __bundledSetupRuntimeDepMarker?: string;
-    };
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/alpha",
-        version: "2026.4.21",
-        type: "module",
-        dependencies: {
-          "alpha-runtime-dep": "1.0.0",
-        },
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "setup-entry.js"),
-      [
-        "import { marker } from 'alpha-runtime-dep';",
-        "globalThis.__bundledSetupRuntimeDepMarker = marker;",
-        "export default {",
-        "  kind: 'bundled-channel-setup-entry',",
-        "  loadSetupPlugin() {",
-        "    return { id: 'alpha', meta: { label: marker }, config: {} };",
-        "  },",
-        "};",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageRoot;
-    const { resolveBundledRuntimeDependencyInstallRoot } =
-      await import("../../plugins/bundled-runtime-deps.js");
-    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginDir);
-    const depRoot = path.join(installRoot, "node_modules", "alpha-runtime-dep");
-    fs.mkdirSync(depRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(depRoot, "package.json"),
-      JSON.stringify({
-        name: "alpha-runtime-dep",
-        version: "1.0.0",
-        type: "module",
-        main: "index.js",
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(path.join(depRoot, "index.js"), "export const marker = 'staged-alpha';\n");
-
-    mockAlphaDistExtensionRuntime();
-
-    try {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
-
-      const bundled = await importFreshModule<typeof import("./bundled.js")>(
-        import.meta.url,
-        "./bundled.js?scope=bundled-setup-runtime-deps",
-      );
-
-      expect(bundled.getBundledChannelSetupPlugin("alpha")).toBeUndefined();
-      expect(testGlobal.__bundledSetupRuntimeDepMarker).toBeUndefined();
-    } finally {
-      restoreBundledPluginsDir(previousBundledPluginsDir);
-      if (previousPluginStageDir === undefined) {
-        delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
-      } else {
-        process.env.OPENCLAW_PLUGIN_STAGE_DIR = previousPluginStageDir;
-      }
-      fs.rmSync(root, { recursive: true, force: true });
-      fs.rmSync(stageRoot, { recursive: true, force: true });
-      delete testGlobal.__bundledSetupRuntimeDepMarker;
-    }
-  });
-
-  it("does not load bundled runtime entries through external staged runtime deps during discovery", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-runtime-deps-"));
-    const stageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-stage-"));
-    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    const previousPluginStageDir = process.env.OPENCLAW_PLUGIN_STAGE_DIR;
-    const pluginDir = path.join(root, "dist", "extensions", "alpha");
-    const testGlobal = globalThis as typeof globalThis & {
-      __bundledRuntimeDepMarker?: string;
-    };
-    fs.mkdirSync(pluginDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/alpha",
-        version: "2026.4.21",
-        type: "module",
-        dependencies: {
-          "alpha-runtime-dep": "1.0.0",
-        },
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "plugin.js"),
-      [
-        "import { marker } from 'alpha-runtime-dep';",
-        "globalThis.__bundledRuntimeDepMarker = marker;",
-        "export default { id: 'alpha', meta: { label: marker }, config: {} };",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "index.js"),
-      [
-        `import { defineBundledChannelEntry } from ${JSON.stringify(pathToFileURL(path.resolve("src/plugin-sdk/channel-entry-contract.ts")).href)};`,
-        "export default defineBundledChannelEntry({",
-        "  id: 'alpha',",
-        "  name: 'Alpha',",
-        "  description: 'Alpha',",
-        "  importMetaUrl: import.meta.url,",
-        "  features: { accountInspect: true },",
-        "  plugin: { specifier: './plugin.js' },",
-        "});",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
-
-    process.env.OPENCLAW_PLUGIN_STAGE_DIR = stageRoot;
-    const { resolveBundledRuntimeDependencyInstallRoot } =
-      await import("../../plugins/bundled-runtime-deps.js");
-    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginDir);
-    const depRoot = path.join(installRoot, "node_modules", "alpha-runtime-dep");
-    fs.mkdirSync(depRoot, { recursive: true });
-    fs.writeFileSync(
-      path.join(depRoot, "package.json"),
-      JSON.stringify({
-        name: "alpha-runtime-dep",
-        version: "1.0.0",
-        type: "module",
-        main: "index.js",
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(path.join(depRoot, "index.js"), "export const marker = 'staged-alpha';\n");
-
-    mockAlphaDistExtensionRuntime();
-
-    try {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
-
-      const bundled = await importFreshModule<typeof import("./bundled.js")>(
-        import.meta.url,
-        "./bundled.js?scope=bundled-runtime-deps",
-      );
-
-      expect(bundled.hasBundledChannelEntryFeature("alpha", "accountInspect")).toBe(true);
-      expect(testGlobal.__bundledRuntimeDepMarker).toBeUndefined();
-    } finally {
-      restoreBundledPluginsDir(previousBundledPluginsDir);
-      if (previousPluginStageDir === undefined) {
-        delete process.env.OPENCLAW_PLUGIN_STAGE_DIR;
-      } else {
-        process.env.OPENCLAW_PLUGIN_STAGE_DIR = previousPluginStageDir;
-      }
-      fs.rmSync(root, { recursive: true, force: true });
-      fs.rmSync(stageRoot, { recursive: true, force: true });
-      delete testGlobal.__bundledRuntimeDepMarker;
-    }
-  });
-
   it("swallows and caches bundled plugin and setup load failures", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-load-failure-"));
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -918,34 +743,6 @@ describe("bundled channel entry shape guards", () => {
         if (usesFeature !== hasHint) {
           offenders.push(`${path.relative(process.cwd(), extensionDir)}:${feature}`);
         }
-      }
-    }
-
-    expect(offenders).toEqual([]);
-  });
-
-  it("keeps staged runtime-dependency setup entries on setup-only plugin barrels", () => {
-    const offenders: string[] = [];
-
-    for (const extensionDir of bundledPluginRoots) {
-      const setupEntryPath = path.join(extensionDir, "setup-entry.ts");
-      const packageJsonPath = path.join(extensionDir, "package.json");
-      if (!fs.existsSync(setupEntryPath) || !fs.existsSync(packageJsonPath)) {
-        continue;
-      }
-      const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
-        openclaw?: {
-          bundle?: {
-            stageRuntimeDependencies?: boolean;
-          };
-        };
-      };
-      if (packageJson.openclaw?.bundle?.stageRuntimeDependencies !== true) {
-        continue;
-      }
-      const setupEntrySource = fs.readFileSync(setupEntryPath, "utf8");
-      if (/specifier:\s*["']\.\/(?:api|channel-plugin-api)\.js["']/u.test(setupEntrySource)) {
-        offenders.push(path.relative(process.cwd(), setupEntryPath));
       }
     }
 

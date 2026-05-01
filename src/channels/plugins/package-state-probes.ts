@@ -5,12 +5,9 @@ import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
+import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import {
-  isJavaScriptModulePath,
-  loadChannelPluginModule,
-  resolveExistingPluginModulePath,
-} from "./module-loader.js";
+import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
 type ChannelPackageStateChecker = (params: {
   cfg: OpenClawConfig;

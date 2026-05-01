@@ -5,6 +5,18 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { selectAgentHarness } from "../../agents/harness/selection.js";
+import {
+  isToolAllowedByPolicies,
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicyForSession,
+} from "../../agents/pi-tools.policy.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../../agents/subagent-capabilities.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -12,6 +24,7 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -77,6 +90,7 @@ import type {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -279,6 +293,42 @@ const createShouldEmitVerboseProgress = (params: {
     return params.fallbackLevel !== "off";
   };
 };
+
+const resolveHarnessSourceVisibleRepliesDefault = (params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  sessionAgentId: string;
+  sessionKey?: string;
+}): "automatic" | "message_tool" | undefined => {
+  if (params.ctx.CommandSource === "native") {
+    return undefined;
+  }
+  try {
+    const provider =
+      normalizeOptionalString(params.entry?.modelProvider) ??
+      normalizeOptionalString(params.ctx.Provider) ??
+      normalizeOptionalString(params.ctx.Surface) ??
+      "";
+    const harness = selectAgentHarness({
+      provider,
+      modelId: normalizeOptionalString(params.entry?.model),
+      config: params.cfg,
+      agentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+      agentHarnessId:
+        normalizeOptionalString(params.entry?.agentHarnessId) ??
+        normalizeOptionalString(params.entry?.agentRuntimeOverride),
+    });
+    return harness.deliveryDefaults?.sourceVisibleReplies;
+  } catch (error) {
+    logVerbose(
+      `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,
+    );
+    return undefined;
+  }
+};
+
 export type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
@@ -593,6 +643,92 @@ export async function dispatchReplyFromConfig(
       undefined,
     chatType: sessionStoreEntry.entry?.chatType,
   });
+  const {
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+  } = resolveEffectiveToolPolicy({
+    config: cfg,
+    sessionKey: acpDispatchSessionKey,
+    agentId: sessionAgentId,
+  });
+  const chatType = normalizeChatType(ctx.ChatType);
+  const configuredVisibleReplies =
+    chatType === "group" || chatType === "channel"
+      ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
+      : cfg.messages?.visibleReplies;
+  const harnessDefaultVisibleReplies =
+    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
+      ? resolveHarnessSourceVisibleRepliesDefault({
+          cfg,
+          ctx,
+          entry: sessionStoreEntry.entry,
+          sessionAgentId,
+          sessionKey: acpDispatchSessionKey,
+        })
+      : undefined;
+  const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
+  const prefersMessageToolDelivery =
+    params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
+    (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
+      ctx.CommandSource !== "native" &&
+      (chatType === "group" || chatType === "channel"
+        ? effectiveVisibleReplies !== "automatic"
+        : effectiveVisibleReplies === "message_tool"));
+  const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
+    ...(profileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
+  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
+    ...(providerProfileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
+  const groupResolution = resolveGroupSessionKey(ctx);
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: ctx.OriginatingChannel,
+    provider: ctx.Provider ?? ctx.Surface,
+  });
+  const groupPolicy = resolveGroupToolPolicy({
+    config: cfg,
+    sessionKey: acpDispatchSessionKey,
+    messageProvider,
+    groupId: groupResolution?.id,
+    groupChannel:
+      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
+    groupSpace: normalizeOptionalString(ctx.GroupSpace),
+    accountId: ctx.AccountId,
+    senderId: normalizeOptionalString(ctx.SenderId),
+    senderName: normalizeOptionalString(ctx.SenderName),
+    senderUsername: normalizeOptionalString(ctx.SenderUsername),
+    senderE164: normalizeOptionalString(ctx.SenderE164),
+  });
+  const subagentStore = resolveSubagentCapabilityStore(acpDispatchSessionKey, { cfg });
+  const subagentPolicy =
+    acpDispatchSessionKey &&
+    isSubagentEnvelopeSession(acpDispatchSessionKey, {
+      cfg,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(cfg, acpDispatchSessionKey, {
+          store: subagentStore,
+        })
+      : undefined;
+  const messageToolAvailable = isToolAllowedByPolicies("message", [
+    profilePolicy,
+    providerProfilePolicy,
+    globalProviderPolicy,
+    agentProviderPolicy,
+    globalPolicy,
+    agentPolicy,
+    groupPolicy,
+    subagentPolicy,
+  ]);
   const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     cfg,
     ctx,
@@ -601,6 +737,8 @@ export async function dispatchReplyFromConfig(
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
     shouldSuppressTyping,
+    messageToolAvailable,
+    defaultVisibleReplies: harnessDefaultVisibleReplies,
   });
   const {
     sourceReplyDeliveryMode,

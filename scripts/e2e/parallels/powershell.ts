@@ -1,3 +1,9 @@
+import {
+  configPathMapKey,
+  providerIdFromModelId,
+  providerTimeoutConfigJson,
+} from "./provider-auth.ts";
+
 export function psSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
 }
@@ -10,6 +16,37 @@ export function encodePowerShell(script: string): string {
   return Buffer.from(`$ProgressPreference = 'SilentlyContinue'\n${script}`, "utf16le").toString(
     "base64",
   );
+}
+
+export function windowsModelProviderTimeoutScript(modelId: string): string {
+  const providerId = providerIdFromModelId(modelId);
+  const configJson = providerTimeoutConfigJson(modelId, "windows");
+  if (!providerId || !configJson) {
+    return "";
+  }
+  const batchJson = JSON.stringify([
+    {
+      path: `models.providers.${providerId}`,
+      value: JSON.parse(configJson) as unknown,
+    },
+    {
+      path: `agents.defaults.models${configPathMapKey(modelId)}`,
+      value: {
+        alias: "GPT",
+        params: {
+          transport: "sse",
+        },
+      },
+    },
+  ]);
+  return `$providerTimeoutBatchPath = Join-Path ([System.IO.Path]::GetTempPath()) 'openclaw-provider-timeout.batch.json'
+@'
+${batchJson}
+'@ | Set-Content -Path $providerTimeoutBatchPath -Encoding UTF8
+Invoke-OpenClaw config set --batch-file $providerTimeoutBatchPath --strict-json
+$providerTimeoutExit = $LASTEXITCODE
+Remove-Item $providerTimeoutBatchPath -Force -ErrorAction SilentlyContinue
+if ($providerTimeoutExit -ne 0) { throw "model provider timeout config set failed" }`;
 }
 
 export const windowsOpenClawResolver = String.raw`function Resolve-OpenClawCommand {
@@ -55,9 +92,18 @@ export const windowsOpenClawResolver = String.raw`function Resolve-OpenClawComma
 function Invoke-OpenClaw {
   param([Parameter(ValueFromRemainingArguments = $true)][string[]] $OpenClawArgs)
   $command = Resolve-OpenClawCommand
-  if ($command.Kind -eq 'node') {
-    & node.exe $command.Path @OpenClawArgs
-  } else {
-    & $command.Path @OpenClawArgs
+  $previousErrorActionPreference = $ErrorActionPreference
+  $previousNativeErrorActionPreference = $PSNativeCommandUseErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  $PSNativeCommandUseErrorActionPreference = $false
+  try {
+    if ($command.Kind -eq 'node') {
+      & node.exe $command.Path @OpenClawArgs
+    } else {
+      & $command.Path @OpenClawArgs
+    }
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
+    $PSNativeCommandUseErrorActionPreference = $previousNativeErrorActionPreference
   }
 }`;

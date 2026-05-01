@@ -19,7 +19,7 @@ type TransportOutputShape = {
   errorMessage?: string;
 };
 
-export const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 export function sanitizeTransportPayloadText(text: string): string {
   return text.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,

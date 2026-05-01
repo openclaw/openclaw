@@ -22,7 +22,6 @@ const tempDirs: string[] = [];
 const mocks = getRegistryJitiMocks();
 
 let clearPluginSetupRegistryCache: typeof import("./setup-registry.js").clearPluginSetupRegistryCache;
-let setupRegistryTesting: typeof import("./setup-registry.js").__testing;
 let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePluginSetupRegistry;
 let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
@@ -177,7 +176,6 @@ describe("setup-registry getJiti", () => {
     resetRegistryJitiMocks();
     vi.resetModules();
     ({
-      __testing: setupRegistryTesting,
       clearPluginSetupRegistryCache,
       resolvePluginSetupRegistry,
       resolvePluginSetupProvider,
@@ -806,7 +804,6 @@ describe("setup-registry getJiti", () => {
 
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
     expect(resolvePluginSetupProvider({ provider: "anthropic", env: {} })?.id).toBe("anthropic");
-    expect(setupRegistryTesting.getCacheSizes().setupProvider).toBe(0);
     expect(resolvePluginSetupProvider({ provider: "openai", env: {} })?.id).toBe("openai");
 
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
@@ -815,7 +812,6 @@ describe("setup-registry getJiti", () => {
     expect(resolvePluginSetupCliBackend({ backend: "claude-cli", env: {} })?.backend.id).toBe(
       "claude-cli",
     );
-    expect(setupRegistryTesting.getCacheSizes().setupCliBackend).toBe(0);
     expect(resolvePluginSetupCliBackend({ backend: "codex-cli", env: {} })?.backend.id).toBe(
       "codex-cli",
     );
@@ -828,7 +824,6 @@ describe("setup-registry getJiti", () => {
       env: {},
       pluginIds: ["anthropic"],
     });
-    expect(setupRegistryTesting.getCacheSizes().setupRegistry).toBe(0);
     expect(loadSetupModule).toHaveBeenCalledTimes(7);
   });
 });

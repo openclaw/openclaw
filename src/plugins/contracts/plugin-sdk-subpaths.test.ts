@@ -643,6 +643,8 @@ describe("plugin-sdk subpath exports", () => {
       "collectOpenGroupPolicyConfiguredRouteWarnings",
       "resolveControlCommandGate",
       "delegateCompactionToRuntime",
+      "createReplyPrefixContext",
+      "createChannelReplyPipeline",
     ]);
     expectSourceMentions("device-bootstrap", [
       "approveDevicePairing",
@@ -1332,6 +1334,15 @@ describe("plugin-sdk subpath exports", () => {
       expect(typeof mod).toBe("object");
       expect(mod, `subpath ${id} should resolve`).toBeTruthy();
     }
+  });
+
+  it("keeps the Zalouser command-auth compatibility facade importable", async () => {
+    const zalouserSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/zalouser");
+    const commandAuthSdk = await importResolvedPluginSdkSubpath("openclaw/plugin-sdk/command-auth");
+
+    expect(zalouserSdk.resolveSenderCommandAuthorization).toBe(
+      commandAuthSdk.resolveSenderCommandAuthorization,
+    );
   });
 
   it("exports single-provider plugin entry helpers from the dedicated subpath", () => {
