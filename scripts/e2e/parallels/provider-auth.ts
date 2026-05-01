@@ -42,7 +42,7 @@ export function resolveProviderAuth(input: {
       apiKeyEnv: input.apiKeyEnv || "OPENAI_API_KEY",
       authChoice: "openai-api-key",
       authKeyFlag: "openai-api-key",
-      modelId: input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.4",
+      modelId: input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.5",
     },
   };
   const resolved = providerDefaults[input.provider];
@@ -51,6 +51,25 @@ export function resolveProviderAuth(input: {
     die(`${resolved.apiKeyEnv} is required`);
   }
   return { ...resolved, apiKeyValue };
+}
+
+export function resolveWindowsProviderAuth(input: {
+  provider: Provider;
+  apiKeyEnv?: string;
+  modelId?: string;
+}): ProviderAuth {
+  const auth = resolveProviderAuth(input);
+  if (input.provider !== "openai" || input.modelId) {
+    return auth;
+  }
+  const windowsModel = process.env.OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL?.trim();
+  if (windowsModel) {
+    return { ...auth, modelId: windowsModel };
+  }
+  if (process.env.OPENCLAW_PARALLELS_OPENAI_MODEL?.trim()) {
+    return auth;
+  }
+  return { ...auth, modelId: "openai/gpt-4.1-mini" };
 }
 
 export function parseProvider(value: string): Provider {

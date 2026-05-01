@@ -14,7 +14,7 @@ import {
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
-  resolveProviderAuth,
+  resolveWindowsProviderAuth,
   resolveSnapshot,
   run,
   runStreaming,
@@ -33,7 +33,7 @@ import { WindowsGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { encodePowerShell, psArray, psSingleQuote, windowsOpenClawResolver } from "./powershell.ts";
+import { encodePowerShell, psSingleQuote, windowsOpenClawResolver } from "./powershell.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
 
 interface WindowsOptions {
@@ -241,7 +241,7 @@ class WindowsSmoke {
   };
 
   constructor(private options: WindowsOptions) {
-    this.auth = resolveProviderAuth({
+    this.auth = resolveWindowsProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
       provider: options.provider,
@@ -798,6 +798,14 @@ if ((Test-Path $logPath) -or (Test-Path $donePath)) {
 $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps') 'portable-git') ''
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
 where.exe git.exe
+$configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if ($null -eq $config.update) {
+  $config | Add-Member -MemberType NoteProperty -Name update -Value ([pscustomobject]@{})
+}
+$config.update | Add-Member -Force -MemberType NoteProperty -Name channel -Value 'dev'
+$config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$env:OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
 Invoke-OpenClaw update --channel dev --yes --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
@@ -881,23 +889,42 @@ Invoke-OpenClaw models set ${psSingleQuote(this.auth.modelId)}
 if ($LASTEXITCODE -ne 0) { throw "models set failed" }
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
+Invoke-OpenClaw config set tools.profile minimal
+if ($LASTEXITCODE -ne 0) { throw "tools profile config set failed" }
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
-$args = ${psArray([
-        "agent",
-        "--local",
-        "--agent",
-        "main",
-        "--session-id",
-        "parallels-windows-smoke",
-        "--message",
-        "Reply with exact ASCII text OK only.",
-        "--json",
-      ])}
-$output = Invoke-OpenClaw @args 2>&1
-if ($null -ne $output) { $output | ForEach-Object { $_ } }
-if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
-if (($output | Out-String) -notmatch '"finalAssistant(Raw|Visible)Text":\\s*"OK"') { throw 'openclaw agent finished without OK response' }`,
+$agentOk = $false
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+  $sessionId = if ($attempt -eq 1) { 'parallels-windows-smoke' } else { "parallels-windows-smoke-retry-$attempt" }
+  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
+  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
+  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
+  $args = @(
+    'agent',
+    '--local',
+    '--agent',
+    'main',
+    '--session-id',
+    $sessionId,
+    '--message',
+    'Reply with exact ASCII text OK only.',
+    '--thinking',
+    'minimal',
+    '--json'
+  )
+  $output = Invoke-OpenClaw @args 2>&1
+  if ($null -ne $output) { $output | ForEach-Object { $_ } }
+  if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
+  if (($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
+    $agentOk = $true
+    break
+  }
+  if ($attempt -lt 2) {
+    Write-Host "agent turn attempt $attempt finished without OK response; retrying"
+    Start-Sleep -Seconds 3
+  }
+}
+if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`,
       Number(process.env.OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 900) * 1000,
     );
   }

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
+  readAllowFromFileWithExists,
   readAllowFromFileSyncWithExists,
   resolveAllowFromAccountId,
   resolveAllowFromFilePath,
@@ -73,6 +74,52 @@ describe("allow-from store file keys", () => {
 });
 
 describe("allow-from store file reads", () => {
+  it("rethrows unexpected async read errors after a successful stat", async () => {
+    const error = fsError("permission denied", "EACCES");
+    const statSpy = vi.spyOn(fs.promises, "stat").mockResolvedValue({
+      mtimeMs: 1,
+      size: 2,
+    } as fs.Stats);
+    const readSpy = vi.spyOn(fs.promises, "readFile").mockRejectedValue(error);
+
+    try {
+      await expect(
+        readAllowFromFileWithExists({
+          cacheNamespace: "test-async-read-error",
+          filePath: "/tmp/openclaw-allowFrom.json",
+          normalizeStore: () => [],
+        }),
+      ).rejects.toBe(error);
+    } finally {
+      readSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+  });
+
+  it("rethrows unexpected sync read errors after a successful stat", () => {
+    const error = fsError("permission denied", "EACCES");
+    const statSpy = vi.spyOn(fs, "statSync").mockReturnValue({
+      mtimeMs: 1,
+      size: 2,
+    } as fs.Stats);
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation(() => {
+      throw error;
+    });
+
+    try {
+      expect(() =>
+        readAllowFromFileSyncWithExists({
+          cacheNamespace: "test-sync-read-error",
+          filePath: "/tmp/openclaw-allowFrom.json",
+          normalizeStore: () => [],
+        }),
+      ).toThrow(error);
+    } finally {
+      readSpy.mockRestore();
+      statSpy.mockRestore();
+    }
+  });
+
   it("rethrows unexpected sync stat errors", () => {
     const error = fsError("permission denied", "EACCES");
     const statSpy = vi.spyOn(fs, "statSync").mockImplementation(() => {

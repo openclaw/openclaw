@@ -126,15 +126,6 @@ export type BlueBubblesAccountConfig = {
   coalesceSameSenderDms?: boolean;
 };
 
-export type BlueBubblesConfig = Omit<BlueBubblesAccountConfig, "actions"> & {
-  /** Optional per-account BlueBubbles configuration (multi-account). */
-  accounts?: Record<string, BlueBubblesAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-  /** Per-action tool gating (default: true for all). */
-  actions?: BlueBubblesActionConfig;
-};
-
 export type BlueBubblesSendTarget =
   | { kind: "chat_id"; chatId: number }
   | { kind: "chat_guid"; chatGuid: string }
@@ -171,19 +162,6 @@ export function normalizeBlueBubblesServerUrl(raw: string): string {
   }
   const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
   return withScheme.replace(/\/+$/, "");
-}
-
-export function buildBlueBubblesApiUrl(params: {
-  baseUrl: string;
-  path: string;
-  password?: string;
-}): string {
-  const normalized = normalizeBlueBubblesServerUrl(params.baseUrl);
-  const url = new URL(params.path, `${normalized}/`);
-  if (params.password) {
-    url.searchParams.set("password", params.password);
-  }
-  return url.toString();
 }
 
 // Overridable guard for testing; production code uses fetchWithSsrFGuard.

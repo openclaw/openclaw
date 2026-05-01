@@ -10,6 +10,11 @@ title: "Voicecall"
 
 `voicecall` is a plugin-provided command. It only appears if the voice-call plugin is installed and enabled.
 
+When the Gateway is running, operational commands (`call`, `start`,
+`continue`, `speak`, `dtmf`, `end`, and `status`) are sent to that Gateway's
+voice-call runtime. If no Gateway is reachable, they fall back to a standalone
+CLI runtime.
+
 Primary doc:
 
 - Voice-call plugin: [Voice Call](/plugins/voice-call)

@@ -64,6 +64,7 @@ const BASE_METHODS = [
   "models.authStatus",
   "tools.catalog",
   "tools.effective",
+  "tools.invoke",
   "agents.list",
   "agents.create",
   "agents.update",

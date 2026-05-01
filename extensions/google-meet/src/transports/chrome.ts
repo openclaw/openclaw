@@ -699,10 +699,6 @@ export async function recoverCurrentMeetTabOnNode(params: {
   };
 }
 
-export type GoogleMeetCurrentTabRecoveryResult = Awaited<
-  ReturnType<typeof recoverCurrentMeetTab | typeof recoverCurrentMeetTabOnNode>
->;
-
 export async function launchChromeMeetOnNode(params: {
   runtime: PluginRuntime;
   config: GoogleMeetConfig;
