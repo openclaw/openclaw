@@ -1048,4 +1048,63 @@ describe("extractThreadCompletionFallbackText", () => {
       ]),
     ).toBe("sample task");
   });
+
+  it("steer fails + fallback throws → falls through to gateway call instead of returning delivered:false", async () => {
+    const callGateway = createGatewayMock({ delivered: true, path: "gateway" });
+    const queueEmbeddedPiMessage = vi.fn(() => false);
+    const sendMessage = vi.fn(async () => {
+      throw new Error("fallback send error");
+    });
+
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "requester-session-fb-fail",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-fallback-fail-through",
+      queueEmbeddedPiMessage,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "fallback throw test",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Test result text for fallback",
+        },
+      ],
+    });
+
+    // Should NOT return delivered:false — should fall through to gateway
+    expect(result.delivered).toBe(true);
+    expect(callGateway).toHaveBeenCalled();
+    // Verify sendMessage was actually called (catch path is exercised)
+    expect(sendMessage).toHaveBeenCalled();
+  });
+
+  it("steer succeeds → returns steered, gateway not called (regression)", async () => {
+    const callGateway = createGatewayMock({ delivered: true, path: "gateway" });
+    const queueEmbeddedPiMessage = vi.fn(() => true);
+
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "requester-session-steer-ok",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-steer-ok",
+      queueEmbeddedPiMessage,
+    });
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        delivered: true,
+        path: "steered",
+      }),
+    );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
 });

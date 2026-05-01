@@ -744,17 +744,8 @@ async function sendSubagentAnnounceDirectly(params: {
             };
           }
         } catch (err) {
-          return {
-            delivered: false,
-            path: "direct",
-            error: `active requester session could not be woken; fallback send failed: ${summarizeDeliveryError(err)}`,
-          };
+          // Fallback failed — fall through to gateway call below
         }
-        return {
-          delivered: false,
-          path: "direct",
-          error: "active requester session could not be woken",
-        };
       }
     }
     if (params.signal?.aborted) {
