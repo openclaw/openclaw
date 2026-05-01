@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/markdown: tolerate CRLF line endings between heading and start marker in `replaceManagedMarkdownBlock` and collapse any pre-existing duplicate managed blocks into one on rewrite, so dreaming and wiki managed blocks no longer accumulate copies on Windows-style memory files or after the previous append-on-mismatch path. (#75491) Thanks @asaenokkostya-coder.
 - Gateway/config: report failed backup restores as failed in logs and config observe audit records instead of marking them valid. (#70515) Thanks @davidangularme.
 
 ## 2026.4.30
