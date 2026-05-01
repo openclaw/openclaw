@@ -35,7 +35,7 @@ let body;
 try {
   body = text ? JSON.parse(text) : null;
 } catch (error) {
-  throw new Error(`${url} returned non-JSON probe body: ${String(error)}`);
+  throw new Error(`${url} returned non-JSON probe body: ${String(error)}`, { cause: error });
 }
 const elapsedMs = Date.now() - startedAt;
 
