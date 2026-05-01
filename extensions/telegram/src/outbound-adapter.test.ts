@@ -98,6 +98,83 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-2", chatId: "12345" });
   });
 
+  it("uses interactive button labels as fallback text for button-only payloads", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-buttons", chatId: "12345" });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Approve", value: "approve" }] }],
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "- Approve",
+      expect.objectContaining({
+        buttons: [[{ text: "Approve", callback_data: "approve" }]],
+      }),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
+  });
+
+  it("sends rendered presentation payloads with direct notification buttons", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-direct", chatId: "12345" });
+    const payload = {
+      text: "Choose Approve, Revise, or Reject below.",
+      presentation: {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [
+              { label: "Approve", value: "code-agent:approve", style: "primary" as const },
+              { label: "Revise", value: "code-agent:revise", style: "secondary" as const },
+              { label: "Reject", value: "code-agent:reject", style: "danger" as const },
+            ],
+          },
+        ],
+      },
+    };
+    const rendered = await telegramOutbound.renderPresentation!({
+      payload,
+      presentation: payload.presentation,
+      ctx: {
+        cfg: {} as never,
+        to: "12345",
+        text: payload.text,
+        payload,
+      },
+    });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: payload.text,
+      payload: rendered!,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      expect.stringContaining("Choose Approve, Revise, or Reject below."),
+      expect.objectContaining({
+        buttons: [
+          [
+            { text: "Approve", callback_data: "code-agent:approve", style: "primary" },
+            { text: "Revise", callback_data: "code-agent:revise", style: undefined },
+            { text: "Reject", callback_data: "code-agent:reject", style: "danger" },
+          ],
+        ],
+      }),
+    );
+    expect(result).toEqual({ channel: "telegram", messageId: "tg-direct", chatId: "12345" });
+  });
+
   it("passes delivery pin notify requests to Telegram pinning", async () => {
     pinMessageTelegramMock.mockResolvedValueOnce({ ok: true, messageId: "tg-1", chatId: "12345" });
 

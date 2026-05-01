@@ -693,6 +693,27 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("uses interactive button labels as fallback text when message text is omitted", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Revise", value: "revise" }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "- Revise",
+      expect.objectContaining({
+        buttons: [[{ text: "Revise", callback_data: "revise" }]],
+      }),
+    );
+  });
+
   it("pins action sends when delivery pin is requested", async () => {
     await handleTelegramAction(
       {
