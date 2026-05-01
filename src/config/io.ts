@@ -441,28 +441,28 @@ async function writeConfigHealthState(
   deps: Required<ConfigIoDeps>,
   state: ConfigHealthState,
 ): Promise<void> {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     await deps.fs.promises.mkdir(path.dirname(healthPath), { recursive: true, mode: 0o700 });
     await deps.fs.promises.writeFile(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config health-state write failed: ${healthPath}: ${formatErrorMessage(err)}`);
   }
 }
 
 function writeConfigHealthStateSync(deps: Required<ConfigIoDeps>, state: ConfigHealthState): void {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     deps.fs.mkdirSync(path.dirname(healthPath), { recursive: true, mode: 0o700 });
     deps.fs.writeFileSync(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {
-    // best-effort
+  } catch (err) {
+    deps.logger.warn(`Config health-state write failed: ${healthPath}: ${formatErrorMessage(err)}`);
   }
 }
 

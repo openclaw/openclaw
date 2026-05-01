@@ -1,3 +1,4 @@
+import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -102,6 +103,65 @@ describe("config io write", () => {
       homedir: () => home,
       logger: silentLogger,
     });
+
+  function withHealthStateWriteFailure(healthPath: string): typeof fsNode {
+    const writeFile = fsNode.promises.writeFile.bind(fsNode.promises);
+    const writeFileSync = fsNode.writeFileSync.bind(fsNode);
+    return {
+      ...fsNode,
+      promises: {
+        ...fsNode.promises,
+        writeFile: async (target, data, options) => {
+          if (target === healthPath) {
+            throw new Error("health write failed");
+          }
+          return await writeFile(target, data, options);
+        },
+      },
+      writeFileSync: (target, data, options) => {
+        if (target === healthPath) {
+          throw new Error("health write failed");
+        }
+        return writeFileSync(target, data, options);
+      },
+    };
+  }
+
+  it("logs health-state write failures through public config reads", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        `${JSON.stringify({ gateway: { mode: "local" } }, null, 2)}\n`,
+        "utf-8",
+      );
+      const warn = vi.fn();
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        fs: withHealthStateWriteFailure(healthPath),
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      await expect(io.readConfigFileSnapshot()).resolves.toMatchObject({ exists: true });
+      expect(() => io.loadConfig()).not.toThrow();
+
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(
+          `Config health-state write failed: ${healthPath}: health write failed`,
+        ),
+      );
+      expect(
+        warn.mock.calls.filter(
+          ([message]) =>
+            typeof message === "string" && message.includes("Config health-state write failed:"),
+        ),
+      ).toHaveLength(2);
+    });
+  });
 
   it("migrates shipped plugin install config records into the plugin index", async () => {
     await withSuiteHome(async (home) => {
