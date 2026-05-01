@@ -2349,6 +2349,56 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     ).toHaveLength(0);
   });
 
+  it("does not skip missing manifest runtime deps when package deps are materialized", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.29" }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "5.0.0", typebox: "1.1.34" },
+      runtimeDependencies: {
+        localMemoryEmbedding: ["node-llama-cpp@3.18.1"],
+      },
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    writeInstalledPackage(installRoot, "chokidar", "5.0.0");
+    writeInstalledPackage(installRoot, "typebox", "1.1.34");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["chokidar@5.0.0", "typebox@1.1.34"]);
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "local" },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({
+      installedSpecs: ["chokidar@5.0.0", "node-llama-cpp@3.18.1", "typebox@1.1.34"],
+    });
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["chokidar@5.0.0", "node-llama-cpp@3.18.1", "typebox@1.1.34"],
+        installSpecs: ["chokidar@5.0.0", "node-llama-cpp@3.18.1", "typebox@1.1.34"],
+      },
+    ]);
+  });
+
   it("accepts generated package-level runtime-deps supersets without reinstalling", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();

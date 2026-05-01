@@ -216,6 +216,26 @@ function arePackageLevelRuntimeDepsAlreadyMaterialized(params: {
   return installSpecs.length > 0 && isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs);
 }
 
+function collectPackageLevelRuntimeDepsForPlugin(params: {
+  extensionsDir: string;
+  pluginId: string;
+  pluginDepEntries: readonly RuntimeDepEntry[];
+  config?: OpenClawConfig;
+  manifestCache: BundledPluginRuntimeDepsManifestCache;
+  normalizePluginId?: (id: string) => string | undefined;
+}): { deps: readonly RuntimeDepEntry[]; conflicts: readonly RuntimeDepConflict[] } {
+  if (!params.config) {
+    return { deps: params.pluginDepEntries, conflicts: [] };
+  }
+  return collectBundledPluginRuntimeDeps({
+    extensionsDir: params.extensionsDir,
+    config: params.config,
+    pluginIds: new Set([params.pluginId]),
+    manifestCache: params.manifestCache,
+    ...(params.normalizePluginId ? { normalizePluginId: params.normalizePluginId } : {}),
+  });
+}
+
 export function scanBundledPluginRuntimeDeps(params: {
   packageRoot: string;
   config?: OpenClawConfig;
@@ -353,11 +373,20 @@ export function ensureBundledPluginRuntimeDeps(params: {
     packageRoot && path.resolve(installRoot) !== path.resolve(params.pluginRoot);
   let deps = pluginDepEntries;
   if (usePackageLevelPlan && packageRoot) {
+    const requestedPluginPlan = collectPackageLevelRuntimeDepsForPlugin({
+      extensionsDir,
+      pluginId: params.pluginId,
+      pluginDepEntries,
+      ...(params.config ? { config: params.config } : {}),
+      manifestCache,
+      ...(normalizePluginId ? { normalizePluginId } : {}),
+    });
     if (
+      requestedPluginPlan.conflicts.length === 0 &&
       arePackageLevelRuntimeDepsAlreadyMaterialized({
         installRoot,
         packageRoot,
-        pluginDeps: pluginDepEntries,
+        pluginDeps: requestedPluginPlan.deps,
       })
     ) {
       removeLegacyRuntimeDepsManifest(installRoot);
