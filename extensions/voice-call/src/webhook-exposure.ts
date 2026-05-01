@@ -1,3 +1,5 @@
+import { isBlockedHostnameOrIp } from "../api.js";
+
 export type VoiceCallWebhookExposureConfig = {
   provider?: string;
   publicUrl?: string;
@@ -20,24 +22,7 @@ export function providerRequiresPublicWebhook(providerName: string | undefined):
 }
 
 export function isLocalOnlyWebhookHost(hostname: string): boolean {
-  const host = hostname.trim().toLowerCase();
-  if (!host) {
-    return false;
-  }
-  if (
-    host === "localhost" ||
-    host === "0.0.0.0" ||
-    host === "::" ||
-    host === "::1" ||
-    host.startsWith("127.")
-  ) {
-    return true;
-  }
-  if (host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) {
-    return true;
-  }
-  const private172 = /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
-  return private172 || host.startsWith("fc") || host.startsWith("fd");
+  return isBlockedHostnameOrIp(hostname);
 }
 
 export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
