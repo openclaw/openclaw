@@ -119,6 +119,8 @@ export function createCronPromptExecutor(params: {
   );
 
   const runPrompt = async (promptText: string) => {
+    const liveModelDefaultProvider = params.liveSelection.provider;
+    const liveModelDefaultModel = params.liveSelection.model;
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfgWithAgentDefaults,
       provider: params.liveSelection.provider,
@@ -200,6 +202,8 @@ export function createCronPromptExecutor(params: {
           lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
+          liveModelDefaultProvider,
+          liveModelDefaultModel,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
