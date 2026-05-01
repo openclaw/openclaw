@@ -1,4 +1,7 @@
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import http from "node:http";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
@@ -67,6 +70,15 @@ function makeHandler(
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
     },
+    callerContext: overrides?.callerContext ?? {
+      enabled: false,
+      callers: {},
+      maxProfileChars: 1200,
+      maxVoiceCardChars: 1800,
+      unknownCallerInstructions:
+        "Caller identity: unknown. Ask briefly who is calling before using personal context.",
+    },
+    transcriptLog: overrides?.transcriptLog ?? { enabled: false, includeInterim: true },
     providers: overrides?.providers ?? {},
     ...(overrides?.provider ? { provider: overrides.provider } : {}),
   };
@@ -97,11 +109,12 @@ function makeHandler(
 
 const startRealtimeServer = async (
   handler: RealtimeCallHandler,
+  form = new URLSearchParams(),
 ): Promise<{
   url: string;
   close: () => Promise<void>;
 }> => {
-  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"));
+  const payload = handler.buildTwiMLPayload(makeRequest("/voice/webhook"), form);
   const match = payload.body.match(/wss:\/\/[^/]+(\/[^"]+)/);
   if (!match) {
     throw new Error("Failed to extract realtime stream path");
@@ -256,7 +269,14 @@ describe("RealtimeCallHandler path routing", () => {
       },
       realtimeProvider: makeRealtimeProvider(createBridge),
     });
-    const server = await startRealtimeServer(handler);
+    const server = await startRealtimeServer(
+      handler,
+      new URLSearchParams({
+        Direction: "inbound",
+        From: "+15550001234",
+        To: "+15550009999",
+      }),
+    );
 
     try {
       const ws = await connectWs(server.url);
@@ -327,6 +347,197 @@ describe("RealtimeCallHandler path routing", () => {
           success: true,
         });
         expect(triggerGreeting).toHaveBeenCalledWith("Say exactly: hello from Meet.");
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("injects bounded caller context and opens known callers with their configured greeting", async () => {
+    let callbacks:
+      | {
+          onReady?: () => void;
+        }
+      | undefined;
+    let providerRequest: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0] | undefined;
+    const triggerGreeting = vi.fn();
+    const profilePath = join(mkdtempSync(join(tmpdir(), "voice-profile-")), "profile.md");
+    const voiceCardPath = join(mkdtempSync(join(tmpdir(), "voice-card-")), "voice-card.md");
+    writeFileSync(profilePath, "Stable profile: direct Dutch-speaking user.", "utf8");
+    writeFileSync(voiceCardPath, "Current voice context: testing caller greetings.", "utf8");
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        providerRequest = request;
+        return makeBridge({ triggerGreeting });
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-caller",
+        provider: "twilio",
+        direction: "inbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(
+      {
+        callerContext: {
+          enabled: true,
+          callers: {
+            "+15550001234": {
+              name: "Yme",
+              greeting: "Hi Yme",
+              profilePath,
+              voiceCardPath,
+            },
+          },
+          maxProfileChars: 1200,
+          maxVoiceCardChars: 1800,
+          unknownCallerInstructions: "Ask who is calling.",
+        },
+      },
+      {
+        manager: {
+          getCallByProviderCallId,
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      },
+    );
+    const server = await startRealtimeServer(
+      handler,
+      new URLSearchParams({
+        Direction: "inbound",
+        From: "+15550001234",
+        To: "+15550009999",
+      }),
+    );
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-caller", callSid: "CA-caller" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        expect(providerRequest?.instructions).toContain(
+          "Caller identity from verified caller ID: Yme.",
+        );
+        expect(providerRequest?.instructions).toContain(
+          "Stable profile: direct Dutch-speaking user.",
+        );
+        expect(providerRequest?.instructions).toContain(
+          "Current voice context: testing caller greetings.",
+        );
+
+        callbacks?.onReady?.();
+
+        expect(triggerGreeting).toHaveBeenCalledWith(expect.stringContaining("Hi Yme"));
+      } finally {
+        if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+          ws.close();
+        }
+      }
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("writes realtime transcript fragments to the configured aftercare log", async () => {
+    let callbacks:
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+    const logPath = join(mkdtempSync(join(tmpdir(), "voice-transcripts-")), "fragments.jsonl");
+    const createBridge = vi.fn(
+      (request: Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0]) => {
+        callbacks = request;
+        return makeBridge();
+      },
+    );
+    const getCallByProviderCallId = vi.fn(
+      (): CallRecord => ({
+        callId: "call-1",
+        providerCallId: "CA-log",
+        provider: "twilio",
+        direction: "inbound",
+        state: "ringing",
+        from: "+15550001234",
+        to: "+15550009999",
+        startedAt: Date.now(),
+        transcript: [],
+        processedEventIds: [],
+        metadata: {},
+      }),
+    );
+    const handler = makeHandler(
+      {
+        transcriptLog: { enabled: true, path: logPath, includeInterim: true },
+      },
+      {
+        manager: {
+          getCallByProviderCallId,
+        },
+        realtimeProvider: makeRealtimeProvider(createBridge),
+      },
+    );
+    const server = await startRealtimeServer(handler);
+
+    try {
+      const ws = await connectWs(server.url);
+      try {
+        ws.send(
+          JSON.stringify({
+            event: "start",
+            start: { streamSid: "MZ-log", callSid: "CA-log" },
+          }),
+        );
+        await vi.waitFor(() => {
+          expect(createBridge).toHaveBeenCalled();
+        });
+
+        callbacks?.onTranscript?.("user", "partial question", false);
+        callbacks?.onTranscript?.("assistant", "final answer", true);
+
+        const entries = readFileSync(logPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(entries).toEqual([
+          expect.objectContaining({
+            callId: "call-1",
+            providerCallId: "CA-log",
+            streamSid: "MZ-log",
+            role: "user",
+            text: "partial question",
+            isFinal: false,
+          }),
+          expect.objectContaining({
+            callId: "call-1",
+            providerCallId: "CA-log",
+            role: "assistant",
+            text: "final answer",
+            isFinal: true,
+          }),
+        ]);
       } finally {
         if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
           ws.close();

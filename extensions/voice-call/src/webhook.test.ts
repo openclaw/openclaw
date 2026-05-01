@@ -83,6 +83,15 @@ const createConfig = (overrides: VoiceCallConfigInput = {}): VoiceCallConfig => 
         ...overrides.realtime?.fastContext,
         sources: overrides.realtime?.fastContext?.sources ?? base.realtime.fastContext.sources,
       },
+      callerContext: {
+        ...base.realtime.callerContext,
+        ...overrides.realtime?.callerContext,
+        callers: overrides.realtime?.callerContext?.callers ?? base.realtime.callerContext.callers,
+      },
+      transcriptLog: {
+        ...base.realtime.transcriptLog,
+        ...overrides.realtime?.transcriptLog,
+      },
       providers: overrides.realtime?.providers ?? base.realtime.providers,
     },
   };

@@ -240,6 +240,67 @@ export type VoiceCallRealtimeFastContextConfig = z.infer<
   typeof VoiceCallRealtimeFastContextConfigSchema
 >;
 
+export const VoiceCallRealtimeCallerConfigSchema = z
+  .object({
+    /** Display/first name resolved from caller ID. */
+    name: z.string().min(1).optional(),
+    /** Optional exact first greeting phrase, e.g. "Hi Yme". Defaults to "Hi {name}". */
+    greeting: z.string().min(1).optional(),
+    /** Extra bounded instructions for this caller. Keep short; not a transcript store. */
+    instructions: z.string().min(1).optional(),
+    /** Optional local file with durable caller profile context. */
+    profilePath: z.string().min(1).optional(),
+    /** Optional local file with compact daily/current voice context. */
+    voiceCardPath: z.string().min(1).optional(),
+  })
+  .strict();
+export type VoiceCallRealtimeCallerConfig = z.infer<typeof VoiceCallRealtimeCallerConfigSchema>;
+
+export const VoiceCallRealtimeCallerContextConfigSchema = z
+  .object({
+    /** Enable caller-ID-specific greetings and bounded context injection. */
+    enabled: z.boolean().default(false),
+    /** Caller configs keyed by E.164 number or digit-only normalized phone number. */
+    callers: z.record(z.string(), VoiceCallRealtimeCallerConfigSchema).default({}),
+    /** Maximum characters read from profilePath per call. */
+    maxProfileChars: z.number().int().positive().default(1200),
+    /** Maximum characters read from voiceCardPath per call. */
+    maxVoiceCardChars: z.number().int().positive().default(1800),
+    /** Instructions used when caller ID is not configured. */
+    unknownCallerInstructions: z
+      .string()
+      .default(
+        "Caller identity: unknown. Ask briefly who is calling before using personal context.",
+      ),
+  })
+  .strict()
+  .default({
+    enabled: false,
+    callers: {},
+    maxProfileChars: 1200,
+    maxVoiceCardChars: 1800,
+    unknownCallerInstructions:
+      "Caller identity: unknown. Ask briefly who is calling before using personal context.",
+  });
+export type VoiceCallRealtimeCallerContextConfig = z.infer<
+  typeof VoiceCallRealtimeCallerContextConfigSchema
+>;
+
+export const VoiceCallRealtimeTranscriptLogConfigSchema = z
+  .object({
+    /** Append realtime transcript fragments to JSONL for aftercare/recovery. */
+    enabled: z.boolean().default(false),
+    /** Optional JSONL path. Defaults to the voice-call store directory. */
+    path: z.string().min(1).optional(),
+    /** Include interim/non-final transcript fragments as a best-effort recovery trail. */
+    includeInterim: z.boolean().default(true),
+  })
+  .strict()
+  .default({ enabled: false, includeInterim: true });
+export type VoiceCallRealtimeTranscriptLogConfig = z.infer<
+  typeof VoiceCallRealtimeTranscriptLogConfigSchema
+>;
+
 export const VoiceCallStreamingProvidersConfigSchema = z
   .record(z.string(), z.record(z.string(), z.unknown()))
   .default({});
@@ -260,6 +321,10 @@ export const VoiceCallRealtimeConfigSchema = z
     tools: z.array(RealtimeToolSchema).default([]),
     /** Low-latency memory/session context for the consult tool. */
     fastContext: VoiceCallRealtimeFastContextConfigSchema,
+    /** Caller-ID specific greetings and compact context. */
+    callerContext: VoiceCallRealtimeCallerContextConfigSchema,
+    /** Best-effort realtime transcript fragment logging for aftercare/recovery. */
+    transcriptLog: VoiceCallRealtimeTranscriptLogConfigSchema,
     /** Provider-owned raw config blobs keyed by provider id. */
     providers: VoiceCallRealtimeProvidersConfigSchema,
   })
@@ -276,6 +341,15 @@ export const VoiceCallRealtimeConfigSchema = z
       sources: ["memory", "sessions"],
       fallbackToConsult: false,
     },
+    callerContext: {
+      enabled: false,
+      callers: {},
+      maxProfileChars: 1200,
+      maxVoiceCardChars: 1800,
+      unknownCallerInstructions:
+        "Caller identity: unknown. Ask briefly who is calling before using personal context.",
+    },
+    transcriptLog: { enabled: false, includeInterim: true },
     providers: {},
   });
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;
@@ -515,6 +589,20 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     ...config.realtime?.fastContext,
     sources: config.realtime?.fastContext?.sources ?? defaults.realtime.fastContext.sources,
   };
+  const realtimeCallerContextCallers = Object.fromEntries(
+    Object.entries(
+      config.realtime?.callerContext?.callers ?? defaults.realtime.callerContext.callers,
+    ).filter((entry): entry is [string, VoiceCallRealtimeCallerConfig] => Boolean(entry[1])),
+  );
+  const realtimeCallerContext = {
+    ...defaults.realtime.callerContext,
+    ...config.realtime?.callerContext,
+    callers: realtimeCallerContextCallers,
+  };
+  const realtimeTranscriptLog = {
+    ...defaults.realtime.transcriptLog,
+    ...config.realtime?.transcriptLog,
+  };
   return {
     ...defaults,
     ...config,
@@ -546,6 +634,8 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
       tools:
         (config.realtime?.tools as RealtimeToolConfig[] | undefined) ?? defaults.realtime.tools,
       fastContext: realtimeFastContext,
+      callerContext: realtimeCallerContext,
+      transcriptLog: realtimeTranscriptLog,
       providers: realtimeProviders,
     },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),

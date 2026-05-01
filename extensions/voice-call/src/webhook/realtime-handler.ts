@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import http from "node:http";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { Duplex } from "node:stream";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -11,7 +14,11 @@ import {
   type RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
 import WebSocket, { WebSocketServer } from "ws";
-import type { VoiceCallRealtimeConfig } from "../config.js";
+import type {
+  VoiceCallRealtimeCallerContextConfig,
+  VoiceCallRealtimeConfig,
+  VoiceCallRealtimeTranscriptLogConfig,
+} from "../config.js";
 import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
@@ -51,10 +58,120 @@ function buildGreetingInstructions(
     return undefined;
   }
   const intro =
-    "Start the call by greeting the caller naturally. Include this greeting in your first spoken reply:";
+    "Start the call now. Begin the first spoken reply with this exact greeting phrase, then continue naturally and briefly:";
   return baseInstructions
     ? `${baseInstructions}\n\n${intro} "${trimmedGreeting}"`
     : `${intro} "${trimmedGreeting}"`;
+}
+
+function normalizePhone(value: string | undefined): string {
+  return value?.replace(/\D/g, "") ?? "";
+}
+
+function resolveCallerContext(
+  config: VoiceCallRealtimeCallerContextConfig,
+  phone: string | undefined,
+) {
+  if (!config.enabled) {
+    return undefined;
+  }
+  const normalized = normalizePhone(phone);
+  if (!normalized) {
+    return undefined;
+  }
+  return (
+    config.callers[phone ?? ""] ?? config.callers[normalized] ?? config.callers[`+${normalized}`]
+  );
+}
+
+function readBoundedFile(path: string | undefined, maxChars: number): string | null {
+  if (!path) {
+    return null;
+  }
+  try {
+    const text = readFileSync(path, "utf8").trim();
+    if (!text) {
+      return null;
+    }
+    return text.length > maxChars ? `${text.slice(0, maxChars).trim()}\n…[trimmed]` : text;
+  } catch {
+    return null;
+  }
+}
+
+function buildCallerContextInstructions(
+  config: VoiceCallRealtimeCallerContextConfig,
+  phone: string | undefined,
+): string | undefined {
+  if (!config.enabled) {
+    return undefined;
+  }
+  const caller = resolveCallerContext(config, phone);
+  if (!caller) {
+    return config.unknownCallerInstructions;
+  }
+  const profile = readBoundedFile(caller.profilePath, config.maxProfileChars);
+  const voiceCard = readBoundedFile(caller.voiceCardPath, config.maxVoiceCardChars);
+  return [
+    caller.name ? `Caller identity from verified caller ID: ${caller.name}.` : undefined,
+    caller.name
+      ? `Required opening: begin the first spoken reply with exactly “${
+          caller.greeting?.trim() || `Hi ${caller.name}`
+        }”.`
+      : undefined,
+    caller.instructions,
+    profile || voiceCard
+      ? "Compact caller memory for this live call. Use only when relevant; do not recite it. Keep privacy boundaries strict."
+      : undefined,
+    profile,
+    voiceCard,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildRuntimeInstructions(
+  baseInstructions: string,
+  callerContext: VoiceCallRealtimeCallerContextConfig,
+  phone: string | undefined,
+): string {
+  const callerInstructions = buildCallerContextInstructions(callerContext, phone);
+  return callerInstructions ? `${baseInstructions}\n\n${callerInstructions}` : baseInstructions;
+}
+
+function resolveCallerGreeting(
+  config: VoiceCallRealtimeCallerContextConfig,
+  phone: string | undefined,
+  fallbackGreeting: string | undefined,
+): string | undefined {
+  const caller = resolveCallerContext(config, phone);
+  if (!caller?.name) {
+    return fallbackGreeting;
+  }
+  return caller.greeting?.trim() || `Hi ${caller.name}`;
+}
+
+function resolveTranscriptLogPath(config: VoiceCallRealtimeTranscriptLogConfig): string {
+  return config.path ?? join(homedir(), ".openclaw", "voice-calls", "realtime-transcripts.jsonl");
+}
+
+function appendTranscriptFragment(
+  config: VoiceCallRealtimeTranscriptLogConfig,
+  entry: Record<string, unknown>,
+): void {
+  if (!config.enabled) {
+    return;
+  }
+  if (!config.includeInterim && entry.isFinal !== true) {
+    return;
+  }
+  try {
+    const path = resolveTranscriptLogPath(config);
+    mkdirSync(dirname(path), { recursive: true });
+    appendFileSync(path, `${JSON.stringify(entry)}\n`, "utf8");
+  } catch {
+    // Best-effort aftercare logging only; never break the live call path.
+  }
 }
 
 type PendingStreamToken = {
@@ -266,6 +383,11 @@ export class RealtimeCallHandler {
     }
 
     const { callId, initialGreetingInstructions } = registration;
+    const runtimeInstructions = buildRuntimeInstructions(
+      this.config.instructions,
+      this.config.callerContext,
+      callerMeta.from,
+    );
     console.log(
       `[voice-call] Realtime bridge starting for call ${callId} (providerCallId=${callSid}, initialGreeting=${initialGreetingInstructions ? "queued" : "absent"})`,
     );
@@ -281,7 +403,7 @@ export class RealtimeCallHandler {
     const bridge = createRealtimeVoiceBridgeSession({
       provider: this.realtimeProvider,
       providerConfig: this.providerConfig,
-      instructions: this.config.instructions,
+      instructions: runtimeInstructions,
       tools: this.config.tools,
       initialGreetingInstructions,
       triggerGreetingOnReady: Boolean(initialGreetingInstructions),
@@ -304,6 +426,20 @@ export class RealtimeCallHandler {
         },
       },
       onTranscript: (role, text, isFinal) => {
+        const trimmedTranscript = text.trim();
+        if (trimmedTranscript) {
+          appendTranscriptFragment(this.config.transcriptLog, {
+            timestamp: Date.now(),
+            callId,
+            providerCallId: callSid,
+            streamSid,
+            from: callerMeta.from,
+            to: callerMeta.to,
+            role,
+            text: trimmedTranscript,
+            isFinal,
+          });
+        }
         if (!isFinal) {
           if (role === "user" && text.trim()) {
             this.partialUserTranscriptsByCallId.set(callId, text);
@@ -412,7 +548,11 @@ export class RealtimeCallHandler {
       return null;
     }
 
-    const initialGreeting = this.extractInitialGreeting(callRecord);
+    const initialGreeting = resolveCallerGreeting(
+      this.config.callerContext,
+      callerMeta.from,
+      this.extractInitialGreeting(callRecord),
+    );
     console.log(
       `[voice-call] Realtime call ${callRecord.callId} initial greeting ${initialGreeting ? "queued" : "absent"}`,
     );
@@ -429,10 +569,7 @@ export class RealtimeCallHandler {
 
     return {
       callId: callRecord.callId,
-      initialGreetingInstructions: buildGreetingInstructions(
-        this.config.instructions,
-        initialGreeting,
-      ),
+      initialGreetingInstructions: buildGreetingInstructions(undefined, initialGreeting),
     };
   }
 
