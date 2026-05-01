@@ -173,19 +173,6 @@ export function normalizeBlueBubblesServerUrl(raw: string): string {
   return withScheme.replace(/\/+$/, "");
 }
 
-export function buildBlueBubblesApiUrl(params: {
-  baseUrl: string;
-  path: string;
-  password?: string;
-}): string {
-  const normalized = normalizeBlueBubblesServerUrl(params.baseUrl);
-  const url = new URL(params.path, `${normalized}/`);
-  if (params.password) {
-    url.searchParams.set("password", params.password);
-  }
-  return url.toString();
-}
-
 // Overridable guard for testing; production code uses fetchWithSsrFGuard.
 let _fetchGuard = fetchWithSsrFGuard;
 
