@@ -119,6 +119,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
       successScenario.indexOf('plugins enable "$KITCHEN_SINK_ID"'),
     );
+    expect(successScenario).toContain('plugins inspect "$KITCHEN_SINK_ID" --runtime --json');
+    expect(successScenario).toContain("plugins inspect --all --runtime --json");
     expect(sweepScript).toContain("run_failure_scenario");
     expect(assertionsScript).toContain("record.source !== source");
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
