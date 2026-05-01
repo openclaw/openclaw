@@ -778,6 +778,32 @@ function pluginLoadOptionsMatchCacheKey(
   return resolvePluginLoadCacheContext(options).cacheKey === expectedCacheKey;
 }
 
+function pluginToolDiscoveryOptionsMatchActiveCacheKey(
+  options: PluginLoadOptions,
+  expectedCacheKey: string,
+): boolean {
+  if (options.toolDiscovery !== true) {
+    return false;
+  }
+  const fullRuntimeOptions = {
+    ...options,
+    toolDiscovery: undefined,
+  };
+  if (pluginLoadOptionsMatchCacheKey(fullRuntimeOptions, expectedCacheKey)) {
+    return true;
+  }
+  if (options.activate !== false) {
+    return false;
+  }
+  return pluginLoadOptionsMatchCacheKey(
+    {
+      ...fullRuntimeOptions,
+      activate: true,
+    },
+    expectedCacheKey,
+  );
+}
+
 type PluginRegistrationPlan = {
   /** Public compatibility label passed to plugin register(api). */
   mode: PluginRegistrationMode;
@@ -1031,6 +1057,9 @@ function getCompatibleActivePluginRegistry(
       return activeRegistry;
     }
   }
+  if (pluginToolDiscoveryOptionsMatchActiveCacheKey(options, activeCacheKey)) {
+    return activeRegistry;
+  }
   if (
     loadContext.runtimeSubagentMode === "default" &&
     getActivePluginRuntimeSubagentMode() === "gateway-bindable"
@@ -1043,6 +1072,9 @@ function getCompatibleActivePluginRegistry(
       },
     };
     if (matchesActiveCacheKey(gatewayBindableOptions)) {
+      return activeRegistry;
+    }
+    if (pluginToolDiscoveryOptionsMatchActiveCacheKey(gatewayBindableOptions, activeCacheKey)) {
       return activeRegistry;
     }
     if (!loadContext.shouldActivate) {

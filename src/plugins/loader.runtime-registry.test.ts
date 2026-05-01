@@ -106,6 +106,57 @@ describe("getCompatibleActivePluginRegistry", () => {
     ).toBeUndefined();
   });
 
+  it("reuses an active full registry for compatible tool-discovery loads", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey, "default");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        activate: false,
+        installBundledRuntimeDeps: false,
+        toolDiscovery: true,
+      }),
+    ).toBe(registry);
+  });
+
+  it("does not reuse a default-mode active registry for gateway-bindable tool discovery", () => {
+    const registry = createEmptyPluginRegistry();
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+          load: { paths: ["/tmp/demo.js"] },
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    setActivePluginRegistry(registry, cacheKey, "default");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        ...loadOptions,
+        activate: false,
+        installBundledRuntimeDeps: false,
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+        toolDiscovery: true,
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not embed activation secrets in the loader cache key", () => {
     const { cacheKey } = __testing.resolvePluginLoadCacheContext({
       config: {

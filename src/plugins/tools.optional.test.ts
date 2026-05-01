@@ -7,6 +7,7 @@ type MockRegistryToolEntry = {
   names?: string[];
   optional: boolean;
   source: string;
+  names: string[];
   factory: (ctx: unknown) => unknown;
 };
 
@@ -88,6 +89,7 @@ function setMultiToolRegistry() {
       pluginId: "multi",
       optional: false,
       source: "/tmp/multi.js",
+      names: ["message", "other_tool"],
       factory: () => [makeTool("message"), makeTool("other_tool")],
     },
   ]);
@@ -99,6 +101,7 @@ function createOptionalDemoEntry(): MockRegistryToolEntry {
     names: ["optional_tool"],
     optional: true,
     source: "/tmp/optional-demo.js",
+    names: ["optional_tool"],
     factory: () => makeTool("optional_tool"),
   };
 }
@@ -255,6 +258,41 @@ describe("resolvePluginTools optional tools", () => {
     expect(tools).toHaveLength(0);
   });
 
+  it("does not invoke named optional tool factories without a matching allowlist", () => {
+    const factory = vi.fn(() => makeTool("optional_tool"));
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
+        factory,
+      },
+    ]);
+
+    expect(resolveOptionalDemoTools()).toHaveLength(0);
+    expect(resolveOptionalDemoTools(["other_tool"])).toHaveLength(0);
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it("invokes unnamed optional tool factories when a tool allowlist may match the result", () => {
+    const factory = vi.fn(() => makeTool("optional_tool"));
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: true,
+        source: "/tmp/optional-demo.js",
+        names: [],
+        factory,
+      },
+    ]);
+
+    const tools = resolveOptionalDemoTools(["optional_tool"]);
+
+    expectResolvedToolNames(tools, ["optional_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     {
       name: "allows optional tools by tool name",
@@ -281,6 +319,7 @@ describe("resolvePluginTools optional tools", () => {
         pluginId: "message",
         optional: false,
         source: "/tmp/message.js",
+        names: ["optional_tool"],
         factory: () => makeTool("optional_tool"),
       },
     ]);
@@ -348,6 +387,7 @@ describe("resolvePluginTools optional tools", () => {
         pluginId: "schema-bug",
         optional: false,
         source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
         factory: () => [createMalformedTool("broken_tool"), makeTool("valid_tool")],
       },
     ]);
@@ -447,6 +487,7 @@ describe("resolvePluginTools optional tools", () => {
         pluginId: "optional-demo",
         optional: true,
         source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
         factory: () => createMalformedTool("optional_tool"),
       },
     ]);

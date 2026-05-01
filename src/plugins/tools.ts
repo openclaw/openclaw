@@ -81,6 +81,24 @@ function isOptionalToolAllowed(params: {
   return params.allowlist.has("group:plugins");
 }
 
+function isOptionalToolEntryPotentiallyAllowed(params: {
+  names: readonly string[];
+  pluginId: string;
+  allowlist: Set<string>;
+}): boolean {
+  if (params.allowlist.size === 0) {
+    return false;
+  }
+  const pluginKey = normalizeToolName(params.pluginId);
+  if (params.allowlist.has(pluginKey) || params.allowlist.has("group:plugins")) {
+    return true;
+  }
+  if (params.names.length === 0) {
+    return true;
+  }
+  return params.names.some((name) => params.allowlist.has(normalizeToolName(name)));
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -270,6 +288,16 @@ export function resolvePluginTools(params: {
       continue;
     }
     const declaredNames = entry.names ?? [];
+    if (
+      entry.optional &&
+      !isOptionalToolEntryPotentiallyAllowed({
+        names: declaredNames,
+        pluginId: entry.pluginId,
+        allowlist,
+      })
+    ) {
+      continue;
+    }
     let resolved: AnyAgentTool | AnyAgentTool[] | null | undefined = null;
     let factoryFailed = false;
     const factoryStartedAt = Date.now();
