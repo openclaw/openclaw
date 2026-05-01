@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
 import * as externalCliSync from "./external-cli-sync.js";
@@ -10,6 +11,12 @@ import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
+type ExternalCliOverlayOptions = {
+  allowKeychainPrompt?: boolean;
+  config?: OpenClawConfig;
+  externalCliProviderIds?: Iterable<string>;
+  externalCliProfileIds?: Iterable<string>;
+};
 
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
 
@@ -38,14 +45,16 @@ function resolveExternalAuthProfileMap(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
+  externalCli?: ExternalCliOverlayOptions;
 }): ExternalAuthProfileMap {
   const env = params.env ?? process.env;
   const resolveProfiles =
     resolveExternalAuthProfilesForRuntime ?? resolveExternalAuthProfilesWithPlugins;
   const profiles = resolveProfiles({
     env,
+    config: params.externalCli?.config,
     context: {
-      config: undefined,
+      config: params.externalCli?.config,
       agentDir: params.agentDir,
       workspaceDir: undefined,
       env,
@@ -54,7 +63,12 @@ function resolveExternalAuthProfileMap(params: {
   });
 
   const resolved: ExternalAuthProfileMap = new Map();
-  const cliProfiles = externalCliSync.resolveExternalCliAuthProfiles?.(params.store) ?? [];
+  const cliProfiles =
+    externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
+      allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
+      providerIds: params.externalCli?.externalCliProviderIds,
+      profileIds: params.externalCli?.externalCliProfileIds,
+    }) ?? [];
   for (const profile of cliProfiles) {
     resolved.set(profile.profileId, {
       profileId: profile.profileId,
@@ -76,24 +90,27 @@ function listRuntimeExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
+  externalCli?: ExternalCliOverlayOptions;
 }): RuntimeExternalOAuthProfile[] {
   return Array.from(
     resolveExternalAuthProfileMap({
       store: params.store,
       agentDir: params.agentDir,
       env: params.env,
+      externalCli: params.externalCli,
     }).values(),
   );
 }
 
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
-  params?: { agentDir?: string; env?: NodeJS.ProcessEnv },
+  params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
 ): AuthProfileStore {
   const profiles = listRuntimeExternalAuthProfiles({
     store,
     agentDir: params?.agentDir,
     env: params?.env,
+    externalCli: params,
   });
   return overlayRuntimeExternalOAuthProfiles(store, profiles);
 }
@@ -104,11 +121,19 @@ export function shouldPersistExternalAuthProfile(params: {
   credential: OAuthCredential;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
+  externalCliProviderIds?: Iterable<string>;
+  externalCliProfileIds?: Iterable<string>;
 }): boolean {
   const profiles = listRuntimeExternalAuthProfiles({
     store: params.store,
     agentDir: params.agentDir,
     env: params.env,
+    externalCli: {
+      config: params.config,
+      externalCliProviderIds: params.externalCliProviderIds,
+      externalCliProfileIds: params.externalCliProfileIds,
+    },
   });
   return shouldPersistRuntimeExternalOAuthProfile({
     profileId: params.profileId,

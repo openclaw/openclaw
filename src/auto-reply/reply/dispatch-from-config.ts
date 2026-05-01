@@ -5,6 +5,18 @@ import {
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
+import { selectAgentHarness } from "../../agents/harness/selection.js";
+import {
+  isToolAllowedByPolicies,
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicyForSession,
+} from "../../agents/pi-tools.policy.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../../agents/subagent-capabilities.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import {
   resolveConversationBindingRecord,
   touchConversationBindingRecord,
@@ -12,6 +24,7 @@ import {
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -77,7 +90,9 @@ import type {
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import { withFullRuntimeReplyConfig } from "./get-reply-fast-path.js";
 import { claimInboundDedupe, commitInboundDedupe, releaseInboundDedupe } from "./inbound-dedupe.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
+import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
 let routeReplyRuntimePromise: Promise<typeof import("./route-reply.runtime.js")> | null = null;
@@ -278,6 +293,42 @@ const createShouldEmitVerboseProgress = (params: {
     return params.fallbackLevel !== "off";
   };
 };
+
+const resolveHarnessSourceVisibleRepliesDefault = (params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  sessionAgentId: string;
+  sessionKey?: string;
+}): "automatic" | "message_tool" | undefined => {
+  if (params.ctx.CommandSource === "native") {
+    return undefined;
+  }
+  try {
+    const provider =
+      normalizeOptionalString(params.entry?.modelProvider) ??
+      normalizeOptionalString(params.ctx.Provider) ??
+      normalizeOptionalString(params.ctx.Surface) ??
+      "";
+    const harness = selectAgentHarness({
+      provider,
+      modelId: normalizeOptionalString(params.entry?.model),
+      config: params.cfg,
+      agentId: params.sessionAgentId,
+      sessionKey: params.sessionKey,
+      agentHarnessId:
+        normalizeOptionalString(params.entry?.agentHarnessId) ??
+        normalizeOptionalString(params.entry?.agentRuntimeOverride),
+    });
+    return harness.deliveryDefaults?.sourceVisibleReplies;
+  } catch (error) {
+    logVerbose(
+      `dispatch-from-config: could not resolve harness visible-reply defaults: ${formatErrorMessage(error)}`,
+    );
+    return undefined;
+  }
+};
+
 export type {
   DispatchFromConfigParams,
   DispatchFromConfigResult,
@@ -291,7 +342,8 @@ export async function dispatchReplyFromConfig(
   const channel = normalizeLowercaseStringOrEmpty(ctx.Surface ?? ctx.Provider ?? "unknown");
   const chatId = ctx.To ?? ctx.From;
   const messageId = ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const sessionKey = ctx.SessionKey;
+  const sessionKey =
+    normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
   const startTime = diagnosticsEnabled ? Date.now() : 0;
   const canTrackSession = diagnosticsEnabled && Boolean(sessionKey);
 
@@ -574,10 +626,10 @@ export async function dispatchReplyFromConfig(
     ? toPluginConversationBinding(pluginOwnedBindingRecord)
     : null;
 
-  // Resolve sendPolicy early so every outbound path below (plugin-binding
-  // notices, fast-abort, normal dispatch) honors suppressDelivery. Under
-  // sendPolicy: "deny" the agent still processes inbound, but no outbound
-  // reply/notice/indicator is allowed. See #53328.
+  // Resolve automatic source-delivery suppression early so every outbound path
+  // below (plugin-binding notices, fast-abort, normal dispatch) honors it. The
+  // agent still processes inbound, but automatic replies/notices/indicators are
+  // blocked; explicit message tool sends remain available.
   const sendPolicy = resolveSendPolicy({
     cfg,
     entry: sessionStoreEntry.entry,
@@ -591,8 +643,111 @@ export async function dispatchReplyFromConfig(
       undefined,
     chatType: sessionStoreEntry.entry?.chatType,
   });
-  const suppressDelivery = sendPolicy === "deny";
-  const suppressHookUserDelivery = suppressAcpChildUserDelivery || suppressDelivery;
+  const {
+    globalPolicy,
+    globalProviderPolicy,
+    agentPolicy,
+    agentProviderPolicy,
+    profile,
+    providerProfile,
+    profileAlsoAllow,
+    providerProfileAlsoAllow,
+  } = resolveEffectiveToolPolicy({
+    config: cfg,
+    sessionKey: acpDispatchSessionKey,
+    agentId: sessionAgentId,
+  });
+  const chatType = normalizeChatType(ctx.ChatType);
+  const configuredVisibleReplies =
+    chatType === "group" || chatType === "channel"
+      ? (cfg.messages?.groupChat?.visibleReplies ?? cfg.messages?.visibleReplies)
+      : cfg.messages?.visibleReplies;
+  const harnessDefaultVisibleReplies =
+    configuredVisibleReplies === undefined && chatType !== "group" && chatType !== "channel"
+      ? resolveHarnessSourceVisibleRepliesDefault({
+          cfg,
+          ctx,
+          entry: sessionStoreEntry.entry,
+          sessionAgentId,
+          sessionKey: acpDispatchSessionKey,
+        })
+      : undefined;
+  const effectiveVisibleReplies = configuredVisibleReplies ?? harnessDefaultVisibleReplies;
+  const prefersMessageToolDelivery =
+    params.replyOptions?.sourceReplyDeliveryMode === "message_tool_only" ||
+    (params.replyOptions?.sourceReplyDeliveryMode === undefined &&
+      ctx.CommandSource !== "native" &&
+      (chatType === "group" || chatType === "channel"
+        ? effectiveVisibleReplies !== "automatic"
+        : effectiveVisibleReplies === "message_tool"));
+  const runtimeProfileAlsoAllow = prefersMessageToolDelivery ? ["message"] : [];
+  const profilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(profile), [
+    ...(profileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
+  const providerProfilePolicy = mergeAlsoAllowPolicy(resolveToolProfilePolicy(providerProfile), [
+    ...(providerProfileAlsoAllow ?? []),
+    ...runtimeProfileAlsoAllow,
+  ]);
+  const groupResolution = resolveGroupSessionKey(ctx);
+  const messageProvider = resolveOriginMessageProvider({
+    originatingChannel: ctx.OriginatingChannel,
+    provider: ctx.Provider ?? ctx.Surface,
+  });
+  const groupPolicy = resolveGroupToolPolicy({
+    config: cfg,
+    sessionKey: acpDispatchSessionKey,
+    messageProvider,
+    groupId: groupResolution?.id,
+    groupChannel:
+      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
+    groupSpace: normalizeOptionalString(ctx.GroupSpace),
+    accountId: ctx.AccountId,
+    senderId: normalizeOptionalString(ctx.SenderId),
+    senderName: normalizeOptionalString(ctx.SenderName),
+    senderUsername: normalizeOptionalString(ctx.SenderUsername),
+    senderE164: normalizeOptionalString(ctx.SenderE164),
+  });
+  const subagentStore = resolveSubagentCapabilityStore(acpDispatchSessionKey, { cfg });
+  const subagentPolicy =
+    acpDispatchSessionKey &&
+    isSubagentEnvelopeSession(acpDispatchSessionKey, {
+      cfg,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(cfg, acpDispatchSessionKey, {
+          store: subagentStore,
+        })
+      : undefined;
+  const messageToolAvailable = isToolAllowedByPolicies("message", [
+    profilePolicy,
+    providerProfilePolicy,
+    globalProviderPolicy,
+    agentProviderPolicy,
+    globalPolicy,
+    agentPolicy,
+    groupPolicy,
+    subagentPolicy,
+  ]);
+  const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
+    cfg,
+    ctx,
+    requested: params.replyOptions?.sourceReplyDeliveryMode,
+    sendPolicy,
+    suppressAcpChildUserDelivery,
+    explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
+    shouldSuppressTyping,
+    messageToolAvailable,
+    defaultVisibleReplies: harnessDefaultVisibleReplies,
+  });
+  const {
+    sourceReplyDeliveryMode,
+    suppressAutomaticSourceDelivery,
+    suppressDelivery,
+    deliverySuppressionReason,
+    suppressHookUserDelivery,
+    suppressHookReplyLifecycle,
+  } = sourceReplyPolicy;
 
   let pluginFallbackReason:
     | "plugin-bound-fallback-missing-plugin"
@@ -603,11 +758,10 @@ export async function dispatchReplyFromConfig(
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
     if (suppressDelivery) {
       // Plugin-bound inbound handlers typically emit outbound replies we
-      // cannot rewind. Under deny, skip the plugin claim entirely and fall
-      // through to normal (suppressed) agent processing so no delivery leaks
-      // via the plugin path. See #53328.
+      // cannot rewind. When automatic delivery is suppressed, skip the plugin
+      // claim and fall through to normal suppressed agent processing.
       logVerbose(
-        `plugin-bound inbound skipped under sendPolicy: deny (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
+        `plugin-bound inbound skipped under ${deliverySuppressionReason} (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to suppressed agent processing`,
       );
     } else {
       logVerbose(
@@ -742,7 +896,7 @@ export async function dispatchReplyFromConfig(
         }
       } else {
         logVerbose(
-          `dispatch-from-config: fast_abort reply suppressed by sendPolicy: deny (session=${sessionKey ?? "unknown"})`,
+          `dispatch-from-config: fast_abort reply suppressed by ${deliverySuppressionReason} (session=${sessionKey ?? "unknown"})`,
         );
       }
       const counts = dispatcher.getQueuedCounts();
@@ -844,6 +998,8 @@ export async function dispatchReplyFromConfig(
           sessionTtsAuto,
           ttsChannel: deliveryChannel,
           suppressUserDelivery: suppressHookUserDelivery,
+          suppressReplyLifecycle: suppressHookReplyLifecycle,
+          sourceReplyDeliveryMode,
           shouldRouteToOriginating,
           originatingChannel: routeReplyChannel,
           originatingTo: routeReplyTo,
@@ -868,11 +1024,12 @@ export async function dispatchReplyFromConfig(
       }
     }
 
-    // When sendPolicy is "deny", we still let the agent process the inbound message
-    // (context, memory, tool calls) but suppress all outbound delivery.
+    // When automatic source delivery is suppressed, still let the agent process
+    // the inbound message (context, memory, tool calls) but suppress automatic
+    // outbound source delivery.
     if (suppressDelivery) {
       logVerbose(
-        `Delivery suppressed by send policy for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
+        `Delivery suppressed by ${deliverySuppressionReason} for session ${sessionStoreEntry.sessionKey ?? sessionKey ?? "unknown"} — agent will still process the message`,
       );
     }
 
@@ -1023,8 +1180,7 @@ export async function dispatchReplyFromConfig(
     };
     const typing = resolveRunTypingPolicy({
       requestedPolicy: params.replyOptions?.typingPolicy,
-      suppressTyping:
-        suppressDelivery || params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
+      suppressTyping: sourceReplyPolicy.suppressTyping,
       originatingChannel: routeReplyChannel,
       systemEvent: shouldRouteToOriginating,
     });
@@ -1044,12 +1200,41 @@ export async function dispatchReplyFromConfig(
       ctx,
       {
         ...params.replyOptions,
+        sourceReplyDeliveryMode,
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
+        onPartialReply: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onPartialReply,
+        onReasoningStream: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onReasoningStream,
+        onReasoningEnd: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onReasoningEnd,
+        onAssistantMessageStart: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onAssistantMessageStart,
+        onBlockReplyQueued: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onBlockReplyQueued,
+        onToolStart: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onToolStart,
+        onItemEvent: suppressAutomaticSourceDelivery ? undefined : params.replyOptions?.onItemEvent,
+        onCommandOutput: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCommandOutput,
+        onCompactionStart: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCompactionStart,
+        onCompactionEnd: suppressAutomaticSourceDelivery
+          ? undefined
+          : params.replyOptions?.onCompactionEnd,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             markInboundDedupeReplayUnsafe();
-            await onToolResultFromReplyOptions?.(payload);
+            if (!suppressAutomaticSourceDelivery) {
+              await onToolResultFromReplyOptions?.(payload);
+            }
             if (suppressDelivery) {
               return;
             }
@@ -1093,7 +1278,9 @@ export async function dispatchReplyFromConfig(
         },
         onPlanUpdate: async (payload) => {
           markInboundDedupeReplayUnsafe();
-          await onPlanUpdateFromReplyOptions?.(payload);
+          if (!suppressAutomaticSourceDelivery) {
+            await onPlanUpdateFromReplyOptions?.(payload);
+          }
           if (payload.phase !== "update" || suppressDefaultToolProgressMessages) {
             return;
           }
@@ -1101,7 +1288,9 @@ export async function dispatchReplyFromConfig(
         },
         onApprovalEvent: async (payload) => {
           markInboundDedupeReplayUnsafe();
-          await onApprovalEventFromReplyOptions?.(payload);
+          if (!suppressAutomaticSourceDelivery) {
+            await onApprovalEventFromReplyOptions?.(payload);
+          }
           if (payload.phase !== "requested" || suppressDefaultToolProgressMessages) {
             return;
           }
@@ -1117,7 +1306,9 @@ export async function dispatchReplyFromConfig(
         },
         onPatchSummary: async (payload) => {
           markInboundDedupeReplayUnsafe();
-          await onPatchSummaryFromReplyOptions?.(payload);
+          if (!suppressAutomaticSourceDelivery) {
+            await onPatchSummaryFromReplyOptions?.(payload);
+          }
           if (payload.phase !== "end" || suppressDefaultToolProgressMessages) {
             return;
           }
@@ -1181,7 +1372,9 @@ export async function dispatchReplyFromConfig(
                     assistantMessageIndex: payloadMetadata.assistantMessageIndex,
                   }
                 : context;
-            await params.replyOptions?.onBlockReplyQueued?.(visiblePayload, queuedContext);
+            if (!suppressAutomaticSourceDelivery) {
+              await params.replyOptions?.onBlockReplyQueued?.(visiblePayload, queuedContext);
+            }
             const ttsPayload = await maybeApplyTtsToReplyPayload({
               payload: visiblePayload,
               cfg,
@@ -1221,6 +1414,8 @@ export async function dispatchReplyFromConfig(
             sessionTtsAuto,
             ttsChannel: deliveryChannel,
             suppressUserDelivery: suppressHookUserDelivery,
+            suppressReplyLifecycle: suppressHookReplyLifecycle,
+            sourceReplyDeliveryMode,
             shouldRouteToOriginating,
             originatingChannel: routeReplyChannel,
             originatingTo: routeReplyTo,

@@ -17,6 +17,7 @@ import type {
 import type { MemorySearchConfig } from "./types.tools.js";
 
 export type AgentContextInjection = "always" | "continuation-skip" | "never";
+export type OptionalBootstrapFileName = "SOUL.md" | "USER.md" | "HEARTBEAT.md" | "IDENTITY.md";
 export type EmbeddedPiExecutionContract = "default" | "strict-agentic";
 
 export type Gpt5PromptOverlayConfig = {
@@ -225,6 +226,13 @@ export type AgentDefaultsConfig = {
   /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
   skipBootstrap?: boolean;
   /**
+   * List of optional bootstrap filenames to skip writing to the workspace root.
+   * Applies to: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.
+   * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
+   * Example: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"]
+   */
+  skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
+  /**
    * Controls when workspace bootstrap files (AGENTS.md, SOUL.md, etc.) are
    * injected into the system prompt:
    * - always: inject on every turn (default)
@@ -301,6 +309,8 @@ export type AgentDefaultsConfig = {
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Default verbose level when no /verbose directive is present. */
   verboseDefault?: "off" | "on" | "full";
+  /** Default reasoning level when no /reasoning directive is present. */
+  reasoningDefault?: "off" | "on" | "stream";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
   /** Default block streaming level when no override is present. */
@@ -379,6 +389,11 @@ export type AgentDefaultsConfig = {
      */
     isolatedSession?: boolean;
     /**
+     * If true, defer heartbeat runs while subagent or nested command lanes are busy.
+     * Cron lanes are always treated as busy for heartbeat deferral.
+     */
+    skipWhenBusy?: boolean;
+    /**
      * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
      * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
      *
@@ -425,6 +440,14 @@ export type AgentCompactionQualityGuardConfig = {
   maxRetries?: number;
 };
 
+export type AgentCompactionMidTurnPrecheckConfig = {
+  /**
+   * Enable structured context pressure checks after tool results are appended
+   * and before the next Pi model call. Default: false.
+   */
+  enabled?: boolean;
+};
+
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
@@ -446,6 +469,8 @@ export type AgentCompactionConfig = {
   identifierInstructions?: string;
   /** Optional quality-audit retries for safeguard compaction summaries. */
   qualityGuard?: AgentCompactionQualityGuardConfig;
+  /** Mid-turn precheck for tool-loop context pressure. Default: disabled. */
+  midTurnPrecheck?: AgentCompactionMidTurnPrecheckConfig;
   /** Post-compaction session memory index sync mode. */
   postIndexSync?: AgentCompactionPostIndexSyncMode;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */
@@ -493,6 +518,8 @@ export type AgentCompactionConfig = {
 export type AgentCompactionMemoryFlushConfig = {
   /** Enable the pre-compaction memory flush (default: true). */
   enabled?: boolean;
+  /** Optional provider/model override used only for pre-compaction memory flush turns. */
+  model?: string;
   /** Run the memory flush when context is within this many tokens of the compaction threshold. */
   softThresholdTokens?: number;
   /**

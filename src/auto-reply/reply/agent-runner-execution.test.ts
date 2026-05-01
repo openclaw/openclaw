@@ -203,6 +203,7 @@ type EmbeddedAgentParams = {
   onAgentEvent?: (payload: {
     stream: string;
     data: Record<string, unknown>;
+    sessionKey?: string;
   }) => Promise<void> | void;
 };
 
@@ -1147,6 +1148,7 @@ describe("runAgentTurnWithFallback", () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({
         stream: "codex_app_server.guardian",
+        sessionKey: "agent:main:subagent:codex-child",
         data: {
           phase: "blocked",
           message: "command requires approval",
@@ -1184,11 +1186,116 @@ describe("runAgentTurnWithFallback", () => {
     expect(emitAgentEvent).toHaveBeenCalledWith({
       runId: "run-codex",
       stream: "codex_app_server.guardian",
+      sessionKey: "agent:main:subagent:codex-child",
       data: {
         phase: "blocked",
         message: "command requires approval",
       },
     });
+  });
+
+  it("emits an embedded lifecycle terminal backstop when the runner returns without one", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      return {
+        payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
+        meta: { aborted: true, livenessState: "blocked", replayInvalid: true },
+      };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { runId: "run-timeout" } as GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(emitAgentEvent).toHaveBeenCalledWith({
+      runId: "run-timeout",
+      sessionKey: "main",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 1_000,
+        endedAt: expect.any(Number),
+        aborted: true,
+        livenessState: "blocked",
+        replayInvalid: true,
+      },
+    });
+  });
+
+  it("does not duplicate embedded lifecycle terminal events already reported by the runner", async () => {
+    const agentEvents = await import("../../infra/agent-events.js");
+    const emitAgentEvent = vi.mocked(agentEvents.emitAgentEvent);
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_000 },
+      });
+      await params.onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 1_500 },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun: createFollowupRun(),
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: { runId: "run-complete" } as GetReplyOptions,
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(emitAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-complete",
+        stream: "lifecycle",
+      }),
+    );
   });
 
   it("trims chatty GPT ack-turn final prose", async () => {

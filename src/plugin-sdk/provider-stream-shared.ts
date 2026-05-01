@@ -260,7 +260,7 @@ function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void
   }
 }
 
-function ensureDeepSeekV4ToolCallReasoningContent(payload: Record<string, unknown>): void {
+function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unknown>): void {
   if (!Array.isArray(payload.messages)) {
     return;
   }
@@ -269,7 +269,7 @@ function ensureDeepSeekV4ToolCallReasoningContent(payload: Record<string, unknow
       continue;
     }
     const record = message as Record<string, unknown>;
-    if (record.role !== "assistant" || !Array.isArray(record.tool_calls)) {
+    if (record.role !== "assistant") {
       continue;
     }
     if (!("reasoning_content" in record)) {
@@ -303,7 +303,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveDeepSeekV4ReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4ToolCallReasoningContent(payload);
+      ensureDeepSeekV4AssistantReasoningContent(payload);
     });
   };
 }

@@ -48,10 +48,13 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
   `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
   the local refresh token is canonical; other integrations can remain
   externally managed and re-read their CLI auth store
+- status and startup paths that already know the configured provider set scope
+  external CLI discovery to that set, so an unrelated CLI login store is not
+  probed for a single-provider setup
 
 ## Storage (where tokens live)
 
-Secrets are stored **per-agent**:
+Secrets are stored in agent auth stores:
 
 - Auth profiles (OAuth + API keys + optional value-level refs): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - Legacy compatibility file: `~/.openclaw/agents/<agentId>/agent/auth.json`
@@ -64,6 +67,13 @@ Legacy import-only file (still supported, but not the main store):
 All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration-reference#auth-storage)
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
+
+When a secondary agent has no local auth profile, OpenClaw uses read-through
+inheritance from the default/main agent store. It does not clone the main
+agent's `auth-profiles.json` on read. OAuth refresh tokens are especially
+sensitive: normal copy flows skip them by default because some providers rotate
+or invalidate refresh tokens after use. Configure a separate OAuth login for an
+agent when it needs an independent account.
 
 ## Anthropic legacy token compatibility
 
@@ -129,6 +139,9 @@ At runtime:
 
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
+- if a secondary agent reads an inherited main-agent OAuth profile, refresh
+  writes back to the main agent store instead of copying the refresh token into
+  the secondary agent store
 - exception: some external CLI credentials stay externally managed; OpenClaw
   re-reads those CLI auth stores instead of spending copied refresh tokens.
   Codex CLI bootstrap is intentionally narrower: it seeds an empty

@@ -1,7 +1,7 @@
 ---
 summary: "Import map, registration API reference, and SDK architecture"
 title: "Plugin SDK overview"
-sidebarTitle: "SDK overview"
+sidebarTitle: "Plugin SDK overview"
 read_when:
   - You need to know which SDK subpath to import from
   - You want a reference for all registration methods on OpenClawPluginApi
@@ -11,14 +11,17 @@ read_when:
 The plugin SDK is the typed contract between plugins and core. This page is the
 reference for **what to import** and **what you can register**.
 
-<Tip>
-  Looking for a how-to guide instead?
+<Note>
+  This page is for plugin authors using `openclaw/plugin-sdk/*` inside
+  OpenClaw. For external apps, scripts, dashboards, CI jobs, and IDE extensions
+  that want to run agents through the Gateway, use the
+  [OpenClaw App SDK](/concepts/openclaw-sdk) and the `@openclaw/sdk` package
+  instead.
+</Note>
 
-- First plugin? Start with [Building plugins](/plugins/building-plugins).
-- Channel plugin? See [Channel plugins](/plugins/sdk-channel-plugins).
-- Provider plugin? See [Provider plugins](/plugins/sdk-provider-plugins).
-- Tool or lifecycle hook plugin? See [Plugin hooks](/plugins/hooks).
-  </Tip>
+<Tip>
+Looking for a how-to guide instead? Start with [Building plugins](/plugins/building-plugins), use [Channel plugins](/plugins/sdk-channel-plugins) for channel plugins, [Provider plugins](/plugins/sdk-provider-plugins) for provider plugins, and [Plugin hooks](/plugins/hooks) for tool or lifecycle hook plugins.
+</Tip>
 
 ## Import convention
 
@@ -51,10 +54,15 @@ pattern for new plugins.
   barrels or add a narrow generic SDK contract when a need is truly
   cross-channel.
 
-A small set of bundled-plugin helper seams (`plugin-sdk/feishu`,
-`plugin-sdk/zalo`, `plugin-sdk/matrix*`, and similar) still appear in the
-generated export map. They exist for bundled-plugin maintenance only and are
-not recommended import paths for new third-party plugins.
+A small set of bundled-plugin helper seams still appear in the generated export
+map when they have tracked owner usage. They exist for bundled-plugin
+maintenance only and are not recommended import paths for new third-party
+plugins.
+
+`openclaw/plugin-sdk/discord` and `openclaw/plugin-sdk/telegram-account` are
+also kept as deprecated compatibility facades for tracked owner usage. Do not
+copy those import paths into new plugins; use injected runtime helpers and
+generic channel SDK subpaths instead.
 </Warning>
 
 ## Subpath reference
@@ -273,6 +281,9 @@ AI CLI backend such as `codex-cli`.
   memory plugin's private layout.
 - `registerMemoryPromptSection`, `registerMemoryFlushPlan`, and
   `registerMemoryRuntime` are legacy-compatible exclusive memory-plugin APIs.
+- `MemoryFlushPlan.model` can pin the flush turn to an exact `provider/model`
+  reference, such as `ollama/qwen3:8b`, without inheriting the active fallback
+  chain.
 - `registerMemoryEmbeddingProvider` lets the active memory plugin register one
   or more embedding adapter ids (for example `openai`, `gemini`, or a custom
   plugin-defined id).
@@ -302,6 +313,7 @@ semantics.
 - `message_received`: use the typed `threadId` field when you need inbound thread/topic routing. Keep `metadata` for channel-specific extras.
 - `message_sending`: use typed `replyToId` / `threadId` routing fields before falling back to channel-specific `metadata`.
 - `gateway_start`: use `ctx.config`, `ctx.workspaceDir`, and `ctx.getCron?.()` for gateway-owned startup state instead of relying on internal `gateway:startup` hooks.
+- `cron_changed`: observe gateway-owned cron lifecycle changes. Use `event.job?.state?.nextRunAtMs` and `ctx.getCron?.()` when syncing external wake schedulers, and keep OpenClaw as the source of truth for due checks and execution.
 
 ### API object fields
 
@@ -342,7 +354,7 @@ Facade-loaded bundled plugin public surfaces (`api.ts`, `runtime-api.ts`,
 `index.ts`, `setup-entry.ts`, and similar public entry files) prefer the
 active runtime config snapshot when OpenClaw is already running. If no runtime
 snapshot exists yet, they fall back to the resolved config file on disk.
-Packaged bundled plugin facades should be loaded through the OpenClaw SDK
+Packaged bundled plugin facades should be loaded through OpenClaw's plugin
 facade loaders; direct imports from `dist/extensions/...` bypass staged runtime
 dependency mirrors that packaged installs use for plugin-owned dependencies.
 

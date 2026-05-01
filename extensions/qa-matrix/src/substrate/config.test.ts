@@ -76,6 +76,7 @@ describe("matrix qa config", () => {
       replyToMode: "off",
       threadReplies: "inbound",
     });
+    expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
   });
 
   it("applies room-keyed Matrix QA config overrides", () => {
@@ -104,9 +105,12 @@ describe("matrix qa config", () => {
           threadReplies: "off",
         },
         encryption: true,
+        allowBots: "mentions",
+        configuredBotRoles: ["observer"],
         groupAllowFrom: ["@driver:matrix-qa.test", "@observer:matrix-qa.test"],
         groupsByKey: {
           secondary: {
+            allowBots: false,
             requireMention: false,
             tools: {
               allow: ["sessions_spawn"],
@@ -123,6 +127,7 @@ describe("matrix qa config", () => {
         threadReplies: "always",
         toolProfile: "coding",
       },
+      observerAccessToken: "observer-token",
       sutAccessToken: "sut-token",
       sutAccountId: "sut",
       sutUserId: "@sut:matrix-qa.test",
@@ -144,7 +149,14 @@ describe("matrix qa config", () => {
     expect(next.tools).toMatchObject({
       profile: "coding",
     });
+    expect(next.channels?.matrix?.accounts?.["qa-observer-bot-source"]).toMatchObject({
+      accessToken: "observer-token",
+      enabled: false,
+      homeserver: "http://127.0.0.1:28008/",
+      userId: "@observer:matrix-qa.test",
+    });
     expect(next.channels?.matrix?.accounts?.sut).toMatchObject({
+      allowBots: "mentions",
       autoJoin: "allowlist",
       autoJoinAllowlist: ["!dm:matrix-qa.test", "#ops:matrix-qa.test"],
       blockStreaming: true,
@@ -157,6 +169,7 @@ describe("matrix qa config", () => {
       groups: {
         "!main:matrix-qa.test": { enabled: true, requireMention: true },
         "!secondary:matrix-qa.test": {
+          allowBots: false,
           enabled: true,
           requireMention: false,
           tools: {
@@ -231,6 +244,7 @@ describe("matrix qa config", () => {
         exec: false,
         plugin: false,
       },
+      allowBots: undefined,
       autoJoin: "allowlist",
       autoJoinAllowlist: ["!ops:matrix-qa.test"],
       blockStreaming: true,
@@ -244,6 +258,7 @@ describe("matrix qa config", () => {
       },
       encryption: false,
       execApprovals: undefined,
+      configuredBotRoles: [],
       groupAllowFrom: ["@driver:matrix-qa.test"],
       groupPolicy: "open",
       groupsByKey: {
@@ -265,6 +280,8 @@ describe("matrix qa config", () => {
       threadBindings: {},
       threadReplies: "inbound",
     });
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("allowBots=<default>");
+    expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("configuredBotRoles=<none>");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("autoJoin=allowlist");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain("streaming=partial");
     expect(summarizeMatrixQaConfigSnapshot(snapshot)).toContain(
@@ -352,6 +369,40 @@ describe("matrix qa config", () => {
     });
 
     expect(snapshot.groupAllowFrom).toEqual(["@driver:matrix-qa.test", "@observer:matrix-qa.test"]);
+  });
+
+  it("rejects configured bot roles without matching side-account auth", () => {
+    expect(() =>
+      buildMatrixQaConfig({} as OpenClawConfig, {
+        driverUserId: "@driver:matrix-qa.test",
+        homeserver: "http://127.0.0.1:28008/",
+        observerUserId: "@observer:matrix-qa.test",
+        overrides: {
+          configuredBotRoles: ["observer"],
+        },
+        sutAccessToken: "sut-token",
+        sutAccountId: "sut",
+        sutUserId: "@sut:matrix-qa.test",
+        topology,
+      }),
+    ).toThrow('Matrix QA configured bot role "observer" requires an access token');
+  });
+
+  it("rejects the SUT role as a configured bot source", () => {
+    expect(() =>
+      buildMatrixQaConfig({} as OpenClawConfig, {
+        driverUserId: "@driver:matrix-qa.test",
+        homeserver: "http://127.0.0.1:28008/",
+        observerUserId: "@observer:matrix-qa.test",
+        overrides: {
+          configuredBotRoles: ["sut"],
+        },
+        sutAccessToken: "sut-token",
+        sutAccountId: "sut",
+        sutUserId: "@sut:matrix-qa.test",
+        topology,
+      }),
+    ).toThrow('Matrix QA configured bot role "sut" would match the SUT account itself');
   });
 
   it("rejects unknown room-key overrides", () => {

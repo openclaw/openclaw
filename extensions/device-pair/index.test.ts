@@ -8,7 +8,6 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi } from "./api.js";
-import type { PendingPairingRequest } from "./notify.ts";
 
 const pluginApiMocks = vi.hoisted(() => ({
   clearDeviceBootstrapTokens: vi.fn(async () => ({ removed: 2 })),
@@ -70,6 +69,7 @@ type ApprovedPairingDevice = ApprovedPairingResult["device"];
 const INTERNAL_PAIRING_SCOPES = ["operator.write", "operator.pairing"];
 
 function createApi(params?: {
+  config?: OpenClawPluginApi["config"];
   runtime?: OpenClawPluginApi["runtime"];
   pluginConfig?: Record<string, unknown>;
   registerCommand?: (command: OpenClawPluginCommandDefinition) => void;
@@ -78,7 +78,7 @@ function createApi(params?: {
     id: "device-pair",
     name: "device-pair",
     source: "test",
-    config: {
+    config: params?.config ?? {
       gateway: {
         auth: {
           mode: "token",
@@ -96,6 +96,7 @@ function createApi(params?: {
 }
 
 function registerPairCommand(params?: {
+  config?: OpenClawPluginApi["config"];
   runtime?: OpenClawPluginApi["runtime"];
   pluginConfig?: Record<string, unknown>;
 }): OpenClawPluginCommandDefinition {
@@ -609,13 +610,109 @@ describe("device-pair /pair default setup code", () => {
       text: "⚠️ This command requires operator.pairing for internal gateway callers.",
     });
   });
+
+  it("normalizes bare publicUrl host ports before issuing setup codes", async () => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl: "gateway.example.test:18789/setup",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+    const text = requireText(result);
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Gateway: ws://gateway.example.test:18789");
+  });
+
+  it("rejects invalid bare publicUrl host ports", async () => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl: "localhost:notaport",
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Error: Configured publicUrl is invalid." });
+  });
+
+  it("rejects invalid gateway.remote.url before falling back to bind-derived setup urls", async () => {
+    const command = registerPairCommand({
+      config: {
+        gateway: {
+          bind: "custom",
+          customBindHost: "127.0.0.1",
+          remote: { url: "http://localhost:notaport" },
+          auth: {
+            mode: "token",
+            token: "gateway-token",
+          },
+        },
+      },
+      pluginConfig: {
+        publicUrl: undefined,
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Error: Configured gateway.remote.url is invalid." });
+  });
+
+  it.each([
+    "http://localhost:notaport",
+    "http:gateway.example.test",
+    "ws:gateway.example.test",
+    "http:/localhost:notaport",
+    "ftp:/gateway.example.test",
+    "mailto:foo@example.com",
+    "ws://user:pass@gateway.example.test:18789",
+  ])("rejects invalid publicUrl %s before issuing setup codes", async (publicUrl) => {
+    const command = registerPairCommand({
+      pluginConfig: {
+        publicUrl,
+      },
+    });
+    const result = await command.handler(
+      createCommandContext({
+        channel: "webchat",
+        args: "",
+        commandBody: "/pair",
+        gatewayClientScopes: ["operator.write", "operator.pairing"],
+      }),
+    );
+
+    expect(pluginApiMocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
+    expect(result).toEqual({ text: "Error: Configured publicUrl is invalid." });
+  });
 });
 
 describe("device-pair notify pending formatting", () => {
   it("includes role and scopes for pending requests", async () => {
     const { formatPendingRequests } =
       await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
-    const pending: PendingPairingRequest[] = [
+    const pending: Parameters<typeof formatPendingRequests>[0] = [
       {
         requestId: "req-1",
         deviceId: "device-1",
@@ -639,7 +736,7 @@ describe("device-pair notify pending formatting", () => {
   it("falls back to roles list and no scopes when role/scopes are absent", async () => {
     const { formatPendingRequests } =
       await vi.importActual<typeof import("./notify.ts")>("./notify.ts");
-    const pending: PendingPairingRequest[] = [
+    const pending: Parameters<typeof formatPendingRequests>[0] = [
       {
         requestId: "req-2",
         deviceId: "device-2",

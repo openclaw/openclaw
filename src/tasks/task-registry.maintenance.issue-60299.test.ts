@@ -68,6 +68,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   const currentTasks = new Map(params.tasks.map((task) => [task.taskId, { ...task }]));
 
   const runtime: TaskRegistryMaintenanceRuntime = {
+    listAcpSessionEntries: async () => [],
     readAcpSessionEntry: () =>
       acpEntry !== undefined
         ? ({
@@ -192,6 +193,40 @@ describe("task-registry maintenance issue #60299", () => {
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("marks subagent tasks lost when their child session recovery is tombstoned", async () => {
+    const childSessionKey = "agent:main:subagent:wedged-child";
+    const task = makeStaleTask({
+      runtime: "subagent",
+      runId: "run-wedged-child",
+      childSessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: "session-wedged-child",
+          updatedAt: Date.now(),
+          abortedLastRun: false,
+          subagentRecovery: {
+            automaticAttempts: 2,
+            lastAttemptAt: Date.now() - 30_000,
+            lastRunId: "run-wedged-child",
+            wedgedAt: Date.now() - 20_000,
+            wedgedReason: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+          },
+        },
+      },
+    });
+
+    expect(previewTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({
+      status: "lost",
+      error: "subagent orphan recovery blocked after 2 rapid accepted resume attempts",
+    });
   });
 
   it("does not mark cron tasks lost when the current process is not the cron runtime authority", async () => {
@@ -335,6 +370,53 @@ describe("task-registry maintenance issue #60299", () => {
       tasks: [task],
       sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
       activeRunIds: ["run-chat-cli-live"],
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("keeps detached media cli tasks live while their tool run context is active", async () => {
+    const channelKey = "agent:main:discord:channel:1456744319972282449";
+    const runId = "tool:video_generate:ac88dfc5-c2a9-4630-ab48-384e6450a12b";
+    const task = makeStaleTask({
+      runtime: "cli",
+      taskKind: "video_generation",
+      sourceId: "video_generate:fal",
+      runId,
+      ownerKey: channelKey,
+      requesterSessionKey: channelKey,
+      childSessionKey: channelKey,
+      progressSummary: "Generating video",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
+      activeRunIds: [runId],
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("keeps recently refreshed media cli tasks live without a chat run context", async () => {
+    const channelKey = "agent:main:discord:channel:1456744319972282449";
+    const task = makeStaleTask({
+      runtime: "cli",
+      taskKind: "video_generation",
+      sourceId: "video_generate:fal",
+      runId: "tool:video_generate:3a948fb2-79e8-470c-a6bc-46f37732cd3d",
+      ownerKey: channelKey,
+      requesterSessionKey: channelKey,
+      childSessionKey: channelKey,
+      lastEventAt: Date.now() - 60_000,
+      progressSummary: "Generating video",
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: { [channelKey]: { sessionId: channelKey, updatedAt: Date.now() } },
     });
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
