@@ -341,7 +341,9 @@ async function collectEmittedToolOutputMediaUrls(
   return filterToolResultMediaUrls(toolName, mediaUrls, result);
 }
 
-const COMPACT_PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
+type ToolOutputVisibility = "public" | "internal" | "diagnostic" | "media-delivery";
+
+const PROVIDER_INVENTORY_TOOLS = new Set(["image_generate", "video_generate"]);
 
 function hasProviderInventoryDetails(result: unknown): boolean {
   if (!result || typeof result !== "object") {
@@ -351,18 +353,37 @@ function hasProviderInventoryDetails(result: unknown): boolean {
   return Array.isArray(details?.providers);
 }
 
-function shouldEmitCompactToolOutput(params: {
+function classifyToolOutputVisibility(params: {
   toolName: string;
   result: unknown;
   outputText?: string;
+  hasDeliverableStructuredMedia: boolean;
+}): ToolOutputVisibility {
+  if (params.hasDeliverableStructuredMedia) {
+    return "media-delivery";
+  }
+  if (
+    PROVIDER_INVENTORY_TOOLS.has(params.toolName) &&
+    hasProviderInventoryDetails(params.result) &&
+    params.outputText?.trim()
+  ) {
+    return "diagnostic";
+  }
+  return "public";
+}
+
+function shouldEmitUserVisibleToolOutput(params: {
+  ctx: ToolHandlerContext;
+  visibility: ToolOutputVisibility;
 }): boolean {
-  if (!COMPACT_PROVIDER_INVENTORY_TOOLS.has(params.toolName)) {
-    return false;
+  switch (params.visibility) {
+    case "diagnostic":
+    case "internal":
+      return params.ctx.shouldEmitInternalDiagnosticToolOutput?.() ?? false;
+    case "media-delivery":
+    case "public":
+      return params.ctx.shouldEmitToolOutput();
   }
-  if (!hasProviderInventoryDetails(params.result)) {
-    return false;
-  }
-  return Boolean(params.outputText?.trim());
 }
 
 function readExecApprovalPendingDetails(result: unknown): {
@@ -533,15 +554,21 @@ async function emitToolResultOutput(params: {
   const mediaUrls = mediaReply
     ? filterToolResultMediaUrls(rawToolName, mediaReply.mediaUrls, result, ctx.builtinToolNames)
     : [];
+  const hasDeliverableStructuredMedia = hasStructuredMedia && mediaUrls.length > 0;
+  const outputVisibility = classifyToolOutputVisibility({
+    toolName,
+    result,
+    outputText,
+    hasDeliverableStructuredMedia,
+  });
   const shouldEmitOutput =
     !shouldSuppressStructuredMediaToolOutput({
       toolName,
       rawToolName,
       isToolError,
-      hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
+      hasDeliverableStructuredMedia,
       builtinToolNames: ctx.builtinToolNames,
-    }) &&
-    (ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText }));
+    }) && shouldEmitUserVisibleToolOutput({ ctx, visibility: outputVisibility });
   if (shouldEmitOutput) {
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, result);

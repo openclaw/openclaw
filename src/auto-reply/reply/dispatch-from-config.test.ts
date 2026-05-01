@@ -4402,6 +4402,37 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
+  it("does not deliver automatic diagnostic tool text in default Discord channel turns", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    let capturedOnToolResult: ((payload: ReplyPayload) => Promise<void>) | undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      capturedOnToolResult = opts?.onToolResult as
+        | ((payload: ReplyPayload) => Promise<void>)
+        | undefined;
+      return { text: "final reply" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        From: "discord:channel:C1",
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: "agent:main:discord:channel:C1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(capturedOnToolResult).toBeDefined();
+    await capturedOnToolResult!({ text: "openai: default=sora-2 | auth=OPENAI_API_KEY" });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
   it("falls back to automatic group/channel delivery when the message tool is unavailable", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

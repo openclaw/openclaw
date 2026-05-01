@@ -8,6 +8,7 @@ import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handler
 // Minimal mock context factory. Only the fields needed for the media emission path.
 function createMockContext(overrides?: {
   shouldEmitToolOutput?: boolean;
+  shouldEmitInternalDiagnosticToolOutput?: boolean;
   onToolResult?: ReturnType<typeof vi.fn>;
   toolResultFormat?: "markdown" | "plain";
   builtinToolNames?: ReadonlySet<string>;
@@ -44,6 +45,9 @@ function createMockContext(overrides?: {
     builtinToolNames: overrides?.builtinToolNames,
     shouldEmitToolResult: vi.fn(() => false),
     shouldEmitToolOutput: vi.fn(() => overrides?.shouldEmitToolOutput ?? false),
+    shouldEmitInternalDiagnosticToolOutput: vi.fn(
+      () => overrides?.shouldEmitInternalDiagnosticToolOutput ?? false,
+    ),
     emitToolSummary: vi.fn(),
     emitToolOutput: vi.fn(),
     trimMessagingToolSent: vi.fn(),
@@ -424,7 +428,83 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
   });
 
-  it("emits provider inventory output for compact video_generate list results", async () => {
+  it("queues generated media from structured details when tool output is hidden", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      toolResultFormat: "markdown",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated image: /tmp/generated.png" }],
+        details: {
+          media: {
+            mediaUrls: ["/tmp/generated.png"],
+          },
+        },
+      },
+    });
+
+    expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
+  });
+
+  function providerInventoryResult() {
+    return {
+      content: [
+        {
+          type: "text",
+          text: [
+            "openai: default=sora-2 | models=sora-2 | auth=OPENAI_API_KEY",
+            "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview | auth=GOOGLE_API_KEY",
+          ].join("\n"),
+        },
+      ],
+      details: {
+        providers: [
+          {
+            id: "openai",
+            defaultModel: "sora-2",
+            models: ["sora-2"],
+            authEnvVars: ["OPENAI_API_KEY"],
+            capabilities: { textToVideo: true },
+          },
+          {
+            id: "google",
+            defaultModel: "veo-3.1-fast-generate-preview",
+            models: ["veo-3.1-fast-generate-preview"],
+            authEnvVars: ["GOOGLE_API_KEY"],
+            capabilities: { textToVideo: true },
+          },
+        ],
+      },
+    };
+  }
+
+  it("does not emit image provider inventory when tool output is hidden", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result: providerInventoryResult(),
+    });
+
+    expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
+  it("does not emit video provider inventory when tool output is hidden", async () => {
     const ctx = createMockContext({
       shouldEmitToolOutput: false,
       onToolResult: vi.fn(),
@@ -436,37 +516,60 @@ describe("handleToolExecutionEnd media emission", () => {
       toolName: "video_generate",
       toolCallId: "tc-1",
       isError: false,
-      result: {
-        content: [
-          {
-            type: "text",
-            text: [
-              "openai: default=sora-2 | models=sora-2",
-              "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
-            ].join("\n"),
-          },
-        ],
-        details: {
-          providers: [
-            { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
-            {
-              id: "google",
-              defaultModel: "veo-3.1-fast-generate-preview",
-              models: ["veo-3.1-fast-generate-preview"],
-            },
-          ],
-        },
-      },
+      result: providerInventoryResult(),
+    });
+
+    expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+  });
+
+  it("emits provider inventory only when diagnostic output is explicitly allowed", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: false,
+      shouldEmitInternalDiagnosticToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+    const result = providerInventoryResult();
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "video_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result,
     });
 
     expect(ctx.emitToolOutput).toHaveBeenCalledWith(
       "video_generate",
       undefined,
-      [
-        "openai: default=sora-2 | models=sora-2",
-        "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
-      ].join("\n"),
-      expect.any(Object),
+      result.content[0].text,
+      result,
+    );
+  });
+
+  it("emits provider inventory in full verbose output through diagnostic policy", async () => {
+    const ctx = createMockContext({
+      shouldEmitToolOutput: true,
+      shouldEmitInternalDiagnosticToolOutput: true,
+      onToolResult: vi.fn(),
+      toolResultFormat: "plain",
+    });
+    const result = providerInventoryResult();
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "image_generate",
+      toolCallId: "tc-1",
+      isError: false,
+      result,
+    });
+
+    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+      "image_generate",
+      undefined,
+      result.content[0].text,
+      result,
     );
     expect(ctx.state.pendingToolMediaUrls).toEqual([]);
   });

@@ -506,6 +506,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     typeof params.shouldEmitToolOutput === "function"
       ? params.shouldEmitToolOutput()
       : params.verboseLevel === "full";
+  const shouldEmitInternalDiagnosticToolOutput = () =>
+    typeof params.shouldEmitInternalDiagnosticToolOutput === "function"
+      ? params.shouldEmitInternalDiagnosticToolOutput()
+      : params.verboseLevel === "full";
   const formatToolOutputBlock = (text: string) => {
     const trimmed = text.trim();
     if (!trimmed) {
@@ -900,6 +904,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     noteLastAssistant,
     shouldEmitToolResult,
     shouldEmitToolOutput,
+    shouldEmitInternalDiagnosticToolOutput,
     emitToolSummary,
     emitToolOutput,
     stripBlockTags,
