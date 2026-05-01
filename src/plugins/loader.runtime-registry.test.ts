@@ -165,7 +165,7 @@ describe("getCompatibleActivePluginRegistry", () => {
     ).toBeUndefined();
   });
 
-  it("reuses a scoped gateway-bindable registry for an unscoped default-mode request", () => {
+  it("reuses a scoped gateway-bindable registry for a matching default-mode tool scope", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(
       { id: "acpx" } as (typeof registry.plugins)[number],
@@ -190,11 +190,12 @@ describe("getCompatibleActivePluginRegistry", () => {
       __testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
+        onlyPluginIds: ["acpx", "telegram"],
       }),
     ).toBe(registry);
   });
 
-  it("reuses a scoped gateway-bindable registry for an unscoped snapshot-mode request", () => {
+  it("reuses a scoped gateway-bindable registry for a matching snapshot-mode tool scope", () => {
     const registry = createEmptyPluginRegistry();
     registry.plugins.push(
       { id: "acpx" } as (typeof registry.plugins)[number],
@@ -219,18 +220,52 @@ describe("getCompatibleActivePluginRegistry", () => {
       __testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
+        onlyPluginIds: ["acpx", "telegram"],
         activate: false,
       }),
     ).toBe(registry);
   });
 
-  it("does not reuse a scoped registry when plugin IDs differ", () => {
+  it("does not reuse a scoped registry when the requested tool scope needs another plugin", () => {
     const registry = createEmptyPluginRegistry();
-    registry.plugins.push({ id: "acpx" } as (typeof registry.plugins)[number]);
+    registry.plugins.push(
+      { id: "acpx" } as (typeof registry.plugins)[number],
+      { id: "telegram" } as (typeof registry.plugins)[number],
+    );
     const startupOptions = {
       config: {
         plugins: {
-          allow: ["acpx", "telegram"],
+          allow: ["acpx", "telegram", "tavily"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["acpx", "telegram"],
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: startupOptions.config,
+        workspaceDir: "/tmp/workspace-a",
+        onlyPluginIds: ["acpx", "telegram", "tavily"],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat an unscoped request as compatible with the scoped startup registry", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "acpx" } as (typeof registry.plugins)[number],
+      { id: "telegram" } as (typeof registry.plugins)[number],
+    );
+    const startupOptions = {
+      config: {
+        plugins: {
+          allow: ["acpx", "telegram", "tavily"],
         },
       },
       workspaceDir: "/tmp/workspace-a",
@@ -309,6 +344,7 @@ describe("getCompatibleActivePluginRegistry", () => {
       __testing.getCompatibleActivePluginRegistry({
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
+        onlyPluginIds: ["acpx", "telegram"],
       }),
     ).toBe(registry);
   });

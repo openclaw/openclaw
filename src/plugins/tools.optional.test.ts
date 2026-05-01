@@ -163,6 +163,7 @@ function resolveAutoEnabledOptionalDemoTools() {
 
 function createOptionalDemoActiveRegistry() {
   return {
+    plugins: [{ id: "optional-demo", status: "loaded" }],
     tools: [createOptionalDemoEntry()],
     diagnostics: [],
   };
@@ -403,10 +404,10 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
-  it("reuses the active registry for gateway-bindable tool loads before reloading", () => {
+  it("routes gateway-bindable tool loads through scoped runtime compatibility", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
     setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
-    resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
+    resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools(
       createResolveToolsParams({
@@ -416,8 +417,44 @@ describe("resolvePluginTools optional tools", () => {
     );
 
     expectResolvedToolNames(tools, ["optional_tool"]);
-    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["optional-demo"],
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    );
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("adds enabled non-startup tool plugins to the active tool runtime scope", () => {
+    const activeRegistry = createOptionalDemoActiveRegistry();
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
+    resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
+
+    resolvePluginTools({
+      context: {
+        ...createContext(),
+        config: {
+          plugins: {
+            enabled: true,
+            allow: ["tavily"],
+            entries: {
+              tavily: { enabled: true },
+            },
+          },
+        },
+      } as never,
+      toolAllowlist: ["optional_tool"],
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["optional-demo", "tavily"],
+      }),
+    );
   });
 
   it("loads plugin tools when gateway-bindable tool loads have no active registry", () => {
