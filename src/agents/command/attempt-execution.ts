@@ -324,6 +324,7 @@ export function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
+  fastMode?: boolean;
   timeoutMs: number;
   runId: string;
   opts: AgentCommandOpts & { senderIsOwner: boolean };
@@ -577,6 +578,7 @@ export function runAgentAttempt(params: {
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
+    fastMode: params.fastMode,
     verboseLevel: params.resolvedVerboseLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,

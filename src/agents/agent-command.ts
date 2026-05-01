@@ -48,6 +48,7 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { resolveFastModeState } from "./fast-mode.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadModelCatalog } from "./model-catalog.js";
@@ -978,6 +979,13 @@ async function agentCommandInternal(
               body,
               isFallbackRetry,
               resolvedThinkLevel,
+              fastMode: resolveFastModeState({
+                cfg,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: sessionAgentId,
+                sessionEntry,
+              }).enabled,
               timeoutMs,
               runId,
               opts,
