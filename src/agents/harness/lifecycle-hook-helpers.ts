@@ -161,7 +161,12 @@ function normalizeBeforeAgentFinalizeResult(
       if (nextCount > maxAttempts) {
         return { action: "continue" };
       }
-      return { action: "revise", reason: retryInstruction };
+      const reason = result.reason?.trim();
+      const revisedReason =
+        reason && reason.includes(retryInstruction)
+          ? reason
+          : [reason, retryInstruction].filter(Boolean).join("\n\n");
+      return { action: "revise", reason: revisedReason };
     }
     const reason = result.reason?.trim();
     return reason ? { action: "revise", reason } : { action: "continue" };

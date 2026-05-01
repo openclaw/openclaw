@@ -165,7 +165,7 @@ describe("plugin run context lifecycle", () => {
     ).toBeUndefined();
   });
 
-  it("keeps run context until slow terminal event subscriptions settle", async () => {
+  it("clears run context after the terminal subscription grace period", async () => {
     vi.useFakeTimers();
     let releaseTerminalHandler: (() => void) | undefined;
     let terminalHandlerSawContext: unknown;
@@ -221,13 +221,13 @@ describe("plugin run context lifecycle", () => {
         pluginId: "slow-terminal-subscription",
         get: { runId: "run-slow-terminal", namespace: "seen" },
       }),
-    ).toEqual({ runId: "run-slow-terminal" });
+    ).toBeUndefined();
 
     releaseTerminalHandler?.();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(terminalHandlerSawContext).toEqual({ runId: "run-slow-terminal" });
-    expect(terminalHandlerWroteContext).toEqual({ completed: true });
+    expect(terminalHandlerSawContext).toBeUndefined();
+    expect(terminalHandlerWroteContext).toBeUndefined();
     expect(
       getPluginRunContext({
         pluginId: "slow-terminal-subscription",

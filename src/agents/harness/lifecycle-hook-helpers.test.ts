@@ -187,4 +187,30 @@ describe("agent harness lifecycle hook helpers", () => {
       }),
     ).resolves.toEqual({ action: "revise", reason: "revise from context run" });
   });
+
+  it("preserves merged revise reasons when retry metadata is present", async () => {
+    const hookRunner = {
+      hasHooks: () => true,
+      runBeforeAgentFinalize: vi.fn().mockResolvedValue({
+        action: "revise",
+        reason: "fix generated baseline\n\nrerun the focused tests",
+        retry: {
+          instruction: "rerun the focused tests",
+          idempotencyKey: "merged-reason",
+          maxAttempts: 1,
+        },
+      }),
+    };
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      action: "revise",
+      reason: "fix generated baseline\n\nrerun the focused tests",
+    });
+  });
 });
