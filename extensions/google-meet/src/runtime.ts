@@ -133,7 +133,11 @@ function evaluateSpeechReadiness(session: GoogleMeetSession): {
 function collectChromeAudioCommands(config: GoogleMeetConfig): string[] {
   const commands = config.chrome.audioBridgeCommand
     ? [config.chrome.audioBridgeCommand[0]]
-    : [config.chrome.audioInputCommand?.[0], config.chrome.audioOutputCommand?.[0]];
+    : [
+        config.chrome.audioInputCommand?.[0],
+        config.chrome.audioOutputCommand?.[0],
+        config.chrome.bargeInInputCommand?.[0],
+      ];
   return [...new Set(commands.filter((value): value is string => Boolean(value?.trim())))];
 }
 
