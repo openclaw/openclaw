@@ -159,6 +159,10 @@ function asParamRecord(params: unknown): Record<string, unknown> {
     : {};
 }
 
+function isCliOnlyProcess(): boolean {
+  return process.env.OPENCLAW_CLI === "1" && !process.argv.slice(2).includes("gateway");
+}
+
 const VOICE_CALL_RUNTIME_KEY = Symbol.for("openclaw.voice-call.runtime");
 const VOICE_CALL_RUNTIME_PROMISE_KEY = Symbol.for("openclaw.voice-call.runtimePromise");
 const VOICE_CALL_RUNTIME_STOP_PROMISE_KEY = Symbol.for("openclaw.voice-call.runtimeStopPromise");
@@ -428,11 +432,11 @@ export default definePluginEntry({
         try {
           const raw =
             normalizeOptionalString(params?.callId) ?? normalizeOptionalString(params?.sid) ?? "";
+          const rt = await ensureRuntime();
           if (!raw) {
-            respond(false, { error: "callId required" });
+            respond(true, { found: true, calls: rt.manager.getActiveCalls() });
             return;
           }
-          const rt = await ensureRuntime();
           const call = rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
           if (!call) {
             respond(true, { found: false });
@@ -611,6 +615,9 @@ export default definePluginEntry({
     api.registerService({
       id: "voicecall",
       start: () => {
+        if (isCliOnlyProcess()) {
+          return;
+        }
         if (!config.enabled) {
           return;
         }

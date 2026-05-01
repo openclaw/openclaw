@@ -3,6 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { format } from "node:util";
 import type { Command } from "commander";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { sleep } from "../api.js";
 import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
@@ -31,12 +33,70 @@ type SetupStatus = {
   checks: SetupCheck[];
 };
 
+type VoiceCallGatewayMethod =
+  | "voicecall.initiate"
+  | "voicecall.start"
+  | "voicecall.continue"
+  | "voicecall.speak"
+  | "voicecall.dtmf"
+  | "voicecall.end"
+  | "voicecall.status";
+
+type VoiceCallGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
+
+const VOICE_CALL_GATEWAY_TIMEOUT_MS = "5000";
+
+const voiceCallCliDeps = {
+  callGatewayFromCli,
+};
+
+export const __testing = {
+  setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
+    voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
+  },
+};
+
 function writeStdoutLine(...values: unknown[]): void {
   process.stdout.write(`${format(...values)}\n`);
 }
 
 function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
+  const message = formatErrorMessage(err);
+  return (
+    message.includes("ECONNREFUSED") ||
+    message.includes("ECONNRESET") ||
+    message.includes("EHOSTUNREACH") ||
+    message.includes("ENOTFOUND") ||
+    message.includes("gateway not connected")
+  );
+}
+
+async function callVoiceCallGateway(
+  method: VoiceCallGatewayMethod,
+  params?: Record<string, unknown>,
+): Promise<VoiceCallGatewayCallResult> {
+  try {
+    const payload = await voiceCallCliDeps.callGatewayFromCli(
+      method,
+      { json: true, timeout: VOICE_CALL_GATEWAY_TIMEOUT_MS },
+      params,
+      { progress: false },
+    );
+    return { ok: true, payload };
+  } catch (err) {
+    if (isGatewayUnavailableForLocalFallback(err)) {
+      return { ok: false, error: err };
+    }
+    throw err;
+  }
 }
 
 function resolveMode(input: string): "off" | "serve" | "funnel" {
@@ -192,6 +252,48 @@ async function initiateCallAndPrintId(params: {
   writeStdoutJson({ callId: result.callId });
 }
 
+function writeGatewayCallId(payload: unknown): void {
+  if (isRecord(payload) && typeof payload.callId === "string") {
+    writeStdoutJson({ callId: payload.callId });
+    return;
+  }
+  if (isRecord(payload) && typeof payload.error === "string") {
+    throw new Error(payload.error);
+  }
+  throw new Error("voicecall gateway response missing callId");
+}
+
+async function initiateCallViaGatewayOrRuntime(params: {
+  ensureRuntime: () => Promise<VoiceCallRuntime>;
+  method: "voicecall.initiate" | "voicecall.start";
+  to?: string;
+  message?: string;
+  mode?: string;
+}) {
+  const mode = resolveCallMode(params.mode);
+  const gateway = await callVoiceCallGateway(params.method, {
+    ...(params.to ? { to: params.to } : {}),
+    ...(params.message ? { message: params.message } : {}),
+    ...(mode ? { mode } : {}),
+  });
+  if (gateway.ok) {
+    writeGatewayCallId(gateway.payload);
+    return;
+  }
+
+  const rt = await params.ensureRuntime();
+  const to = params.to ?? rt.config.toNumber;
+  if (!to) {
+    throw new Error("Missing --to and no toNumber configured");
+  }
+  await initiateCallAndPrintId({
+    runtime: rt,
+    to,
+    message: params.message,
+    mode: params.mode,
+  });
+}
+
 export function registerVoiceCallCli(params: {
   program: Command;
   config: VoiceCallConfig;
@@ -265,20 +367,35 @@ export function registerVoiceCallCli(params: {
           }
           return;
         }
-        const rt = await ensureRuntime();
-        const result = await rt.manager.initiateCall(options.to, undefined, {
-          message: options.message,
-          mode: resolveCallMode(options.mode) ?? "notify",
+        const mode = resolveCallMode(options.mode) ?? "notify";
+        const gateway = await callVoiceCallGateway("voicecall.start", {
+          to: options.to,
+          ...(options.message ? { message: options.message } : {}),
+          mode,
         });
-        if (!result.success) {
-          throw new Error(result.error || "smoke call failed");
+        let callId: unknown;
+        if (gateway.ok) {
+          callId = isRecord(gateway.payload) ? gateway.payload.callId : undefined;
+        } else {
+          const rt = await ensureRuntime();
+          const result = await rt.manager.initiateCall(options.to, undefined, {
+            message: options.message,
+            mode,
+          });
+          if (!result.success) {
+            throw new Error(result.error || "smoke call failed");
+          }
+          callId = result.callId;
+        }
+        if (typeof callId !== "string" || !callId) {
+          throw new Error("smoke call failed");
         }
         if (options.json) {
-          writeStdoutJson({ ok: true, setup, liveCall: true, callId: result.callId });
+          writeStdoutJson({ ok: true, setup, liveCall: true, callId });
           return;
         }
         writeSetupStatus(setup);
-        writeStdoutLine("live-call: started %s", result.callId);
+        writeStdoutLine("live-call: started %s", callId);
       },
     );
 
@@ -296,14 +413,10 @@ export function registerVoiceCallCli(params: {
       "conversation",
     )
     .action(async (options: { message: string; to?: string; mode?: string }) => {
-      const rt = await ensureRuntime();
-      const to = options.to ?? rt.config.toNumber;
-      if (!to) {
-        throw new Error("Missing --to and no toNumber configured");
-      }
-      await initiateCallAndPrintId({
-        runtime: rt,
-        to,
+      await initiateCallViaGatewayOrRuntime({
+        ensureRuntime,
+        method: "voicecall.initiate",
+        to: options.to,
         message: options.message,
         mode: options.mode,
       });
@@ -320,9 +433,9 @@ export function registerVoiceCallCli(params: {
       "conversation",
     )
     .action(async (options: { to: string; message?: string; mode?: string }) => {
-      const rt = await ensureRuntime();
-      await initiateCallAndPrintId({
-        runtime: rt,
+      await initiateCallViaGatewayOrRuntime({
+        ensureRuntime,
+        method: "voicecall.start",
         to: options.to,
         message: options.message,
         mode: options.mode,
@@ -335,6 +448,14 @@ export function registerVoiceCallCli(params: {
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--message <text>", "Message to speak")
     .action(async (options: { callId: string; message: string }) => {
+      const gateway = await callVoiceCallGateway("voicecall.continue", {
+        callId: options.callId,
+        message: options.message,
+      });
+      if (gateway.ok) {
+        writeStdoutJson(gateway.payload);
+        return;
+      }
       const rt = await ensureRuntime();
       const result = await rt.manager.continueCall(options.callId, options.message);
       if (!result.success) {
@@ -349,6 +470,14 @@ export function registerVoiceCallCli(params: {
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--message <text>", "Message to speak")
     .action(async (options: { callId: string; message: string }) => {
+      const gateway = await callVoiceCallGateway("voicecall.speak", {
+        callId: options.callId,
+        message: options.message,
+      });
+      if (gateway.ok) {
+        writeStdoutJson(gateway.payload);
+        return;
+      }
       const rt = await ensureRuntime();
       const result = await rt.manager.speak(options.callId, options.message);
       if (!result.success) {
@@ -363,6 +492,14 @@ export function registerVoiceCallCli(params: {
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--digits <digits>", "DTMF digits")
     .action(async (options: { callId: string; digits: string }) => {
+      const gateway = await callVoiceCallGateway("voicecall.dtmf", {
+        callId: options.callId,
+        digits: options.digits,
+      });
+      if (gateway.ok) {
+        writeStdoutJson(gateway.payload);
+        return;
+      }
       const rt = await ensureRuntime();
       const result = await rt.manager.sendDtmf(options.callId, options.digits);
       if (!result.success) {
@@ -376,6 +513,13 @@ export function registerVoiceCallCli(params: {
     .description("Hang up an active call")
     .requiredOption("--call-id <id>", "Call ID")
     .action(async (options: { callId: string }) => {
+      const gateway = await callVoiceCallGateway("voicecall.end", {
+        callId: options.callId,
+      });
+      if (gateway.ok) {
+        writeStdoutJson(gateway.payload);
+        return;
+      }
       const rt = await ensureRuntime();
       const result = await rt.manager.endCall(options.callId);
       if (!result.success) {
@@ -390,6 +534,24 @@ export function registerVoiceCallCli(params: {
     .option("--call-id <id>", "Call ID")
     .option("--json", "Print machine-readable JSON")
     .action(async (options: { callId?: string; json?: boolean }) => {
+      const gateway = await callVoiceCallGateway(
+        "voicecall.status",
+        options.callId ? { callId: options.callId } : undefined,
+      );
+      if (gateway.ok) {
+        if (options.callId && isRecord(gateway.payload)) {
+          if (gateway.payload.found === true && "call" in gateway.payload) {
+            writeStdoutJson(gateway.payload.call);
+            return;
+          }
+          if (gateway.payload.found === false) {
+            writeStdoutJson({ found: false });
+            return;
+          }
+        }
+        writeStdoutJson(gateway.payload);
+        return;
+      }
       const rt = await ensureRuntime();
       if (options.callId) {
         const call = rt.manager.getCall(options.callId);

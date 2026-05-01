@@ -610,6 +610,11 @@ openclaw voicecall latency                      # summarize turn latency from lo
 openclaw voicecall expose --mode funnel
 ```
 
+When the Gateway is already running, operational `voicecall` commands delegate
+to the Gateway-owned voice-call runtime so the CLI does not bind a second
+webhook server. If no Gateway is reachable, the commands fall back to a
+standalone CLI runtime.
+
 `latency` reads `calls.jsonl` from the default voice-call storage path.
 Use `--file <path>` to point at a different log and `--last <n>` to limit
 analysis to the last N records (default 200). Output includes p50/p90/p99
