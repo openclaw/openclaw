@@ -311,4 +311,51 @@ describe("telegramMessageActions", () => {
       }
     }
   });
+
+  // Regression for #75433: when channels.telegram.botToken is configured as
+  // an unresolved SecretRef, discovery must NOT throw and crash the embedded
+  // reply run. Return empty discovery so prompt prep continues; the runtime
+  // send path uses the resolved snapshot anyway.
+  it("returns empty discovery when botToken is an unresolved SecretRef instead of crashing the embedded run", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: { source: "exec", provider: "default", id: "telegram-token" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({ cfg });
+
+    expect(discovery).toEqual({
+      actions: [],
+      capabilities: [],
+      schema: null,
+    });
+  });
+
+  it("returns empty discovery when scoped Telegram account token is an unresolved SecretRef", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            ops: {
+              botToken: { source: "exec", provider: "default", id: "telegram-ops" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const discovery = telegramMessageActions.describeMessageTool?.({
+      cfg,
+      accountId: "ops",
+    });
+
+    expect(discovery).toEqual({
+      actions: [],
+      capabilities: [],
+      schema: null,
+    });
+  });
 });

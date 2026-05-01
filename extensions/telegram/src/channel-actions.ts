@@ -53,8 +53,32 @@ function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
   return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
 }
 
+/**
+ * Discovery is a best-effort capability summary used during embedded prompt
+ * prep, before the active gateway runtime snapshot has resolved channel
+ * credentials. When `channels.telegram.botToken` is configured as a non-env
+ * SecretRef, calling the resolver from raw config throws
+ * `channels.telegram.botToken: unresolved SecretRef ...` and crashes the
+ * entire embedded reply run before model output (#75433). Treat any
+ * unresolved-SecretRef failure as "no usable Telegram accounts for discovery"
+ * and return null — the runtime path that actually sends messages still uses
+ * the resolved snapshot and will surface real auth failures there.
+ */
+function isUnresolvedSecretRefError(err: unknown): boolean {
+  return err instanceof Error && /unresolved SecretRef/i.test(err.message);
+}
+
 function resolveTelegramActionDiscovery(cfg: Parameters<typeof listEnabledTelegramAccounts>[0]) {
-  const accounts = listTokenSourcedAccounts(listEnabledTelegramAccounts(cfg));
+  let resolved: ReturnType<typeof listEnabledTelegramAccounts>;
+  try {
+    resolved = listEnabledTelegramAccounts(cfg);
+  } catch (err) {
+    if (isUnresolvedSecretRefError(err)) {
+      return null;
+    }
+    throw err;
+  }
+  const accounts = listTokenSourcedAccounts(resolved);
   if (accounts.length === 0) {
     return null;
   }
@@ -89,7 +113,15 @@ function resolveScopedTelegramActionDiscovery(params: {
   if (!params.accountId) {
     return resolveTelegramActionDiscovery(params.cfg);
   }
-  const account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  let account: ReturnType<typeof resolveTelegramAccount>;
+  try {
+    account = resolveTelegramAccount({ cfg: params.cfg, accountId: params.accountId });
+  } catch (err) {
+    if (isUnresolvedSecretRefError(err)) {
+      return null;
+    }
+    throw err;
+  }
   if (!account.enabled || account.tokenSource === "none") {
     return null;
   }
