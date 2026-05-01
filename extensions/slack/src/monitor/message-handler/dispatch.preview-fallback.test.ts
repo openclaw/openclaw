@@ -34,6 +34,7 @@ let mockedReplyThreadTs: string | undefined = THREAD_TS;
 let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
 let mockedQueuedFinal = false;
 let mockedFailedCounts = { tool: 0, block: 0, final: 0 };
+let mockedDispatchCounts: { tool?: number; block?: number; final?: number } | undefined;
 let mockedSwallowDeliveryFailures = false;
 let mockedDispatchSequence: Array<{
   kind: "tool" | "block" | "final";
@@ -352,12 +353,14 @@ vi.mock("../reply.runtime.js", () => ({
         }
       }
     }
+    const sequenceCounts = {
+      tool: mockedDispatchSequence.filter((entry) => entry.kind === "tool").length,
+      block: mockedDispatchSequence.filter((entry) => entry.kind === "block").length,
+      final: mockedDispatchSequence.filter((entry) => entry.kind === "final").length,
+    };
     return {
       queuedFinal: mockedQueuedFinal,
-      counts: {
-        block: mockedDispatchSequence.filter((entry) => entry.kind === "block").length,
-        final: mockedDispatchSequence.filter((entry) => entry.kind === "final").length,
-      },
+      counts: mockedDispatchCounts ?? sequenceCounts,
     };
   },
 }));
@@ -388,6 +391,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyThreadTsSequence = undefined;
     mockedQueuedFinal = false;
     mockedFailedCounts = { tool: 0, block: 0, final: 0 };
+    mockedDispatchCounts = undefined;
     mockedSwallowDeliveryFailures = false;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
     mockedProgressEvents = [];
@@ -436,6 +440,23 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats delivered tool-only counts as visible Slack delivery", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedDispatchCounts = { tool: 1, block: 0, final: 0 };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
   });
 
   it("finalizes fast draft preview text without sending a duplicate normal reply", async () => {

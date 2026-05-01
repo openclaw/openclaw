@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Slack: preserve tool-only delivery accounting while retrying transient outbound send failures, so Socket Mode reconnects and swallowed send errors do not make visible replies look undelivered. (#72896) Thanks @shannon0430.
+
 ## 2026.4.30
 
 ### Changes
