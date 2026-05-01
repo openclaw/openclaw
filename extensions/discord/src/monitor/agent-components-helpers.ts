@@ -10,7 +10,6 @@ export {
 export {
   ensureAgentComponentInteractionAllowed,
   ensureComponentUserAllowed,
-  ensureGuildComponentMemberAllowed,
   resolveAuthorizedComponentInteraction,
   resolveComponentCommandAuthorized,
   resolveInteractionContextWithDmAuth,
@@ -31,7 +30,5 @@ export type {
   AgentComponentMessageInteraction,
   ComponentInteractionContext,
   DiscordChannelContext,
-  DiscordUser,
 } from "./agent-components.types.js";
-export { resolveDiscordGuildEntry } from "./allow-list.js";
 export { resolvePinnedMainDmOwnerFromAllowlist } from "./agent-components-helpers.runtime.js";

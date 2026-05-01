@@ -143,6 +143,22 @@ Wait-OpenClawGateway
 Invoke-OpenClaw models set ${psSingleQuote(input.auth.modelId)}
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 Invoke-OpenClaw config set tools.profile minimal
+$configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if ($null -eq $config.models) {
+  $config | Add-Member -MemberType NoteProperty -Name models -Value ([pscustomobject]@{})
+}
+if ($null -eq $config.models.providers) {
+  $config.models | Add-Member -MemberType NoteProperty -Name providers -Value ([pscustomobject]@{})
+}
+$config.models.providers | Add-Member -Force -MemberType NoteProperty -Name openai -Value ([pscustomobject]@{
+  baseUrl = 'https://api.openai.com/v1'
+  models = @()
+  timeoutSeconds = 300
+})
+$config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
+Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
 Invoke-OpenClaw agent --local --agent main --session-id parallels-npm-update-windows --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;

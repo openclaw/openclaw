@@ -332,6 +332,14 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(combined).toContain("where.exe git.exe");
   });
 
+  it("preseeds dev update channel before stable-to-dev update lanes", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(macos).toContain('channel: "dev"');
+    expect(windows).toContain("Name channel -Value 'dev'");
+  });
+
   it("passes aggregate model overrides into each OS fresh lane", () => {
     const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
 
@@ -414,6 +422,9 @@ console.log(JSON.stringify(result));
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
+    expect(script).toContain("$config.models.providers");
+    expect(script).toContain("timeoutSeconds = 300");
+    expect(script).toContain("parallels-windows-smoke.jsonl");
   });
 
   it("waits through transient Windows restoring state before VM operations", () => {

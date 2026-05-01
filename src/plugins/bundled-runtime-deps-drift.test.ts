@@ -13,7 +13,7 @@ describe("mirrored root runtime dependency drift guard", () => {
     "file-type", // available transitively via mirrored deps
     "ipaddr.js", // available transitively via mirrored deps
     "proxy-agent", // available transitively via mirrored deps
-    "qrcode", // type-only import in src/media/qr-runtime.ts
+    "qrcode", // QR setup flows stage this through the owning channel plugin, not the root mirror
     "typescript", // CLI/dev only (api-baseline, jiti-runtime-api)
   ]);
 

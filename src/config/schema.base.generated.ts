@@ -21648,6 +21648,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "string",
                           const: "clawhub",
                         },
+                        {
+                          type: "string",
+                          const: "git",
+                        },
                       ],
                     },
                     spec: {
@@ -21716,6 +21720,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           const: "private",
                         },
                       ],
+                    },
+                    gitUrl: {
+                      type: "string",
+                    },
+                    gitRef: {
+                      type: "string",
+                    },
+                    gitCommit: {
+                      type: "string",
                     },
                     hooks: {
                       type: "array",
