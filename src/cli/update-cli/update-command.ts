@@ -103,6 +103,10 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
 ] as const;
+const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
+  ...SERVICE_REFRESH_PATH_ENV_KEYS,
+  "OPENCLAW_PROFILE",
+] as const;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -320,6 +324,26 @@ function resolveUpdatedInstallCommandEnv(
   return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
 }
 
+export function resolvePostInstallDoctorEnv(params?: {
+  baseEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  if (!params?.serviceEnv) {
+    return resolvedEnv;
+  }
+
+  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
+  for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
+    const value = serviceEnv[key]?.trim();
+    if (value) {
+      resolvedEnv[key] = serviceEnv[key];
+    }
+  }
+  return resolvedEnv;
+}
+
 export function resolveUpdatedGatewayRestartPort(params: {
   config?: OpenClawConfig;
   processEnv?: NodeJS.ProcessEnv;
@@ -515,6 +539,8 @@ async function runPackageInstallUpdate(params: {
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   jsonMode: boolean;
+  managedServiceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
 }): Promise<UpdateRunResult> {
   const manager = await resolveGlobalManager({
     root: params.root,
@@ -579,7 +605,10 @@ async function runPackageInstallUpdate(params: {
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
           env: {
-            ...disableUpdatedPackageCompileCacheEnv(process.env),
+            ...resolvePostInstallDoctorEnv({
+              serviceEnv: params.managedServiceEnv,
+              invocationCwd: params.invocationCwd,
+            }),
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
           },
@@ -1619,6 +1648,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
             startedAt,
             progress,
             jsonMode: Boolean(opts.json),
+            managedServiceEnv: prePackageServiceStop?.serviceEnv,
+            invocationCwd,
           })
         : await runGitUpdate({
             root,
