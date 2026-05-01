@@ -134,7 +134,13 @@ function buildFreshestSessionEntryIndex(
   for (const [key, entry] of Object.entries(store)) {
     const normalized = normalizeLowercaseStringOrEmpty(key);
     const existing = index.get(normalized);
-    if (!existing || (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0)) {
+    const entryRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
+    const existingRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(existing));
+    if (
+      !existing ||
+      (entryRoutable && !existingRoutable) ||
+      (entryRoutable === existingRoutable && (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0))
+    ) {
       index.set(normalized, entry);
     }
   }

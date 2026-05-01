@@ -94,9 +94,10 @@ export function resolveAttachmentDelivery(params: {
   }
   if (channel === "slack") {
     const hint = params.channelHints?.slack;
+    const threadTs = normalizeOptionalString(hint?.threadTs);
     return {
       ...(fallbackParseMode ? { parseMode: fallbackParseMode } : {}),
-      ...(hint?.threadTs ? { threadTs: hint.threadTs } : {}),
+      ...(threadTs ? { threadTs } : {}),
     };
   }
   return fallbackParseMode ? { parseMode: fallbackParseMode } : {};
@@ -229,8 +230,7 @@ export async function sendPluginSessionAttachment(
       threadId: resolvedThreadId,
       requesterSessionKey: sessionKey,
       mediaUrls: validated,
-      forceDocument:
-        params.forceDocument ?? (resolvedDelivery.forceDocumentMime ? true : undefined),
+      forceDocument: resolvedDelivery.forceDocumentMime ? true : params.forceDocument,
       bestEffort: false,
       ...(resolvedDelivery.parseMode ? { parseMode: resolvedDelivery.parseMode } : {}),
       ...(resolvedDelivery.disableNotification !== undefined

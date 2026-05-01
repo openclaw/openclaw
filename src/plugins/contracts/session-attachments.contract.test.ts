@@ -109,6 +109,18 @@ describe("plugin session attachments", () => {
         channelHints: { slack: { threadTs: "1700000000.000100" } },
       }),
     ).toEqual({ threadTs: "1700000000.000100" });
+    expect(
+      resolveAttachmentDelivery({
+        channel: "slack",
+        channelHints: { slack: { threadTs: " 1700000000.000100 " } },
+      }),
+    ).toEqual({ threadTs: "1700000000.000100" });
+    expect(
+      resolveAttachmentDelivery({
+        channel: "slack",
+        channelHints: { slack: { threadTs: "   " } },
+      }),
+    ).toEqual({});
     expect(resolveAttachmentDelivery({ channel: "discord", captionFormat: "markdown" })).toEqual(
       {},
     );
@@ -515,6 +527,7 @@ describe("plugin session attachments", () => {
           origin: "bundled",
           sessionKey: "agent:main:main",
           files: [{ path: pdfPath }],
+          forceDocument: false,
           channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
         }),
       ).resolves.toMatchObject({ ok: true, channel: "telegram", count: 1 });
