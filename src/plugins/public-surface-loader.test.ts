@@ -5,6 +5,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps-roots.js";
 import { clearBundledRuntimeDependencyNodePaths } from "./bundled-runtime-deps.js";
+import { writeGeneratedRuntimeDepsManifest } from "./test-helpers/bundled-runtime-deps-fixtures.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -79,6 +80,7 @@ function createPackagedPublicArtifactWithStagedRuntimeDep(): {
     "utf8",
   );
   fs.writeFileSync(path.join(depRoot, "index.js"), 'export const marker = "staged";\n', "utf8");
+  writeGeneratedRuntimeDepsManifest(installRoot, ["public-artifact-runtime-dep@1.0.0"]);
 
   return {
     bundledPluginsDir: path.join(packageRoot, "dist", "extensions"),
@@ -94,6 +96,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.doUnmock("./native-module-require.js");
   vi.doUnmock("node:module");
   clearBundledRuntimeDependencyNodePaths();
   if (originalBundledPluginsDir === undefined) {
@@ -113,6 +116,11 @@ describe("bundled plugin public surface loader", () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "windows-dist-ok" })));
     vi.doMock("jiti", () => ({
       createJiti,
+    }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: (modulePath: string) =>
+        modulePath.endsWith(".js") || modulePath.endsWith(".mjs") || modulePath.endsWith(".cjs"),
+      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.resetModules();
@@ -192,6 +200,11 @@ describe("bundled plugin public surface loader", () => {
     const createJiti = vi.fn(() => vi.fn((modulePath: string) => ({ modulePath })));
     vi.doMock("jiti", () => ({
       createJiti,
+    }));
+    vi.doMock("./native-module-require.js", () => ({
+      isJavaScriptModulePath: (modulePath: string) =>
+        modulePath.endsWith(".js") || modulePath.endsWith(".mjs") || modulePath.endsWith(".cjs"),
+      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
     vi.resetModules();
 
