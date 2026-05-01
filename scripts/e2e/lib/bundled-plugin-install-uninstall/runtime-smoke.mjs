@@ -77,12 +77,38 @@ function buildPluginPlan(manifest) {
   const contracts =
     manifest.contracts && typeof manifest.contracts === "object" ? manifest.contracts : {};
   const commandAliases = Array.isArray(manifest.commandAliases) ? manifest.commandAliases : [];
+  const channels = Array.isArray(manifest.channels)
+    ? manifest.channels.filter(isNonEmptyString)
+    : [];
+  const speechProviders = Array.isArray(contracts.speechProviders)
+    ? contracts.speechProviders.filter(isNonEmptyString)
+    : [];
+  const tools = Array.isArray(contracts.tools) ? contracts.tools.filter(isNonEmptyString) : [];
+  const hasRuntimeContractSurface = Boolean(
+    channels.length > 0 ||
+    speechProviders.length > 0 ||
+    tools.length > 0 ||
+    (Array.isArray(manifest.providers) && manifest.providers.length > 0) ||
+    (Array.isArray(manifest.cliBackends) && manifest.cliBackends.length > 0) ||
+    (Array.isArray(contracts.mediaUnderstandingProviders) &&
+      contracts.mediaUnderstandingProviders.length > 0) ||
+    (Array.isArray(contracts.migrationProviders) && contracts.migrationProviders.length > 0),
+  );
+  const legacyImplicitStartupSidecar =
+    manifest.activation?.onStartup === undefined &&
+    channels.length === 0 &&
+    !hasRuntimeContractSurface;
+  const commandAliasesActiveInThisProbe =
+    manifest.activation?.onStartup === true ||
+    legacyImplicitStartupSidecar ||
+    channels.length > 0 ||
+    speechProviders.length > 0 ||
+    tools.length > 0;
   return {
-    channels: Array.isArray(manifest.channels) ? manifest.channels.filter(isNonEmptyString) : [],
-    speechProviders: Array.isArray(contracts.speechProviders)
-      ? contracts.speechProviders.filter(isNonEmptyString)
-      : [],
-    tools: Array.isArray(contracts.tools) ? contracts.tools.filter(isNonEmptyString) : [],
+    channels,
+    speechProviders,
+    tools,
+    commandAliasesActiveInThisProbe,
     runtimeSlashAliases: commandAliases
       .filter((alias) => alias?.kind === "runtime-slash")
       .map((alias) => alias?.name)
@@ -321,11 +347,15 @@ async function runManifestProbes(plan, options) {
     const status = await rpcCall("channels.status", { probe: false, timeoutMs: 2000 }, options);
     assertChannelVisible(status, channel);
   }
-  if (plan.runtimeSlashAliases.length > 0) {
+  if (plan.runtimeSlashAliases.length > 0 && plan.commandAliasesActiveInThisProbe) {
     const commands = await rpcCall("commands.list", { scope: "both", includeArgs: true }, options);
     for (const alias of plan.runtimeSlashAliases) {
       assertCommandVisible(commands, alias);
     }
+  } else if (plan.runtimeSlashAliases.length > 0) {
+    console.log(
+      `Runtime slash command smoke skipped for ${options.pluginId}: plugin is lazy in this probe`,
+    );
   }
   if (plan.tools.length > 0) {
     const catalog = await rpcCall("tools.catalog", { includePlugins: true }, options);
