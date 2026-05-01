@@ -226,6 +226,29 @@ describe("nextcloudTalkMessageActions", () => {
       ).rejects.toThrow(/Action delete not supported for nextcloud-talk/);
     });
 
+    it("rejects reaction removal requests without calling the add-reaction sender", async () => {
+      await expect(
+        nextcloudTalkMessageActions.handleAction?.({
+          channel: "nextcloud-talk",
+          action: "react",
+          params: { to: "room:abc123", messageId: "1", emoji: "👍", remove: true },
+          cfg,
+        }),
+      ).rejects.toThrow(/removal is not supported/);
+      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
+    });
+
+    it("still adds the reaction when remove is explicitly false", async () => {
+      await nextcloudTalkMessageActions.handleAction?.({
+        channel: "nextcloud-talk",
+        action: "react",
+        params: { to: "room:abc123", messageId: "1", emoji: "👍", remove: false },
+        cfg,
+      });
+
+      expect(hoisted.sendReactionNextcloudTalk).toHaveBeenCalledTimes(1);
+    });
+
     it("propagates errors from sendReactionNextcloudTalk", async () => {
       hoisted.sendReactionNextcloudTalk.mockRejectedValueOnce(
         new Error("Nextcloud Talk reaction failed: 403 forbidden"),
