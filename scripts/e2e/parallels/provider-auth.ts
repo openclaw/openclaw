@@ -72,6 +72,20 @@ export function resolveWindowsProviderAuth(input: {
   return { ...auth, modelId: "openai/gpt-4.1-mini" };
 }
 
+export function providerIdFromModelId(modelId: string): string {
+  const providerId = modelId.split("/", 1)[0]?.trim() ?? "";
+  return /^[A-Za-z0-9_-]+$/u.test(providerId) ? providerId : "";
+}
+
+export function resolveParallelsModelTimeoutSeconds(platform?: Platform): number {
+  const platformEnv =
+    platform === undefined
+      ? undefined
+      : process.env[`OPENCLAW_PARALLELS_${platform.toUpperCase()}_MODEL_TIMEOUT_S`];
+  const raw = Number(platformEnv || process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || 600);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 600;
+}
+
 export function parseProvider(value: string): Provider {
   if (value === "openai" || value === "anthropic" || value === "minimax") {
     return value;

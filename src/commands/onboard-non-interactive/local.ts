@@ -208,6 +208,7 @@ export async function runNonInteractiveLocalSetup(params: {
   await replaceConfigFile({
     nextConfig,
     ...(baseHash !== undefined ? { baseHash } : {}),
+    writeOptions: { allowConfigSizeDrop: true },
   });
   logConfigUpdated(runtime);
   await preparePostConfigBundledRuntimeDeps({ config: nextConfig, runtime });

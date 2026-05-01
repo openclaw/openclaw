@@ -5,6 +5,7 @@ import { createVoiceReceiveRecoveryState } from "./receive-recovery.js";
 
 const {
   createConnectionMock,
+  getVoiceConnectionMock,
   joinVoiceChannelMock,
   entersStateMock,
   createAudioPlayerMock,
@@ -83,8 +84,11 @@ const {
     return connection;
   };
 
+  const getVoiceConnectionMock = vi.fn((): MockConnection | undefined => undefined);
+
   return {
     createConnectionMock,
+    getVoiceConnectionMock,
     joinVoiceChannelMock: vi.fn(() => createConnectionMock()),
     entersStateMock: vi.fn(async (_target?: unknown, _state?: string, _timeoutMs?: number) => {
       return undefined;
@@ -118,6 +122,7 @@ vi.mock("./sdk-runtime.js", () => ({
     createAudioPlayer: createAudioPlayerMock,
     createAudioResource: vi.fn(),
     entersState: entersStateMock,
+    getVoiceConnection: getVoiceConnectionMock,
     joinVoiceChannel: joinVoiceChannelMock,
   }),
 }));
@@ -189,6 +194,8 @@ describe("DiscordVoiceManager", () => {
   });
 
   beforeEach(() => {
+    getVoiceConnectionMock.mockReset();
+    getVoiceConnectionMock.mockReturnValue(undefined);
     joinVoiceChannelMock.mockReset();
     joinVoiceChannelMock.mockImplementation(() => createConnectionMock());
     entersStateMock.mockReset();
@@ -206,7 +213,7 @@ describe("DiscordVoiceManager", () => {
   const createManager = (
     discordConfig: ConstructorParameters<
       typeof managerModule.DiscordVoiceManager
-    >[0]["discordConfig"] = {},
+    >[0]["discordConfig"] = { voice: { enabled: true } },
     clientOverride?: ReturnType<typeof createClient>,
     cfgOverride: ConstructorParameters<typeof managerModule.DiscordVoiceManager>[0]["cfg"] = {},
   ) =>
@@ -242,6 +249,17 @@ describe("DiscordVoiceManager", () => {
       new Error("Failed to decrypt: DecryptionFailed(UnencryptedWhenPassthroughDisabled)"),
     );
   };
+
+  it("rejects joins when Discord voice config is absent", async () => {
+    const manager = createManager({});
+
+    await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject({
+      ok: false,
+      message: "Discord voice is disabled (channels.discord.voice.enabled).",
+    });
+
+    expect(joinVoiceChannelMock).not.toHaveBeenCalled();
+  });
 
   type ProcessSegmentInvoker = {
     processSegment: (params: {
@@ -311,6 +329,52 @@ describe("DiscordVoiceManager", () => {
     oldDestroyed?.();
 
     expectConnectedStatus(manager, "1002");
+  });
+
+  it("destroys stale tracked voice connections before joining", async () => {
+    const staleConnection = createConnectionMock();
+    const connection = createConnectionMock();
+    getVoiceConnectionMock.mockReturnValueOnce(staleConnection);
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(getVoiceConnectionMock).toHaveBeenCalledWith("g1");
+    expect(staleConnection.destroy).toHaveBeenCalledTimes(1);
+    expectConnectedStatus(manager, "1001");
+  });
+
+  it("does not throw when stale tracked voice connections are already destroyed", async () => {
+    const staleConnection = createConnectionMock();
+    staleConnection.state.status = "destroyed";
+    staleConnection.destroy.mockImplementation(() => {
+      throw new Error("Cannot destroy VoiceConnection - it has already been destroyed");
+    });
+    getVoiceConnectionMock.mockReturnValueOnce(staleConnection);
+    joinVoiceChannelMock.mockReturnValueOnce(createConnectionMock());
+    const manager = createManager();
+
+    await expect(manager.join({ guildId: "g1", channelId: "1001" })).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(staleConnection.destroy).not.toHaveBeenCalled();
+  });
+
+  it("does not throw when leaving an already destroyed voice connection", async () => {
+    const connection = createConnectionMock();
+    connection.destroy.mockImplementation(() => {
+      throw new Error("Cannot destroy VoiceConnection - it has already been destroyed");
+    });
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    connection.state.status = "destroyed";
+
+    await expect(manager.leave({ guildId: "g1" })).resolves.toMatchObject({ ok: true });
+    expect(connection.destroy).not.toHaveBeenCalled();
   });
 
   it("removes voice listeners on leave", async () => {
@@ -846,6 +910,17 @@ describe("DiscordVoiceManager", () => {
 
     const { DiscordVoiceReadyListener } = managerModule;
     const listener = new DiscordVoiceReadyListener(manager);
+
+    await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
+    expect(autoJoinSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("DiscordVoiceResumedListener: runs autoJoin on gateway resume", async () => {
+    const manager = createManager();
+    const autoJoinSpy = vi.spyOn(manager, "autoJoin").mockResolvedValue(undefined);
+
+    const { DiscordVoiceResumedListener } = managerModule;
+    const listener = new DiscordVoiceResumedListener(manager);
 
     await expect(listener.handle(undefined, undefined as never)).resolves.not.toThrow();
     expect(autoJoinSpy).toHaveBeenCalledTimes(1);

@@ -319,13 +319,20 @@ console.log(JSON.stringify(result));
       expect(script, scriptPath).toContain("tools.profile");
       expect(script, scriptPath).toContain("--thinking");
       expect(script, scriptPath).toContain("minimal");
+      expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
     }
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("resolveParallelsModelTimeoutSeconds");
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("resolveParallelsModelTimeoutSeconds");
+    expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsModelProviderTimeoutScript");
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("tools.profile");
     expect(npmUpdateScripts).toContain("--thinking minimal");
+    expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
+    expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
+    expect(npmUpdateScripts).toContain("windowsModelProviderTimeoutScript");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {
@@ -451,10 +458,12 @@ console.log(JSON.stringify(result));
 
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
+    expect(script).toContain("windowsModelProviderTimeoutScript(this.auth.modelId)");
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
-    expect(script).toContain("$config.models.providers");
-    expect(script).toContain("timeoutSeconds = 300");
-    expect(script).toContain("parallels-windows-smoke.jsonl");
+    expect(script).toContain("parallels-windows-smoke-retry-$attempt");
+    expect(script).not.toContain("$config.models.providers");
+    expect(script).not.toContain("timeoutSeconds = 300");
+    expect(script).toContain('"$sessionId.jsonl"');
   });
 
   it("waits through transient Windows restoring state before VM operations", () => {
@@ -470,6 +479,8 @@ console.log(JSON.stringify(result));
     const windows = readFileSync(TS_PATHS.windows, "utf8");
 
     expect(powershell).toContain("windowsOpenClawResolver");
+    expect(powershell).toContain('resolveParallelsModelTimeoutSeconds("windows")');
+    expect(powershell).toContain("models.providers.${providerId}.timeoutSeconds");
     expect(powershell).toContain("Resolve-OpenClawCommand");
     expect(powershell).toContain("npm\\node_modules\\openclaw\\openclaw.mjs");
     expect(powershell).toContain("$ErrorActionPreference = 'Continue'");
