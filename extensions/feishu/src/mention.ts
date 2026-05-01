@@ -13,13 +13,6 @@ type FeishuMentionLike = {
   name?: string;
 };
 
-/**
- * Escape regex metacharacters so user-controlled mention fields are treated literally.
- */
-export function escapeRegExp(input: string): string {
-  return input.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 export function isFeishuBroadcastMention(mention: FeishuMentionLike): boolean {
   const normalizedKey = mention.key?.trim().toLowerCase();
   if (normalizedKey === "@all" || normalizedKey === "@_all") {
