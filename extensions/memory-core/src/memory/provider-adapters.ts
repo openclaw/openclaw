@@ -112,11 +112,11 @@ const localAdapter: MemoryEmbeddingProviderAdapter = {
   },
 };
 
-export const builtinMemoryEmbeddingProviderAdapters = [localAdapter] as const;
+const builtinMemoryEmbeddingProviderAdapters = [localAdapter] as const;
 
 export { DEFAULT_LOCAL_MODEL };
 
-export function getBuiltinMemoryEmbeddingProviderAdapter(
+function getBuiltinMemoryEmbeddingProviderAdapter(
   id: string,
 ): MemoryEmbeddingProviderAdapter | undefined {
   return listMemoryEmbeddingProviders().find((adapter) => adapter.id === id);
@@ -169,4 +169,4 @@ export function listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata(): Ar
     });
 }
 
-export { canAutoSelectLocal, formatLocalSetupError };
+export { canAutoSelectLocal };
