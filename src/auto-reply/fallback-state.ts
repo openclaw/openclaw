@@ -116,7 +116,7 @@ export function buildFallbackClearedNotice(params: {
   return `↪️ Model Fallback cleared: ${selected}`;
 }
 
-export type ResolvedFallbackTransition = {
+type ResolvedFallbackTransition = {
   selectedModelRef: string;
   activeModelRef: string;
   fallbackActive: boolean;
