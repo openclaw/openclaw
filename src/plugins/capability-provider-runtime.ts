@@ -472,11 +472,12 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
   }
-  const requestedSpeechProviders =
-    missingRequestedSpeechProviders ??
-    (activeProviders.length === 0 && params.key === "speechProviders"
-      ? collectRequestedSpeechProviderIds(params.cfg)
-      : undefined);
+  let requestedSpeechProviders: Set<string> | undefined;
+  if (params.key === "speechProviders") {
+    requestedSpeechProviders =
+      missingRequestedProviders ??
+      (activeProviders.length === 0 ? collectRequestedSpeechProviderIds(params.cfg) : undefined);
+  }
   const pluginIds =
     resolveRequestedCapabilityCompatPluginIds({
       key: params.key,
