@@ -47,11 +47,16 @@ find ~/.openclaw-pay-dev -mindepth 1 ! -name openclaw.json ! -name README.md -de
 ## Inner loop (per edit)
 
 ```bash
-pnpm test extensions/payment      # ~250ms; the smoke + unit tests
-pnpm plugin:check                 # ~30s on first run, fast after; inspector
+# From the worktree root (.worktrees/payment-plugin/):
+pnpm test extensions/payment
+
+# From extensions/payment/ specifically (plugin:check is a per-plugin script):
+cd extensions/payment && pnpm plugin:check
 ```
 
-Run from the worktree root (`.worktrees/payment-plugin/`). `pnpm plugin:check` invokes `pnpm dlx @openclaw/plugin-inspector@0.3.5 inspect --no-openclaw` against `extensions/payment/`.
+`pnpm test extensions/payment` is a root-level script that takes a path arg; ~250ms once warm. `pnpm plugin:check` is defined in `extensions/payment/package.json` and only resolves there; it invokes `pnpm dlx @openclaw/plugin-inspector@0.3.5 inspect --no-openclaw` against the local plugin (~30s on first run, fast after).
+
+If you run `pnpm plugin:check` from the worktree root you'll get `ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL Command "plugin:check" not found`. That's pnpm telling you it's a per-package script.
 
 ## Pre-commit gate (auto)
 
