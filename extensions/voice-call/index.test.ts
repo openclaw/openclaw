@@ -317,8 +317,9 @@ describe("voice-call plugin", () => {
     expect(createVoiceCallRuntime).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(
       false,
+      undefined,
       expect.objectContaining({
-        error: expect.stringContaining("TWILIO_ACCOUNT_SID"),
+        message: expect.stringContaining("TWILIO_ACCOUNT_SID"),
       }),
     );
   });
@@ -534,12 +535,63 @@ describe("voice-call plugin", () => {
       });
       expect(callGatewayFromCliMock).toHaveBeenCalledWith(
         "voicecall.start",
-        { json: true, timeout: "5000" },
+        { json: true, timeout: "35000" },
         { to: "+1", message: "Hello", mode: "conversation" },
         { progress: false },
       );
       expect(createVoiceCallRuntime).not.toHaveBeenCalled();
       expect(stdout.output()).toContain('"callId": "gateway-call"');
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("responds with protocol errors for delegated gateway failures", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+
+    await handler?.({ params: {}, respond });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "to required",
+      }),
+    );
+  });
+
+  it("CLI continue uses the configured transcript timeout for gateway delegation", async () => {
+    callGatewayFromCliMock.mockResolvedValueOnce({ success: true, transcript: "gateway hello" });
+    const program = new Command();
+    const stdout = captureStdout();
+    await registerVoiceCallCli(program, {
+      provider: "mock",
+      transcriptTimeoutMs: 120000,
+    });
+
+    try {
+      await program.parseAsync(
+        ["voicecall", "continue", "--call-id", "call-1", "--message", "Hello"],
+        {
+          from: "user",
+        },
+      );
+      expect(callGatewayFromCliMock).toHaveBeenCalledWith(
+        "voicecall.continue",
+        { json: true, timeout: "130000" },
+        { callId: "call-1", message: "Hello" },
+        { progress: false },
+      );
+      expect(createVoiceCallRuntime).not.toHaveBeenCalled();
+      expect(stdout.output()).toContain('"transcript": "gateway hello"');
     } finally {
       stdout.restore();
     }

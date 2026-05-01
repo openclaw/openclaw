@@ -45,7 +45,9 @@ type VoiceCallGatewayMethod =
 
 type VoiceCallGatewayCallResult = { ok: true; payload: unknown } | { ok: false; error: unknown };
 
-const VOICE_CALL_GATEWAY_TIMEOUT_MS = "5000";
+const VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS = 5000;
+const VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS = 30000;
+const VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS = 10000;
 
 const voiceCallCliDeps = {
   callGatewayFromCli,
@@ -83,11 +85,16 @@ function isGatewayUnavailableForLocalFallback(err: unknown): boolean {
 async function callVoiceCallGateway(
   method: VoiceCallGatewayMethod,
   params?: Record<string, unknown>,
+  opts?: { timeoutMs?: number },
 ): Promise<VoiceCallGatewayCallResult> {
   try {
+    const timeoutMs =
+      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
+        ? Math.max(1, Math.ceil(opts.timeoutMs))
+        : VOICE_CALL_GATEWAY_DEFAULT_TIMEOUT_MS;
     const payload = await voiceCallCliDeps.callGatewayFromCli(
       method,
-      { json: true, timeout: VOICE_CALL_GATEWAY_TIMEOUT_MS },
+      { json: true, timeout: String(timeoutMs) },
       params,
       { progress: false },
     );
@@ -98,6 +105,14 @@ async function callVoiceCallGateway(
     }
     throw err;
   }
+}
+
+function resolveGatewayOperationTimeoutMs(config: VoiceCallConfig): number {
+  return Math.max(VOICE_CALL_GATEWAY_OPERATION_TIMEOUT_MS, config.ringTimeoutMs + 5000);
+}
+
+function resolveGatewayContinueTimeoutMs(config: VoiceCallConfig): number {
+  return config.transcriptTimeoutMs + VOICE_CALL_GATEWAY_TRANSCRIPT_BUFFER_MS;
 }
 
 function resolveMode(input: string): "off" | "serve" | "funnel" {
@@ -252,17 +267,24 @@ function writeGatewayCallId(payload: unknown): void {
 
 async function initiateCallViaGatewayOrRuntime(params: {
   ensureRuntime: () => Promise<VoiceCallRuntime>;
+  config: VoiceCallConfig;
   method: "voicecall.initiate" | "voicecall.start";
   to?: string;
   message?: string;
   mode?: string;
 }) {
   const mode = resolveCallMode(params.mode);
-  const gateway = await callVoiceCallGateway(params.method, {
-    ...(params.to ? { to: params.to } : {}),
-    ...(params.message ? { message: params.message } : {}),
-    ...(mode ? { mode } : {}),
-  });
+  const gateway = await callVoiceCallGateway(
+    params.method,
+    {
+      ...(params.to ? { to: params.to } : {}),
+      ...(params.message ? { message: params.message } : {}),
+      ...(mode ? { mode } : {}),
+    },
+    {
+      timeoutMs: resolveGatewayOperationTimeoutMs(params.config),
+    },
+  );
   if (gateway.ok) {
     writeGatewayCallId(gateway.payload);
     return;
@@ -355,11 +377,17 @@ export function registerVoiceCallCli(params: {
           return;
         }
         const mode = resolveCallMode(options.mode) ?? "notify";
-        const gateway = await callVoiceCallGateway("voicecall.start", {
-          to: options.to,
-          ...(options.message ? { message: options.message } : {}),
-          mode,
-        });
+        const gateway = await callVoiceCallGateway(
+          "voicecall.start",
+          {
+            to: options.to,
+            ...(options.message ? { message: options.message } : {}),
+            mode,
+          },
+          {
+            timeoutMs: resolveGatewayOperationTimeoutMs(config),
+          },
+        );
         let callId: unknown;
         if (gateway.ok) {
           callId = isRecord(gateway.payload) ? gateway.payload.callId : undefined;
@@ -402,6 +430,7 @@ export function registerVoiceCallCli(params: {
     .action(async (options: { message: string; to?: string; mode?: string }) => {
       await initiateCallViaGatewayOrRuntime({
         ensureRuntime,
+        config,
         method: "voicecall.initiate",
         to: options.to,
         message: options.message,
@@ -422,6 +451,7 @@ export function registerVoiceCallCli(params: {
     .action(async (options: { to: string; message?: string; mode?: string }) => {
       await initiateCallViaGatewayOrRuntime({
         ensureRuntime,
+        config,
         method: "voicecall.start",
         to: options.to,
         message: options.message,
@@ -435,10 +465,16 @@ export function registerVoiceCallCli(params: {
     .requiredOption("--call-id <id>", "Call ID")
     .requiredOption("--message <text>", "Message to speak")
     .action(async (options: { callId: string; message: string }) => {
-      const gateway = await callVoiceCallGateway("voicecall.continue", {
-        callId: options.callId,
-        message: options.message,
-      });
+      const gateway = await callVoiceCallGateway(
+        "voicecall.continue",
+        {
+          callId: options.callId,
+          message: options.message,
+        },
+        {
+          timeoutMs: resolveGatewayContinueTimeoutMs(config),
+        },
+      );
       if (gateway.ok) {
         writeStdoutJson(gateway.payload);
         return;
