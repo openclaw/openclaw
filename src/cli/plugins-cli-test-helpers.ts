@@ -57,7 +57,7 @@ export const writePersistedInstalledPluginIndexInstallRecords: AsyncUnknownMock 
     );
   },
 );
-const loadPluginManifestRegistry: UnknownMock = vi.fn();
+export const loadPluginManifestRegistry: UnknownMock = vi.fn();
 export const buildPluginSnapshotReport: UnknownMock = vi.fn();
 export const buildPluginRegistrySnapshotReport: UnknownMock = vi.fn();
 export const buildPluginInspectReport: UnknownMock = vi.fn();
@@ -288,7 +288,10 @@ vi.mock("../plugins/status.js", () => ({
 }));
 
 vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: () => ({ diagnostics: [], plugins: [] }),
+  loadPluginManifestRegistryForPluginRegistry: ((...args: unknown[]) =>
+    invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
+    ...args: unknown[]
+  ) => unknown,
   inspectPluginRegistry: ((
     ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>
   ) =>
