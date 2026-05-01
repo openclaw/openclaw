@@ -1757,6 +1757,7 @@
         "@mariozechner/pi-coding-agent",
         "@modelcontextprotocol/sdk",
         "ajv",
+        "chalk",
         "chokidar",
         "commander",
         "croner",

@@ -75,7 +75,11 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
     return {};
   }
   let repairError: unknown;
-  const packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
+  const packageRoot = resolveOpenClawPackageRootSync({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: process.cwd(),
+  });
   if (packageRoot) {
     try {
       pruneUnknownBundledRuntimeDepsRoots({

@@ -289,6 +289,13 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
         exactPluginIds: ["telegram"],
       }),
     );
+    expect(resolveOpenClawPackageRootSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        moduleUrl: expect.stringContaining("server-startup-plugins"),
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+      }),
+    );
     expect(prepareBundledPluginRuntimeLoadRoot).toHaveBeenCalledWith(
       expect.objectContaining({
         pluginId: "telegram",
