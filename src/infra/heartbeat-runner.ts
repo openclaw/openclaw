@@ -285,7 +285,7 @@ export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: Heartbea
 }
 
 const HEARTBEAT_RESPONSE_TOOL_PROMPT =
-  "If the heartbeat_respond tool is available, call it to record the heartbeat outcome. Use notify=false instead of HEARTBEAT_OK when nothing should be sent visibly. Use notify=true with notificationText for a concise user-visible alert.";
+  "If the heartbeat_respond tool is available, call it to record the heartbeat outcome. Use notify=false for quiet/no-change outcomes. Use notify=true with notificationText for a concise user-visible alert.";
 
 function appendHeartbeatResponseToolPrompt(prompt: string): string {
   return prompt.includes("heartbeat_respond")

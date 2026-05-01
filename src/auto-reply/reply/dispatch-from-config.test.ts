@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   clearApprovalNativeRouteStateForTest,
@@ -695,6 +696,7 @@ async function dispatchTwiceWithFreshDispatchers(params: Omit<DispatchReplyArgs,
 
 describe("dispatchReplyFromConfig", () => {
   beforeEach(() => {
+    clearAgentHarnesses();
     const discordTestPlugin = {
       ...createChannelTestPluginBase({
         id: "discord",
@@ -4391,6 +4393,42 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       ctx: buildTestCtx({
         ChatType: "channel",
         SessionKey: "test:discord:channel:C1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("uses harness defaults for direct source delivery when config is unset", async () => {
+    setNoAbort();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      deliveryDefaults: { sourceVisibleReplies: "message_tool" },
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(async () => ({}) as never),
+    });
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      agentHarnessId: "codex",
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      return { text: "final reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "direct",
+        SessionKey: "agent:main:main",
       }),
       cfg: emptyConfig,
       dispatcher,
