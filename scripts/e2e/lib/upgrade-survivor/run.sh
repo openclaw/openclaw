@@ -30,7 +30,6 @@ export PATH="$npm_config_prefix/bin:$PATH"
 
 SUMMARY_JSON="${OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON:-$ARTIFACT_ROOT/summary.json}"
 PHASE_LOG="$ARTIFACT_ROOT/phases.jsonl"
-: >"$PHASE_LOG"
 BASELINE_RAW="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE:?missing OPENCLAW_UPGRADE_SURVIVOR_BASELINE}"
 CANDIDATE_KIND="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND:-tarball}"
 CANDIDATE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
@@ -56,6 +55,17 @@ STATUS_ERR="$ARTIFACT_ROOT/status.err"
 BASELINE_CONFIG_VALIDATE_LOG="$ARTIFACT_ROOT/baseline-config-validate.log"
 CONFIG_COVERAGE_JSON="$ARTIFACT_ROOT/config-recipe.json"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
+rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
+: >"$PHASE_LOG"
+
+validate_baseline_package_spec() {
+  local spec="$1"
+  if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+    return 0
+  fi
+  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
+  return 1
+}
 
 normalize_baseline() {
   local raw="${BASELINE_RAW//[[:space:]]/}"
@@ -90,6 +100,7 @@ normalize_baseline() {
       baseline_version_expected="1"
       ;;
   esac
+  validate_baseline_package_spec "$baseline_spec"
 }
 
 json_event() {
