@@ -45,6 +45,10 @@ export type DiagnosticStabilityEventRecord = {
   thresholdBytes?: number;
   rssGrowthBytes?: number;
   windowMs?: number;
+  eventLoopDelayP99Ms?: number;
+  eventLoopDelayMaxMs?: number;
+  eventLoopUtilization?: number;
+  cpuCoreRatio?: number;
   ageMs?: number;
   queueDepth?: number;
   queueSize?: number;
@@ -97,12 +101,6 @@ export type DiagnosticStabilitySnapshot = {
       bySurface: Record<string, number>;
     };
   };
-};
-
-export type DiagnosticStabilityQuery = {
-  limit?: number;
-  type?: string;
-  sinceSeq?: number;
 };
 
 export type DiagnosticStabilityQueryInput = {
@@ -235,6 +233,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "session.stuck":
       record.outcome = event.state;
+      assignReasonCode(record, event.reason);
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
       break;
@@ -262,6 +261,19 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "diagnostic.heartbeat":
       record.webhooks = { ...event.webhooks };
+      record.active = event.active;
+      record.waiting = event.waiting;
+      record.queued = event.queued;
+      break;
+    case "diagnostic.liveness.warning":
+      record.level = "warning";
+      record.durationMs = event.intervalMs;
+      record.count = event.reasons.length;
+      assignReasonCode(record, event.reasons[0]);
+      record.eventLoopDelayP99Ms = event.eventLoopDelayP99Ms;
+      record.eventLoopDelayMaxMs = event.eventLoopDelayMaxMs;
+      record.eventLoopUtilization = event.eventLoopUtilization;
+      record.cpuCoreRatio = event.cpuCoreRatio;
       record.active = event.active;
       record.waiting = event.waiting;
       record.queued = event.queued;

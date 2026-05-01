@@ -32,7 +32,6 @@ type NormalizedTransportLike = {
 };
 
 type ProviderRuntimeTestMockOptions = {
-  clearHookCache?: () => void;
   getOpenRouterModelCapabilities?: (modelId: string) => OpenRouterModelCapabilities | undefined;
   handledDynamicProviders?: readonly string[];
   loadOpenRouterModelCapabilities?: (modelId: string) => Promise<void>;
@@ -267,22 +266,14 @@ function buildDynamicModel(
       const template =
         lower === "gpt-5.5-pro"
           ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex"])
-          : lower === "gpt-5.4" || isLegacyGpt54Alias || lower === "gpt-5.4-pro"
+          : lower === "gpt-5.4" ||
+              isLegacyGpt54Alias ||
+              lower === "gpt-5.4-pro" ||
+              lower === "gpt-5.4-mini"
             ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
-            : lower === "gpt-5.4-mini"
-              ? findTemplate(params, "openai-codex", [
-                  "gpt-5.4",
-                  "gpt-5.1-codex-mini",
-                  "gpt-5.3-codex",
-                  "gpt-5.2-codex",
-                ])
-              : lower === "gpt-5.3-codex-spark"
-                ? findTemplate(params, "openai-codex", [
-                    "gpt-5.4",
-                    "gpt-5.3-codex",
-                    "gpt-5.2-codex",
-                  ])
-                : findTemplate(params, "openai-codex", ["gpt-5.4"]);
+            : lower === "gpt-5.3-codex-spark"
+              ? findTemplate(params, "openai-codex", ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2-codex"])
+              : findTemplate(params, "openai-codex", ["gpt-5.4"]);
       const fallback = {
         provider: "openai-codex",
         api: "openai-codex-responses",
@@ -350,7 +341,8 @@ function buildDynamicModel(
             api: "openai-codex-responses",
             baseUrl: OPENAI_CODEX_BASE_URL,
             cost: { input: 0.75, output: 4.5, cacheRead: 0.075, cacheWrite: 0 },
-            contextWindow: 272_000,
+            contextWindow: 400_000,
+            contextTokens: 272_000,
             maxTokens: 128_000,
           },
           fallback,
@@ -552,7 +544,6 @@ export function createProviderRuntimeTestMock(options: ProviderRuntimeTestMockOp
     options.loadOpenRouterModelCapabilities ?? (async () => {});
 
   return {
-    clearProviderRuntimeHookCache: options.clearHookCache ?? (() => {}),
     buildProviderUnknownModelHintWithPlugin: (params: { provider: string }) => {
       switch (params.provider) {
         case "ollama":

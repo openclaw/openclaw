@@ -102,6 +102,7 @@ describe("CLI attempt execution", () => {
   }) {
     await runAgentAttempt({
       providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
       modelOverride: "opus",
       cfg: {} as OpenClawConfig,
       sessionEntry: params.sessionEntry,
@@ -166,6 +167,7 @@ describe("CLI attempt execution", () => {
 
     await runAgentAttempt({
       providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
       modelOverride: "opus",
       cfg: {} as OpenClawConfig,
       sessionEntry,
@@ -317,6 +319,7 @@ describe("CLI attempt execution", () => {
 
     await runAgentAttempt({
       providerOverride: "codex-cli",
+      originalProvider: "codex-cli",
       modelOverride: "gpt-5.4",
       cfg: {} as OpenClawConfig,
       sessionEntry,
@@ -421,7 +424,7 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("forwards user trigger and channel context to CLI runs", async () => {
+  it("forwards separate user trigger, channel, and provider context to CLI runs", async () => {
     const sessionKey = "agent:main:direct:claude-channel-context";
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-channel",
@@ -433,6 +436,7 @@ describe("CLI attempt execution", () => {
 
     await runAgentAttempt({
       providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
       modelOverride: "opus",
       cfg: {} as OpenClawConfig,
       sessionEntry,
@@ -446,10 +450,13 @@ describe("CLI attempt execution", () => {
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
       runId: "run-cli-channel-context",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      opts: {
+        senderIsOwner: false,
+        messageProvider: "discord-voice",
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
-      messageChannel: "telegram",
+      messageChannel: "discord",
       skillsSnapshot: undefined,
       resolvedVerboseLevel: undefined,
       agentDir: tmpDir,
@@ -464,8 +471,8 @@ describe("CLI attempt execution", () => {
     expect(runCliAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: "user",
-        messageChannel: "telegram",
-        messageProvider: "telegram",
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
       }),
     );
   });
@@ -482,6 +489,7 @@ describe("CLI attempt execution", () => {
 
     await runAgentAttempt({
       providerOverride: "anthropic",
+      originalProvider: "anthropic",
       modelOverride: "claude-opus-4-7",
       cfg: {
         agents: {
@@ -523,6 +531,136 @@ describe("CLI attempt execution", () => {
       }),
     );
   });
+
+  it("keeps one-shot model runs on the raw embedded provider path", async () => {
+    const sessionKey = "agent:main:direct:model-run-raw";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-model-run-raw",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      originalProvider: "anthropic",
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli", fallback: "none" },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "raw prompt",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-model-run-raw",
+      opts: {
+        senderIsOwner: false,
+        modelRun: true,
+        promptMode: "none",
+        messageProvider: "discord-voice",
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:discord:source",
+          sourceTool: "sessions_send",
+        },
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: "discord",
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "anthropic",
+      sessionStore,
+      storePath,
+      sessionHasHistory: true,
+    });
+
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        agentHarnessId: "pi",
+        prompt: "raw prompt",
+        messageChannel: "discord",
+        messageProvider: "discord-voice",
+        modelRun: true,
+        promptMode: "none",
+        disableTools: true,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt).not.toContain(
+      "[Inter-session message]",
+    );
+  });
+
+  it("forwards one-shot CLI cleanup to CLI providers", async () => {
+    const sessionKey = "agent:main:direct:cleanup-claude-cli";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-cleanup-cli",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("cleanup cli"));
+
+    await runAgentAttempt({
+      providerOverride: "claude-cli",
+      originalProvider: "claude-cli",
+      modelOverride: "claude-opus-4-7",
+      cfg: {} as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "cleanup",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-cleanup-claude-cli",
+      opts: {
+        senderIsOwner: false,
+        cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+      } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "claude-cli",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cleanupBundleMcpOnRunEnd: true,
+        cleanupCliLiveSessionOnRunEnd: true,
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
 });
 
 describe("embedded attempt harness pinning", () => {
@@ -549,6 +687,7 @@ describe("embedded attempt harness pinning", () => {
 
     await runAgentAttempt({
       providerOverride: "openai",
+      originalProvider: "openai",
       modelOverride: "gpt-5.4",
       cfg: {} as OpenClawConfig,
       sessionEntry,
@@ -592,6 +731,7 @@ describe("embedded attempt harness pinning", () => {
 
     await runAgentAttempt({
       providerOverride: "codex",
+      originalProvider: "codex",
       modelOverride: "gpt-5.4",
       cfg: {
         agents: {
@@ -630,6 +770,73 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
+  it("auto-forwards OpenAI Codex auth profiles to configured Codex harness runs", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "codex-auth-session",
+      updatedAt: Date.now(),
+    };
+    await fs.writeFile(
+      path.join(tmpDir, "auth-profiles.json"),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "openai-codex:work": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      }),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex", fallback: "none" },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-codex-auto-auth-profile",
+      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: true,
+    });
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentHarnessId: "codex",
+        authProfileId: "openai-codex:work",
+        authProfileIdSource: "auto",
+      }),
+    );
+  });
+
   it("pins a fresh unpinned session to the default PI harness", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "fresh-session",
@@ -641,6 +848,7 @@ describe("embedded attempt harness pinning", () => {
 
     await runAgentAttempt({
       providerOverride: "openai",
+      originalProvider: "openai",
       modelOverride: "gpt-5.4",
       cfg: {} as OpenClawConfig,
       sessionEntry,
@@ -684,6 +892,7 @@ describe("embedded attempt harness pinning", () => {
 
     await runAgentAttempt({
       providerOverride: "openai",
+      originalProvider: "claude-cli",
       modelOverride: "gpt-5.4",
       cfg: {
         agents: {

@@ -60,7 +60,7 @@ export type MatrixQaScenarioContext = {
   waitGatewayAccountReady?: (accountId: string, opts?: { timeoutMs?: number }) => Promise<void>;
 };
 
-export const NO_REPLY_WINDOW_MS = 8_000;
+const NO_REPLY_WINDOW_MS = 8_000;
 const NO_REPLY_WINDOW_ENV = "OPENCLAW_QA_MATRIX_NO_REPLY_WINDOW_MS";
 
 export function resolveMatrixQaNoReplyWindowMs(timeoutMs: number) {
@@ -446,7 +446,7 @@ export async function runConfigurableTopLevelScenario(params: {
   };
 }
 
-export async function runTopLevelMentionScenario(params: {
+async function runTopLevelMentionScenario(params: {
   accessToken: string;
   actorId: MatrixQaActorId;
   baseUrl: string;
@@ -600,6 +600,7 @@ export async function runNoReplyExpectedScenario(params: {
   mentionUserIds?: string[];
   observedEvents: MatrixQaObservedEvent[];
   roomId: string;
+  sendClient?: MatrixQaScenarioClient;
   syncState: MatrixQaSyncState;
   syncStreams?: MatrixQaSyncStreams;
   sutUserId: string;
@@ -618,7 +619,8 @@ export async function runNoReplyExpectedScenario(params: {
     syncState: params.syncState,
     syncStreams: params.syncStreams,
   });
-  const driverEventId = await client.sendTextMessage({
+  const sendClient = params.sendClient ?? client;
+  const triggerEventId = await sendClient.sendTextMessage({
     body: params.body,
     ...(params.mentionUserIds ? { mentionUserIds: params.mentionUserIds } : {}),
     roomId: params.roomId,
@@ -630,7 +632,7 @@ export async function runNoReplyExpectedScenario(params: {
       if (event.roomId !== params.roomId) {
         return false;
       }
-      if (event.eventId === driverEventId) {
+      if (event.eventId === triggerEventId) {
         observedTriggerEvent = true;
         return false;
       }
@@ -638,7 +640,8 @@ export async function runNoReplyExpectedScenario(params: {
         observedTriggerEvent &&
         event.sender === params.sutUserId &&
         event.type === "m.room.message" &&
-        (params.replyPredicate?.(event, { driverEventId, token: params.token }) ?? true)
+        (params.replyPredicate?.(event, { driverEventId: triggerEventId, token: params.token }) ??
+          true)
       );
     },
     roomId: params.roomId,
@@ -664,13 +667,13 @@ export async function runNoReplyExpectedScenario(params: {
   return {
     artifacts: {
       actorUserId: params.actorUserId,
-      driverEventId,
+      driverEventId: triggerEventId,
       expectedNoReplyWindowMs: params.timeoutMs,
       token: params.token,
       triggerBody: params.body,
     },
     details: [
-      `trigger event: ${driverEventId}`,
+      `trigger event: ${triggerEventId}`,
       `trigger sender: ${params.actorUserId}`,
       `waited ${params.timeoutMs}ms with no SUT reply`,
     ].join("\n"),

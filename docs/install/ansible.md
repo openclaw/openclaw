@@ -177,6 +177,7 @@ This is idempotent and safe to run multiple times.
     - Ensure you can access via Tailscale VPN first
     - SSH access (port 22) is always allowed
     - The gateway is only accessible via Tailscale by design
+
   </Accordion>
   <Accordion title="Service will not start">
     ```bash
@@ -201,9 +202,11 @@ This is idempotent and safe to run multiple times.
     # Check sandbox image
     sudo docker images | grep openclaw-sandbox
 
-    # Build sandbox image if missing
+    # Build sandbox image if missing (requires source checkout)
     cd /opt/openclaw/openclaw
     sudo -u openclaw ./scripts/sandbox-setup.sh
+    # For npm installs without a source checkout, see
+    # https://docs.openclaw.ai/gateway/sandboxing#images-and-setup
     ```
 
   </Accordion>

@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectDurableServiceEnvVars } from "../config/state-dir-dotenv.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayStateDir } from "../daemon/paths.js";
 import {
@@ -22,6 +24,7 @@ import {
   isDangerousHostEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
+import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
@@ -44,6 +47,11 @@ let daemonInstallAuthProfileSourceRuntimePromise:
 let daemonInstallAuthProfileStoreRuntimePromise:
   | Promise<typeof import("./daemon-install-auth-profiles-store.runtime.js")>
   | undefined;
+
+const NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS = new Set([
+  "gateway.auth.password",
+  "gateway.auth.token",
+]);
 
 function loadDaemonInstallAuthProfileSourceRuntime() {
   daemonInstallAuthProfileSourceRuntimePromise ??=
@@ -109,6 +117,58 @@ async function collectAuthProfileServiceEnvVars(params: {
   return entries;
 }
 
+function collectConfigSecretRefServiceEnvVars(params: {
+  env: Record<string, string | undefined>;
+  config?: OpenClawConfig;
+  durableEnvironment: Record<string, string | undefined>;
+  warn?: DaemonInstallWarnFn;
+}): Record<string, string> {
+  if (!params.config) {
+    return {};
+  }
+  const entries: Record<string, string> = {};
+  for (const target of discoverConfigSecretTargets(params.config)) {
+    if (!target.entry.includeInPlan) {
+      continue;
+    }
+    if (NON_PERSISTED_CONFIG_SECRET_ENV_TARGET_IDS.has(target.entry.id)) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults: params.config.secrets?.defaults,
+    });
+    if (!ref || ref.source !== "env") {
+      continue;
+    }
+    const key = normalizeEnvVarKey(ref.id, { portable: true });
+    if (!key) {
+      params.warn?.(
+        `Config SecretRef env id "${ref.id}" is not portable and was not added to the service environment`,
+        "Config SecretRef",
+      );
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      params.warn?.(
+        `Config SecretRef env ref "${key}" blocked by host-env security policy`,
+        "Config SecretRef",
+      );
+      continue;
+    }
+    if (Object.hasOwn(params.durableEnvironment, key)) {
+      continue;
+    }
+    const value = params.env[key]?.trim();
+    if (!value) {
+      continue;
+    }
+    entries[key] = value;
+  }
+  return entries;
+}
+
 function mergeServicePath(
   nextPath: string | undefined,
   existingPath: string | undefined,
@@ -120,13 +180,63 @@ function mergeServicePath(
     .map((value) => value?.trim())
     .filter((value): value is string => Boolean(value))
     .map((value) => path.resolve(value));
-  const shouldPreservePathSegment = (segment: string) => {
-    if (!path.isAbsolute(segment)) {
-      return false;
+  const realTmpDirs = normalizedTmpDirs.map((tmpRoot) => {
+    try {
+      return path.normalize(fs.realpathSync.native(tmpRoot));
+    } catch {
+      return tmpRoot;
     }
+  });
+  const isSameOrChildPath = (candidate: string, parent: string) =>
+    candidate === parent || candidate.startsWith(`${parent}${path.sep}`);
+  const isUnsafeProcPath = (candidate: string) =>
+    candidate === `${path.sep}proc` || candidate.startsWith(`${path.sep}proc${path.sep}`);
+  const realpathExistingPath = (candidate: string): string | undefined => {
+    const parts: string[] = [];
+    let current = candidate;
+    while (current && current !== path.dirname(current)) {
+      try {
+        const realCurrent = path.normalize(fs.realpathSync.native(current));
+        return path.normalize(path.join(realCurrent, ...parts.toReversed()));
+      } catch {
+        parts.push(path.basename(current));
+        current = path.dirname(current);
+      }
+    }
+    try {
+      return path.normalize(path.join(fs.realpathSync.native(current), ...parts.toReversed()));
+    } catch {
+      return undefined;
+    }
+  };
+  const normalizePreservedPathSegment = (segment: string): string | undefined => {
+    if (!path.isAbsolute(segment)) {
+      return undefined;
+    }
+    const normalized = path.normalize(segment);
+    if (isUnsafeProcPath(normalized)) {
+      return undefined;
+    }
+    const cwd = path.resolve(process.cwd());
+    if (isSameOrChildPath(normalized, cwd)) {
+      return undefined;
+    }
+    try {
+      const realSegment = realpathExistingPath(normalized);
+      const realCwd = path.normalize(fs.realpathSync.native(cwd));
+      if (realSegment && isSameOrChildPath(realSegment, realCwd)) {
+        return undefined;
+      }
+    } catch {
+      // Legacy PATH entries may no longer exist; keep filtering best-effort.
+    }
+    return normalized;
+  };
+  const shouldPreserveNormalizedPathSegment = (segment: string) => {
     const resolved = path.resolve(segment);
-    return !normalizedTmpDirs.some(
-      (tmpRoot) => resolved === tmpRoot || resolved.startsWith(`${tmpRoot}${path.sep}`),
+    const realResolved = realpathExistingPath(resolved) ?? resolved;
+    return ![...normalizedTmpDirs, ...realTmpDirs].some(
+      (tmpRoot) => isSameOrChildPath(resolved, tmpRoot) || isSameOrChildPath(realResolved, tmpRoot),
     );
   };
   const addPath = (value: string | undefined, options?: { preserve?: boolean }) => {
@@ -135,14 +245,15 @@ function mergeServicePath(
     }
     for (const segment of value.split(path.delimiter)) {
       const trimmed = segment.trim();
-      if (options?.preserve && !shouldPreservePathSegment(trimmed)) {
+      const candidate = options?.preserve ? normalizePreservedPathSegment(trimmed) : trimmed;
+      if (options?.preserve && (!candidate || !shouldPreserveNormalizedPathSegment(candidate))) {
         continue;
       }
-      if (!trimmed || seen.has(trimmed)) {
+      if (!candidate || seen.has(candidate)) {
         continue;
       }
-      seen.add(trimmed);
-      segments.push(trimmed);
+      seen.add(candidate);
+      segments.push(candidate);
     }
   };
   addPath(nextPath);
@@ -213,6 +324,12 @@ async function buildGatewayInstallEnvironment(params: {
     env: params.env,
     config: params.config,
   });
+  const configSecretRefEnvironment = collectConfigSecretRefServiceEnvVars({
+    env: params.env,
+    config: params.config,
+    durableEnvironment,
+    warn: params.warn,
+  });
   const authProfileEnvironment = await collectAuthProfileServiceEnvVars({
     env: params.env,
     authStore: params.authStore,
@@ -224,6 +341,7 @@ async function buildGatewayInstallEnvironment(params: {
       readManagedServiceEnvKeysFromEnvironment(params.existingEnvironment),
     ),
     ...durableEnvironment,
+    ...configSecretRefEnvironment,
     ...authProfileEnvironment,
   };
   const managedServiceEnvKeys = formatManagedServiceEnvKeys(durableEnvironment, {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
@@ -16,13 +17,34 @@ const loadGatewayStartupPlugins = vi.hoisted(() =>
     gatewayMethods: ["ping"],
   })),
 );
-const repairBundledRuntimeDepsInstallRootAsync = vi.hoisted(() =>
-  vi.fn(async (_params: unknown) => ({})),
+const prepareBundledPluginRuntimeLoadRoot = vi.hoisted(() => vi.fn((params: unknown) => params));
+const registerBundledRuntimeDependencyJitiAliases = vi.hoisted(() => vi.fn());
+const isSourceCheckoutRoot = vi.hoisted(() => vi.fn((_packageRoot: string) => false));
+const pruneUnknownBundledRuntimeDepsRoots = vi.hoisted(() =>
+  vi.fn((_params: unknown) => ({ scanned: 0, removed: 0, skippedLocked: 0 })),
 );
-const resolveBundledRuntimeDependencyPackageInstallRoot = vi.hoisted(() =>
-  vi.fn((_packageRoot: string, _params: unknown) => "/runtime"),
+const repairBundledRuntimeDepsPackagePlanAsync = vi.hoisted(() =>
+  vi.fn(async (_params: unknown) => ({ repairedSpecs: ["grammy@1.37.0"] })),
 );
-const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
+const pluginManifestRegistry = vi.hoisted(
+  (): PluginManifestRegistry => ({
+    plugins: [
+      {
+        id: "telegram",
+        origin: "bundled",
+        rootDir: "/package/dist/extensions/telegram",
+        source: "/package/dist/extensions/telegram/index.js",
+        manifestPath: "/package/dist/extensions/telegram/package.json",
+        channels: ["telegram"],
+        providers: [],
+        cliBackends: [],
+        skills: [],
+        hooks: [],
+      },
+    ],
+    diagnostics: [],
+  }),
+);
 const pluginMetadataSnapshot = vi.hoisted(
   (): PluginMetadataSnapshot => ({
     policyHash: "policy",
@@ -89,14 +111,6 @@ const runChannelPluginStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
 );
 const runStartupSessionMigration = vi.hoisted(() => vi.fn(async (_params: unknown) => undefined));
-const scanBundledPluginRuntimeDeps = vi.hoisted(() =>
-  vi.fn((_params: unknown) => ({
-    deps: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-    missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-    conflicts: [],
-  })),
-);
-
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
@@ -120,11 +134,24 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
-  repairBundledRuntimeDepsInstallRootAsync: (params: unknown) =>
-    repairBundledRuntimeDepsInstallRootAsync(params),
-  resolveBundledRuntimeDependencyPackageInstallRoot: (packageRoot: string, params: unknown) =>
-    resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, params),
-  scanBundledPluginRuntimeDeps: (params: unknown) => scanBundledPluginRuntimeDeps(params),
+  repairBundledRuntimeDepsPackagePlanAsync: (params: unknown) =>
+    repairBundledRuntimeDepsPackagePlanAsync(params),
+}));
+
+vi.mock("../plugins/bundled-runtime-deps-roots.js", () => ({
+  isSourceCheckoutRoot: (packageRoot: string) => isSourceCheckoutRoot(packageRoot),
+  pruneUnknownBundledRuntimeDepsRoots: (params: unknown) =>
+    pruneUnknownBundledRuntimeDepsRoots(params),
+}));
+
+vi.mock("../plugins/bundled-runtime-deps-jiti-aliases.js", () => ({
+  registerBundledRuntimeDependencyJitiAliases: (rootDir: string) =>
+    registerBundledRuntimeDependencyJitiAliases(rootDir),
+}));
+
+vi.mock("../plugins/bundled-runtime-root.js", () => ({
+  prepareBundledPluginRuntimeLoadRoot: (params: unknown) =>
+    prepareBundledPluginRuntimeLoadRoot(params),
 }));
 
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
@@ -170,8 +197,17 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     applyPluginAutoEnable.mockClear();
     initSubagentRegistry.mockClear();
     loadGatewayStartupPlugins.mockClear();
-    repairBundledRuntimeDepsInstallRootAsync.mockReset().mockResolvedValue({});
-    resolveBundledRuntimeDependencyPackageInstallRoot.mockClear();
+    prepareBundledPluginRuntimeLoadRoot.mockReset().mockImplementation((params: unknown) => params);
+    registerBundledRuntimeDependencyJitiAliases.mockClear();
+    isSourceCheckoutRoot.mockClear().mockReturnValue(false);
+    pruneUnknownBundledRuntimeDepsRoots.mockClear().mockReturnValue({
+      scanned: 0,
+      removed: 0,
+      skippedLocked: 0,
+    });
+    repairBundledRuntimeDepsPackagePlanAsync.mockReset().mockResolvedValue({
+      repairedSpecs: ["grammy@1.37.0"],
+    });
     loadPluginLookUpTable.mockClear().mockReturnValue({
       manifestRegistry: pluginManifestRegistry,
       startup: {
@@ -183,16 +219,10 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
     runStartupSessionMigration.mockClear();
-    scanBundledPluginRuntimeDeps.mockClear().mockReturnValue({
-      deps: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-      missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-      conflicts: [],
-    });
   });
 
-  it("falls back to per-plugin runtime-deps installs after failed pre-start staging", async () => {
-    const installError = new Error("offline registry");
-    repairBundledRuntimeDepsInstallRootAsync.mockRejectedValueOnce(installError);
+  it("loads startup plugins in verify-only mode after failed pre-start staging", async () => {
+    repairBundledRuntimeDepsPackagePlanAsync.mockRejectedValueOnce(new Error("offline registry"));
     const log = createLog();
     const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
 
@@ -218,31 +248,71 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
         pluginLookUpTable: expect.objectContaining({
           manifestRegistry: pluginManifestRegistry,
         }),
+        installBundledRuntimeDeps: false,
       }),
     );
-    expect(scanBundledPluginRuntimeDeps).toHaveBeenCalledWith(
+    expect(repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledOnce();
+    expect(prepareBundledPluginRuntimeLoadRoot).toHaveBeenCalledWith(
       expect.objectContaining({
-        selectedPluginIds: ["telegram"],
+        pluginId: "telegram",
+        installMissingDeps: false,
+        previousRepairError: expect.any(Error),
       }),
     );
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "gateway startup will continue with per-plugin runtime-deps installs",
-      ),
+      expect.stringContaining("plugin load will verify without synchronous repair"),
     );
     expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledRuntimeDepsInstaller",
     );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bundledRuntimeDepsRepairError: expect.any(Error),
+      }),
+    );
   });
 
-  it("pre-stages only missing runtime deps while retaining the full startup dependency set", async () => {
-    scanBundledPluginRuntimeDeps.mockReturnValueOnce({
-      deps: [
-        { name: "alpha-runtime", version: "1.0.0", pluginIds: ["telegram"] },
-        { name: "grammy", version: "1.37.0", pluginIds: ["telegram"] },
-      ],
-      missing: [{ name: "grammy", version: "1.37.0", pluginIds: ["telegram"] }],
-      conflicts: [],
+  it("prepares the full startup plugin runtime set", async () => {
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        packageRoot: "/package",
+        exactPluginIds: ["telegram"],
+      }),
+    );
+    expect(resolveOpenClawPackageRootSync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        moduleUrl: expect.stringContaining("server-startup-plugins"),
+        argv1: process.argv[1],
+        cwd: process.cwd(),
+      }),
+    );
+    expect(prepareBundledPluginRuntimeLoadRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "telegram",
+        pluginRoot: "/package/dist/extensions/telegram",
+        modulePath: "/package/dist/extensions/telegram/index.js",
+        installMissingDeps: false,
+        memoizePreparedRoot: true,
+      }),
+    );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
+    );
+  });
+
+  it("allows the loader to verify already staged deps during warm gateway starts", async () => {
+    repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValueOnce({
+      repairedSpecs: [],
     });
     const log = createLog();
     const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
@@ -254,13 +324,68 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       log,
     });
 
-    expect(repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
+    expect(repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledWith(
       expect.objectContaining({
-        installRoot: "/runtime",
-        missingSpecs: ["grammy@1.37.0"],
-        installSpecs: ["alpha-runtime@1.0.0", "grammy@1.37.0"],
+        packageRoot: "/package",
+        exactPluginIds: ["telegram"],
       }),
     );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
+    );
+  });
+
+  it("repairs source-checkout startup plugin deps before verify-only load", async () => {
+    repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValueOnce({
+      repairedSpecs: [],
+    });
+    isSourceCheckoutRoot.mockReturnValueOnce(true);
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await prepareGatewayPluginBootstrap({
+      cfgAtStart: {},
+      startupRuntimeConfig: {},
+      minimalTestGateway: false,
+      log,
+    });
+
+    expect(isSourceCheckoutRoot).toHaveBeenCalledWith("/package");
+    expect(prepareBundledPluginRuntimeLoadRoot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "telegram",
+        installMissingDeps: true,
+        memoizePreparedRoot: true,
+        logInstalled: expect.any(Function),
+      }),
+    );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
+    );
+  });
+
+  it("can defer runtime-deps staging and startup plugin loading until after HTTP bind", async () => {
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+
+    await expect(
+      prepareGatewayPluginBootstrap({
+        cfgAtStart: {},
+        startupRuntimeConfig: {},
+        minimalTestGateway: false,
+        log,
+        loadRuntimePlugins: false,
+      }),
+    ).resolves.toMatchObject({
+      baseGatewayMethods: ["ping"],
+      startupPluginIds: ["telegram"],
+      runtimePluginsLoaded: false,
+    });
+
+    expect(loadPluginLookUpTable).toHaveBeenCalledOnce();
+    expect(repairBundledRuntimeDepsPackagePlanAsync).not.toHaveBeenCalled();
+    expect(prepareBundledPluginRuntimeLoadRoot).not.toHaveBeenCalled();
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
   });
 
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
@@ -405,10 +530,10 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     );
   });
 
-  it("falls back to per-plugin runtime-deps installs after failed pre-start scan", async () => {
-    scanBundledPluginRuntimeDeps.mockImplementationOnce(() => {
-      throw new Error("unsupported runtime dependency spec");
-    });
+  it("keeps startup plugin loading verify-only after failed pre-start scan", async () => {
+    repairBundledRuntimeDepsPackagePlanAsync.mockRejectedValueOnce(
+      new Error("unsupported runtime dependency spec"),
+    );
     const log = createLog();
     const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
 
@@ -427,12 +552,12 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       }),
     });
 
-    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
     expect(loadGatewayStartupPlugins).toHaveBeenCalledOnce();
     expect(log.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "failed to scan bundled runtime deps before gateway startup; gateway startup will continue with per-plugin runtime-deps installs",
-      ),
+      expect.stringContaining("unsupported runtime dependency spec"),
+    );
+    expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({ installBundledRuntimeDeps: false }),
     );
     expect(loadGatewayStartupPlugins.mock.calls[0]?.[0]).not.toHaveProperty(
       "bundledRuntimeDepsInstaller",
@@ -472,8 +597,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
     });
 
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    expect(scanBundledPluginRuntimeDeps).not.toHaveBeenCalled();
-    expect(repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
+    expect(prepareBundledPluginRuntimeLoadRoot).not.toHaveBeenCalled();
     expect(loadGatewayStartupPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         cfg,

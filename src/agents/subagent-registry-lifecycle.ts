@@ -72,6 +72,7 @@ export function createSubagentRegistryLifecycleController(params: {
   notifyContextEngineSubagentEnded(args: {
     childSessionKey: string;
     reason: "completed" | "deleted";
+    agentDir?: string;
     workspaceDir?: string;
   }): Promise<void>;
   resumeSubagentRun(runId: string): void;
@@ -421,6 +422,7 @@ export function createSubagentRegistryLifecycleController(params: {
       void params.notifyContextEngineSubagentEnded({
         childSessionKey: cleanupParams.entry.childSessionKey,
         reason: "deleted",
+        agentDir: cleanupParams.entry.agentDir,
         workspaceDir: cleanupParams.entry.workspaceDir,
       });
       params.runs.delete(cleanupParams.runId);
@@ -431,6 +433,7 @@ export function createSubagentRegistryLifecycleController(params: {
     void params.notifyContextEngineSubagentEnded({
       childSessionKey: cleanupParams.entry.childSessionKey,
       reason: "completed",
+      agentDir: cleanupParams.entry.agentDir,
       workspaceDir: cleanupParams.entry.workspaceDir,
     });
     cleanupParams.entry.cleanupCompletedAt = cleanupParams.completedAt;
@@ -438,7 +441,7 @@ export function createSubagentRegistryLifecycleController(params: {
     retryDeferredCompletedAnnounces(cleanupParams.runId);
   };
 
-  const retireRunModeBundleMcpRuntime = (cleanupParams: {
+  const retireRunModeBundleMcpRuntime = async (cleanupParams: {
     runId: string;
     entry: SubagentRunRecord;
     reason: string;
@@ -446,7 +449,7 @@ export function createSubagentRegistryLifecycleController(params: {
     if (cleanupParams.entry.spawnMode === "session") {
       return;
     }
-    void retireSessionMcpRuntimeForSessionKey({
+    await retireSessionMcpRuntimeForSessionKey({
       sessionKey: cleanupParams.entry.childSessionKey,
       reason: cleanupParams.reason,
       onError: (error, sessionId) => {
@@ -701,6 +704,10 @@ export function createSubagentRegistryLifecycleController(params: {
       entry.endedReason = completeParams.reason;
       mutated = true;
     }
+    if (entry.pauseReason !== undefined) {
+      entry.pauseReason = undefined;
+      mutated = true;
+    }
 
     if (await freezeRunResultAtCompletion(entry, outcome)) {
       mutated = true;
@@ -765,7 +772,7 @@ export function createSubagentRegistryLifecycleController(params: {
       onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
     });
 
-    retireRunModeBundleMcpRuntime({
+    await retireRunModeBundleMcpRuntime({
       runId: completeParams.runId,
       entry,
       reason: "subagent-run-complete",

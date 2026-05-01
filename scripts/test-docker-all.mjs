@@ -222,6 +222,24 @@ function githubWorkflowRerunCommand(laneNames, ref) {
       )}`,
     );
   }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_baseline=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}`,
+    );
+  }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_baselines=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}`,
+    );
+  }
+  if (process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS) {
+    fields.push(
+      "-f",
+      `published_upgrade_survivor_scenarios=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS)}`,
+    );
+  }
   if (process.env.OPENCLAW_DOCKER_E2E_BARE_IMAGE) {
     fields.push(
       "-f",
@@ -250,6 +268,9 @@ function buildLaneRerunCommand(name, baseEnv) {
     ["OPENCLAW_DOCKER_E2E_BARE_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_BARE_IMAGE],
     ["OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE", baseEnv.OPENCLAW_DOCKER_E2E_FUNCTIONAL_IMAGE],
     ["OPENCLAW_CURRENT_PACKAGE_TGZ", baseEnv.OPENCLAW_CURRENT_PACKAGE_TGZ],
+    ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC],
+    ["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS],
+    ["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS],
   ];
   if (baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND) {
     env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);
@@ -266,6 +287,10 @@ function withResolvedPnpmCommand(command, env) {
     return command;
   }
   return command.replace(/(^|\s)pnpm(?=\s)/g, `$1${shellQuote(pnpmCommand)}`);
+}
+
+function liveDockerHarnessScriptCommand(script) {
+  return `bash -c 'harness="\${OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR:-}"; if [ -z "$harness" ]; then if [ -d .release-harness/scripts ]; then harness=.release-harness; else harness=.; fi; fi; OPENCLAW_LIVE_DOCKER_REPO_ROOT="\${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$PWD}" bash "$harness/scripts/${script}"'`;
 }
 
 async function loadTimingStore(file, enabled) {
@@ -363,6 +388,7 @@ async function writeFailureIndex(logDir, summary) {
     lane: failure.name,
     logFile: failure.logFile,
     name: failure.name,
+    noOutputTimedOut: failure.noOutputTimedOut,
     rerunCommand: failure.rerunCommand,
     status: failure.status,
     timedOut: failure.timedOut,
@@ -437,43 +463,81 @@ function dockerPreflightContainerNames(raw) {
     );
 }
 
-function runShellCommand({ command, env, label, logFile, timeoutMs }) {
+function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
   return new Promise((resolve) => {
+    const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
       env,
-      stdio: logFile ? ["ignore", "pipe", "pipe"] : "inherit",
+      stdio: pipeOutput ? ["ignore", "pipe", "pipe"] : "inherit",
     });
     activeChildren.add(child);
     let timedOut = false;
+    let noOutputTimedOut = false;
     let killTimer;
+    let stream;
+    let noOutputTimer;
+    const terminateForTimeout = (message, options = {}) => {
+      if (timedOut) {
+        return;
+      }
+      timedOut = true;
+      noOutputTimedOut = options.noOutput === true;
+      if (stream) {
+        stream.write(`\n==> [${label}] ${message}; sending SIGTERM\n`);
+      } else {
+        console.error(`==> [${label}] ${message}; sending SIGTERM`);
+      }
+      terminateChild(child, "SIGTERM");
+      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
+      killTimer.unref?.();
+    };
+    const resetNoOutputTimer = () => {
+      if (!noOutputTimeoutMs || noOutputTimeoutMs <= 0 || timedOut) {
+        return;
+      }
+      if (noOutputTimer) {
+        clearTimeout(noOutputTimer);
+      }
+      noOutputTimer = setTimeout(() => {
+        terminateForTimeout(`no output for ${noOutputTimeoutMs}ms`, { noOutput: true });
+      }, noOutputTimeoutMs);
+      noOutputTimer.unref?.();
+    };
     const timeoutTimer =
       timeoutMs > 0
         ? setTimeout(() => {
-            timedOut = true;
-            if (stream) {
-              stream.write(`\n==> [${label}] timeout after ${timeoutMs}ms; sending SIGTERM\n`);
-            }
-            terminateChild(child, "SIGTERM");
-            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
-            killTimer.unref?.();
+            terminateForTimeout(`timeout after ${timeoutMs}ms`);
           }, timeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
 
-    let stream;
     if (logFile) {
       stream = fs.createWriteStream(logFile, { flags: "a" });
       stream.write(`==> [${label}] command: ${command}\n`);
       stream.write(`==> [${label}] started: ${utcStamp()}\n`);
-      child.stdout.pipe(stream, { end: false });
-      child.stderr.pipe(stream, { end: false });
+    }
+    if (pipeOutput) {
+      const writeOutput = (target, chunk) => {
+        resetNoOutputTimer();
+        if (stream) {
+          stream.write(chunk);
+        } else {
+          target.write(chunk);
+        }
+      };
+      child.stdout.on("data", (chunk) => writeOutput(process.stdout, chunk));
+      child.stderr.on("data", (chunk) => writeOutput(process.stderr, chunk));
+      resetNoOutputTimer();
     }
 
     child.on("close", (status, signal) => {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
+      }
+      if (noOutputTimer) {
+        clearTimeout(noOutputTimer);
       }
       if (killTimer) {
         clearTimeout(killTimer);
@@ -481,10 +545,14 @@ function runShellCommand({ command, env, label, logFile, timeoutMs }) {
       activeChildren.delete(child);
       const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
       if (stream) {
-        stream.write(`\n==> [${label}] finished: ${utcStamp()} status=${exitCode}\n`);
+        stream.write(
+          `\n==> [${label}] finished: ${utcStamp()} status=${exitCode}${
+            noOutputTimedOut ? " noOutputTimedOut=true" : ""
+          }\n`,
+        );
         stream.end();
       }
-      resolve({ signal, status: exitCode, timedOut });
+      resolve({ signal, status: exitCode, timedOut, noOutputTimedOut });
     });
   });
 }
@@ -688,6 +756,7 @@ function laneEnv(poolLane, baseEnv, logDir, cacheKey) {
 async function runLane(lane, baseEnv, logDir, fallbackTimeoutMs) {
   const { name } = lane;
   const timeoutMs = lane.timeoutMs ?? fallbackTimeoutMs;
+  const noOutputTimeoutMs = lane.noOutputTimeoutMs;
   const logFile = path.join(logDir, `${name}.log`);
   const env = laneEnv(lane, baseEnv, logDir, lane.cacheKey);
   const command = withResolvedPnpmCommand(lane.command, env);
@@ -699,6 +768,7 @@ async function runLane(lane, baseEnv, logDir, fallbackTimeoutMs) {
       `==> [${name}] cli tools dir: ${env.OPENCLAW_DOCKER_CLI_TOOLS_DIR}`,
       `==> [${name}] cache dir: ${env.OPENCLAW_DOCKER_CACHE_HOME_DIR}`,
       `==> [${name}] timeout: ${timeoutMs}ms`,
+      `==> [${name}] no output timeout: ${noOutputTimeoutMs ?? 0}ms`,
       `==> [${name}] retries: ${lane.retries ?? 0}`,
       `==> [${name}] e2e image kind: ${lane.e2eImageKind ?? "none"}`,
       `==> [${name}] e2e image: ${env.OPENCLAW_DOCKER_E2E_IMAGE ?? ""}`,
@@ -717,11 +787,19 @@ async function runLane(lane, baseEnv, logDir, fallbackTimeoutMs) {
       await fs.promises.appendFile(logFile, `\n==> [${name}] retry attempt ${attempt}\n`);
       console.log(`==> [${name}] retry ${attempt}/${maxAttempts}`);
     }
-    result = await runShellCommand({ command, env, label: name, logFile, timeoutMs });
+    result = await runShellCommand({
+      command,
+      env,
+      label: name,
+      logFile,
+      timeoutMs,
+      noOutputTimeoutMs,
+    });
     attempts.push({
       attempt,
       elapsedSeconds: phaseElapsedSeconds(attemptStartedAt),
       finishedAt: new Date().toISOString(),
+      noOutputTimedOut: result.noOutputTimedOut,
       startedAt: new Date(attemptStartedAt).toISOString(),
       status: result.status,
       timedOut: result.timedOut,
@@ -756,6 +834,7 @@ async function runLane(lane, baseEnv, logDir, fallbackTimeoutMs) {
     rerunCommand: buildLaneRerunCommand(name, baseEnv),
     startedAt: startedAtIso,
     status: result.status,
+    noOutputTimedOut: result.noOutputTimedOut,
     timedOut: result.timedOut,
   };
 }
@@ -1060,6 +1139,8 @@ async function main() {
     releaseChunk,
     selectedLaneNames,
     timingStore,
+    upgradeSurvivorBaselines: process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+    upgradeSurvivorScenarios: process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
   });
 
   if (planJson) {
@@ -1134,7 +1215,7 @@ async function main() {
     const buildEntries = [];
     if (scheduledLanes.some((poolLane) => poolLane.live)) {
       buildEntries.push({
-        command: "pnpm test:docker:live-build",
+        command: liveDockerHarnessScriptCommand("test-live-build-docker.sh"),
         label: "shared live-test image once",
         phaseDetails: { imageKind: "live" },
         phases,

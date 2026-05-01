@@ -222,6 +222,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "heartbeat_respond",
+    label: "heartbeat_respond",
+    description: "Record heartbeat outcomes",
+    sectionId: "automation",
+    profiles: [],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "cron",
     label: "cron",
     description: CRON_TOOL_DISPLAY_SUMMARY,
