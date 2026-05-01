@@ -84,6 +84,17 @@ export type StripeLinkAdapterOptions = {
   maxAmountCents: number;
   /** CommandRunner injected for testing. Defaults to createNodeCommandRunner(). */
   runner?: CommandRunner;
+  /**
+   * Reserved for future use. V1 delegates approval polling to link-cli's
+   * built-in `--request-approval` flag, so this option is currently
+   * accepted but not consulted. Default: 1000ms.
+   */
+  pollIntervalMs?: number;
+  /**
+   * Reserved for future use (see pollIntervalMs). V1 delegates polling.
+   * Default: 120 (would yield ~2min total at 1s cadence if polling were enabled).
+   */
+  pollMaxAttempts?: number;
   /** Subprocess timeout. Default 60000. */
   commandTimeoutMs?: number;
 };
@@ -96,6 +107,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
   const command = opts.command ?? "link-cli";
   const runner: CommandRunner = opts.runner ?? createNodeCommandRunner();
   const commandTimeoutMs = opts.commandTimeoutMs ?? 60_000;
+  // reserved — V1 delegates polling to link-cli's --request-approval flag
+  const pollIntervalMs = opts.pollIntervalMs ?? 1000; // reserved
+  const pollMaxAttempts = opts.pollMaxAttempts ?? 120; // reserved
+  void pollIntervalMs;
+  void pollMaxAttempts;
 
   /** Append --test flag to args array when testMode is enabled. */
   function maybeTest(args: string[]): string[] {

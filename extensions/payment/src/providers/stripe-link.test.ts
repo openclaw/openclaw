@@ -55,7 +55,9 @@ import paymentMethodsList from "./fixtures/stripe-link/payment-methods-list.json
 import spendRequestCreateApprovedMpp from "./fixtures/stripe-link/spend-request-create-approved-mpp.json" assert { type: "json" };
 import spendRequestCreateApproved from "./fixtures/stripe-link/spend-request-create-approved.json" assert { type: "json" };
 import spendRequestCreateDenied from "./fixtures/stripe-link/spend-request-create-denied.json" assert { type: "json" };
+import spendRequestCreateExpired from "./fixtures/stripe-link/spend-request-create-expired.json" assert { type: "json" };
 import spendRequestCreatePending from "./fixtures/stripe-link/spend-request-create-pending.json" assert { type: "json" };
+import spendRequestRetrieveCardConsumed from "./fixtures/stripe-link/spend-request-retrieve-card-consumed.json" assert { type: "json" };
 import spendRequestRetrieveWithCard from "./fixtures/stripe-link/spend-request-retrieve-with-card.json" assert { type: "json" };
 import spendRequestRetrieveWithoutCard from "./fixtures/stripe-link/spend-request-retrieve-without-card.json" assert { type: "json" };
 import type { CommandRunner } from "./runner.js";
@@ -345,6 +347,41 @@ describe("issueVirtualCard", () => {
       idempotencyKey: "test-key-001",
     });
     expect(handle.status).toBe("pending_approval");
+  });
+
+  it("maps expired terminal status to status: 'expired'", async () => {
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateExpired));
+    const adapter = makeAdapter({ runner });
+    const handle = await adapter.issueVirtualCard({
+      fundingSourceId: "pm_test_card_visa_4242",
+      amount: BASE_AMOUNT,
+      merchant: BASE_MERCHANT,
+      purchaseIntent: VALID_PURCHASE_INTENT,
+      idempotencyKey: "test-key-001",
+    });
+    expect(handle.status).toBe("expired");
+    expect(handle.provider).toBe("stripe-link");
+    expect(handle.providerRequestId).toBe("spreq_expired_001");
+  });
+
+  it("treats poll-timeout (status still pending after --request-approval times out) as pending_approval", async () => {
+    // When link-cli's --request-approval times out internally it exits non-zero,
+    // but if it exits 0 with a pending status (e.g. on a partial timeout), the
+    // adapter maps it to pending_approval so the manager can re-poll via getStatus.
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreatePending));
+    const adapter = makeAdapter({ runner });
+    const handle = await adapter.issueVirtualCard({
+      fundingSourceId: "pm_test_card_visa_4242",
+      amount: BASE_AMOUNT,
+      merchant: BASE_MERCHANT,
+      purchaseIntent: VALID_PURCHASE_INTENT,
+      idempotencyKey: "test-key-pending-timeout",
+    });
+    expect(handle.status).toBe("pending_approval");
+    // Manager can call getStatus(handle.id) to re-poll
+    const meta = handleMap.get(handle.id);
+    expect(meta).toBeDefined();
+    expect(meta?.providerId).toBe("stripe-link");
   });
 
   it("populates all 5 fillSentinels referencing the handle id", async () => {
@@ -645,6 +682,28 @@ describe("retrieveCardSecrets", () => {
     await expect(adapter.retrieveCardSecrets("spreq_consumed")).rejects.toThrow(
       CardUnavailableError,
     );
+  });
+
+  it("throws CardUnavailableError when retrieve indicates card consumed (fixture-driven)", async () => {
+    // The card-consumed fixture has an error body with code "spend_request_consumed".
+    // link-cli returns non-zero exit when the card is consumed; the adapter throws CardUnavailableError
+    // without leaking any card data from the error body (defense-in-depth).
+    const { runner } = makeFixtureRunner({
+      stdout: JSON.stringify(spendRequestRetrieveCardConsumed),
+      stderr: "spend_request_consumed",
+      exitCode: 1,
+    });
+    const adapter = makeAdapter({ runner });
+    let caught: CardUnavailableError | undefined;
+    try {
+      await adapter.retrieveCardSecrets("spreq_consumed");
+    } catch (err) {
+      caught = err as CardUnavailableError;
+    }
+    expect(caught).toBeInstanceOf(CardUnavailableError);
+    // Generic message — no PAN/CVV in the error
+    expect(caught?.message).toMatch(/card no longer available/i);
+    expect(caught?.message).not.toMatch(/\d{13,19}/);
   });
 
   it("CardUnavailableError message does NOT contain card data (defense-in-depth)", async () => {
@@ -955,6 +1014,37 @@ describe("getStatus", () => {
     expect(handle.providerRequestId).toBe("spreq_test_approved_001");
   });
 
+  it("maps expired status to status: 'expired' in getStatus", async () => {
+    handleMap.set("slh-spreq_expired_001", {
+      spendRequestId: "spreq_expired_001",
+      providerId: "stripe-link",
+      last4: "0000",
+      issuedAt: new Date().toISOString(),
+    });
+
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateExpired));
+    const adapter = makeAdapter({ runner });
+    const handle = await adapter.getStatus("slh-spreq_expired_001");
+    expect(handle.status).toBe("expired");
+    expect(handle.providerRequestId).toBe("spreq_expired_001");
+  });
+
+  it("maps pending status to pending_approval in getStatus (timeout/poll scenario)", async () => {
+    handleMap.set("slh-spreq_test_pending_001", {
+      spendRequestId: "spreq_test_pending_001",
+      providerId: "stripe-link",
+      last4: undefined,
+      issuedAt: new Date().toISOString(),
+    });
+
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreatePending));
+    const adapter = makeAdapter({ runner });
+    const handle = await adapter.getStatus("slh-spreq_test_pending_001");
+    // pending from link-cli maps to pending_approval so manager can re-poll
+    expect(handle.status).toBe("pending_approval");
+    expect(handle.providerRequestId).toBe("spreq_test_pending_001");
+  });
+
   it("throws CardUnavailableError for unknown handleId", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithoutCard));
     const adapter = makeAdapter({ runner });
@@ -1141,5 +1231,17 @@ describe("adapter metadata", () => {
     const adapter = makeAdapter({ runner });
     expect(adapter.rails).toContain("virtual_card");
     expect(adapter.rails).toContain("machine_payment");
+  });
+
+  it("accepts pollIntervalMs and pollMaxAttempts options (reserved for future use)", () => {
+    const adapter = createStripeLinkAdapter({
+      clientName: "test",
+      testMode: true,
+      maxAmountCents: 50000,
+      pollIntervalMs: 500,
+      pollMaxAttempts: 60,
+      runner: vi.fn(),
+    });
+    expect(adapter.id).toBe("stripe-link");
   });
 });

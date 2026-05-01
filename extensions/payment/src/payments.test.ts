@@ -536,11 +536,62 @@ describe("createPaymentManager — adapter registry", () => {
 });
 
 // ---------------------------------------------------------------------------
-// U4 integration: createPaymentManager({ adapters: [createStripeLinkAdapter(...)] })
+// U4 integration: PaymentManager + Stripe Link adapter end-to-end flows
 // ---------------------------------------------------------------------------
 
-describe("createPaymentManager with Stripe Link adapter", () => {
-  function makeStripeLinkFixtureRunner(
+// Fixture data inlined for manager-layer tests (avoids importing from the
+// provider's fixture directory directly from payments.test.ts).
+const STRIPE_LINK_APPROVED_FIXTURE = {
+  spend_request: {
+    id: "spreq_test_approved_001",
+    status: "approved",
+    credential_type: "virtual_card",
+    amount_cents: 2500,
+    currency: "usd",
+    valid_until: "2026-05-01T03:26:21.000Z",
+    merchant_name: "Test Merchant",
+    card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2030 },
+  },
+};
+
+const STRIPE_LINK_APPROVED_MPP_FIXTURE = {
+  spend_request: {
+    id: "spreq_test_mpp_approved_001",
+    status: "approved",
+    credential_type: "shared_payment_token",
+    amount_cents: 2500,
+    currency: "usd",
+    valid_until: "2026-05-01T03:26:21.000Z",
+    shared_payment_token: "spt_test_abc123def456",
+    merchant_name: "Test API Merchant",
+  },
+};
+
+const STRIPE_LINK_MPP_SETTLED_FIXTURE = {
+  result: {
+    outcome: "settled",
+    status_code: 200,
+    receipt_id: "rcpt_test_settled_001",
+    issued_at: "2026-04-30T19:26:21.000Z",
+    target_url: "https://api.example.com/pay",
+  },
+};
+
+const STRIPE_LINK_WITHOUT_CARD_FIXTURE = {
+  spend_request: {
+    id: "spreq_test_approved_001",
+    status: "approved",
+    credential_type: "virtual_card",
+    amount_cents: 2500,
+    currency: "usd",
+    valid_until: "2026-05-01T03:26:21.000Z",
+    merchant_name: "Test Merchant",
+    card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2030 },
+  },
+};
+
+describe("PaymentManager + Stripe Link adapter integration", () => {
+  function makeSequentialRunner(
     responses: Array<{ stdout: string; stderr?: string; exitCode: number }>,
   ): CommandRunner {
     let callIndex = 0;
@@ -555,59 +606,119 @@ describe("createPaymentManager with Stripe Link adapter", () => {
     };
   }
 
-  it("can be constructed without errors and adapter id is stripe-link", () => {
-    const runner = makeStripeLinkFixtureRunner([{ stdout: "{}", stderr: "", exitCode: 0 }]);
-    const stripeLinkAdapter = createStripeLinkAdapter({
-      command: "link-cli",
-      clientName: "TestClient",
-      testMode: true,
-      maxAmountCents: 50000,
-      runner,
-    });
-    expect(() =>
-      createPaymentManager({
-        adapters: [stripeLinkAdapter],
-        config: { ...CONFIG, provider: "stripe-link" as const },
-      }),
-    ).not.toThrow();
-    expect(stripeLinkAdapter.id).toBe("stripe-link");
-  });
+  function fixtureOk(data: unknown) {
+    return { stdout: JSON.stringify(data), stderr: "", exitCode: 0 };
+  }
 
-  it("stripe-link adapter supports both rails", () => {
-    const runner = makeStripeLinkFixtureRunner([{ stdout: "{}", stderr: "", exitCode: 0 }]);
-    const stripeLinkAdapter = createStripeLinkAdapter({
-      command: "link-cli",
-      clientName: "TestClient",
-      testMode: true,
-      maxAmountCents: 50000,
-      runner,
-    });
-    expect(stripeLinkAdapter.rails).toContain("virtual_card");
-    expect(stripeLinkAdapter.rails).toContain("machine_payment");
-  });
-
-  it("manager rejects unknown providerId even with stripe-link adapter registered", async () => {
-    const runner = makeStripeLinkFixtureRunner([{ stdout: "{}", stderr: "", exitCode: 0 }]);
-    const stripeLinkAdapter = createStripeLinkAdapter({
-      command: "link-cli",
+  it("issueVirtualCard via manager dispatches to stripe-link adapter and returns approved handle", async () => {
+    const runner = makeSequentialRunner([fixtureOk(STRIPE_LINK_APPROVED_FIXTURE)]);
+    const stripeAdapter = createStripeLinkAdapter({
       clientName: "TestClient",
       testMode: true,
       maxAmountCents: 50000,
       runner,
     });
     const manager = createPaymentManager({
-      adapters: [stripeLinkAdapter],
+      adapters: [stripeAdapter],
       config: { ...CONFIG, provider: "stripe-link" as const },
     });
-    await expect(
-      manager.issueVirtualCard({
-        // @ts-expect-error — testing runtime guard for unregistered provider
-        providerId: "mock",
-        fundingSourceId: "any",
-        amount: BASE_AMOUNT,
-        merchant: BASE_MERCHANT,
-        purchaseIntent: VALID_PURCHASE_INTENT,
-      }),
-    ).rejects.toThrow(/no adapter registered/i);
+
+    const handle = await manager.issueVirtualCard({
+      providerId: "stripe-link",
+      fundingSourceId: "pm_test_card_visa_4242",
+      amount: BASE_AMOUNT,
+      merchant: BASE_MERCHANT,
+      purchaseIntent: VALID_PURCHASE_INTENT,
+      idempotencyKey: "integration-key-001",
+    });
+
+    expect(handle.status).toBe("approved");
+    expect(handle.provider).toBe("stripe-link");
+    expect(handle.display?.last4).toBe("4242");
+
+    // handleMap is populated so getStatus can dispatch to stripe-link
+    const meta = handleMap.get(handle.id);
+    expect(meta).toBeDefined();
+    expect(meta?.providerId).toBe("stripe-link");
+  });
+
+  it("executeMachinePayment via manager dispatches to stripe-link adapter and returns settled receipt", async () => {
+    const runner = makeSequentialRunner([
+      fixtureOk(STRIPE_LINK_APPROVED_MPP_FIXTURE),
+      fixtureOk(STRIPE_LINK_MPP_SETTLED_FIXTURE),
+    ]);
+    const stripeAdapter = createStripeLinkAdapter({
+      clientName: "TestClient",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner,
+    });
+    const manager = createPaymentManager({
+      adapters: [stripeAdapter],
+      config: { ...CONFIG, provider: "stripe-link" as const },
+    });
+
+    const result = await manager.executeMachinePayment({
+      providerId: "stripe-link",
+      fundingSourceId: "pm_test_card_visa_4242",
+      targetUrl: "https://api.example.com/pay",
+      method: "POST",
+      idempotencyKey: "integration-mpp-key-001",
+    });
+
+    expect(result.outcome).toBe("settled");
+    expect(result.receipt?.receiptId).toBe("rcpt_test_settled_001");
+    expect(result.receipt?.statusCode).toBe(200);
+    expect(result.handleId).toMatch(/^slm-/);
+  });
+
+  it("getStatus via manager dispatches to stripe-link adapter using handleMap.providerId", async () => {
+    // First: issue a card to populate handleMap via the adapter
+    const issueRunner = makeSequentialRunner([fixtureOk(STRIPE_LINK_APPROVED_FIXTURE)]);
+    const stripeAdapter = createStripeLinkAdapter({
+      clientName: "TestClient",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner: issueRunner,
+    });
+    const manager = createPaymentManager({
+      adapters: [stripeAdapter],
+      config: { ...CONFIG, provider: "stripe-link" as const },
+    });
+
+    const handle = await manager.issueVirtualCard({
+      providerId: "stripe-link",
+      fundingSourceId: "pm_test_card_visa_4242",
+      amount: BASE_AMOUNT,
+      merchant: BASE_MERCHANT,
+      purchaseIntent: VALID_PURCHASE_INTENT,
+      idempotencyKey: "integration-key-002",
+    });
+
+    // Now configure the adapter to return the retrieve fixture for getStatus
+    let getStatusCalled = false;
+    const statusRunner: CommandRunner = async () => {
+      getStatusCalled = true;
+      return { stdout: JSON.stringify(STRIPE_LINK_WITHOUT_CARD_FIXTURE), stderr: "", exitCode: 0 };
+    };
+    // Swap the runner by creating a new adapter sharing the same handleMap entry
+    const stripeAdapter2 = createStripeLinkAdapter({
+      clientName: "TestClient",
+      testMode: true,
+      maxAmountCents: 50000,
+      runner: statusRunner,
+    });
+    const manager2 = createPaymentManager({
+      adapters: [stripeAdapter2],
+      config: { ...CONFIG, provider: "stripe-link" as const },
+    });
+
+    const statusHandle = await manager2.getStatus(handle.id);
+
+    // Dispatched to stripe-link (not any other adapter)
+    expect(getStatusCalled).toBe(true);
+    expect(statusHandle.status).toBe("approved");
+    expect(statusHandle.provider).toBe("stripe-link");
+    expect(statusHandle.id).toBe(handle.id);
   });
 });

@@ -1,0 +1,13 @@
+{
+  "spend_request": {
+    "id": "spreq_expired_001",
+    "status": "expired",
+    "valid_until": "2025-01-01T00:00:00Z",
+    "card": {
+      "brand": "visa",
+      "last4": "0000",
+      "exp_month": "01",
+      "exp_year": "2025"
+    }
+  }
+}
