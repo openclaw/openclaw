@@ -10,16 +10,34 @@ const timeoutMs = Number(process.env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS ??
 const canaryTimeoutMs = Number(
   process.env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS ?? String(timeoutMs),
 );
-const scenarioIds = new Set(
-  (process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply")
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean),
-);
+const warmSampleCount = Number(process.env.OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES ?? "20");
+const sampleTimeoutMs = Number(process.env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS ?? "30000");
+const maxWarmFailures = Number(process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? "3");
+const scenarioIds = (
+  process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply"
+)
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
 
 if (!groupId || !driverToken || !sutToken) {
   throw new Error(
     "missing Telegram env: OPENCLAW_QA_TELEGRAM_GROUP_ID, OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN, OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
+  );
+}
+if (!Number.isInteger(warmSampleCount) || warmSampleCount < 1) {
+  throw new Error(
+    `OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES must be a positive integer; got: ${warmSampleCount}`,
+  );
+}
+if (!Number.isInteger(sampleTimeoutMs) || sampleTimeoutMs < 1) {
+  throw new Error(
+    `OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS must be a positive integer; got: ${sampleTimeoutMs}`,
+  );
+}
+if (!Number.isInteger(maxWarmFailures) || maxWarmFailures < 1) {
+  throw new Error(
+    `OPENCLAW_NPM_TELEGRAM_MAX_FAILURES must be a positive integer; got: ${maxWarmFailures}`,
   );
 }
 
@@ -101,6 +119,7 @@ async function waitForSutReply(params) {
         text: messageText(message),
         scenarioId: params.scenarioId,
         scenarioTitle: params.scenarioTitle,
+        sampleIndex: params.sampleIndex,
       });
       if (message.from?.id !== params.sutId) {
         continue;
@@ -137,6 +156,7 @@ async function runScenario(params) {
       requestMessageId: request.message_id,
       scenarioId: params.id,
       scenarioTitle: params.title,
+      sampleIndex: params.sampleIndex,
       startedUnixSeconds,
       sutId: params.sutId,
       timeoutMs: params.timeoutMs,
@@ -159,6 +179,71 @@ async function runScenario(params) {
   }
 }
 
+function percentile(sortedValues, percentileValue) {
+  if (sortedValues.length === 0) {
+    return undefined;
+  }
+  const index = Math.ceil((percentileValue / 100) * sortedValues.length) - 1;
+  return sortedValues[Math.min(Math.max(index, 0), sortedValues.length - 1)];
+}
+
+function summarizeSamples(samples) {
+  const passed = samples.filter((sample) => sample.status === "pass" && sample.rttMs !== undefined);
+  const sorted = passed.map((sample) => sample.rttMs).sort((a, b) => a - b);
+  const sum = sorted.reduce((total, value) => total + value, 0);
+  return {
+    total: samples.length,
+    passed: passed.length,
+    failed: samples.length - passed.length,
+    avgMs: sorted.length > 0 ? Math.round(sum / sorted.length) : undefined,
+    p50Ms: percentile(sorted, 50),
+    p95Ms: percentile(sorted, 95),
+    maxMs: sorted.at(-1),
+  };
+}
+
+async function runWarmScenario(params) {
+  const samples = [];
+  let failures = 0;
+  for (let index = 0; index < params.sampleCount; index += 1) {
+    const sample = await runScenario({
+      allowAnySutReply: true,
+      id: params.id,
+      input: `/status@${params.sutUsername}`,
+      sampleIndex: index + 1,
+      sutId: params.sutId,
+      timeoutMs: params.sampleTimeoutMs,
+      title: params.title,
+    });
+    if (sample.status === "fail") {
+      failures += 1;
+    }
+    samples.push({
+      index: index + 1,
+      status: sample.status,
+      details: sample.details,
+      ...(sample.rttMs === undefined ? {} : { rttMs: sample.rttMs }),
+    });
+    if (failures >= params.maxFailures) {
+      break;
+    }
+    if (index + 1 < params.sampleCount) {
+      await sleep(500);
+    }
+  }
+
+  const stats = summarizeSamples(samples);
+  return {
+    id: params.id,
+    title: params.title,
+    status: stats.failed > 0 ? "fail" : "pass",
+    details: `${stats.passed}/${stats.total} warm samples passed`,
+    rttMs: stats.p50Ms,
+    samples,
+    stats,
+  };
+}
+
 function reportMarkdown(summary) {
   const lines = ["# Telegram RTT", ""];
   for (const scenario of summary.scenarios) {
@@ -167,6 +252,21 @@ function reportMarkdown(summary) {
     lines.push(`- Details: ${scenario.details}`);
     if (scenario.rttMs !== undefined) {
       lines.push(`- RTT: ${scenario.rttMs}ms`);
+    }
+    if (scenario.stats) {
+      lines.push(`- Samples: ${scenario.stats.passed}/${scenario.stats.total}`);
+      if (scenario.stats.avgMs !== undefined) {
+        lines.push(`- Avg: ${scenario.stats.avgMs}ms`);
+      }
+      if (scenario.stats.p50Ms !== undefined) {
+        lines.push(`- P50: ${scenario.stats.p50Ms}ms`);
+      }
+      if (scenario.stats.p95Ms !== undefined) {
+        lines.push(`- P95: ${scenario.stats.p95Ms}ms`);
+      }
+      if (scenario.stats.maxMs !== undefined) {
+        lines.push(`- Max: ${scenario.stats.maxMs}ms`);
+      }
     }
     lines.push("");
   }
@@ -190,16 +290,15 @@ async function main() {
     }),
   );
 
-  if (scenarioIds.has("telegram-mentioned-message-reply")) {
-    const marker = `OPENCLAW_RTT_${Date.now().toString(36)}`;
+  if (scenarioIds.includes("telegram-mentioned-message-reply")) {
     scenarios.push(
-      await runScenario({
-        allowAnySutReply: true,
+      await runWarmScenario({
         id: "telegram-mentioned-message-reply",
-        input: `/status@${sutMe.username} RTT marker ${marker}`,
-        matchText: "OPENCLAW_RTT_OK",
+        maxFailures: maxWarmFailures,
+        sampleCount: warmSampleCount,
+        sampleTimeoutMs,
         sutId: sutMe.id,
-        timeoutMs,
+        sutUsername: sutMe.username,
         title: "Telegram status command reply",
       }),
     );
