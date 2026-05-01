@@ -1,0 +1,58 @@
+{
+  "id": "manifest",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["manifest"],
+  "modelCatalog": {
+    "providers": {
+      "manifest": {
+        "baseUrl": "https://app.manifest.build/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "auto",
+            "name": "Manifest Auto",
+            "input": ["text", "image"],
+            "reasoning": false,
+            "contextWindow": 200000,
+            "maxTokens": 16384,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "manifest": "static"
+    }
+  },
+  "providerAuthEnvVars": {
+    "manifest": ["MANIFEST_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "manifest",
+      "method": "api-key",
+      "choiceId": "manifest-api-key",
+      "choiceLabel": "Manifest API key",
+      "groupId": "manifest",
+      "groupLabel": "Manifest",
+      "groupHint": "Open-source LLM router",
+      "optionKey": "manifestApiKey",
+      "cliFlag": "--manifest-api-key",
+      "cliOption": "--manifest-api-key <key>",
+      "cliDescription": "Manifest API key (starts with mnfst_)"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
