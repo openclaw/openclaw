@@ -28,6 +28,7 @@ import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 import { adjustedParamsByToolCallId } from "./pi-tools.before-tool-call.state.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -63,6 +64,10 @@ export type HookContext = {
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
+  sandbox?: {
+    root: string;
+    bridge: SandboxFsBridge;
+  };
 };
 
 type HookBlockedKind = "veto" | "failure";
@@ -503,7 +508,13 @@ export async function runBeforeToolCallHook(args: {
       return { blocked: false, params };
     }
     const normalizedParams = isPlainObject(params) ? params : {};
-    const deriveOptions = args.ctx?.cwd ? { cwd: args.ctx.cwd } : undefined;
+    const deriveOptions =
+      args.ctx?.cwd || args.ctx?.sandbox
+        ? {
+            ...(args.ctx.cwd ? { cwd: args.ctx.cwd } : {}),
+            ...(args.ctx.sandbox ? { sandbox: args.ctx.sandbox } : {}),
+          }
+        : undefined;
     const derivedToolParams = deriveToolParams(toolName, normalizedParams, deriveOptions);
     const deriveToolEventParams = (candidateParams: Record<string, unknown>) => {
       const derived = deriveToolParams(toolName, candidateParams, deriveOptions);
