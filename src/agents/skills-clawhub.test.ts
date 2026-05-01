@@ -328,7 +328,7 @@ describe("skills-clawhub", () => {
     });
   });
 
-  describe("owner-prefixed slugs match clawhub.ai install snippets", () => {
+  describe("owner-prefixed slugs match ClawHub references", () => {
     it("strips the owner prefix and installs the bare slug", async () => {
       installPackageDirMock.mockResolvedValueOnce({
         ok: true,

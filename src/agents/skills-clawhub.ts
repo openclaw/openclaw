@@ -67,9 +67,9 @@ const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 // eslint-disable-next-line no-control-regex -- detects any character outside printable ASCII
 const NON_ASCII_PATTERN = /[^\x00-\x7F]/;
 
-// ClawHub install snippets on clawhub.ai are rendered as `<owner>/<slug>` so users copy and
-// paste that form directly. Strip the owner prefix to the canonical bare slug used by the
-// registry (`/api/v1/skills/<slug>`), the install dir, and the lockfile.
+// Some ClawHub references use `<owner>/<slug>` even though the registry and local
+// install metadata are keyed by the bare slug. Strip the owner prefix before any
+// registry, install-dir, or lockfile work.
 function parseClawHubSkillSlug(raw: string, mode: "tracked" | "requested"): string {
   const trimmed = raw.trim();
   if (!trimmed || trimmed.includes("\\") || trimmed.includes("..")) {
