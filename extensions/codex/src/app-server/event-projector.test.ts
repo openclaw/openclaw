@@ -280,6 +280,95 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it("projects usageLimitExceeded errors using the latest rate-limit snapshot", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: null,
+          limitName: null,
+          credits: null,
+          rateLimitReachedType: null,
+          planType: "plus",
+          primary: { usedPercent: 100, windowDurationMins: 86, resetsAt: null },
+          secondary: null,
+        },
+      },
+    } as ProjectorNotification);
+
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "ChatGPT rate limit reached",
+          codexErrorInfo: "usageLimitExceeded",
+          additionalDetails: null,
+        },
+        willRetry: false,
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toBeTruthy();
+    const promptError = typeof result.promptError === "string" ? result.promptError : "";
+    expect(promptError).toMatch(/usage limit/i);
+    expect(promptError).toMatch(/ChatGPT Plus/);
+    expect(promptError).toMatch(/86 minutes/);
+    expect(result.promptErrorSource).toBe("prompt");
+    expect(result.lastAssistant).toBeUndefined();
+    expect(projector.hasStructuredPromptError()).toBe(true);
+  });
+
+  it("preserves a captured structured error when the watchdog later fires", async () => {
+    const projector = await createProjector();
+
+    await projector.handleNotification({
+      method: "account/rateLimits/updated",
+      params: {
+        rateLimits: {
+          limitId: null,
+          limitName: null,
+          credits: null,
+          rateLimitReachedType: null,
+          planType: "pro",
+          primary: { usedPercent: 100, windowDurationMins: 30, resetsAt: null },
+          secondary: null,
+        },
+      },
+    } as ProjectorNotification);
+
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "ChatGPT rate limit reached",
+          codexErrorInfo: "usageLimitExceeded",
+          additionalDetails: null,
+        },
+        willRetry: false,
+      }),
+    );
+
+    projector.markTimedOut();
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    const promptError = typeof result.promptError === "string" ? result.promptError : "";
+    expect(promptError).not.toContain("attempt timed out");
+    expect(promptError).toMatch(/usage limit/i);
+    expect(promptError).toMatch(/ChatGPT Pro/);
+    expect(projector.hasStructuredPromptError()).toBe(true);
+  });
+
+  it("falls back to the timeout label when no structured error was captured", async () => {
+    const projector = await createProjector();
+    projector.markTimedOut();
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.promptError).toBe("codex app-server attempt timed out");
+    expect(projector.hasStructuredPromptError()).toBe(false);
+  });
+
   it("normalizes snake_case current token usage fields", async () => {
     const projector = await createProjector();
 

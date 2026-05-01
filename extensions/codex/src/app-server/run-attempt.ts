@@ -1121,13 +1121,29 @@ export async function runCodexAppServerAttempt(
   try {
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
-    const finalAborted = result.aborted || runAbortController.signal.aborted;
-    const finalPromptError = turnCompletionIdleTimedOut
-      ? turnCompletionIdleTimeoutMessage
+    // Preserve any structured prompt error captured by the projector before
+    // the watchdog fired (e.g. usageLimitExceeded surfaced via the codex
+    // `error` notification or `turn/completed` turn.error). Falling back to
+    // the generic "attempt timed out" label here would erase the cause and
+    // collapse the failover decision to `surface_error reason=timeout`,
+    // which the channel reply layer renders as a generic timeout message.
+    const hasStructuredPromptError =
+      activeProjector.hasStructuredPromptError() && Boolean(result.promptError);
+    const finalAborted =
+      (result.aborted || runAbortController.signal.aborted) && !hasStructuredPromptError;
+    const finalTimedOut = timedOut && !hasStructuredPromptError;
+    const finalPromptError = hasStructuredPromptError
+      ? result.promptError
+      : turnCompletionIdleTimedOut
+        ? turnCompletionIdleTimeoutMessage
+        : timedOut
+          ? "codex app-server attempt timed out"
+          : result.promptError;
+    const finalPromptErrorSource = hasStructuredPromptError
+      ? (result.promptErrorSource ?? "prompt")
       : timedOut
-        ? "codex app-server attempt timed out"
-        : result.promptError;
-    const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
+        ? "prompt"
+        : result.promptErrorSource;
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -1227,7 +1243,7 @@ export async function runCodexAppServerAttempt(
     });
     return {
       ...result,
-      timedOut,
+      timedOut: finalTimedOut,
       aborted: finalAborted,
       promptError: finalPromptError,
       promptErrorSource: finalPromptErrorSource,
