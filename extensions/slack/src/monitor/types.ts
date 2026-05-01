@@ -86,13 +86,4 @@ export type SlackMessageDeletedEvent = {
   event_ts?: string;
 };
 
-export type SlackThreadBroadcastEvent = {
-  type: "message";
-  subtype: "thread_broadcast";
-  channel?: string;
-  user?: string;
-  message?: { ts?: string; user?: string; bot_id?: string };
-  event_ts?: string;
-};
-
 export type { SlackFile, SlackMessageEvent };

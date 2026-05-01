@@ -73,6 +73,7 @@ type TelegramStatusReactionController = {
 
 export type TelegramMessageContext = {
   ctxPayload: TelegramMessageContextPayload["ctxPayload"];
+  turn: TelegramMessageContextPayload["turn"];
   primaryCtx: BuildTelegramMessageContextParams["primaryCtx"];
   msg: BuildTelegramMessageContextParams["primaryCtx"]["message"];
   chatId: BuildTelegramMessageContextParams["primaryCtx"]["message"]["chat"]["id"];
@@ -429,6 +430,7 @@ export const buildTelegramMessageContext = async ({
     senderId,
     senderUsername,
     resolvedThreadId,
+    replyThreadId,
     routeAgentId: route.agentId,
     sessionKey,
     effectiveGroupAllow,
@@ -554,7 +556,7 @@ export const buildTelegramMessageContext = async ({
         )
       : null;
 
-  const { ctxPayload, skillFilter } = await buildTelegramInboundContextPayload({
+  const { ctxPayload, skillFilter, turn } = await buildTelegramInboundContextPayload({
     cfg,
     primaryCtx,
     msg,
@@ -592,6 +594,7 @@ export const buildTelegramMessageContext = async ({
 
   return {
     ctxPayload,
+    turn,
     primaryCtx,
     msg,
     chatId,

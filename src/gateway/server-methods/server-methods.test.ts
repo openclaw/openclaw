@@ -1893,10 +1893,200 @@ describe("gateway healthHandlers.status scope handling", () => {
     async ({ scopes, includeSensitive }) => {
       const respond = await runHealthStatus(scopes);
 
-      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive });
+      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+        includeSensitive,
+        includeChannelSummary: true,
+      });
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     },
   );
+
+  it("can skip channel summary work for liveness-only status requests", async () => {
+    const respond = vi.fn();
+
+    await healthHandlers.status({
+      req: {} as never,
+      params: { includeChannelSummary: false },
+      respond: respond as never,
+      context: {} as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+      includeSensitive: false,
+      includeChannelSummary: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+});
+
+describe("gateway healthHandlers.health cache freshness", () => {
+  let healthHandlers: typeof import("./health.js").healthHandlers;
+
+  beforeAll(async () => {
+    ({ healthHandlers } = await import("./health.js"));
+  });
+
+  it("refreshes cached health when runtime channel lifecycle has changed", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {
+        discord: {
+          configured: true,
+          running: false,
+          connected: false,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: false,
+              connected: false,
+            },
+          },
+        },
+      },
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    const fresh = {
+      ...cached,
+      ts: cached.ts + 1,
+      channels: {
+        discord: {
+          ...cached.channels.discord,
+          running: true,
+          connected: true,
+          accounts: {
+            default: {
+              ...cached.channels.discord.accounts.default,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({
+          channels: {},
+          channelAccounts: {
+            discord: {
+              default: {
+                accountId: "default",
+                running: true,
+                connected: true,
+              },
+            },
+          },
+        }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {
+        discord: {
+          configured: true,
+          running: true,
+          connected: true,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    const fresh = {
+      ...cached,
+      ts: cached.ts + 1,
+      channels: {
+        discord: {
+          ...cached.channels.discord,
+          accounts: {
+            ...cached.channels.discord.accounts,
+            work: {
+              accountId: "work",
+              configured: true,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({
+          channels: {},
+          channelAccounts: {
+            discord: {
+              work: {
+                accountId: "work",
+                running: true,
+                connected: true,
+              },
+            },
+          },
+        }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
 });
 
 describe("logs.tail", () => {

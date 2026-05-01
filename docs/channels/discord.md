@@ -98,14 +98,24 @@ You will need to create a new application with a bot, add the bot to your server
 
 ```bash
 export DISCORD_BOT_TOKEN="YOUR_BOT_TOKEN"
-openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN --dry-run
-openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
-openclaw config set channels.discord.enabled true --strict-json
+cat > discord.patch.json5 <<'JSON5'
+{
+  channels: {
+    discord: {
+      enabled: true,
+      token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+    },
+  },
+}
+JSON5
+openclaw config patch --file ./discord.patch.json5 --dry-run
+openclaw config patch --file ./discord.patch.json5
 openclaw gateway
 ```
 
     If OpenClaw is already running as a background service, restart it via the OpenClaw Mac app or by stopping and restarting the `openclaw gateway run` process.
     For managed service installs, run `openclaw gateway install` from a shell where `DISCORD_BOT_TOKEN` is present, or store the variable in `~/.openclaw/.env`, so the service can resolve the env SecretRef after restart.
+    If your host is blocked or rate-limited by Discord's startup application lookup, set the Discord application/client ID from the Developer Portal so startup can skip that REST call. Use `channels.discord.applicationId` for the default account, or `channels.discord.accounts.<accountId>.applicationId` when you run multiple Discord bots.
 
   </Step>
 
@@ -141,7 +151,29 @@ openclaw gateway
 DISCORD_BOT_TOKEN=...
 ```
 
-        Plaintext `token` values are supported. SecretRef values are also supported for `channels.discord.token` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
+        For scripted or remote setup, write the same JSON5 block with `openclaw config patch --file ./discord.patch.json5 --dry-run` and then rerun without `--dry-run`. Plaintext `token` values are supported. SecretRef values are also supported for `channels.discord.token` across env/file/exec providers. See [Secrets Management](/gateway/secrets).
+
+        For multiple Discord bots, keep each bot token and application ID under its account. A top-level `channels.discord.applicationId` is inherited by accounts, so only set it there when every account should use the same application ID.
+
+```json5
+{
+  channels: {
+    discord: {
+      enabled: true,
+      accounts: {
+        personal: {
+          token: { source: "env", provider: "default", id: "DISCORD_PERSONAL_TOKEN" },
+          applicationId: "111111111111111111",
+        },
+        work: {
+          token: { source: "env", provider: "default", id: "DISCORD_WORK_TOKEN" },
+          applicationId: "222222222222222222",
+        },
+      },
+    },
+  },
+}
+```
 
       </Tab>
     </Tabs>
@@ -390,11 +422,11 @@ Example:
 
 <Tabs>
   <Tab title="DM policy">
-    `channels.discord.dmPolicy` controls DM access (legacy: `channels.discord.dm.policy`):
+    `channels.discord.dmPolicy` controls DM access. `channels.discord.allowFrom` is the canonical DM allowlist.
 
     - `pairing` (default)
     - `allowlist`
-    - `open` (requires `channels.discord.allowFrom` to include `"*"`; legacy: `channels.discord.dm.allowFrom`)
+    - `open` (requires `channels.discord.allowFrom` to include `"*"`)
     - `disabled`
 
     If DM policy is not open, unknown users are blocked (or prompted for pairing in `pairing` mode).
@@ -402,15 +434,18 @@ Example:
     Multi-account precedence:
 
     - `channels.discord.accounts.default.allowFrom` applies only to the `default` account.
-    - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` is unset.
+    - For one account, `allowFrom` takes precedence over legacy `dm.allowFrom`.
+    - Named accounts inherit `channels.discord.allowFrom` when their own `allowFrom` and legacy `dm.allowFrom` are unset.
     - Named accounts do not inherit `channels.discord.accounts.default.allowFrom`.
+
+    Legacy `channels.discord.dm.policy` and `channels.discord.dm.allowFrom` still read for compatibility. `openclaw doctor --fix` migrates them to `dmPolicy` and `allowFrom` when it can do so without changing access.
 
     DM target format for delivery:
 
     - `user:<id>`
     - `<@id>` mention
 
-    Bare numeric IDs are ambiguous and rejected unless an explicit user/channel target kind is provided.
+    Bare numeric IDs normally resolve as channel IDs when a channel default is active, but IDs listed in the account's effective DM `allowFrom` are treated as user DM targets for compatibility.
 
   </Tab>
 
@@ -1013,6 +1048,8 @@ Auto-join example:
         ],
         daveEncryption: true,
         decryptionFailureTolerance: 24,
+        connectTimeoutMs: 30000,
+        reconnectGraceMs: 15000,
         tts: {
           provider: "openai",
           openai: { voice: "onyx" },
@@ -1028,11 +1065,14 @@ Notes:
 - `voice.tts` overrides `messages.tts` for voice playback only.
 - `voice.model` overrides the LLM used for Discord voice channel responses only. Leave it unset to inherit the routed agent model.
 - STT uses `tools.media.audio`; `voice.model` does not affect transcription.
+- Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
-- Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable voice runtime and the `GuildVoiceStates` gateway intent.
-- `channels.discord.intents.voiceStates` can explicitly override voice-state intent subscription. Leave it unset for the intent to follow `voice.enabled`.
+- Discord voice is opt-in for text-only configs; set `channels.discord.voice.enabled=true` (or keep an existing `channels.discord.voice` block) to enable `/vc` commands, the voice runtime, and the `GuildVoiceStates` gateway intent.
+- `channels.discord.intents.voiceStates` can explicitly override voice-state intent subscription. Leave it unset for the intent to follow effective voice enablement.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
+- `voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts. Default: `30000`.
+- `voice.reconnectGraceMs` controls how long OpenClaw waits for a disconnected voice session to begin reconnecting before destroying it. Default: `15000`.
 - OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
 - If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)` after updating, collect a dependency report and logs. The bundled `@discordjs/voice` line includes the upstream padding fix from discord.js PR #11449, which closed discord.js issue #11419.
 
@@ -1040,7 +1080,7 @@ Voice channel pipeline:
 
 - Discord PCM capture is converted to a WAV temp file.
 - `tools.media.audio` handles STT, for example `openai/gpt-4o-mini-transcribe`.
-- The transcript is sent through normal Discord ingress and routing.
+- The transcript is sent through Discord ingress and routing while the response LLM runs with a voice-output policy that hides the agent `tts` tool and asks for returned text, because Discord voice owns final TTS playback.
 - `voice.model`, when set, overrides only the response LLM for this voice-channel turn.
 - `voice.tts` is merged over `messages.tts`; the resulting audio is played in the joined channel.
 
@@ -1102,11 +1142,11 @@ openclaw logs --follow
     - `Slow listener detected ...`
     - `stuck session: sessionKey=agent:...:discord:... state=processing ...`
 
-    Carbon gateway queue knobs:
+    Discord gateway queue knobs:
 
     - single-account: `channels.discord.eventQueue.listenerTimeout`
     - multi-account: `channels.discord.accounts.<accountId>.eventQueue.listenerTimeout`
-    - this only controls Carbon gateway listener work, not agent turn lifetime
+    - this only controls Discord gateway listener work, not agent turn lifetime
 
     Discord does not apply a channel-owned timeout to queued agent turns. Message listeners hand off immediately, and queued Discord runs preserve per-session ordering until the session/tool/runtime lifecycle completes or aborts the work.
 

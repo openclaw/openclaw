@@ -537,6 +537,8 @@ export type ChannelMessagingAdapter = {
     parentConversationCandidates?: string[];
   } | null;
   /**
+   * @deprecated Return parentConversationCandidates from resolveSessionConversation.
+   *
    * Legacy compatibility hook for parent fallbacks when a plugin does not need
    * to customize `id` or `threadId`. Core only uses this when
    * `resolveSessionConversation(...)` does not return

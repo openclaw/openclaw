@@ -12,9 +12,26 @@ bundled_channel_stage_root() {
   printf "%s/.openclaw/plugin-runtime-deps" "$HOME"
 }
 
+bundled_channel_stage_dir() {
+  printf "%s" "${OPENCLAW_PLUGIN_STAGE_DIR:-$(bundled_channel_stage_root)}"
+}
+
+bundled_channel_install_package() {
+  openclaw_e2e_install_package "$@"
+}
+
 bundled_channel_find_external_dep_package() {
   local dep_path="$1"
   find "$(bundled_channel_stage_root)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
+}
+
+bundled_channel_find_staged_dep_package() {
+  local dep_path="$1"
+  find "$(bundled_channel_stage_dir)" -maxdepth 12 -path "*/node_modules/$dep_path/package.json" -type f -print -quit 2>/dev/null || true
+}
+
+bundled_channel_dump_stage_dir() {
+  find "$(bundled_channel_stage_dir)" -maxdepth 12 -type f | sort | head -160 >&2 || true
 }
 
 bundled_channel_assert_no_package_dep_available() {
@@ -62,6 +79,45 @@ bundled_channel_assert_no_dep_available() {
   fi
 }
 
+bundled_channel_assert_no_staged_dep() {
+  local channel="$1"
+  local dep_path="$2"
+  local message="${3:-$channel unexpectedly staged $dep_path}"
+  if [ -n "$(bundled_channel_find_staged_dep_package "$dep_path")" ]; then
+    echo "$message" >&2
+    bundled_channel_dump_stage_dir
+    exit 1
+  fi
+}
+
+bundled_channel_assert_staged_dep() {
+  local channel="$1"
+  local dep_path="$2"
+  local log_file="${3:-}"
+  if [ -n "$(bundled_channel_find_staged_dep_package "$dep_path")" ]; then
+    return 0
+  fi
+  echo "missing external staged dependency sentinel for $channel: $dep_path" >&2
+  if [ -n "$log_file" ]; then
+    cat "$log_file" >&2 || true
+  fi
+  bundled_channel_dump_stage_dir
+  exit 1
+}
+
+bundled_channel_assert_no_staged_manifest_spec() {
+  local channel="$1"
+  local dep_path="$2"
+  local log_file="${3:-}"
+  if ! node scripts/e2e/lib/bundled-channel/assert-no-staged-manifest-spec.mjs "$(bundled_channel_stage_dir)" "$dep_path"; then
+    echo "$channel unexpectedly selected $dep_path for external runtime deps" >&2
+    if [ -n "$log_file" ]; then
+      cat "$log_file" >&2 || true
+    fi
+    exit 1
+  fi
+}
+
 bundled_channel_remove_runtime_dep() {
   local channel="$1"
   local dep_path="$2"
@@ -74,121 +130,8 @@ bundled_channel_remove_runtime_dep() {
 
 bundled_channel_write_config() {
   local mode="$1"
-  node - <<'NODE' "$mode" "${TOKEN:?missing TOKEN}" "${PORT:?missing PORT}"
-const fs = require("node:fs");
-const path = require("node:path");
-
-const mode = process.argv[2];
-const token = process.argv[3];
-const port = Number(process.argv[4]);
-const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
-const config = fs.existsSync(configPath)
-  ? JSON.parse(fs.readFileSync(configPath, "utf8"))
-  : {};
-
-config.gateway = {
-  ...(config.gateway || {}),
-  port,
-  auth: { mode: "token", token },
-  controlUi: { enabled: false },
-};
-config.agents = {
-  ...(config.agents || {}),
-  defaults: {
-    ...(config.agents?.defaults || {}),
-    model: { primary: "openai/gpt-4.1-mini" },
-  },
-};
-config.models = {
-  ...(config.models || {}),
-  providers: {
-    ...(config.models?.providers || {}),
-    openai: {
-      ...(config.models?.providers?.openai || {}),
-      apiKey: process.env.OPENAI_API_KEY,
-      baseUrl: "https://api.openai.com/v1",
-      models: [],
-    },
-  },
-};
-config.plugins = {
-  ...(config.plugins || {}),
-  enabled: true,
-};
-config.channels = {
-  ...(config.channels || {}),
-  telegram: {
-    ...(config.channels?.telegram || {}),
-    enabled: mode === "telegram",
-    botToken: "123456:bundled-channel-update-token",
-    dmPolicy: "disabled",
-    groupPolicy: "disabled",
-  },
-  discord: {
-    ...(config.channels?.discord || {}),
-    enabled: mode === "discord",
-    dmPolicy: "disabled",
-    groupPolicy: "disabled",
-  },
-  slack: {
-    ...(config.channels?.slack || {}),
-    enabled: mode === "slack",
-    botToken: "xoxb-bundled-channel-update-token",
-    appToken: "xapp-bundled-channel-update-token",
-  },
-  feishu: {
-    ...(config.channels?.feishu || {}),
-    enabled: mode === "feishu",
-  },
-};
-if (mode === "memory-lancedb") {
-  config.plugins = {
-    ...(config.plugins || {}),
-    enabled: true,
-    allow: [...new Set([...(config.plugins?.allow || []), "memory-lancedb"])],
-    slots: {
-      ...(config.plugins?.slots || {}),
-      memory: "memory-lancedb",
-    },
-    entries: {
-      ...(config.plugins?.entries || {}),
-      "memory-lancedb": {
-        ...(config.plugins?.entries?.["memory-lancedb"] || {}),
-        enabled: true,
-        config: {
-          ...(config.plugins?.entries?.["memory-lancedb"]?.config || {}),
-          embedding: {
-            ...(config.plugins?.entries?.["memory-lancedb"]?.config?.embedding || {}),
-            apiKey: process.env.OPENAI_API_KEY,
-            model: "text-embedding-3-small",
-          },
-          dbPath: process.env.OPENCLAW_BUNDLED_CHANNEL_MEMORY_DB_PATH || "~/.openclaw/memory/lancedb-e2e",
-          autoCapture: false,
-          autoRecall: false,
-        },
-      },
-    },
-  };
-}
-if (mode === "acpx") {
-  config.plugins = {
-    ...(config.plugins || {}),
-    enabled: true,
-    allow:
-      Array.isArray(config.plugins?.allow) && config.plugins.allow.length > 0
-        ? [...new Set([...config.plugins.allow, "acpx"])]
-        : config.plugins?.allow,
-    entries: {
-      ...(config.plugins?.entries || {}),
-      acpx: {
-        ...(config.plugins?.entries?.acpx || {}),
-        enabled: true,
-      },
-    },
-  };
-}
-
-fs.mkdirSync(path.dirname(configPath), { recursive: true });
-fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
-NODE
+  node scripts/e2e/lib/bundled-channel/write-config.mjs \
+    "$mode" \
+    "${TOKEN:-bundled-channel-config-token}" \
+    "${PORT:-18789}"
 }

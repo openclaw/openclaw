@@ -13,8 +13,13 @@ const { createTempDir } = createScriptTestHarness();
 
 describe("runtime postbuild static assets", () => {
   it("tracks plugin-owned static assets that release packaging must ship", () => {
-    expect(listStaticExtensionAssetOutputs()).toContain(
-      "dist/extensions/diffs/assets/viewer-runtime.js",
+    expect(listStaticExtensionAssetOutputs()).toEqual(
+      expect.arrayContaining([
+        "dist/extensions/acpx/error-format.mjs",
+        "dist/extensions/acpx/mcp-command-line.mjs",
+        "dist/extensions/acpx/mcp-proxy.mjs",
+        "dist/extensions/diffs/assets/viewer-runtime.js",
+      ]),
     );
   });
 
@@ -86,8 +91,10 @@ describe("runtime postbuild static assets", () => {
 
     writeLegacyCliExitCompatChunks({ rootDir });
 
-    await expect(
-      fs.readFile(path.join(rootDir, "dist", "memory-state-CcqRgDZU.js"), "utf8"),
-    ).resolves.toContain("function hasMemoryRuntime()");
+    for (const chunk of ["memory-state-CcqRgDZU.js", "memory-state-DwGdReW4.js"]) {
+      await expect(fs.readFile(path.join(rootDir, "dist", chunk), "utf8")).resolves.toContain(
+        "function hasMemoryRuntime()",
+      );
+    }
   });
 });

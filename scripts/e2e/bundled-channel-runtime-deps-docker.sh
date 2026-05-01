@@ -48,5 +48,4 @@ prepare_package_tgz
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 docker_e2e_harness_mount_args
 
-
 run_bundled_channel_runtime_dep_scenarios

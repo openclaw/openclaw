@@ -184,6 +184,7 @@ cannot roll back unrelated user settings.
     ```json5
     {
       messages: {
+        visibleReplies: "automatic", // set "message_tool" to require message-tool sends everywhere
         groupChat: {
           visibleReplies: "message_tool", // default; use "automatic" for legacy room replies
         },
@@ -208,7 +209,7 @@ cannot roll back unrelated user settings.
 
     - **Metadata mentions**: native @-mentions (WhatsApp tap-to-mention, Telegram @bot, etc.)
     - **Text patterns**: safe regex patterns in `mentionPatterns`
-    - **Visible replies**: `message_tool` keeps normal final replies private; the agent must call `message(action=send)` to post visibly in the group/channel.
+    - **Visible replies**: `messages.visibleReplies` can require message-tool sends globally; `messages.groupChat.visibleReplies` overrides that for groups/channels.
     - See [full reference](/gateway/config-channels#group-chat-mention-gating) for visible reply modes, per-channel overrides, and self-chat mode.
 
   </Accordion>
@@ -332,7 +333,7 @@ cannot roll back unrelated user settings.
     }
     ```
 
-    Build the image first: `scripts/sandbox-setup.sh`
+    Build the image first — from a source checkout run `scripts/sandbox-setup.sh`, or from an npm install see the inline `docker build` command in [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup).
 
     See [Sandboxing](/gateway/sandboxing) for the full guide and [full reference](/gateway/config-agents#agentsdefaultssandbox) for all options.
 

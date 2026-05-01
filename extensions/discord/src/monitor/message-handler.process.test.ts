@@ -1,6 +1,7 @@
 import { DEFAULT_EMOJIS } from "openclaw/plugin-sdk/channel-feedback";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 
 const sendMocks = vi.hoisted(() => ({
   reactMessageDiscord: vi.fn<
@@ -161,6 +162,17 @@ let processDiscordMessage: typeof import("./message-handler.process.js").process
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
+  settleReplyDispatcher: async (params: {
+    dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+    onSettled?: () => void | Promise<void>;
+  }) => {
+    params.dispatcher.markComplete();
+    try {
+      await params.dispatcher.waitForIdle();
+    } finally {
+      await params.onSettled?.();
+    }
+  },
   createReplyDispatcherWithTyping: (opts: {
     deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void;
   }) => ({
@@ -186,6 +198,27 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   recordInboundSession: (...args: unknown[]) => recordInboundSession(...args),
+  resolvePinnedMainDmOwnerFromAllowlist: (params: {
+    dmScope?: string | null;
+    allowFrom?: Array<string | number> | null;
+    normalizeEntry: (entry: string) => string | undefined;
+  }) => {
+    if ((params.dmScope ?? "main") !== "main") {
+      return null;
+    }
+    const allowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
+    if (allowFrom.some((entry) => String(entry).trim() === "*")) {
+      return null;
+    }
+    const owners = Array.from(
+      new Set(
+        allowFrom
+          .map((entry) => params.normalizeEntry(String(entry)))
+          .filter((entry): entry is string => Boolean(entry)),
+      ),
+    );
+    return owners.length === 1 ? owners[0] : null;
+  },
   registerSessionBindingAdapter: vi.fn(),
   unregisterSessionBindingAdapter: vi.fn(),
   resolveThreadBindingConversationIdFromBindingId: (bindingId: string) =>
@@ -262,7 +295,7 @@ function createNoQueuedDispatchResult() {
 
 async function processStreamOffDiscordMessage() {
   const ctx = await createBaseContext({ discordConfig: { streamMode: "off" } });
-  await processDiscordMessage(ctx as any);
+  await runProcessDiscordMessage(ctx);
 }
 
 beforeAll(async () => {
@@ -294,7 +327,13 @@ beforeEach(() => {
 });
 
 function getLastRouteUpdate():
-  | { sessionKey?: string; channel?: string; to?: string; accountId?: string }
+  | {
+      sessionKey?: string;
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      mainDmOwnerPin?: { ownerRecipient?: string; senderRecipient?: string };
+    }
   | undefined {
   const callArgs = recordInboundSession.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
@@ -304,6 +343,7 @@ function getLastRouteUpdate():
           channel?: string;
           to?: string;
           accountId?: string;
+          mainDmOwnerPin?: { ownerRecipient?: string; senderRecipient?: string };
         };
       }
     | undefined;
@@ -346,8 +386,8 @@ function getLastDispatchReplyOptions(): DispatchInboundParams["replyOptions"] | 
   return params?.replyOptions;
 }
 
-async function runProcessDiscordMessage(ctx: unknown): Promise<void> {
-  await processDiscordMessage(ctx as any);
+async function runProcessDiscordMessage(ctx: DiscordMessagePreflightContext): Promise<void> {
+  await processDiscordMessage(ctx);
 }
 
 async function runInPartialStreamMode(): Promise<void> {
@@ -447,7 +487,7 @@ describe("processDiscordMessage ack reactions", () => {
       effectiveWasMentioned: false,
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
   });
@@ -466,7 +506,7 @@ describe("processDiscordMessage ack reactions", () => {
       },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expectReactAckCallAt(0, "👀", {
       accountId: "ops",
@@ -486,7 +526,7 @@ describe("processDiscordMessage ack reactions", () => {
       effectiveWasMentioned: true,
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expectReactAckCallAt(0, "👀", {
       channelId: "fallback-channel",
@@ -537,7 +577,7 @@ describe("processDiscordMessage ack reactions", () => {
 
     const ctx = await createAutomaticSourceDeliveryContext();
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     const emojis = getReactionEmojis();
     expect(emojis).toContain("👀");
@@ -558,7 +598,7 @@ describe("processDiscordMessage ack reactions", () => {
     });
 
     const ctx = await createAutomaticSourceDeliveryContext();
-    const runPromise = processDiscordMessage(ctx as any);
+    const runPromise = runProcessDiscordMessage(ctx);
 
     await vi.advanceTimersByTimeAsync(30_001);
     releaseDispatch();
@@ -592,7 +632,7 @@ describe("processDiscordMessage ack reactions", () => {
       },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     const emojis = getReactionEmojis();
     expect(emojis).toContain("🟦");
@@ -645,7 +685,7 @@ describe("processDiscordMessage ack reactions", () => {
       },
     });
 
-    const runPromise = processDiscordMessage(ctx as any);
+    const runPromise = runProcessDiscordMessage(ctx);
     await vi.advanceTimersByTimeAsync(2_500);
     await vi.runAllTimersAsync();
     await runPromise;
@@ -673,7 +713,7 @@ describe("processDiscordMessage ack reactions", () => {
       },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     await vi.waitFor(() => expect(sendMocks.removeReactionDiscord).toHaveBeenCalled());
     expectRemoveAckCallAt(0, "👀", {
@@ -738,7 +778,7 @@ describe("processDiscordMessage session routing", () => {
       mediaMaxBytes: 1024 * 1024,
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchCtx()).toMatchObject({
       BodyForAgent: "hello from discord voice",
@@ -760,7 +800,7 @@ describe("processDiscordMessage session routing", () => {
       messageChannelId: "dm1",
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(getLastRouteUpdate()).toEqual({
       sessionKey: "agent:main:discord:direct:u1",
@@ -770,13 +810,55 @@ describe("processDiscordMessage session routing", () => {
     });
   });
 
+  it("pins Discord text DM main-route updates to the single configured DM owner", async () => {
+    const ctx = await createBaseContext({
+      ...createDirectMessageContextOverrides(),
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: {
+          store: "/tmp/openclaw-discord-process-test-sessions.json",
+          dmScope: "main",
+        },
+      },
+      channelConfig: { users: ["user:111"] },
+      baseSessionKey: "agent:main:main",
+      author: {
+        id: "222",
+        username: "bob",
+        discriminator: "0",
+        globalName: "Bob",
+      },
+      sender: { id: "222", label: "bob" },
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastRouteUpdate()).toMatchObject({
+      sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "user:222",
+      accountId: "default",
+      mainDmOwnerPin: {
+        ownerRecipient: "111",
+        senderRecipient: "222",
+      },
+    });
+  });
+
   it("stores group lastRoute with channel target", async () => {
     const ctx = await createBaseContext({
       baseSessionKey: "agent:main:discord:channel:c1",
       route: BASE_CHANNEL_ROUTE,
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(getLastRouteUpdate()).toEqual({
       sessionKey: "agent:main:discord:channel:c1",
@@ -794,7 +876,7 @@ describe("processDiscordMessage session routing", () => {
       route: BASE_CHANNEL_ROUTE,
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()).toMatchObject({
       sourceReplyDeliveryMode: "message_tool_only",
@@ -821,7 +903,7 @@ describe("processDiscordMessage session routing", () => {
       route: BASE_CHANNEL_ROUTE,
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
@@ -829,18 +911,18 @@ describe("processDiscordMessage session routing", () => {
   });
 
   it("defaults guild replies to message-tool-only source delivery", async () => {
-    await processDiscordMessage(
-      (await createBaseContext({
+    await runProcessDiscordMessage(
+      await createBaseContext({
         shouldRequireMention: true,
         effectiveWasMentioned: true,
         route: BASE_CHANNEL_ROUTE,
-      })) as any,
+      }),
     );
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
 
     dispatchInboundMessage.mockClear();
-    await processDiscordMessage(
-      (await createBaseContext({
+    await runProcessDiscordMessage(
+      await createBaseContext({
         shouldRequireMention: true,
         effectiveWasMentioned: true,
         cfg: {
@@ -852,15 +934,15 @@ describe("processDiscordMessage session routing", () => {
           session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
         },
         route: BASE_CHANNEL_ROUTE,
-      })) as any,
+      }),
     );
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("automatic");
 
     dispatchInboundMessage.mockClear();
-    await processDiscordMessage(
-      (await createBaseContext({
+    await runProcessDiscordMessage(
+      await createBaseContext({
         ...createDirectMessageContextOverrides(),
-      })) as any,
+      }),
     );
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("automatic");
   });
@@ -891,7 +973,7 @@ describe("processDiscordMessage session routing", () => {
       route: BASE_CHANNEL_ROUTE,
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchCtx()).toMatchObject({
       SessionKey: "agent:main:subagent:child",
@@ -924,7 +1006,7 @@ describe("processDiscordMessage session routing", () => {
       discordConfig: { thread: { inheritParent: false } },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchCtx()).toMatchObject({
       SessionKey: "agent:main:discord:channel:thread-1",
@@ -946,7 +1028,7 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig,
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
   }
 
   async function createBlockModeContext() {
@@ -1007,7 +1089,7 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "partial" },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(editMessageDiscord).toHaveBeenCalledWith(
       "c1",
@@ -1033,7 +1115,7 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
@@ -1053,7 +1135,7 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
@@ -1076,7 +1158,7 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(draftStream.flush).not.toHaveBeenCalled();
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
@@ -1105,7 +1187,7 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "off" },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(deliverDiscordReply).not.toHaveBeenCalled();
     expect(editMessageDiscord).not.toHaveBeenCalled();
@@ -1128,7 +1210,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createBlockModeContext();
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates).toEqual(["Hello", "HelloWorld"]);
@@ -1148,7 +1230,7 @@ describe("processDiscordMessage draft streaming", () => {
       discordConfig: { streamMode: "partial" },
     });
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith("Hello world");
   });
@@ -1164,7 +1246,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     const ctx = await createBlockModeContext();
 
-    await processDiscordMessage(ctx as any);
+    await runProcessDiscordMessage(ctx);
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });

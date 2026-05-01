@@ -256,6 +256,15 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
     writeStdoutLine("state: %s", session.state);
     writeStdoutLine("transport: %s", session.transport);
     writeStdoutLine("mode: %s", session.mode);
+    if (session.twilio) {
+      writeStdoutLine("twilio dial-in: %s", session.twilio.dialInNumber);
+      writeStdoutLine("voice call id: %s", formatOptional(session.twilio.voiceCallId));
+      writeStdoutLine("dtmf sent: %s", formatBoolean(session.twilio.dtmfSent));
+      writeStdoutLine("intro sent: %s", formatBoolean(session.twilio.introSent));
+    }
+    if (!session.chrome) {
+      continue;
+    }
     writeStdoutLine("node: %s", session.chrome?.nodeId ?? "local/none");
     writeStdoutLine("audio bridge: %s", session.chrome?.audioBridge?.type ?? "none");
     writeStdoutLine(
@@ -267,6 +276,11 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
     if (health?.manualActionRequired) {
       writeStdoutLine("manual reason: %s", formatOptional(health.manualActionReason));
       writeStdoutLine("manual message: %s", formatOptional(health.manualActionMessage));
+    }
+    writeStdoutLine("speech ready: %s", formatBoolean(health?.speechReady));
+    if (health?.speechReady === false) {
+      writeStdoutLine("speech blocked reason: %s", formatOptional(health.speechBlockedReason));
+      writeStdoutLine("speech blocked message: %s", formatOptional(health.speechBlockedMessage));
     }
     writeStdoutLine("provider connected: %s", formatBoolean(health?.providerConnected));
     writeStdoutLine("realtime ready: %s", formatBoolean(health?.realtimeReady));
@@ -1930,6 +1944,7 @@ export function registerGoogleMeetCli(params: {
   root
     .command("status")
     .argument("[session-id]", "Meet session ID")
+    .option("--json", "Print JSON output", false)
     .action(async (sessionId?: string) => {
       const rt = await params.ensureRuntime();
       writeStdoutJson(rt.status(sessionId));
@@ -2017,12 +2032,15 @@ export function registerGoogleMeetCli(params: {
     .argument("[message]", "Realtime instructions to speak now")
     .action(async (sessionId: string, message?: string) => {
       const rt = await params.ensureRuntime();
-      const result = rt.speak(sessionId, message);
+      const result = await rt.speak(sessionId, message);
       if (!result.found) {
         throw new Error("session not found");
       }
       if (!result.spoken) {
-        throw new Error("session has no active realtime audio bridge");
+        throw new Error(
+          result.session?.chrome?.health?.speechBlockedMessage ??
+            "session has no active realtime audio bridge",
+        );
       }
       writeStdoutLine("speaking on %s", sessionId);
     });

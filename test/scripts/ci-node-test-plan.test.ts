@@ -17,6 +17,19 @@ type VitestConfig = {
 };
 
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
+const GATEWAY_SERVER_BACKED_HTTP_TESTS = new Set([
+  "src/gateway/embeddings-http.test.ts",
+  "src/gateway/models-http.test.ts",
+  "src/gateway/openai-http.test.ts",
+  "src/gateway/openresponses-http.test.ts",
+  "src/gateway/probe.auth.integration.test.ts",
+]);
+
+const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
+  "src/gateway/gateway.test.ts",
+  "src/gateway/server.startup-matrix-migration.integration.test.ts",
+  "src/gateway/sessions-history-http.test.ts",
+]);
 
 function listTestFiles(rootDir: string): string[] {
   if (!existsSync(rootDir)) {
@@ -51,6 +64,15 @@ function listMatchedTestFiles(config: VitestConfig): string[] {
     })
     .map((file) => relative(process.cwd(), resolve(cwd, file)).replaceAll("\\", "/"))
     .toSorted((a, b) => a.localeCompare(b));
+}
+
+function isGatewayServerTestFile(file: string): boolean {
+  return (
+    file.startsWith("src/gateway/") &&
+    !file.startsWith("src/gateway/server-methods/") &&
+    !GATEWAY_SERVER_EXCLUDED_TESTS.has(file) &&
+    (file.includes("server") || GATEWAY_SERVER_BACKED_HTTP_TESTS.has(file))
+  );
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
@@ -170,25 +192,48 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     ]);
   });
 
-  it("splits the agentic lane into control-plane, command, agent, SDK, and plugin shards", () => {
+  it("splits the agentic lane into control-plane, command, agent, gateway, SDK, and plugin shards", () => {
     const shards = createNodeTestShards();
-    const controlPlaneShard = shards.find((shard) => shard.shardName === "agentic-control-plane");
+    const controlPlaneShards = shards.filter((shard) =>
+      shard.shardName.startsWith("agentic-control-plane-"),
+    );
     const cliShard = shards.find((shard) => shard.shardName === "agentic-cli");
     const commandSupportShard = shards.find(
       (shard) => shard.shardName === "agentic-command-support",
     );
     const commandShards = shards.filter((shard) => shard.shardName.startsWith("agentic-commands-"));
     const agentShard = shards.find((shard) => shard.shardName === "agentic-agents");
+    const gatewayCoreShard = shards.find((shard) => shard.shardName === "agentic-gateway-core");
+    const gatewayMethodsShard = shards.find(
+      (shard) => shard.shardName === "agentic-gateway-methods",
+    );
     const pluginSdkShard = shards.find((shard) => shard.shardName === "agentic-plugin-sdk");
     const pluginsShard = shards.find((shard) => shard.shardName === "agentic-plugins");
 
-    expect(controlPlaneShard).toEqual({
-      checkName: "checks-node-agentic-control-plane",
-      shardName: "agentic-control-plane",
-      configs: ["test/vitest/vitest.gateway-server.config.ts"],
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-      requiresDist: false,
-    });
+    expect(controlPlaneShards.map((shard) => shard.shardName)).toEqual([
+      "agentic-control-plane-agent-chat",
+      "agentic-control-plane-auth-node",
+      "agentic-control-plane-http-models",
+      "agentic-control-plane-runtime",
+    ]);
+    expect(controlPlaneShards).toEqual(
+      controlPlaneShards.map((shard) => ({
+        checkName: `checks-node-${shard.shardName}`,
+        configs: ["test/vitest/vitest.gateway-server.config.ts"],
+        includePatterns: shard.includePatterns,
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+        shardName: shard.shardName,
+      })),
+    );
+    const controlPlaneShardFiles = controlPlaneShards
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+    const expectedControlPlaneFiles = listTestFiles("src/gateway")
+      .filter(isGatewayServerTestFile)
+      .toSorted((a, b) => a.localeCompare(b));
+    expect(controlPlaneShardFiles).toEqual(expectedControlPlaneFiles);
+    expect(new Set(controlPlaneShardFiles).size).toBe(controlPlaneShardFiles.length);
     expect(cliShard).toEqual({
       checkName: "checks-node-agentic-cli",
       shardName: "agentic-cli",
@@ -244,12 +289,24 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       checkName: "checks-node-agentic-plugin-sdk",
       shardName: "agentic-plugin-sdk",
       configs: [
-        "test/vitest/vitest.gateway-core.config.ts",
-        "test/vitest/vitest.gateway-client.config.ts",
-        "test/vitest/vitest.gateway-methods.config.ts",
         "test/vitest/vitest.plugin-sdk-light.config.ts",
         "test/vitest/vitest.plugin-sdk.config.ts",
       ],
+      requiresDist: false,
+    });
+    expect(gatewayCoreShard).toEqual({
+      checkName: "checks-node-agentic-gateway-core",
+      shardName: "agentic-gateway-core",
+      configs: [
+        "test/vitest/vitest.gateway-core.config.ts",
+        "test/vitest/vitest.gateway-client.config.ts",
+      ],
+      requiresDist: false,
+    });
+    expect(gatewayMethodsShard).toEqual({
+      checkName: "checks-node-agentic-gateway-methods",
+      shardName: "agentic-gateway-methods",
+      configs: ["test/vitest/vitest.gateway-methods.config.ts"],
       requiresDist: false,
     });
     expect(pluginsShard).toEqual({
@@ -260,7 +317,7 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     });
   });
 
-  it("keeps plugin prerelease npm install coverage on the agentic plugin CI shard", () => {
+  it("keeps plugin prerelease npm install coverage on the release-only agentic plugin shard", () => {
     const pluginsShard = createNodeTestShards().find(
       (shard) => shard.shardName === "agentic-plugins",
     );
@@ -280,6 +337,8 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
     const shards = createNodeTestShards({ includeReleaseOnlyPluginShards: false });
 
     expect(shards.some((shard) => shard.shardName === "agentic-plugins")).toBe(false);
+    expect(shards.some((shard) => shard.shardName === "agentic-gateway-core")).toBe(true);
+    expect(shards.some((shard) => shard.shardName === "agentic-gateway-methods")).toBe(true);
     expect(shards.some((shard) => shard.shardName === "agentic-plugin-sdk")).toBe(true);
   });
 
@@ -311,16 +370,28 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         shardName: "auto-reply-reply-agent-runner",
       },
       {
+        checkName: "checks-node-auto-reply-reply-commands",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-commands",
+      },
+      {
         checkName: "checks-node-auto-reply-reply-dispatch",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
         shardName: "auto-reply-reply-dispatch",
       },
       {
-        checkName: "checks-node-auto-reply-reply-commands-state-routing",
+        checkName: "checks-node-auto-reply-reply-session",
         configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
         requiresDist: false,
-        shardName: "auto-reply-reply-commands-state-routing",
+        shardName: "auto-reply-reply-session",
+      },
+      {
+        checkName: "checks-node-auto-reply-reply-state-routing",
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        requiresDist: false,
+        shardName: "auto-reply-reply-state-routing",
       },
     ]);
   });

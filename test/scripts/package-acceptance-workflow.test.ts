@@ -4,8 +4,11 @@ import { describe, expect, it } from "vitest";
 const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
+const PACKAGE_JSON = "package.json";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
+const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
+const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 
 describe("package acceptance workflow", () => {
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {
@@ -38,8 +41,17 @@ describe("package acceptance workflow", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
     expect(workflow).toContain("suite_profile:");
+    expect(workflow).toContain("published_upgrade_survivor_baseline:");
+    expect(workflow).toContain("published_upgrade_survivor_baselines:");
+    expect(workflow).toContain("published_upgrade_survivor_scenarios:");
+    expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mjs");
+    expect(workflow).toContain("--history-count 6");
+    expect(workflow).toContain("--include-version 2026.4.23");
+    expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
+    expect(workflow).toContain("update-channel-switch upgrade-survivor");
+    expect(workflow).toContain("published-upgrade-survivor");
     expect(workflow).toContain("bundled-channel-deps-compat");
     expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
@@ -59,18 +71,45 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "harness_ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
     );
+    expect(workflow).toContain(
+      "published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}",
+    );
+    expect(workflow).toContain(
+      "published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}",
+    );
+    expect(workflow).toContain(
+      "published_upgrade_survivor_scenarios: ${{ needs.resolve_package.outputs.published_upgrade_survivor_scenarios }}",
+    );
+    expect(workflow).toContain("Published upgrade survivor baseline:");
+    expect(workflow).toContain("Published upgrade survivor baselines:");
+    expect(workflow).toContain("Published upgrade survivor scenarios:");
   });
 });
 
 describe("package artifact reuse", () => {
   it("lets reusable Docker E2E consume an already resolved package artifact", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+    const packageJson = readFileSync(PACKAGE_JSON, "utf8");
+    const scheduler = readFileSync("scripts/test-docker-all.mjs", "utf8");
+    const publishedUpgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
 
     expect(workflow).toContain("package_artifact_name:");
     expect(workflow).toContain("package_artifact_run_id:");
+    expect(workflow).toContain("published_upgrade_survivor_baseline:");
+    expect(workflow).toContain("published_upgrade_survivor_baselines:");
+    expect(workflow).toContain("published_upgrade_survivor_scenarios:");
     expect(workflow).toContain("docker_e2e_bare_image:");
     expect(workflow).toContain("docker_e2e_functional_image:");
     expect(workflow).toContain("OPENCLAW_DOCKER_E2E_SELECTED_SHA:");
+    expect(workflow).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}",
+    );
+    expect(workflow).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}",
+    );
+    expect(workflow).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}",
+    );
     expect(workflow).toContain("Download current-run OpenClaw Docker E2E package");
     expect(workflow).toContain("Download previous-run OpenClaw Docker E2E package");
     expect(workflow).toContain("inputs.package_artifact_name != ''");
@@ -88,10 +127,31 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     expect(workflow).toContain("plan_docker_lane_groups:");
+    expect(workflow).toContain("targeted_docker_lane_group_size:");
     expect(workflow).toContain("Docker E2E targeted lanes (${{ matrix.group.label }})");
     expect(workflow).toContain("LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}");
+    expect(scheduler).toContain(
+      "published_upgrade_survivor_baseline=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}",
+    );
+    expect(scheduler).toContain(
+      "published_upgrade_survivor_baselines=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}",
+    );
+    expect(scheduler).toContain(
+      '["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC]',
+    );
+    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",');
+    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",');
+    expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
+    expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
+    expect(publishedUpgradeSurvivor).toContain("openclaw@(beta|latest|");
+    expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
+    expect(
+      publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
+    ).toBeLessThan(
+      publishedUpgradeSurvivor.indexOf('npm install -g --prefix "$npm_config_prefix"'),
+    );
   });
 
   it("bounds shared Docker image pulls so package acceptance cannot stall forever", () => {
@@ -99,6 +159,10 @@ describe("package artifact reuse", () => {
 
     expect(pullHelper).toContain("OPENCLAW_DOCKER_PULL_ATTEMPTS");
     expect(pullHelper).toContain("OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS");
+    expect(pullHelper).toContain('timeout_seconds="${OPENCLAW_DOCKER_PULL_TIMEOUT_SECONDS:-180}"');
+    expect(pullHelper).toContain(
+      'retry_delay_seconds="${OPENCLAW_DOCKER_PULL_RETRY_DELAY_SECONDS:-5}"',
+    );
     expect(pullHelper).toContain(
       'timeout --foreground --kill-after=30s "${timeout_seconds}s" docker pull "$image"',
     );
@@ -115,13 +179,46 @@ describe("package artifact reuse", () => {
 
   it("shards broad native live tests instead of one serial live-all job", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW, "utf8");
+    const retryHelper = readFileSync("scripts/ci-live-command-retry.sh", "utf8");
 
+    expect(workflow).toContain("validate_selected_ref:\n    runs-on: ubuntu-24.04");
     expect(workflow).not.toContain("suite_id: live-all");
     expect(workflow).not.toContain("command: pnpm test:live\n");
     expect(workflow).toContain("suite_id: native-live-src-agents");
     expect(workflow).toContain("Checkout trusted live shard harness");
     expect(workflow).toContain(
       "command: node .release-harness/scripts/test-live-shard.mjs native-live-src-agents",
+    );
+    expect(workflow).toContain("OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}");
+    expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain("validate_live_suite_filter:");
+    expect(workflow).toContain("LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}");
+    expect(workflow).toContain(
+      "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
+    );
+    expect(workflow).toContain('add_profile_suite docker-live-models "minimum stable full"');
+    expect(workflow).toContain(
+      'add_profile_suite native-live-src-gateway-core "minimum stable full"',
+    );
+    expect(workflow).toContain('add_profile_suite live-gateway-docker "minimum stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
+    expect(workflow).toContain('add_profile_suite live-cli-backend-docker "stable full"');
+    expect(workflow).toContain(
+      "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
+    );
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.5");
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
+    expect((workflow.match(/service_tier=\\"fast\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(workflow).not.toContain(
+      'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
+    );
+    expect(workflow).toContain("bash .release-harness/scripts/ci-live-command-retry.sh");
+    expect(workflow).toMatch(/validate_repo_e2e:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u);
+    expect(workflow).toMatch(/validate_special_e2e:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u);
+    expect(workflow).toMatch(
+      /validate_live_provider_suites:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u,
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
@@ -133,11 +230,21 @@ describe("package artifact reuse", () => {
     expect(workflow).not.toContain(
       "OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,opencode-go,openrouter,xai,zai",
     );
+    expect(workflow).toContain("suite_id: live-gateway-anthropic-docker");
+    expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2");
+    expect(workflow).toContain("timeout --foreground --kill-after=30s 25m");
     expect(workflow).toContain("suite_id: native-live-extensions-a-k");
     expect(workflow).toContain("suite_id: native-live-extensions-l-n");
+    expect(workflow).toContain("suite_id: native-live-extensions-moonshot");
+    expect(workflow).toMatch(/suite_id: native-live-extensions-moonshot[\s\S]*?advisory: true/u);
+    expect(workflow).toContain("OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}");
+    expect(workflow).toContain("Advisory live suite failed with exit code");
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
     expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
     expect(workflow).toContain("validate_live_media_provider_suites:");
+    expect(workflow).toMatch(
+      /validate_live_media_provider_suites:[\s\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404/u,
+    );
     expect(workflow).toContain("image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04");
     expect(workflow).toContain("ffmpeg -version | head -1");
     expect(workflow).toContain("ffprobe -version | head -1");
@@ -145,7 +252,21 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-google");
     expect(workflow).toContain("suite_id: native-live-extensions-media-music-minimax");
     expect(workflow).toContain("suite_id: native-live-extensions-media-video");
+    expect(workflow).toContain("suite_group: native-live-extensions-media-video");
+    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=google,minimax");
+    expect(workflow).toContain("OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS=openai,openrouter,xai");
+    expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-opencode-go");
+    expect(workflow).toContain("opencode-go/mimo-v2-omni");
+    expect(workflow).toContain(
+      "inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go'",
+    );
+    expect(workflow).toContain("inputs.live_suite_filter == 'native-live-extensions-media-video'");
     expect(workflow).not.toContain("needs_ffmpeg: true");
+    expect(retryHelper).toContain("OPENCLAW_LIVE_COMMAND_ATTEMPTS:-2");
+    expect(retryHelper).toContain("ECONNRESET");
+    expect(retryHelper).toContain("fetch failed");
+    expect(retryHelper).toContain("gateway request timeout");
+    expect(retryHelper).toContain("model idle timeout");
   });
 
   it("runs Docker live harnesses from trusted helper scripts", () => {
@@ -163,19 +284,19 @@ describe("package artifact reuse", () => {
     const stage = readFileSync("scripts/lib/live-docker-stage.sh", "utf8");
 
     expect(workflow).toContain(
-      'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-models-docker.sh',
+      'run: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-models-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-gateway-models-docker.sh',
+      "command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2",
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-cli-backend-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-cli-backend-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-acp-bind-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 45m bash .release-harness/scripts/test-live-acp-bind-docker.sh',
     );
     expect(workflow).toContain(
-      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" bash .release-harness/scripts/test-live-codex-harness-docker.sh',
+      'command: OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-codex-harness-docker.sh',
     );
     expect(scenarios).toContain("function liveDockerScriptCommand");
     expect(scenarios).toContain(
@@ -248,7 +369,6 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain("source: artifact");
-    expect(workflow).toContain("artifact_run_id: ${{ github.run_id }}");
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
@@ -270,6 +390,16 @@ describe("package artifact reuse", () => {
       "OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}",
     );
     expect(workflow).toContain("rerun_group:");
+    expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain(
+      "live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}",
+    );
+    expect(workflow).toContain(
+      "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
+    );
+    expect(workflow).toContain(
+      "contains(fromJSON('[\"all\",\"live-e2e\"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.live_suite_filter == ''",
+    );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
   });
@@ -318,9 +448,55 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain('-f harness_ref="$TARGET_SHA"');
     expect(workflow).toContain("child_rerun_group=all");
     expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
+    expect(workflow).toContain('args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")');
+    expect(workflow).toContain(
+      "cancel-in-progress: ${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}",
+    );
+    expect(workflow).toContain("gh run cancel");
+    expect(workflow).not.toContain("force-cancel");
     expect(workflow).toContain("NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}");
-    expect(workflow.match(/trap - EXIT INT TERM/g)).toHaveLength(6);
     expect(workflow).not.toContain("workflow_ref:");
     expect(workflow).not.toContain("inputs.workflow_ref");
+  });
+
+  it("keeps release QA and repo E2E lanes off scarce 32-core runners", () => {
+    const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+
+    for (const jobName of [
+      "qa_lab_parity_lane_release_checks",
+      "qa_lab_parity_report_release_checks",
+      "qa_live_matrix_release_checks",
+      "qa_live_telegram_release_checks",
+    ]) {
+      expect(releaseChecksWorkflow).toMatch(
+        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+      );
+    }
+
+    for (const jobName of [
+      "run_mock_parity",
+      "run_live_matrix",
+      "run_live_matrix_sharded",
+      "run_live_telegram",
+      "run_live_discord",
+    ]) {
+      expect(qaWorkflow).toMatch(
+        new RegExp(`${jobName}:[\\s\\S]*?runs-on: blacksmith-8vcpu-ubuntu-2404`, "u"),
+      );
+    }
+  });
+
+  it("summarizes queue time separately from execution time in full validation", () => {
+    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+
+    expect(workflow).toContain("### Slowest jobs: ${label}");
+    expect(workflow).toContain("### Longest queues: ${label}");
+    expect(workflow).toContain("| Job | Result | Queue minutes | Run minutes |");
+    expect(workflow).toContain(
+      'gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/jobs?per_page=100"',
+    );
+    expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
+    expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
   });
 });
