@@ -18,8 +18,14 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "groq": ["GROQ_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "groq",
+        "authMethods": ["api-key"],
+        "envVars": ["GROQ_API_KEY"]
+      }
+    ]
   },
   "contracts": {
     "mediaUnderstandingProviders": ["groq"]
