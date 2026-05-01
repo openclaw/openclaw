@@ -1,0 +1,109 @@
+name: Crabbox Hydrate
+
+on:
+  workflow_dispatch:
+    inputs:
+      crabbox_id:
+        description: "Crabbox lease ID"
+        required: true
+        type: string
+      crabbox_runner_label:
+        description: "Dynamic Crabbox runner label"
+        required: true
+        type: string
+      crabbox_keep_alive_minutes:
+        description: "Minutes to keep the hydrated job alive"
+        required: false
+        default: "90"
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  hydrate:
+    name: hydrate
+    runs-on: [self-hosted, "${{ inputs.crabbox_runner_label }}"]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Prepare Crabbox shell
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags --depth=50 origin "+refs/heads/main:refs/remotes/origin/main"
+
+          node_bin="$(dirname "$(node -p 'process.execPath')")"
+          pnpm_bin="$(command -v pnpm)"
+          sudo ln -sf "$node_bin/node" /usr/local/bin/node
+          sudo ln -sf "$node_bin/npm" /usr/local/bin/npm
+          sudo ln -sf "$node_bin/npx" /usr/local/bin/npx
+          sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
+          sudo ln -sf "$pnpm_bin" /usr/local/bin/pnpm
+
+      - name: Hydrate provider env helper
+        shell: bash
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+          ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
+          MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.TOGETHER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+        run: bash scripts/ci-hydrate-testbox-env.sh
+
+      - name: Mark Crabbox ready
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.crabbox/actions"
+          state="$HOME/.crabbox/actions/${{ inputs.crabbox_id }}.env"
+          tmp="${state}.tmp"
+          {
+            echo "WORKSPACE=${GITHUB_WORKSPACE}"
+            echo "RUN_ID=${GITHUB_RUN_ID}"
+            echo "READY_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } > "$tmp"
+          mv "$tmp" "$state"
+
+      - name: Keep Crabbox job alive
+        shell: bash
+        run: |
+          set -euo pipefail
+          minutes="${{ inputs.crabbox_keep_alive_minutes }}"
+          case "$minutes" in
+            ''|*[!0-9]*) minutes=90 ;;
+          esac
+          stop="$HOME/.crabbox/actions/${{ inputs.crabbox_id }}.stop"
+          deadline=$(( $(date +%s) + minutes * 60 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if [ -f "$stop" ]; then
+              exit 0
+            fi
+            sleep 15
+          done

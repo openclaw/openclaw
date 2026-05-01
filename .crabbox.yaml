@@ -8,7 +8,7 @@ capacity:
   regions:
     - eu-west-1
 actions:
-  workflow: .github/workflows/ci-check-testbox.yml
+  workflow: .github/workflows/crabbox-hydrate.yml
   ref: main
   runnerLabels:
     - crabbox
