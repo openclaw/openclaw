@@ -57,6 +57,8 @@ async function ensureDmComponentAuthorized(params: {
       sender: { id: user.id },
       accountId: ctx.accountId,
       token: ctx.token,
+      isSenderAllowed: (senderId, allowFrom) =>
+        resolveAllowMatch(allowFrom).allowed || allowFrom.includes(senderId),
     });
     return matchedGroups.length > 0
       ? resolveAllowMatch([...entries, `discord:${user.id}`])

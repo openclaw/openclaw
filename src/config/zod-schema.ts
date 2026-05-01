@@ -61,6 +61,12 @@ const AccessGroupsSchema = z
           membership: z.literal("canViewChannel").optional(),
         })
         .strict(),
+      z
+        .object({
+          type: z.literal("message.senders"),
+          members: z.record(z.string().min(1), z.array(z.string().min(1))),
+        })
+        .strict(),
     ]),
   )
   .optional();

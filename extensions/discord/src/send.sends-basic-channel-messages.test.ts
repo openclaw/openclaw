@@ -735,6 +735,44 @@ describe("fetchChannelPermissionsDiscord", () => {
     ).resolves.toBe(true);
   });
 
+  it("aggregates conflicting role overwrites before applying allows", async () => {
+    const { rest, getMock } = makeDiscordRest();
+    getMock
+      .mockResolvedValueOnce({
+        id: "chan1",
+        guild_id: "guild1",
+        permission_overwrites: [
+          {
+            id: "role-allow",
+            deny: "0",
+            allow: PermissionFlagsBits.ViewChannel.toString(),
+          },
+          {
+            id: "role-deny",
+            deny: PermissionFlagsBits.ViewChannel.toString(),
+            allow: "0",
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        id: "guild1",
+        roles: [
+          { id: "guild1", permissions: "0" },
+          { id: "role-allow", permissions: "0" },
+          { id: "role-deny", permissions: "0" },
+        ],
+      })
+      .mockResolvedValueOnce({ roles: ["role-allow", "role-deny"] });
+
+    await expect(
+      canViewDiscordGuildChannel("guild1", "chan1", "user1", {
+        rest,
+        token: "t",
+        cfg: DISCORD_TEST_CFG,
+      }),
+    ).resolves.toBe(true);
+  });
+
   it("fails closed when the channel belongs to a different guild", async () => {
     const { rest, getMock } = makeDiscordRest();
     getMock.mockResolvedValueOnce({
