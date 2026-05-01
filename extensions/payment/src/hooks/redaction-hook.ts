@@ -24,9 +24,9 @@ type BeforeMessageWriteEvent = {
   agentId?: string;
 };
 
+// This hook only ever blocks (never rewrites) so message is omitted intentionally.
 type BeforeMessageWriteResult = {
-  block?: boolean;
-  message?: unknown;
+  block: true;
 };
 
 // ---------------------------------------------------------------------------
@@ -34,11 +34,9 @@ type BeforeMessageWriteResult = {
 // ---------------------------------------------------------------------------
 
 export function registerRedactionHook(api: OpenClawPluginApi): void {
-  api.on("before_message_write", (event, _ctx) => {
-    // Cast: our local BeforeMessageWriteResult omits message (never rewritten in this hook),
-    // which is compatible at runtime — the SDK only checks the block flag.
-    return scanMessageForCardData(event as BeforeMessageWriteEvent) as undefined;
-  });
+  api.on("before_message_write", (event, _ctx) =>
+    scanMessageForCardData(event as BeforeMessageWriteEvent),
+  );
 }
 
 // ---------------------------------------------------------------------------

@@ -46,15 +46,34 @@ export function isPanShape(value: string): boolean {
 export const CVV_KEY_PATTERN = /^(cvv2?|cvc2?|card_?security_?code|security_?code)$/i;
 
 /**
- * Recursively scan an arbitrary value for PAN-shaped strings or CVV-key context strings.
+ * Returns true if the given key+value pair represents an
+ * `Authorization: Payment ...` header — a Stripe MPP machine-payment auth
+ * artifact that must never appear in tool arguments.
+ */
+export function isPaymentAuthorizationHeader(parentKey: string | null, value: unknown): boolean {
+  if (parentKey === null) return false;
+  if (
+    parentKey.toLowerCase() !== "authorization" &&
+    parentKey.toLowerCase() !== "proxy-authorization"
+  )
+    return false;
+  if (typeof value !== "string") return false;
+  // Match "Payment <token>" with at least one non-whitespace token after.
+  return /^\s*Payment\s+\S/i.test(value);
+}
+
+/**
+ * Recursively scan an arbitrary value for PAN-shaped strings, CVV-key context
+ * strings, or Authorization: Payment header values.
  * Returns a detection result on first match, or undefined if no card data found.
  *
- * Safe preview: returns last4 only for PAN, "[cvv]" for CVV context.
+ * Safe preview: returns last4 only for PAN, "[cvv]" for CVV context,
+ * "<authorization header redacted>" for auth_payment.
  * NEVER returns the full value in the result.
  */
 export function scanForCardData(
   value: unknown,
-): { kind: "pan" | "cvv"; preview: string } | undefined {
+): { kind: "pan" | "cvv" | "auth_payment"; preview: string } | undefined {
   return _scan(value, null, new WeakSet<object>());
 }
 
@@ -62,11 +81,15 @@ function _scan(
   value: unknown,
   parentKey: string | null,
   seen: WeakSet<object>,
-): { kind: "pan" | "cvv"; preview: string } | undefined {
+): { kind: "pan" | "cvv" | "auth_payment"; preview: string } | undefined {
   try {
     if (value === null || value === undefined) return undefined;
 
     if (typeof value === "string") {
+      // Authorization: Payment header — must check before generic PAN/CVV checks
+      if (isPaymentAuthorizationHeader(parentKey, value)) {
+        return { kind: "auth_payment", preview: "<authorization header redacted>" };
+      }
       // CVV-key context: flag any string when parentKey matches CVV pattern
       if (parentKey !== null && CVV_KEY_PATTERN.test(parentKey)) {
         // Only flag if it looks like a CVV (3-4 digits)

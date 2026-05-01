@@ -260,6 +260,66 @@ describe("redaction hook — CVV detection in CVV-key context", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Authorization: Payment header detection — MUST block
+// ---------------------------------------------------------------------------
+
+describe("Authorization: Payment header detection", () => {
+  it("blocks toolCall arguments containing { authorization: 'Payment <token>' }", async () => {
+    const result = scanMessageForCardData(
+      makeEvent(
+        makeAssistantMessage([
+          makeToolCallBlock({
+            headers: { authorization: "Payment spt_test_abc123def456" },
+          }),
+        ]),
+      ),
+    );
+    expect(result).toBeDefined();
+    expect(result!.block).toBe(true);
+  });
+
+  it("blocks Authorization (capitalized) variant", async () => {
+    const result = scanMessageForCardData(
+      makeEvent(
+        makeAssistantMessage([
+          makeToolCallBlock({
+            headers: { Authorization: "Payment spt_live_xyz789" },
+          }),
+        ]),
+      ),
+    );
+    expect(result).toBeDefined();
+    expect(result!.block).toBe(true);
+  });
+
+  it("does NOT block non-Payment Authorization headers", async () => {
+    const result = scanMessageForCardData(
+      makeEvent(
+        makeAssistantMessage([
+          makeToolCallBlock({
+            headers: { authorization: "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9" },
+          }),
+        ]),
+      ),
+    );
+    expect(result).toBeUndefined();
+  });
+
+  it("does NOT block 'Payment' as a plain string outside an authorization key", async () => {
+    const result = scanMessageForCardData(
+      makeEvent(
+        makeAssistantMessage([
+          makeToolCallBlock({
+            description: "Payment for goods",
+          }),
+        ]),
+      ),
+    );
+    expect(result).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Registration wiring
 // ---------------------------------------------------------------------------
 
