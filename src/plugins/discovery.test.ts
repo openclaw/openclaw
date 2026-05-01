@@ -791,6 +791,37 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it("rejects missing explicit runtime setup entries for installed package plugins", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "missing-runtime-setup-pack");
+    mkdirSafe(path.join(pluginDir, "src"));
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/missing-runtime-setup-pack",
+      extensions: ["./dist/index.js"],
+      setupEntry: "./src/setup-entry.ts",
+      runtimeSetupEntry: "./dist/setup-entry.js",
+    });
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+    writePluginEntry(path.join(pluginDir, "src", "setup-entry.ts"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+    const candidate = findCandidateById(result.candidates, "missing-runtime-setup-pack");
+
+    expect(candidate).toBeDefined();
+    expect(candidate?.setupSource).toBeUndefined();
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.message.includes("runtime setup entry not found") &&
+          entry.message.includes("./dist/setup-entry.js"),
+      ),
+    ).toBe(true);
+  });
+
   it("rejects package runtimeExtensions that do not match extension entries", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "runtime-mismatch-pack");

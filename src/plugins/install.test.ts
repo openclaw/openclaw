@@ -920,6 +920,38 @@ describe("installPluginFromArchive", () => {
     }
   });
 
+  it("rejects package installs when runtimeSetupEntry is missing", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "missing-runtime-setup-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          setupEntry: "./src/setup-entry.ts",
+          runtimeSetupEntry: "./dist/setup-entry.js",
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+    fs.writeFileSync(path.join(pluginDir, "src", "setup-entry.ts"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("runtime setup entry not found");
+      expect(result.error).toContain("./dist/setup-entry.js");
+    }
+  });
+
   it("rejects package installs when an extension entry is a symlink escape", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     const outsideDir = path.join(path.dirname(pluginDir), "outside-symlink");
