@@ -808,6 +808,7 @@ export function createVideoGenerateTool(options?: {
       cfg,
       agentDir: options?.agentDir,
       modelConfig: cfg.agents?.defaults?.videoGenerationModel,
+      providers: () => listRuntimeVideoGenerationProviders({ config: cfg }),
       providerKey: "videoGenerationProviders",
     })
   ) {
