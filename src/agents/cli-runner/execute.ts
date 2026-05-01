@@ -49,8 +49,35 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
   Object.assign(executeDeps, overrides);
 }
 
-function createCliAbortError(): Error {
-  const error = new Error("CLI run aborted");
+function describeCliAbortReason(reason: unknown): string | undefined {
+  if (reason === undefined || reason === null) {
+    return undefined;
+  }
+  if (typeof reason === "string") {
+    const trimmed = reason.trim();
+    return trimmed ? trimmed : undefined;
+  }
+  if (reason instanceof Error) {
+    const message = reason.message?.trim();
+    if (message) {
+      return reason.name && reason.name !== "Error" ? `${reason.name}: ${message}` : message;
+    }
+    return reason.name || undefined;
+  }
+  if (typeof reason === "object") {
+    try {
+      const json = JSON.stringify(reason);
+      return json && json !== "{}" ? json : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return String(reason);
+}
+
+function createCliAbortError(reason?: unknown): Error {
+  const detail = describeCliAbortReason(reason);
+  const error = new Error(detail ? `CLI run aborted: ${detail}` : "CLI run aborted");
   error.name = "AbortError";
   return error;
 }
@@ -221,7 +248,7 @@ export async function executePreparedCliRun(
 ): Promise<CliOutput> {
   const params = context.params;
   if (params.abortSignal?.aborted) {
-    throw createCliAbortError();
+    throw createCliAbortError(params.abortSignal.reason);
   }
   const backend = context.preparedBackend.backend;
   const { sessionId: resolvedSessionId, isNew } = resolveSessionIdToSend({
@@ -510,7 +537,7 @@ export async function executePreparedCliRun(
         }
         streamingParser?.finish();
         if (params.abortSignal?.aborted && result.reason === "manual-cancel") {
-          throw createCliAbortError();
+          throw createCliAbortError(params.abortSignal.reason);
         }
 
         const stdout = result.stdout.trim();
@@ -619,3 +646,7 @@ export async function executePreparedCliRun(
     }
   }
 }
+
+export const __testing = {
+  createCliAbortError,
+};
