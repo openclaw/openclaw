@@ -192,4 +192,58 @@ describe("seekNextActivePhaseDueMs", () => {
     // Should skip 32 half-hour slots (17:00 through 08:30) to reach 09:00 next day
     expect(result).toBe(Date.parse("2026-01-02T09:00:00.000Z"));
   });
+
+  it("caps iterations for pathological sub-second intervals", () => {
+    // 1ms interval with always-false predicate — without the iteration cap
+    // this would loop ~604 million times.  The cap (10 080) prevents that.
+    const startMs = Date.parse("2026-01-01T12:00:00.000Z");
+    const t0 = performance.now();
+    const result = seekNextActivePhaseDueMs({
+      startMs,
+      intervalMs: 1, // 1ms — pathological
+      phaseMs: 0,
+      isActive: () => false,
+    });
+    const elapsedMs = performance.now() - t0;
+
+    // Falls back to startMs (runtime guard will handle it).
+    expect(result).toBe(startMs);
+    // Must complete quickly — without the cap this would take minutes.
+    expect(elapsedMs).toBeLessThan(500);
+  });
+
+  it("handles intervalMs larger than the seek horizon", () => {
+    // 8-day interval — only the startMs candidate is checked within horizon.
+    const startMs = Date.parse("2026-01-01T03:00:00.000Z");
+    const eightDays = 8 * 24 * HOUR;
+    const result = seekNextActivePhaseDueMs({
+      startMs,
+      intervalMs: eightDays,
+      phaseMs: 0,
+      isActive: (ms) => {
+        const hour = new Date(ms).getUTCHours();
+        return hour >= 9 && hour < 17;
+      },
+    });
+
+    // startMs (03:00) is outside 09:00–17:00.  The next candidate would be
+    // 8 days later which is past the 7-day horizon.  Falls back to startMs.
+    expect(result).toBe(startMs);
+  });
+
+  it("returns startMs when intervalMs larger than horizon and startMs is active", () => {
+    const startMs = Date.parse("2026-01-01T12:00:00.000Z"); // 12:00 — active
+    const eightDays = 8 * 24 * HOUR;
+    const result = seekNextActivePhaseDueMs({
+      startMs,
+      intervalMs: eightDays,
+      phaseMs: 0,
+      isActive: (ms) => {
+        const hour = new Date(ms).getUTCHours();
+        return hour >= 9 && hour < 17;
+      },
+    });
+
+    expect(result).toBe(startMs);
+  });
 });

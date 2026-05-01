@@ -66,8 +66,17 @@ export function resolveNextHeartbeatDueMs(params: {
  *
  * `isActive` is a predicate that mirrors `isWithinActiveHours` — the caller
  * binds the config/heartbeat so this module stays config-agnostic.
+ *
+ * `phaseMs` is accepted for call-site symmetry but unused: the caller passes
+ * a phase-aligned `startMs`, and advancing by `intervalMs` preserves alignment.
  */
 const MAX_SEEK_HORIZON_MS = 7 * 24 * 60 * 60_000; // 7 days
+
+// Cap iterations so pathological sub-minute intervals (e.g. "1s", "1ms")
+// cannot block the event loop.  10 080 = 7 days at 1-minute steps — generous
+// enough for any reasonable config.  Pathological configs fall back to the raw
+// slot where the runtime guard still gates execution.
+const MAX_SEEK_ITERATIONS = 10_080;
 
 export function seekNextActivePhaseDueMs(params: {
   startMs: number;
@@ -82,13 +91,16 @@ export function seekNextActivePhaseDueMs(params: {
   const intervalMs = Math.max(1, Math.floor(params.intervalMs));
   const horizonMs = params.startMs + MAX_SEEK_HORIZON_MS;
   let candidateMs = params.startMs;
-  while (candidateMs <= horizonMs) {
+  let iterations = 0;
+  while (candidateMs <= horizonMs && iterations < MAX_SEEK_ITERATIONS) {
     if (isActive(candidateMs)) {
       return candidateMs;
     }
     candidateMs += intervalMs;
+    iterations++;
   }
-  // All slots within the seek horizon fall outside active hours — return the
-  // raw first slot so the runtime execution guard can still gate it.
+  // All slots within the seek horizon (or iteration cap) fall outside active
+  // hours — return the raw first slot so the runtime execution guard can
+  // still gate it.
   return params.startMs;
 }
