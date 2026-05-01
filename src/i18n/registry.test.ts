@@ -109,7 +109,7 @@ describeWhenUiI18nPresent("ui i18n locale registry", () => {
     expect(getNestedTranslation(es, "languages", "de")).toBe("Deutsch (Alemán)");
     expect(getNestedTranslation(ptBR, "languages", "es")).toBe("Español (Espanhol)");
     expect(getNestedTranslation(zhCN, "common", "health")).toBe("\u5065\u5eb7\u72b6\u51b5");
-    expect(getNestedTranslation(th, "languages", "en")).toBe("อังกฤษ");
+    expect(getNestedTranslation(th, "languages", "en")).toBe("English (อังกฤษ)");
     expect(en).toBeNull();
   });
 });

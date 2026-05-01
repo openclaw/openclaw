@@ -12,6 +12,70 @@
     "target": "Control UI"
   },
   {
+    "source": "Agent",
+    "target": "เอเจนต์"
+  },
+  {
+    "source": "Agents",
+    "target": "เอเจนต์"
+  },
+  {
+    "source": "Workspace",
+    "target": "เวิร์กสเปซ"
+  },
+  {
+    "source": "Tool",
+    "target": "เครื่องมือ"
+  },
+  {
+    "source": "Tools",
+    "target": "เครื่องมือ"
+  },
+  {
+    "source": "Channel",
+    "target": "ช่องทาง"
+  },
+  {
+    "source": "Channels",
+    "target": "ช่องทาง"
+  },
+  {
+    "source": "Session",
+    "target": "เซสชัน"
+  },
+  {
+    "source": "Sessions",
+    "target": "เซสชัน"
+  },
+  {
+    "source": "Model",
+    "target": "โมเดล"
+  },
+  {
+    "source": "Models",
+    "target": "โมเดล"
+  },
+  {
+    "source": "Provider",
+    "target": "ผู้ให้บริการ"
+  },
+  {
+    "source": "Providers",
+    "target": "ผู้ให้บริการ"
+  },
+  {
+    "source": "Default",
+    "target": "ค่าเริ่มต้น"
+  },
+  {
+    "source": "Preview",
+    "target": "ดูตัวอย่าง"
+  },
+  {
+    "source": "Approvals",
+    "target": "คำขออนุมัติ"
+  },
+  {
     "source": "Skills",
     "target": "Skills"
   },
