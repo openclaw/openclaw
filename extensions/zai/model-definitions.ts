@@ -43,7 +43,9 @@ export function resolveZaiBaseUrl(endpoint?: string): string {
 }
 
 export function buildZaiCatalogModels(): ModelDefinitionConfig[] {
-  return ZAI_MANIFEST_PROVIDER.models.map((model) => ({ ...model, input: [...model.input] }));
+  return ZAI_MANIFEST_PROVIDER.models.map((model) =>
+    Object.assign({}, model, { input: [...model.input] }),
+  );
 }
 
 export function buildZaiModelDefinition(params: {
