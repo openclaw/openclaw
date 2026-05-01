@@ -216,6 +216,10 @@
     "target": "文档目录"
   },
   {
+    "source": "Single Executable Build",
+    "target": "单文件可执行构建"
+  },
+  {
     "source": "Credits",
     "target": "致谢"
   },

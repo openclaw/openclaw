@@ -4361,6 +4361,53 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(calls).toEqual([]);
   });
 
+  it("accepts package-level mirrors with extensionless main entries", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.27",
+        dependencies: { jszip: "^3.10.1" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["jszip"],
+          },
+        },
+      }),
+    );
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "browser",
+      deps: {},
+      enabledByDefault: true,
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    writeGeneratedRuntimeDepsManifest(installRoot, ["jszip@^3.10.1"]);
+    const jszipRoot = path.join(installRoot, "node_modules", "jszip");
+    fs.mkdirSync(path.join(jszipRoot, "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(jszipRoot, "package.json"),
+      JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+    );
+    fs.writeFileSync(path.join(jszipRoot, "lib", "index.js"), "module.exports = {};\n");
+
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      pluginId: "browser",
+      pluginRoot,
+      installDeps: (params) => {
+        calls.push(params);
+      },
+    });
+
+    expect(result.installedSpecs).toEqual([]);
+    expect(calls).toEqual([]);
+  });
+
   it("mirrors sqlite-vec into the packaged default memory runtime deps", () => {
     const packageRoot = makeTempDir();
     fs.writeFileSync(

@@ -13,6 +13,10 @@ export type CliRespawnPlan = {
   env: NodeJS.ProcessEnv;
 };
 
+type RuntimeVersions = NodeJS.ProcessVersions & {
+  bun?: string;
+};
+
 function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
   return platform === "win32" ? path.win32 : path.posix;
 }
@@ -50,6 +54,7 @@ export function buildCliRespawnPlan(
     env?: NodeJS.ProcessEnv;
     execArgv?: string[];
     execPath?: string;
+    runtimeVersions?: RuntimeVersions;
     autoNodeExtraCaCerts?: string | undefined;
     platform?: NodeJS.Platform;
   } = {},
@@ -58,13 +63,18 @@ export function buildCliRespawnPlan(
   const env = params.env ?? process.env;
   const execArgv = params.execArgv ?? process.execArgv;
   const execPath = params.execPath ?? process.execPath;
+  const runtimeVersions = params.runtimeVersions ?? (process.versions as RuntimeVersions);
   const platform = params.platform ?? process.platform;
 
-  if (shouldSkipRespawnForArgv(argv) || isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN)) {
+  if (
+    shouldSkipRespawnForArgv(argv) ||
+    isTruthyEnvValue(env.OPENCLAW_NO_RESPAWN) ||
+    isTruthyEnvValue(env.OPENCLAW_SEA)
+  ) {
     return null;
   }
 
-  if (platform === "win32") {
+  if (platform === "win32" || runtimeVersions.bun) {
     return null;
   }
 

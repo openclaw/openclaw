@@ -5,6 +5,7 @@ docker-compose.override.yml
 docker-compose.extra.yml
 docker-compose.sandbox.yml
 dist
+dist-sea/
 dist-runtime/
 dist-sea/
 pnpm-lock.yaml
