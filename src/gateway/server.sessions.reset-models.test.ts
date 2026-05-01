@@ -211,6 +211,37 @@ test("sessions.reset follows the updated default after an auto fallback pinned a
   expect(store["agent:main:main"]?.model).toBe("gpt-test-c");
 });
 
+test("sessions.reset falls back from unsafe outside sessionFile paths", async () => {
+  const { dir } = await createSessionStoreDir();
+  const outsideDir = path.join(path.dirname(dir), "outside-transcripts");
+  const unsafeSessionFile = path.join(outsideDir, "pinned-transcript.jsonl");
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-unsafe-path", {
+        sessionFile: unsafeSessionFile,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  const expectedSessionFile = path.join(
+    await fs.realpath(dir),
+    `${reset.payload?.entry.sessionId}.jsonl`,
+  );
+  expect(reset.payload?.entry.sessionFile).toBe(expectedSessionFile);
+  expect(reset.payload?.entry.sessionFile?.startsWith(outsideDir)).toBe(false);
+  await expect(fs.stat(reset.payload?.entry.sessionFile as string)).resolves.toBeTruthy();
+  await expect(fs.stat(unsafeSessionFile)).rejects.toThrow();
+});
+
 test("sessions.reset preserves spawned session ownership metadata", async () => {
   const { storePath } = await createSessionStoreDir();
   const customSessionFile = path.join(
