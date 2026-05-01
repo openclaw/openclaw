@@ -107,7 +107,7 @@ export function extractRtt(summary: TelegramQaSummary) {
   const mention = scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply");
   const warmSamples = mention?.samples
     ?.filter((sample) => sample.status === "pass" && sample.rttMs !== undefined)
-    .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
+    .toSorted((left, right) => (left.index ?? 0) - (right.index ?? 0))
     .flatMap((sample) => (sample.rttMs === undefined ? [] : [sample.rttMs]));
   const rtt: RttResult["rtt"] = {
     canaryMs: scenarios.find((scenario) => scenario.id === "telegram-canary")?.rttMs,

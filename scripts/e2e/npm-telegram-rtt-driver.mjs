@@ -16,12 +16,13 @@ const maxWarmFailures = Number(
   process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? String(warmSampleCount),
 );
 const successMarker = process.env.OPENCLAW_NPM_TELEGRAM_SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
-const scenarioIds = (
-  process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply"
-)
-  .split(",")
-  .map((value) => value.trim())
-  .filter(Boolean);
+const scenarioIds = new Set(
+  process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ??
+    "telegram-mentioned-message-reply"
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean),
+);
 
 if (!groupId || !driverToken || !sutToken) {
   throw new Error(
@@ -203,7 +204,7 @@ function percentile(sortedValues, percentileValue) {
 
 function summarizeSamples(samples) {
   const passed = samples.filter((sample) => sample.status === "pass" && sample.rttMs !== undefined);
-  const sorted = passed.map((sample) => sample.rttMs).sort((a, b) => a - b);
+  const sorted = passed.map((sample) => sample.rttMs).toSorted((a, b) => a - b);
   const sum = sorted.reduce((total, value) => total + value, 0);
   return {
     total: samples.length,
@@ -309,7 +310,7 @@ async function main() {
   });
   scenarios.push(canary);
 
-  if (scenarioIds.includes("telegram-mentioned-message-reply")) {
+  if (scenarioIds.has("telegram-mentioned-message-reply")) {
     scenarios.push(
       await runWarmScenario({
         id: "telegram-mentioned-message-reply",
