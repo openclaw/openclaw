@@ -99,6 +99,7 @@ function loadPluginLoaderModule(): PluginLoaderModule {
         importerUrl: import.meta.url,
         preferBuiltDist: true,
         jitiFilename: import.meta.url,
+        tryNative: true,
       });
       pluginLoaderModule = jiti(modulePath) as PluginLoaderModule;
       return pluginLoaderModule;
