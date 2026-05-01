@@ -24,6 +24,7 @@ openclaw channels capabilities
 openclaw channels capabilities --channel discord --target channel:123
 openclaw channels resolve --channel slack "#general" "@jane"
 openclaw channels logs --channel all
+openclaw channels restart --channel whatsapp --account default
 ```
 
 ## Status / capabilities / resolve / logs
@@ -44,6 +45,22 @@ Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
 stored conversation rows, not provider runtime state. After a Discord provider
 restart, a connected but quiet account may be healthy while no Discord session
 row appears until the next inbound or outbound conversation event.
+
+## Runtime lifecycle
+
+```bash
+openclaw channels start --channel whatsapp --account default
+openclaw channels stop --channel whatsapp --account default
+openclaw channels restart --channel whatsapp --account default
+```
+
+These commands start, stop, or restart an existing linked channel account through the Gateway runtime. They do not log out, remove config, clear credentials, unlink accounts, or start QR pairing. Use them when `channels status` shows a linked account as stopped after a transient failure and you want an explicit operator recovery path.
+
+- `--channel <name>` is required.
+- `--account <id>` defaults to the channel's default account.
+- `--json` prints the Gateway result for scripts.
+
+`restart` is an explicit stop followed by start. It does not change health-monitor retry/backoff policy or add automatic recovery.
 
 ## Add / remove accounts
 

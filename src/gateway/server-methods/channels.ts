@@ -21,14 +21,19 @@ import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validateChannelsLogoutParams,
+  validateChannelsRestartParams,
   validateChannelsStartParams,
   validateChannelsStopParams,
-  validateChannelsLogoutParams,
   validateChannelsStatusParams,
 } from "../protocol/index.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
 
 type ChannelLogoutPayload = {
   channel: ChannelId;
@@ -47,6 +52,10 @@ type ChannelStopPayload = {
   channel: ChannelId;
   accountId: string;
   stopped: boolean;
+};
+
+type ChannelRestartPayload = ChannelStopPayload & {
+  started: boolean;
 };
 
 const CHANNEL_STATUS_MAX_TIMEOUT_MS = 30_000;
@@ -152,7 +161,11 @@ export async function stopChannelAccount(params: {
   context: GatewayRequestContext;
   plugin: ChannelPlugin;
 }): Promise<ChannelStopPayload> {
+  if (!params.plugin.gateway?.startAccount && !params.plugin.gateway?.stopAccount) {
+    throw new Error(`Channel ${params.channelId} does not support runtime stop`);
+  }
   const resolvedAccountId = resolveChannelGatewayAccountId(params);
+  params.plugin.config.resolveAccount(params.cfg, resolvedAccountId);
   await params.context.stopChannel(params.channelId, resolvedAccountId);
   const runtime = params.context.getRuntimeSnapshot();
   const stopped =
@@ -165,6 +178,63 @@ export async function stopChannelAccount(params: {
     channel: params.channelId,
     accountId: resolvedAccountId,
     stopped,
+  };
+}
+
+export async function restartChannelAccount(params: {
+  channelId: ChannelId;
+  accountId?: string | null;
+  cfg: OpenClawConfig;
+  context: GatewayRequestContext;
+  plugin: ChannelPlugin;
+}): Promise<ChannelRestartPayload> {
+  const stopped = await stopChannelAccount(params);
+  const started = await startChannelAccount(params);
+  return {
+    channel: params.channelId,
+    accountId: stopped.accountId,
+    stopped: stopped.stopped,
+    started: started.started,
+  };
+}
+
+type ChannelLifecycleMethod = "channels.start" | "channels.stop" | "channels.restart";
+type ChannelLifecycleValidator =
+  | typeof validateChannelsStartParams
+  | typeof validateChannelsStopParams
+  | typeof validateChannelsRestartParams;
+
+async function resolveLifecycleRequest(params: {
+  method: ChannelLifecycleMethod;
+  validator: ChannelLifecycleValidator;
+  rawParams: unknown;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): Promise<{ channelId: ChannelId; rawChannel: unknown; accountId?: string | null } | undefined> {
+  if (!params.validator(params.rawParams)) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `invalid ${params.method} params: ${formatValidationErrors(params.validator.errors)}`,
+      ),
+    );
+    return undefined;
+  }
+  const rawChannel = (params.rawParams as { channel?: unknown }).channel;
+  const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
+  if (!channelId) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${params.method} channel`),
+    );
+    return undefined;
+  }
+  return {
+    channelId,
+    rawChannel,
+    accountId: (params.rawParams as { accountId?: string | null }).accountId,
   };
 }
 
@@ -366,33 +436,24 @@ export const channelsHandlers: GatewayRequestHandlers = {
     respond(true, payload, undefined);
   },
   "channels.start": async ({ params, respond, context }) => {
-    if (!validateChannelsStartParams(params)) {
+    const resolved = await resolveLifecycleRequest({
+      method: "channels.start",
+      validator: validateChannelsStartParams,
+      rawParams: params,
+      respond,
+    });
+    if (!resolved) {
+      return;
+    }
+    const plugin = getChannelPlugin(resolved.channelId);
+    if (!plugin) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid channels.start params: ${formatValidationErrors(validateChannelsStartParams.errors)}`,
+          `unknown channel: ${formatForLog(resolved.rawChannel)}`,
         ),
-      );
-      return;
-    }
-    const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
-    if (!channelId) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.start channel"),
-      );
-      return;
-    }
-    const plugin = getChannelPlugin(channelId);
-    if (!plugin) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel: ${formatForLog(rawChannel)}`),
       );
       return;
     }
@@ -400,7 +461,10 @@ export const channelsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `channel ${channelId} does not support start`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `channel ${resolved.channelId} does not support start`,
+        ),
       );
       return;
     }
@@ -410,8 +474,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
         env: process.env,
       }).config;
       const payload = await startChannelAccount({
-        channelId,
-        accountId: (params as { accountId?: string | null }).accountId,
+        channelId: resolved.channelId,
+        accountId: resolved.accountId,
         cfg,
         context,
         plugin,
@@ -422,43 +486,97 @@ export const channelsHandlers: GatewayRequestHandlers = {
     }
   },
   "channels.stop": async ({ params, respond, context }) => {
-    if (!validateChannelsStopParams(params)) {
+    const resolved = await resolveLifecycleRequest({
+      method: "channels.stop",
+      validator: validateChannelsStopParams,
+      rawParams: params,
+      respond,
+    });
+    if (!resolved) {
+      return;
+    }
+    const plugin = getChannelPlugin(resolved.channelId);
+    if (!plugin) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `invalid channels.stop params: ${formatValidationErrors(validateChannelsStopParams.errors)}`,
+          `unknown channel: ${formatForLog(resolved.rawChannel)}`,
         ),
       );
       return;
     }
-    const rawChannel = (params as { channel?: unknown }).channel;
-    const channelId = typeof rawChannel === "string" ? normalizeChannelId(rawChannel) : null;
-    if (!channelId) {
+    if (!plugin.gateway?.startAccount && !plugin.gateway?.stopAccount) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid channels.stop channel"),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `channel ${resolved.channelId} does not support runtime stop`,
+        ),
       );
       return;
     }
-    const plugin = getChannelPlugin(channelId);
+    try {
+      const cfg = applyPluginAutoEnable({
+        config: context.getRuntimeConfig(),
+        env: process.env,
+      }).config;
+      const payload = await stopChannelAccount({
+        channelId: resolved.channelId,
+        accountId: resolved.accountId,
+        cfg,
+        context,
+        plugin,
+      });
+      respond(true, payload, undefined);
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)));
+    }
+  },
+  "channels.restart": async ({ params, respond, context }) => {
+    const resolved = await resolveLifecycleRequest({
+      method: "channels.restart",
+      validator: validateChannelsRestartParams,
+      rawParams: params,
+      respond,
+    });
+    if (!resolved) {
+      return;
+    }
+    const plugin = getChannelPlugin(resolved.channelId);
     if (!plugin) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unknown channel ${channelId}`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unknown channel: ${formatForLog(resolved.rawChannel)}`,
+        ),
       );
       return;
     }
-    const accountIdRaw = (params as { accountId?: unknown }).accountId;
-    const accountId = normalizeOptionalString(accountIdRaw);
+    if (!plugin.gateway?.startAccount) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `channel ${resolved.channelId} does not support start`,
+        ),
+      );
+      return;
+    }
     try {
-      const payload = await stopChannelAccount({
-        channelId,
-        accountId,
-        cfg: context.getRuntimeConfig(),
+      const cfg = applyPluginAutoEnable({
+        config: context.getRuntimeConfig(),
+        env: process.env,
+      }).config;
+      const payload = await restartChannelAccount({
+        channelId: resolved.channelId,
+        accountId: resolved.accountId,
+        cfg,
         context,
         plugin,
       });

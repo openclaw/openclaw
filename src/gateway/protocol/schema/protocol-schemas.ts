@@ -62,6 +62,7 @@ import {
   ArtifactsListResultSchema,
 } from "./artifacts.js";
 import {
+  ChannelsRestartParamsSchema,
   ChannelsStartParamsSchema,
   ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
@@ -330,6 +331,7 @@ export const ProtocolSchemas = {
   ChannelsStatusResult: ChannelsStatusResultSchema,
   ChannelsStartParams: ChannelsStartParamsSchema,
   ChannelsStopParams: ChannelsStopParamsSchema,
+  ChannelsRestartParams: ChannelsRestartParamsSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,

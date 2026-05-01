@@ -342,6 +342,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Channels and login helpers">
     - `channels.status` returns built-in + bundled channel/plugin status summaries.
+    - `channels.start` starts an existing linked channel account without running login or QR pairing.
+    - `channels.stop` stops an existing linked channel account without logging it out, unlinking it, or clearing credentials.
+    - `channels.restart` stops then starts an existing linked channel account as an explicit operator action; it does not change health-monitor retry/backoff policy or add automatic recovery.
     - `channels.logout` logs out a specific channel/account where the channel supports logout.
     - `web.login.start` starts a QR/web login flow for the current QR-capable web channel provider.
     - `web.login.wait` waits for that QR/web login flow to complete and starts the channel on success.
