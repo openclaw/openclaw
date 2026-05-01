@@ -573,7 +573,6 @@ export function createImageGenerateTool(options?: {
       cfg,
       agentDir: options?.agentDir,
       modelConfig: cfg.agents?.defaults?.imageGenerationModel,
-      providers: () => listRuntimeImageGenerationProviders({ config: cfg }),
       providerKey: "imageGenerationProviders",
     })
   ) {
