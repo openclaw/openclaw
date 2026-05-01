@@ -9,11 +9,7 @@
  * - `redactBodyKeys` replaces the hardcoded `file_data` redaction.
  */
 
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { ApiError, type ApiClientConfig, type EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
@@ -52,7 +48,6 @@ export class ApiClient {
   private readonly fileUploadTimeoutMs: number;
   private readonly logger?: EngineLogger;
   private readonly resolveUserAgent: () => string;
-  private readonly ssrfPolicy: SsrFPolicy | undefined;
 
   constructor(config: ApiClientConfig = {}) {
     this.baseUrl = config.baseUrl ?? DEFAULT_BASE_URL;
@@ -61,7 +56,6 @@ export class ApiClient {
     this.logger = config.logger;
     const ua = config.userAgent ?? "QQBotPlugin/unknown";
     this.resolveUserAgent = typeof ua === "function" ? ua : () => ua;
-    this.ssrfPolicy = ssrfPolicyFromHttpBaseUrlAllowedHostname(this.baseUrl);
   }
 
   /**
@@ -132,7 +126,6 @@ export class ApiClient {
       const guarded = await fetchWithSsrFGuard({
         url,
         init: fetchInit,
-        policy: this.ssrfPolicy,
       });
       ssrfRelease = guarded.release;
       res = guarded.response;
