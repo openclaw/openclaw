@@ -4,7 +4,6 @@ import type {
 } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveApprovalOverGateway } from "./approval-gateway-resolver.js";
 import {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
@@ -52,16 +51,12 @@ export type {
   PluginApprovalResolvedView,
   ResolvedApprovalView,
 } from "./approval-view-model.types.js";
-export { resolveApprovalOverGateway };
 export {
   CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
   createLazyChannelApprovalNativeRuntimeAdapter,
 };
 export type {
-  ApprovalRequest,
-  ApprovalResolved,
   ChannelApprovalCapabilityHandlerContext,
-  ChannelApprovalKind,
   ChannelApprovalNativeAvailabilityAdapter,
   ChannelApprovalNativeFinalAction,
   ChannelApprovalNativeInteractionAdapter,
