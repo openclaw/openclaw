@@ -14,6 +14,7 @@ import {
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -355,11 +356,16 @@ function shouldEmitCompactToolOutput(params: {
   toolName: string;
   result: unknown;
   outputText?: string;
+  sessionKey?: string;
 }): boolean {
   if (!COMPACT_PROVIDER_INVENTORY_TOOLS.has(params.toolName)) {
     return false;
   }
   if (!hasProviderInventoryDetails(params.result)) {
+    return false;
+  }
+  const chatType = deriveSessionChatTypeFromKey(params.sessionKey);
+  if (chatType === "group" || chatType === "channel") {
     return false;
   }
   return Boolean(params.outputText?.trim());
@@ -541,7 +547,13 @@ async function emitToolResultOutput(params: {
       hasDeliverableStructuredMedia: hasStructuredMedia && mediaUrls.length > 0,
       builtinToolNames: ctx.builtinToolNames,
     }) &&
-    (ctx.shouldEmitToolOutput() || shouldEmitCompactToolOutput({ toolName, result, outputText }));
+    (ctx.shouldEmitToolOutput() ||
+      shouldEmitCompactToolOutput({
+        toolName,
+        result,
+        outputText,
+        sessionKey: ctx.params.sessionKey ?? "",
+      }));
   if (shouldEmitOutput) {
     if (outputText) {
       ctx.emitToolOutput(rawToolName, meta, outputText, result);

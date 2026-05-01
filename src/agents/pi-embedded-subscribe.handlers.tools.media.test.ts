@@ -11,6 +11,7 @@ function createMockContext(overrides?: {
   onToolResult?: ReturnType<typeof vi.fn>;
   toolResultFormat?: "markdown" | "plain";
   builtinToolNames?: ReadonlySet<string>;
+  sessionKey?: string;
 }): EmbeddedPiSubscribeContext {
   const onToolResult = overrides?.onToolResult ?? vi.fn();
   return {
@@ -19,6 +20,7 @@ function createMockContext(overrides?: {
       onToolResult,
       onAgentEvent: vi.fn(),
       toolResultFormat: overrides?.toolResultFormat,
+      ...(overrides?.sessionKey ? { sessionKey: overrides.sessionKey } : {}),
     },
     state: {
       toolMetaById: new Map(),
@@ -136,6 +138,46 @@ async function handleCaseVariantBuiltinMedia(mediaPathOrUrl: string) {
     isError: false,
     result: {
       content: [{ type: "text", text: `MEDIA:${mediaPathOrUrl}` }],
+    },
+  });
+
+  return ctx;
+}
+
+const providerInventoryText = [
+  "openai: default=sora-2 | models=sora-2",
+  "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
+].join("\n");
+
+async function handleProviderInventoryListResult(params: {
+  toolName: "image_generate" | "video_generate";
+  shouldEmitToolOutput: boolean;
+  sessionKey?: string;
+}) {
+  const ctx = createMockContext({
+    shouldEmitToolOutput: params.shouldEmitToolOutput,
+    onToolResult: vi.fn(),
+    toolResultFormat: "plain",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+  });
+
+  await handleToolExecutionEnd(ctx, {
+    type: "tool_execution_end",
+    toolName: params.toolName,
+    toolCallId: "tc-1",
+    isError: false,
+    result: {
+      content: [{ type: "text", text: providerInventoryText }],
+      details: {
+        providers: [
+          { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
+          {
+            id: "google",
+            defaultModel: "veo-3.1-fast-generate-preview",
+            models: ["veo-3.1-fast-generate-preview"],
+          },
+        ],
+      },
     },
   });
 
@@ -424,52 +466,62 @@ describe("handleToolExecutionEnd media emission", () => {
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/generated.png"]);
   });
 
-  it("emits provider inventory output for compact video_generate list results", async () => {
-    const ctx = createMockContext({
-      shouldEmitToolOutput: false,
-      onToolResult: vi.fn(),
-      toolResultFormat: "plain",
-    });
+  it.each(["image_generate", "video_generate"] as const)(
+    "emits compact %s provider inventory in direct sessions",
+    async (toolName) => {
+      const ctx = await handleProviderInventoryListResult({
+        toolName,
+        shouldEmitToolOutput: false,
+        sessionKey: "agent:main:discord:direct:u123",
+      });
 
-    await handleToolExecutionEnd(ctx, {
-      type: "tool_execution_end",
-      toolName: "video_generate",
-      toolCallId: "tc-1",
-      isError: false,
-      result: {
-        content: [
-          {
-            type: "text",
-            text: [
-              "openai: default=sora-2 | models=sora-2",
-              "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
-            ].join("\n"),
-          },
-        ],
-        details: {
-          providers: [
-            { id: "openai", defaultModel: "sora-2", models: ["sora-2"] },
-            {
-              id: "google",
-              defaultModel: "veo-3.1-fast-generate-preview",
-              models: ["veo-3.1-fast-generate-preview"],
-            },
-          ],
-        },
-      },
-    });
+      expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+        toolName,
+        undefined,
+        providerInventoryText,
+        expect.any(Object),
+      );
+      expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    },
+  );
 
-    expect(ctx.emitToolOutput).toHaveBeenCalledWith(
-      "video_generate",
-      undefined,
-      [
-        "openai: default=sora-2 | models=sora-2",
-        "google: default=veo-3.1-fast-generate-preview | models=veo-3.1-fast-generate-preview",
-      ].join("\n"),
-      expect.any(Object),
-    );
-    expect(ctx.state.pendingToolMediaUrls).toEqual([]);
-  });
+  it.each([
+    ["image_generate", "group", "agent:main:discord:group:111"],
+    ["image_generate", "channel", "agent:main:discord:default:channel:222"],
+    ["video_generate", "group", "agent:main:discord:group:111"],
+    ["video_generate", "channel", "agent:main:discord:default:channel:222"],
+  ] as const)(
+    "keeps compact %s provider inventory internal in %s sessions",
+    async (toolName, _chatType, sessionKey) => {
+      const ctx = await handleProviderInventoryListResult({
+        toolName,
+        shouldEmitToolOutput: false,
+        sessionKey,
+      });
+
+      expect(ctx.emitToolOutput).not.toHaveBeenCalled();
+      expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    },
+  );
+
+  it.each(["image_generate", "video_generate"] as const)(
+    "emits %s provider inventory in shared sessions when full tool output is enabled",
+    async (toolName) => {
+      const ctx = await handleProviderInventoryListResult({
+        toolName,
+        shouldEmitToolOutput: true,
+        sessionKey: "agent:main:discord:channel:222",
+      });
+
+      expect(ctx.emitToolOutput).toHaveBeenCalledWith(
+        toolName,
+        undefined,
+        providerInventoryText,
+        expect.any(Object),
+      );
+      expect(ctx.state.pendingToolMediaUrls).toEqual([]);
+    },
+  );
 
   it("does NOT emit media for error results", async () => {
     const onToolResult = vi.fn();
