@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { deriveToolParams } from "./host-tool-param-parsers.js";
 
@@ -27,7 +28,18 @@ describe("deriveToolParams", () => {
   it("returns immutable derived path snapshots", () => {
     const patch = ["*** Begin Patch", "*** Add File: src/new.ts", "+x", "*** End Patch"].join("\n");
     const derived = deriveToolParams("apply_patch", { input: patch });
+    expect(Array.isArray(derived.derivedPaths)).toBe(true);
     expect(Object.isFrozen(derived.derivedPaths)).toBe(true);
+  });
+
+  it("resolves derived apply_patch paths against the tool cwd when provided", () => {
+    const patch = ["*** Begin Patch", "*** Add File: @src/../new.ts", "+x", "*** End Patch"].join(
+      "\n",
+    );
+    const cwd = path.join("/tmp", "openclaw-derived");
+    expect(deriveToolParams("apply_patch", { input: patch }, { cwd })).toEqual({
+      derivedPaths: [path.join(cwd, "new.ts")],
+    });
   });
 
   it("returns an empty object when apply_patch input has no recognised paths", () => {

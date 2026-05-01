@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -738,6 +739,7 @@ describe("before_tool_call requireApproval handling", () => {
   });
 
   it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
+    const cwd = path.join("/tmp", "openclaw-hooks");
     const patch = [
       "*** Begin Patch",
       "*** Add File: src/new.ts",
@@ -755,7 +757,7 @@ describe("before_tool_call requireApproval handling", () => {
       toolName: "apply_patch",
       params: { input: patch },
       toolCallId: "patch-1",
-      ctx: { agentId: "main", sessionKey: "main", runId: "run-patch" },
+      ctx: { agentId: "main", cwd, sessionKey: "main", runId: "run-patch" },
     });
 
     expect(result.blocked).toBe(false);
@@ -764,7 +766,12 @@ describe("before_tool_call requireApproval handling", () => {
         toolName: "apply_patch",
         runId: "run-patch",
         toolCallId: "patch-1",
-        derivedPaths: ["src/new.ts", "src/old.ts", "src/renamed.ts", "src/dead.ts"],
+        derivedPaths: [
+          path.join(cwd, "src/new.ts"),
+          path.join(cwd, "src/old.ts"),
+          path.join(cwd, "src/renamed.ts"),
+          path.join(cwd, "src/dead.ts"),
+        ],
       }),
       expect.objectContaining({
         toolName: "apply_patch",
@@ -774,7 +781,28 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
+  it("skips derived path extraction when no policies or hooks can consume it", async () => {
+    hookRunner.hasHooks.mockReturnValue(false);
+    const params = {};
+    Object.defineProperty(params, "input", {
+      enumerable: true,
+      get() {
+        throw new Error("should not derive paths");
+      },
+    });
+
+    await expect(
+      runBeforeToolCallHook({
+        toolName: "apply_patch",
+        params,
+        toolCallId: "patch-no-hooks",
+      }),
+    ).resolves.toEqual({ blocked: false, params });
+    expect(hookRunner.runBeforeToolCall).not.toHaveBeenCalled();
+  });
+
   it("recomputes host-derived paths after trusted policy param rewrites", async () => {
+    const cwd = path.join("/tmp", "openclaw-hooks");
     const originalPatch = [
       "*** Begin Patch",
       "*** Add File: src/old.ts",
@@ -821,15 +849,15 @@ describe("before_tool_call requireApproval handling", () => {
       toolName: "apply_patch",
       params: { input: originalPatch },
       toolCallId: "patch-rewrite",
-      ctx: { agentId: "main", sessionKey: "main", runId: "run-patch" },
+      ctx: { agentId: "main", cwd, sessionKey: "main", runId: "run-patch" },
     });
 
     expect(result).toEqual({ blocked: false, params: { input: rewrittenPatch } });
-    expect(seenByLaterPolicy).toEqual([["src/new.ts"]]);
+    expect(seenByLaterPolicy).toEqual([[path.join(cwd, "src/new.ts")]]);
     expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
       expect.objectContaining({
         params: { input: rewrittenPatch },
-        derivedPaths: ["src/new.ts"],
+        derivedPaths: [path.join(cwd, "src/new.ts")],
       }),
       expect.anything(),
     );

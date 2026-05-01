@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { extractApplyPatchTargetPaths } from "./apply-patch-paths.js";
 
@@ -149,14 +151,14 @@ describe("extractApplyPatchTargetPaths", () => {
     expect(extractApplyPatchTargetPaths(patch)).toEqual(["src/new.ts", "src/dead.ts"]);
   });
 
-  it("finds indented markers after an update hunk", () => {
+  it("finds top-level markers after an update hunk", () => {
     const patch = [
       "*** Begin Patch",
       "*** Update File: src/old.ts",
       "@@",
       "-old",
       "+new",
-      "  *** Delete File: src/dead.ts",
+      "*** Delete File: src/dead.ts",
       "*** End Patch",
     ].join("\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual(["src/old.ts", "src/dead.ts"]);
@@ -176,11 +178,31 @@ describe("extractApplyPatchTargetPaths", () => {
       "*** Update File: real.ts",
       "@@",
       " *** Add File: fake-context.ts",
+      "  *** Delete File: fake-indented-context.ts",
       "-*** Delete File: fake-remove.ts",
       "+*** Add File: fake-add.ts",
       "*** End Patch",
     ].join("\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual(["real.ts"]);
+  });
+
+  it("can resolve paths with the same cwd semantics as apply_patch execution", () => {
+    const cwd = path.join(os.tmpdir(), "openclaw-derived-paths");
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: @src/../resolved.ts",
+      "+x",
+      "*** Update File: ~/renamed-source.ts",
+      "*** Move to: /tmp/openclaw-target.ts",
+      "@@",
+      "+y",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch, { cwd })).toEqual([
+      path.join(cwd, "resolved.ts"),
+      path.join(os.homedir(), "renamed-source.ts"),
+      path.join("/tmp", "openclaw-target.ts"),
+    ]);
   });
 
   it("does not require the begin/end envelope markers to be present", () => {

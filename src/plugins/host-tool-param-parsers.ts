@@ -1,28 +1,35 @@
-import { extractApplyPatchTargetPaths } from "../agents/apply-patch-paths.js";
+import {
+  extractApplyPatchTargetPaths,
+  type ApplyPatchPathExtractionOptions,
+} from "../agents/apply-patch-paths.js";
 
 /**
  * Derived metadata stamped on `before_tool_call` events for plugin handlers.
  *
- * The host owns parsing of well-known tool param shapes (e.g. apply_patch) so
- * plugins do not need to re-parse and re-validate the same envelopes. The host
- * derives the initial call and re-derives only when a trusted policy rewrites
- * params. Fields are optional and additive: a missing field means derivation
- * produced nothing usable, never that it failed loudly.
+ * The host owns best-effort parsing of well-known tool param shapes
+ * (e.g. apply_patch). Plugins can use these fields as hints, but should still
+ * parse params themselves when policy correctness depends on exact targets. The
+ * host derives the initial call and re-derives only when a trusted policy
+ * rewrites params. Fields are optional and additive: a missing field means
+ * derivation produced nothing usable, never that it failed loudly.
  */
 export type HostToolDerivedParams = {
-  /** Destination paths the tool intends to read or write, when discoverable. */
+  /** Best-effort destination path hints the tool may read or write, when discoverable. */
   derivedPaths?: readonly string[];
 };
 
-type HostToolParamParser = (params: unknown) => HostToolDerivedParams;
+export type HostToolDerivationOptions = ApplyPatchPathExtractionOptions;
 
 /**
  * Per-tool host-owned param derivers. Keep this map small and focused — every
  * entry runs synchronously inside the before_tool_call hot path.
  */
-const HOST_TOOL_PARAM_PARSERS: Record<string, HostToolParamParser> = {
-  apply_patch: (params) => {
-    const paths = extractApplyPatchTargetPaths(params);
+const HOST_TOOL_PARAM_PARSERS: Record<
+  string,
+  (params: unknown, options?: HostToolDerivationOptions) => HostToolDerivedParams
+> = {
+  apply_patch: (params, options) => {
+    const paths = extractApplyPatchTargetPaths(params, options);
     return paths.length > 0 ? { derivedPaths: Object.freeze([...paths]) } : {};
   },
 };
@@ -32,7 +39,11 @@ const HOST_TOOL_PARAM_PARSERS: Record<string, HostToolParamParser> = {
  * parser is registered for the tool, which lets callers spread the result
  * unconditionally without a nullability check.
  */
-export function deriveToolParams(toolName: string, params: unknown): HostToolDerivedParams {
+export function deriveToolParams(
+  toolName: string,
+  params: unknown,
+  options?: HostToolDerivationOptions,
+): HostToolDerivedParams {
   const parser = HOST_TOOL_PARAM_PARSERS[toolName];
-  return parser ? parser(params) : {};
+  return parser ? parser(params, options) : {};
 }

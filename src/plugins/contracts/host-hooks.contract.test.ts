@@ -432,6 +432,45 @@ describe("host-hook fixture plugin contract", () => {
     expect(seenDerivedPaths).toEqual([["old.ts"]]);
   });
 
+  it("ignores non-plain trusted policy params when re-deriving paths", async () => {
+    const seenParams: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-bad",
+        pluginName: "Trusted Bad",
+        source: "test",
+        policy: {
+          id: "bad",
+          description: "bad",
+          evaluate: () => ({ params: "not-a-plain-object" as never }),
+        },
+      },
+      {
+        pluginId: "trusted-inspector",
+        pluginName: "Trusted Inspector",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenParams.push(event.params);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        { toolName: "apply_patch", params: { input: "*** Add File: old.ts" } },
+        { toolName: "apply_patch" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(seenParams).toEqual([{ input: "*** Add File: old.ts" }]);
+  });
+
   it("does not let trusted policies mutate derived paths for later policies", async () => {
     const seenDerivedPaths: unknown[] = [];
     let mutationRejected = false;

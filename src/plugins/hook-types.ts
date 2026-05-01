@@ -416,10 +416,15 @@ export type PluginHookBeforeToolCallEvent = {
   runId?: string;
   toolCallId?: string;
   /**
-   * Optional destination paths the host derived from `params` for well-known
-   * tool envelopes (e.g. `apply_patch`). When present, plugins can rely on
-   * this list rather than re-parsing the envelope. Absent for tools the host
-   * does not know how to derive paths for.
+   * Optional best-effort destination path hints the host derived from `params`
+   * for well-known tool envelopes (e.g. `apply_patch`).
+   *
+   * This is a convenience hint, not an authoritative parse result: the host's
+   * extractor may be intentionally lenient and can return paths for malformed
+   * or partial envelopes. Plugins may use `derivedPaths` as a fast path, but
+   * should parse and validate `params` themselves when correctness or policy
+   * decisions depend on the exact set of affected paths. Absent for tools the
+   * host does not know how to derive paths for.
    */
   derivedPaths?: readonly string[];
 };
