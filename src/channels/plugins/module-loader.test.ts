@@ -19,6 +19,7 @@ afterEach(() => {
   }
   vi.resetModules();
   vi.doUnmock("jiti");
+  vi.doUnmock("../../plugins/native-module-require.js");
 });
 
 function createTempDir(): string {
@@ -99,6 +100,11 @@ describe("channel plugin module loader helpers", () => {
     vi.resetModules();
     vi.doMock("jiti", () => ({
       createJiti,
+    }));
+    vi.doMock("../../plugins/native-module-require.js", () => ({
+      isJavaScriptModulePath: (p: string) =>
+        p.endsWith(".js") || p.endsWith(".mjs") || p.endsWith(".cjs"),
+      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
     }));
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
