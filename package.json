@@ -1757,6 +1757,7 @@
         "jszip",
         "markdown-it",
         "openai",
+        "qrcode",
         "semver",
         "sqlite-vec",
         "tar",
