@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Media/QR rendering: fall back to the explicit `qrcode/lib/index.js` subpath when bare `import("qrcode")` cannot be resolved, so WhatsApp/Feishu QR pairing keeps working in staged plugin-runtime-deps trees that ship the package without an addressable `package.json` main. Fixes #75394. Thanks @lonexreb.
 - Voice Call/Twilio: register accepted media streams immediately but wait for realtime transcription readiness before speaking the initial greeting, so reconnect grace handling stays live while OpenAI STT startup is no longer starved by TTS. Fixes #75197. (#75257) Thanks @donkeykong91 and @PfanP.
 - Agents/pi-embedded-runner: extract the `abortable` provider-call wrapper from `runEmbeddedAttempt` to module scope so its promise handlers no longer close over the run lexical context, releasing transcripts, tool buffers, and subscription callbacks when a provider call hangs past abort. (#74182) Thanks @cjboy007.
 - Docker: restore `python3` in the gateway runtime image after the slim-runtime switch. Fixes #75041.
