@@ -117,8 +117,7 @@ describe("repairSessionFileIfNeeded", () => {
         errorMessage: "transient stream failure",
       },
     };
-    // Include a user follow-up after the poisoned assistant so the session
-    // doesn’t end on assistant (which would also trigger trailing-trim).
+    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
     const followUp = {
       type: "message",
       id: "msg-3",
@@ -136,8 +135,6 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
     expect(result.backupPath).toBeTruthy();
-    // Warn message must omit the "dropped 0 malformed line(s)" noise when
-    // nothing was dropped; only the rewrite count is reported.
     expect(warn).toHaveBeenCalledTimes(1);
     const warnMessage = warn.mock.calls[0]?.[0] as string;
     expect(warnMessage).toContain("rewrote 1 assistant message(s)");
@@ -145,7 +142,6 @@ describe("repairSessionFileIfNeeded", () => {
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
-    // header + user + rewritten-assistant + follow-up user
     expect(repairedLines).toHaveLength(4);
     const repairedEntry: { message: { content: { type: string; text: string }[] } } = JSON.parse(
       repairedLines[2],
@@ -175,14 +171,12 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
 
     expect(result.repaired).toBe(true);
-    // Blank user messages are now rewritten, not dropped.
     expect(result.rewrittenUserMessages).toBe(1);
     expect(result.droppedBlankUserMessages).toBe(0);
     expect(warn.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
-    // Both entries preserved: rewritten blank user + original user.
     expect(repairedLines).toHaveLength(3);
     const rewrittenEntry = JSON.parse(repairedLines[1]);
     expect(rewrittenEntry.id).toBe("msg-blank");
@@ -282,12 +276,6 @@ describe("repairSessionFileIfNeeded", () => {
   });
 
   it("does not rewrite silent-reply turns (stopReason=stop, content=[]) on disk", async () => {
-    // Mirror of the in-memory replay-history test: a clean stop with no
-    // content is a legitimate silent reply (NO_REPLY token path). Repair
-    // must NOT permanently mutate it into a synthetic "[assistant turn
-    // failed before producing content]" entry — that would corrupt the
-    // historical transcript and replay fabricated failure text on every
-    // future provider request.
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();
     const silentReplyEntry = {
@@ -305,8 +293,7 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "stop",
       },
     };
-    // Append a user follow-up so the session doesn't end on assistant —
-    // this test is about per-entry rewrite behavior, not trailing-trim.
+    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
     const followUp = {
       type: "message",
       id: "msg-3",
@@ -351,7 +338,6 @@ describe("repairSessionFileIfNeeded", () => {
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
-    // Only header + user message remain; assistant was trimmed.
     expect(repairedLines).toHaveLength(2);
   });
 
@@ -414,7 +400,6 @@ describe("repairSessionFileIfNeeded", () => {
       timestamp: new Date().toISOString(),
       message: { role: "user", content: "follow up" },
     };
-    // Ends on user, so nothing to trim.
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry)}\n${JSON.stringify(userFollowUp)}\n`;
     await fs.writeFile(file, original, "utf-8");
 
@@ -425,8 +410,6 @@ describe("repairSessionFileIfNeeded", () => {
   });
 
   it("never trims below the session header", async () => {
-    // Edge case: a session with only a header and trailing assistant messages
-    // should keep the header intact.
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();
     const assistantEntry = {
@@ -450,7 +433,6 @@ describe("repairSessionFileIfNeeded", () => {
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
-    // Only the header remains.
     expect(repairedLines).toHaveLength(1);
     expect(JSON.parse(repairedLines[0]).type).toBe("session");
   });
@@ -473,8 +455,7 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "error",
       },
     };
-    // Append a user follow-up so the session doesn't end on assistant —
-    // this test is about idempotent per-entry repair, not trailing-trim.
+    // Follow-up so the session doesn't end on assistant (trailing-trim is tested separately).
     const followUp = {
       type: "message",
       id: "msg-3",
