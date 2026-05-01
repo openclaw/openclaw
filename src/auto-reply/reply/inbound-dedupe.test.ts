@@ -176,6 +176,23 @@ describe("inbound dedupe", () => {
     expect(shouldSkipDuplicateInbound(later)).toBe(false);
   });
 
+  it("does not create a fallback key for idless messages without timestamps", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "repeatable text",
+      Timestamp: undefined,
+    };
+    const retry = {
+      ...first,
+      BodyForAgent: "Sender metadata\n\nrepeatable text",
+    };
+
+    expect(buildInboundDedupeKey(first)).toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(false);
+  });
+
   it("does not create a fallback key for idless messages without text content", () => {
     expect(
       buildInboundDedupeKey({

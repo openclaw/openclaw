@@ -44,7 +44,10 @@ function resolveInboundContentFingerprint(ctx: MsgContext): string | null {
     return null;
   }
   const timestamp =
-    ctx.Timestamp !== undefined && ctx.Timestamp !== null ? String(ctx.Timestamp) : "";
+    ctx.Timestamp !== undefined && ctx.Timestamp !== null ? String(ctx.Timestamp).trim() : "";
+  if (!timestamp) {
+    return null;
+  }
   return createHash("sha256").update(`${timestamp}|${body}`, "utf8").digest("hex").slice(0, 32);
 }
 
