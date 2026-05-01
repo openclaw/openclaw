@@ -338,7 +338,7 @@ describe("plugin session actions", () => {
         api.registerSessionAction({
           id: "throws-secret",
           handler: () => {
-            throw new Error("secret-token-123");
+            throw new Error("fixture action failed");
           },
         });
       },
@@ -691,7 +691,7 @@ describe("plugin session actions", () => {
       expect(
         bundledApi?.emitAgentEvent({
           runId: "run-emit",
-          sessionKey: "agent:main:main",
+          sessionKey: " agent:main:main ",
           stream: "approval",
           data: { state: "queued" },
         }),

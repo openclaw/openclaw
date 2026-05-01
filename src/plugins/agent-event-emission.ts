@@ -53,6 +53,7 @@ export function emitPluginAgentEvent(params: {
   event: PluginAgentEventEmitParams;
 }): PluginAgentEventEmitResult {
   const runId = normalizeOptionalString(params.event.runId);
+  const sessionKey = normalizeOptionalString(params.event.sessionKey);
   const stream = normalizeOptionalString(params.event.stream);
   if (!runId || !stream) {
     return { emitted: false, reason: "runId and stream are required" };
@@ -72,7 +73,7 @@ export function emitPluginAgentEvent(params: {
   emitAgentEvent({
     runId,
     stream,
-    ...(params.event.sessionKey ? { sessionKey: params.event.sessionKey } : {}),
+    ...(sessionKey ? { sessionKey } : {}),
     data: normalizePluginEventData({
       pluginId: params.pluginId,
       pluginName: params.pluginName,

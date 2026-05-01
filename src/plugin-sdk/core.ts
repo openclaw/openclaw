@@ -49,6 +49,8 @@ export type {
   OpenClawPluginServiceContext,
   PluginCommandContext,
   PluginCommandResult,
+  PluginAgentEventEmitParams,
+  PluginAgentEventEmitResult,
   PluginAgentEventSubscriptionRegistration,
   PluginAgentTurnPrepareEvent,
   PluginAgentTurnPrepareResult,
