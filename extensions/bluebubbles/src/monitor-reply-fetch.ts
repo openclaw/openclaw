@@ -152,7 +152,7 @@ async function runFetch(
     if (!body && !sender) {
       return null;
     }
-    rememberBlueBubblesReplyCache({
+    const cacheEntry = {
       accountId: params.accountId,
       messageId: replyToId,
       chatGuid: params.chatGuid,
@@ -161,7 +161,15 @@ async function runFetch(
       senderLabel: sender,
       body,
       timestamp: Date.now(),
-    });
+    };
+    rememberBlueBubblesReplyCache(cacheEntry);
+    const originalReplyToId = params.replyToId.trim();
+    if (originalReplyToId && originalReplyToId !== replyToId) {
+      rememberBlueBubblesReplyCache({
+        ...cacheEntry,
+        messageId: originalReplyToId,
+      });
+    }
     return { body, sender };
   } catch {
     // Best-effort: swallow network/parse errors. Caller proceeds with empty

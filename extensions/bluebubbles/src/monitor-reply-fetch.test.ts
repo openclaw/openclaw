@@ -138,6 +138,25 @@ describe("fetchBlueBubblesReplyContext", () => {
     expect(requestCalls[0]?.path).toBe("/api/v1/message/msg-bare-guid");
   });
 
+  it("populates the reply cache for the original prefixed reply id", async () => {
+    const { factory } = makeFakeClient([
+      jsonResponse({ data: { text: "cached prefix", handle: { address: "+15551112222" } } }),
+    ]);
+    await fetchBlueBubblesReplyContext({
+      ...baseParams,
+      replyToId: "p:0/msg-prefixed-cache",
+      chatGuid: "iMessage;-;+15551112222",
+      clientFactory: factory,
+    });
+    const cached = resolveReplyContextFromCache({
+      accountId: "default",
+      replyToId: "p:0/msg-prefixed-cache",
+      chatGuid: "iMessage;-;+15551112222",
+    });
+    expect(cached?.body).toBe("cached prefix");
+    expect(cached?.senderLabel).toBe("+15551112222");
+  });
+
   it("fetches the BB API and returns body + normalized sender on success", async () => {
     const { factory, requestCalls } = makeFakeClient([
       jsonResponse({
