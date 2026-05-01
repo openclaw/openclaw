@@ -305,7 +305,7 @@ export function createChannelApprovalNativeRuntimeAdapter<
   };
 }
 
-export type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
+type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> = {
   label: string;
   clientDisplayName: string;
   cfg: OpenClawConfig;
@@ -321,7 +321,7 @@ export type ChannelApprovalHandlerRuntimeSpec<TRequest extends ApprovalRequest> 
   nowMs?: () => number;
 };
 
-export type ChannelApprovalHandlerContentSpec<
+type ChannelApprovalHandlerContentSpec<
   TPendingContent,
   TRequest extends ApprovalRequest = ApprovalRequest,
 > = {
@@ -332,14 +332,14 @@ export type ChannelApprovalHandlerContentSpec<
   }) => TPendingContent | Promise<TPendingContent>;
 };
 
-export type ChannelApprovalHandlerTransportSpec<
+type ChannelApprovalHandlerTransportSpec<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,
   TRequest extends ApprovalRequest = ApprovalRequest,
 > = ChannelNativeApprovalTransportSpec<TPendingEntry, TPreparedTarget, TPendingContent, TRequest>;
 
-export type ChannelApprovalHandlerLifecycleSpec<
+type ChannelApprovalHandlerLifecycleSpec<
   TPendingEntry,
   TPreparedTarget,
   TPendingContent,
