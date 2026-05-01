@@ -17,6 +17,15 @@ export function resolveSourceReplyDeliveryMode(params: {
   messageToolAvailable?: boolean;
 }): SourceReplyDeliveryMode {
   if (params.requested) {
+    // When the bot was directly @mentioned, override message_tool_only
+    // to automatic even when an explicit requested mode is provided.
+    // This covers channel monitors (Discord, Slack) that pre-resolve
+    // delivery mode without WasMentioned context.
+    const overrideMentioned =
+      params.ctx.WasMentioned === true && params.requested === "message_tool_only";
+    if (overrideMentioned) {
+      return "automatic";
+    }
     return params.messageToolAvailable === false && params.requested === "message_tool_only"
       ? "automatic"
       : params.requested;
