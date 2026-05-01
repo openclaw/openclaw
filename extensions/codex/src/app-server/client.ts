@@ -46,7 +46,7 @@ export class CodexAppServerRpcError extends Error {
   }
 }
 
-export type CodexServerRequestHandler = (
+type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;
 
@@ -413,7 +413,7 @@ export class CodexAppServerClient {
   }
 }
 
-export function defaultServerRequestResponse(
+function defaultServerRequestResponse(
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
 ): JsonValue {
   if (request.method === "item/tool/call") {
