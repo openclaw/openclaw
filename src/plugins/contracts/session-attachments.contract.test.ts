@@ -10,7 +10,9 @@ import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveAttachmentDelivery, sendPluginSessionAttachment } from "../host-hook-workflow.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { createPluginRegistry } from "../registry.js";
 import { setActivePluginRegistry } from "../runtime.js";
+import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
@@ -21,6 +23,15 @@ const workflowMocks = vi.hoisted(() => ({
 vi.mock("../../infra/outbound/message.js", () => ({
   sendMessage: workflowMocks.sendMessage,
 }));
+
+function createSilentPluginLogger() {
+  return {
+    info() {},
+    warn() {},
+    error() {},
+    debug() {},
+  };
+}
 
 async function withSessionStore(
   run: (params: { stateDir: string; storePath: string; filePath: string }) => Promise<void>,
@@ -362,6 +373,63 @@ describe("plugin session attachments", () => {
           files: [{ path: filePath }],
         }),
       ).resolves.toEqual({ ok: false, error: "plugin is not loaded" });
+    });
+  });
+
+  it("uses the live runtime config when a captured API sends an attachment", async () => {
+    await withSessionStore(async ({ stateDir, storePath, filePath }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      workflowMocks.sendMessage.mockImplementation(async (params: Record<string, unknown>) => ({
+        channel: params.channel,
+        to: params.to,
+        via: "direct" as const,
+        mediaUrl: null,
+        result: { channel: params.channel, messageId: "attachment-1" },
+      }));
+
+      const staleStorePath = path.join(stateDir, "stale-sessions.json");
+      const registrationConfig = { session: { store: staleStorePath } };
+      const liveConfig = { session: { store: storePath } };
+      const registry = createPluginRegistry({
+        logger: createSilentPluginLogger(),
+        runtime: {
+          config: {
+            current: () => liveConfig,
+          },
+        } as unknown as PluginRuntime,
+      });
+      let capturedApi: OpenClawPluginApi | undefined;
+      registerTestPlugin({
+        registry,
+        config: registrationConfig,
+        record: createPluginRecord({
+          id: "live-config-attachment-plugin",
+          name: "Live Config Attachment Plugin",
+          origin: "bundled",
+        }),
+        register(api) {
+          capturedApi = api;
+        },
+      });
+      setActivePluginRegistry(registry.registry);
+
+      await expect(
+        capturedApi?.sendSessionAttachment({
+          sessionKey: "agent:main:main",
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toMatchObject({ ok: true, channel: "telegram", count: 1 });
+      expect(workflowMocks.sendMessage).toHaveBeenCalledTimes(1);
     });
   });
 });

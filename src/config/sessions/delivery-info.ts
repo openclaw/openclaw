@@ -85,25 +85,32 @@ function findSessionEntryInStore(
   let normalizedIndex: Map<string, SessionEntry> | undefined;
   let bestEntry: SessionEntry | undefined;
   let bestUpdatedAt = 0;
+  let bestRoutable = false;
   const acceptCandidate = (candidate: SessionEntry | undefined) => {
     if (!candidate) {
       return;
     }
+    const candidateRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(candidate));
     const candidateUpdatedAt = candidate.updatedAt ?? 0;
-    if (!bestEntry || candidateUpdatedAt > bestUpdatedAt) {
+    if (
+      !bestEntry ||
+      (candidateRoutable && !bestRoutable) ||
+      (candidateRoutable === bestRoutable && candidateUpdatedAt > bestUpdatedAt)
+    ) {
       bestEntry = candidate;
       bestUpdatedAt = candidateUpdatedAt;
+      bestRoutable = candidateRoutable;
     }
   };
   for (const key of keys) {
     const trimmed = key.trim();
     const normalized = normalizeLowercaseStringOrEmpty(key);
-    const directKey = Object.prototype.hasOwnProperty.call(store, normalized)
-      ? normalized
-      : Object.prototype.hasOwnProperty.call(store, trimmed)
-        ? trimmed
-        : undefined;
-    acceptCandidate(directKey ? store[directKey] : undefined);
+    if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+      acceptCandidate(store[normalized]);
+    }
+    if (trimmed !== normalized && Object.prototype.hasOwnProperty.call(store, trimmed)) {
+      acceptCandidate(store[trimmed]);
+    }
     normalizedIndex ??= buildFreshestSessionEntryIndex(store);
     const freshest = normalizedIndex.get(normalized);
     acceptCandidate(freshest);

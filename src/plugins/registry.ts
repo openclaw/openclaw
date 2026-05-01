@@ -2394,9 +2394,12 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 if (!pluginLoaded) {
                   return Promise.resolve({ ok: false, error: "plugin is not loaded" });
                 }
+                const runtimeConfig =
+                  (registryParams.runtime.config?.current?.() as OpenClawConfig | undefined) ??
+                  params.config;
                 return sendPluginSessionAttachment({
                   ...attachment,
-                  config: params.config,
+                  config: runtimeConfig,
                   origin: record.origin,
                 });
               },

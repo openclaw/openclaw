@@ -277,6 +277,38 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("prefers an older routable direct entry over a fresher normalized alias without a route", () => {
+    const sessionKey = "agent:main:matrix:channel:!MixedCase:Example.Org";
+    const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";
+    storeState.store[sessionKey] = {
+      sessionId: "direct-routable-session",
+      updatedAt: Date.now() - 1_000,
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+    };
+    storeState.store[canonicalKey] = {
+      sessionId: "fresh-normalized-session",
+      updatedAt: Date.now(),
+      origin: {
+        provider: "matrix",
+      },
+    };
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!MixedCase:Example.Org",
+        accountId: "matrix-account",
+      },
+      threadId: undefined,
+    });
+  });
+
   it("falls back to the base session when a thread entry only has partial route metadata", () => {
     const baseKey = "agent:main:matrix:channel:!MixedCase:example.org";
     const threadKey = `${baseKey}:thread:$thread-event`;
