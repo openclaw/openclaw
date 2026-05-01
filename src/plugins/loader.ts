@@ -1002,7 +1002,23 @@ function getCompatibleActivePluginRegistry(
     return undefined;
   }
   const loadContext = resolvePluginLoadCacheContext(options);
-  if (pluginLoadOptionsMatchCacheKey(options, activeCacheKey)) {
+  const matchesActiveCacheKey = (candidate: PluginLoadOptions): boolean => {
+    if (pluginLoadOptionsMatchCacheKey(candidate, activeCacheKey)) {
+      return true;
+    }
+    if (candidate.coreGatewayMethodNames !== undefined) {
+      return false;
+    }
+    return pluginLoadOptionsMatchCacheKey(
+      {
+        ...candidate,
+        coreGatewayMethodNames: activeRegistry.coreGatewayMethodNames ?? [],
+      },
+      activeCacheKey,
+    );
+  };
+
+  if (matchesActiveCacheKey(options)) {
     return activeRegistry;
   }
   if (!loadContext.shouldActivate) {
@@ -1010,7 +1026,7 @@ function getCompatibleActivePluginRegistry(
       ...options,
       activate: true,
     };
-    if (pluginLoadOptionsMatchCacheKey(activatingOptions, activeCacheKey)) {
+    if (matchesActiveCacheKey(activatingOptions)) {
       return activeRegistry;
     }
   }
@@ -1025,7 +1041,7 @@ function getCompatibleActivePluginRegistry(
         allowGatewaySubagentBinding: true,
       },
     };
-    if (pluginLoadOptionsMatchCacheKey(gatewayBindableOptions, activeCacheKey)) {
+    if (matchesActiveCacheKey(gatewayBindableOptions)) {
       return activeRegistry;
     }
     if (!loadContext.shouldActivate) {
@@ -1037,53 +1053,8 @@ function getCompatibleActivePluginRegistry(
           allowGatewaySubagentBinding: true,
         },
       };
-      if (pluginLoadOptionsMatchCacheKey(activatingGatewayBindableOptions, activeCacheKey)) {
+      if (matchesActiveCacheKey(activatingGatewayBindableOptions)) {
         return activeRegistry;
-      }
-    }
-  }
-  if (loadContext.onlyPluginIds === undefined) {
-    const scopedOptions = {
-      ...options,
-      onlyPluginIds: activeRegistry.plugins.map((entry) => entry.id).toSorted(),
-      coreGatewayMethodNames: activeRegistry.coreGatewayMethodNames ?? [],
-    };
-    if (pluginLoadOptionsMatchCacheKey(scopedOptions, activeCacheKey)) {
-      return activeRegistry;
-    }
-    if (!loadContext.shouldActivate) {
-      const activatingScopedOptions = {
-        ...scopedOptions,
-        activate: true,
-      };
-      if (pluginLoadOptionsMatchCacheKey(activatingScopedOptions, activeCacheKey)) {
-        return activeRegistry;
-      }
-    }
-    if (
-      loadContext.runtimeSubagentMode === "default" &&
-      getActivePluginRuntimeSubagentMode() === "gateway-bindable"
-    ) {
-      const gatewayBindableScopedOptions = {
-        ...scopedOptions,
-        runtimeOptions: {
-          ...options.runtimeOptions,
-          allowGatewaySubagentBinding: true,
-        },
-      };
-      if (pluginLoadOptionsMatchCacheKey(gatewayBindableScopedOptions, activeCacheKey)) {
-        return activeRegistry;
-      }
-      if (!loadContext.shouldActivate) {
-        const activatingGatewayBindableScopedOptions = {
-          ...gatewayBindableScopedOptions,
-          activate: true,
-        };
-        if (
-          pluginLoadOptionsMatchCacheKey(activatingGatewayBindableScopedOptions, activeCacheKey)
-        ) {
-          return activeRegistry;
-        }
       }
     }
   }

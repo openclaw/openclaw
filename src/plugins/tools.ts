@@ -1,12 +1,10 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import { listEnabledInstalledPluginRecords } from "./installed-plugin-index.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
-import {
-  getActivePluginRegistry,
-  getActivePluginRegistryKey,
-  getActivePluginRuntimeSubagentMode,
-} from "./runtime.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
@@ -94,18 +92,29 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
   return undefined;
 }
 
-function resolvePluginToolRegistry(params: {
-  loadOptions: PluginLoadOptions;
-  allowGatewaySubagentBinding?: boolean;
-}) {
-  if (
-    params.allowGatewaySubagentBinding &&
-    getActivePluginRegistryKey() &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable"
-  ) {
-    return getActivePluginRegistry() ?? resolveRuntimePluginRegistry(params.loadOptions);
+function resolvePluginToolRuntimePluginIds(params: {
+  config: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] | undefined {
+  const pluginIds = new Set<string>();
+  const activeRegistry = getActivePluginRegistry();
+  for (const plugin of activeRegistry?.plugins ?? []) {
+    if (plugin.status === undefined || plugin.status === "loaded") {
+      pluginIds.add(plugin.id);
+    }
   }
-  return resolveRuntimePluginRegistry(params.loadOptions);
+  const index = loadPluginRegistrySnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  for (const plugin of listEnabledInstalledPluginRecords(index, params.config)) {
+    pluginIds.add(plugin.pluginId);
+  }
+  return pluginIds.size > 0
+    ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
 }
 
 export function resolvePluginTools(params: {
@@ -133,16 +142,19 @@ export function resolvePluginTools(params: {
   const runtimeOptions = params.allowGatewaySubagentBinding
     ? { allowGatewaySubagentBinding: true as const }
     : undefined;
+  const onlyPluginIds = resolvePluginToolRuntimePluginIds({
+    config: context.config,
+    workspaceDir: context.workspaceDir,
+    env,
+  });
   const loadOptions = buildPluginRuntimeLoadOptions(context, {
     installBundledRuntimeDeps: false,
     activate: false,
     toolDiscovery: true,
+    ...(onlyPluginIds !== undefined ? { onlyPluginIds } : {}),
     runtimeOptions,
   });
-  const registry = resolvePluginToolRegistry({
-    loadOptions,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-  });
+  const registry = resolveRuntimePluginRegistry(loadOptions);
   if (!registry) {
     return [];
   }
