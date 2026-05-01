@@ -322,9 +322,14 @@ describe("config io audit helpers", () => {
     ]);
   });
 
-  it("does not mask the next arg when a secret flag is followed by another option", () => {
+  it("masks the next arg after a secret flag even when it looks like another option", () => {
     const argv = ["openclaw", "--token", "--port", "8080"];
-    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token", "--port", "8080"]);
+    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token", "***", "8080"]);
+  });
+
+  it("redacts dash-leading secret values after bare secret flags", () => {
+    const argv = ["openclaw", "--password", "-secret-value"];
+    expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--password", "***"]);
   });
 
   it("does not mask when a secret flag is the final arg with no value", () => {

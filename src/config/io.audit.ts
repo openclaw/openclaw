@@ -76,9 +76,9 @@ function parseFlagName(arg: string): string | null {
 //  1. `--flag=value` form for any name matching the explicit list or the
 //     suffix heuristic — mask the value half.
 //  2. value following a bare `--flag` form — emit `***` instead of the
-//     next arg, but only when the candidate value does not itself look
-//     like another option (`-`/`--` prefix). A bare `--token --port 8080`
-//     is treated as a missing value, leaving `--port` and `8080` intact.
+//     next arg, even if it starts with `-`. Command parsers accept
+//     dash-leading values for required options, and this persistent audit
+//     log should fail closed.
 //  3. fall back to redactToolPayloadText for everything else, which catches
 //     `KEY=VALUE` env-style assignments, raw token shapes (sk-, ghp_, xox*,
 //     gsk_, AIza*, npm_, Telegram bot tokens, PEM blocks, Bearer headers,
@@ -95,13 +95,8 @@ export function redactConfigAuditArgv(argv: readonly string[]): string[] {
     }
     if (redactNext) {
       redactNext = false;
-      if (!current.startsWith("-")) {
-        result.push("***");
-        continue;
-      }
-      // The previous arg looked like a secret flag but was followed by
-      // another option — treat as a missing value and fall through so the
-      // current arg is processed normally.
+      result.push("***");
+      continue;
     }
     const currentFlag = parseFlagName(current);
     if (currentFlag !== null && isSecretFlagName(currentFlag)) {
