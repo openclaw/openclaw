@@ -48,6 +48,9 @@ import {
   ToolsEffectiveGroupSchema,
   ToolsEffectiveParamsSchema,
   ToolsEffectiveResultSchema,
+  ToolsInvokeErrorSchema,
+  ToolsInvokeParamsSchema,
+  ToolsInvokeResultSchema,
 } from "./agents-models-skills.js";
 import {
   ArtifactSummarySchema,
@@ -367,6 +370,9 @@ export const ProtocolSchemas = {
   ToolsEffectiveEntry: ToolsEffectiveEntrySchema,
   ToolsEffectiveGroup: ToolsEffectiveGroupSchema,
   ToolsEffectiveResult: ToolsEffectiveResultSchema,
+  ToolsInvokeParams: ToolsInvokeParamsSchema,
+  ToolsInvokeError: ToolsInvokeErrorSchema,
+  ToolsInvokeResult: ToolsInvokeResultSchema,
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
   SkillsSearchParams: SkillsSearchParamsSchema,
