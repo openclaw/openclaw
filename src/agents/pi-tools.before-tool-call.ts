@@ -479,7 +479,6 @@ export async function runBeforeToolCallHook(args: {
     const toolContext = {
       toolName,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
-      ...(args.ctx?.config && { config: args.ctx.config }),
       ...(args.ctx?.sessionKey && { sessionKey: args.ctx.sessionKey }),
       ...(args.ctx?.sessionId && { sessionId: args.ctx.sessionId }),
       ...(args.ctx?.runId && { runId: args.ctx.runId }),
@@ -494,6 +493,7 @@ export async function runBeforeToolCallHook(args: {
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
       },
       toolContext,
+      args.ctx?.config ? { config: args.ctx.config } : undefined,
     );
     if (trustedPolicyResult?.block) {
       return {

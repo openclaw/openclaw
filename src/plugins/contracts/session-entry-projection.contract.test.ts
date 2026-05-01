@@ -262,6 +262,7 @@ describe("plugin session extension SessionEntry projection", () => {
 
   it("exposes scoped session extension reads to trusted tool policies", async () => {
     const seen: unknown[] = [];
+    const seenConfig: unknown[] = [];
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
@@ -281,6 +282,7 @@ describe("plugin session extension SessionEntry projection", () => {
           description: "inspect session extension",
           evaluate(_event, ctx) {
             seen.push(ctx.getSessionExtension?.("policy"));
+            seenConfig.push((ctx as { config?: unknown }).config);
             return undefined;
           },
         });
@@ -321,8 +323,8 @@ describe("plugin session extension SessionEntry projection", () => {
               {
                 toolName: "apply_patch",
                 sessionKey: "agent:main:main",
-                config: tempConfig as never,
               },
+              { config: tempConfig as never },
             ),
           ).resolves.toBeUndefined();
 
@@ -347,6 +349,7 @@ describe("plugin session extension SessionEntry projection", () => {
     }
 
     expect(seen).toEqual([{ gate: "open" }, undefined]);
+    expect(seenConfig).toEqual([undefined, undefined]);
   });
 
   it("does not touch top-level SessionEntry slots when sessionEntrySlotKey is omitted", async () => {
