@@ -38,14 +38,20 @@ const SECRET_FLAG_NAMES = new Set([
   "--identity-token",
   "--session-token",
   "--service-token",
+  "--private-key",
+  "--recovery-key",
+  "--gateway-key",
+  "--session-key",
+  "--active-key",
 ]);
 
 // Suffix-based heuristic. Any `--…-(token|secret|password|passwd|api-key|
-// apikey|api-secret|webhook|credential|bearer|pat)` is treated as a secret
-// flag in addition to the explicit list. The leading `--` is required so we
-// don't mismatch arbitrary positional arguments.
+// apikey|api-secret|webhook|credential|bearer|pat|private-key|recovery-key|
+// signing-key|encryption-key|master-key|session-key|gateway-key|service-key|
+// hook-key)` is treated as a secret flag in addition to the explicit list.
+// The leading `--` is required so we don't mismatch arbitrary positional args.
 const SECRET_FLAG_SUFFIX_PATTERN =
-  /^--(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|webhook|credential|bearer|pat)$/;
+  /^--(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|webhook|credential|bearer|pat|private[-_]?key|recovery[-_]?key|signing[-_]?key|encryption[-_]?key|master[-_]?key|session[-_]?key|gateway[-_]?key|service[-_]?key|hook[-_]?key)$/;
 
 function isSecretFlagName(flagName: string | null): boolean {
   if (flagName === null) {

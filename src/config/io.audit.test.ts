@@ -274,6 +274,54 @@ describe("config io audit helpers", () => {
     ]);
   });
 
+  it("redacts key-valued secret flags (Nostr --private-key, Matrix --recovery-key)", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "channels",
+      "add",
+      "--channel",
+      "nostr",
+      "--private-key",
+      "nsec1realnostrprivatekeyvaluexyz1234567890",
+      "--recovery-key=EsTb-ABCD-1234-EFGH-5678-IJKL-9012-MNOP",
+    ];
+    const result = redactConfigAuditArgv(argv);
+    expect(result).toEqual([
+      "node",
+      "openclaw",
+      "channels",
+      "add",
+      "--channel",
+      "nostr",
+      "--private-key",
+      "***",
+      "--recovery-key=***",
+    ]);
+  });
+
+  it("redacts unknown *-key flags via the heuristic classifier (private/signing/master/etc.)", () => {
+    const argv = [
+      "node",
+      "openclaw",
+      "--my-plugin-private-key",
+      "tenant-private-key-material-zzz",
+      "--rotated-signing-key=PEM-LIKE-MATERIAL",
+      "--ops-master-key",
+      "ABCDEF1234567890",
+    ];
+    const result = redactConfigAuditArgv(argv);
+    expect(result).toEqual([
+      "node",
+      "openclaw",
+      "--my-plugin-private-key",
+      "***",
+      "--rotated-signing-key=***",
+      "--ops-master-key",
+      "***",
+    ]);
+  });
+
   it("does not mask the next arg when a secret flag is followed by another option", () => {
     const argv = ["openclaw", "--token", "--port", "8080"];
     expect(redactConfigAuditArgv(argv)).toEqual(["openclaw", "--token", "--port", "8080"]);
