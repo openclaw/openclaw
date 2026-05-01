@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -232,8 +234,6 @@ describe("local-heavy-check-runtime", () => {
       "--type-aware",
       "--tsconfig",
       "tsconfig.oxlint.json",
-      "--allow",
-      "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
       "error",
       "--threads=1",
@@ -247,8 +247,6 @@ describe("local-heavy-check-runtime", () => {
       "--type-aware",
       "--tsconfig",
       "tsconfig.oxlint.json",
-      "--allow",
-      "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
       "error",
       "--threads=1",
@@ -263,8 +261,6 @@ describe("local-heavy-check-runtime", () => {
       "--type-aware",
       "--tsconfig",
       "tsconfig.oxlint.json",
-      "--allow",
-      "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
       "error",
     ]);
@@ -283,8 +279,6 @@ describe("local-heavy-check-runtime", () => {
       "--type-aware",
       "--tsconfig",
       "tsconfig.oxlint.json",
-      "--allow",
-      "eslint/no-underscore-dangle",
       "--report-unused-disable-directives-severity",
       "error",
     ]);
@@ -390,5 +384,29 @@ describe("local-heavy-check-runtime", () => {
 
     release();
     expect(fs.existsSync(heavyCheckLockDir)).toBe(false);
+  });
+
+  it("stores heavy-check locks under tmpdir when .git is a file (linked worktree layout)", () => {
+    const cwd = createTempDir("openclaw-local-heavy-check-gitfile-");
+    fs.writeFileSync(path.join(cwd, ".git"), "gitdir: /fake/common\n", "utf8");
+
+    const release = acquireLocalHeavyCheckLockSync({
+      cwd,
+      env: makeEnv(),
+      toolName: "tsgo",
+      lockName: "heavy-check",
+    });
+
+    const tmpLocks = path.join(
+      os.tmpdir(),
+      "openclaw-local-checks",
+      createHash("sha256").update(path.resolve(cwd)).digest("hex").slice(0, 32),
+    );
+    const lockDir = path.join(tmpLocks, "heavy-check.lock");
+    expect(fs.existsSync(lockDir)).toBe(true);
+    expect(fs.statSync(path.join(cwd, ".git")).isFile()).toBe(true);
+
+    release();
+    expect(fs.existsSync(lockDir)).toBe(false);
   });
 });

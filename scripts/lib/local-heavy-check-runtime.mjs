@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -85,7 +86,6 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
 
   insertBeforeSeparator(nextArgs, "--type-aware");
   insertBeforeSeparator(nextArgs, "--tsconfig", "tsconfig.oxlint.json");
-  insertBeforeSeparator(nextArgs, "--allow", "eslint/no-underscore-dangle");
   if (
     !hasFlag(nextArgs, "--report-unused-disable-directives") &&
     !hasFlag(nextArgs, "--report-unused-disable-directives-severity")
@@ -181,6 +181,21 @@ export function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode =
   );
 }
 
+function resolveHeavyCheckLocksDir(cwd) {
+  const resolvedCwd = path.resolve(cwd);
+  const commonDir = resolveGitCommonDir(resolvedCwd);
+  try {
+    const st = fs.statSync(commonDir);
+    if (st.isDirectory()) {
+      return path.join(commonDir, "openclaw-local-checks");
+    }
+  } catch {
+    // ENOENT or unreadable: fall through to tmpdir.
+  }
+  const digest = createHash("sha256").update(resolvedCwd).digest("hex").slice(0, 32);
+  return path.join(os.tmpdir(), "openclaw-local-checks", digest);
+}
+
 export function acquireLocalHeavyCheckLockSync(params) {
   const env = params.env ?? process.env;
 
@@ -188,8 +203,7 @@ export function acquireLocalHeavyCheckLockSync(params) {
     return () => {};
   }
 
-  const commonDir = resolveGitCommonDir(params.cwd);
-  const locksDir = path.join(commonDir, "openclaw-local-checks");
+  const locksDir = resolveHeavyCheckLocksDir(params.cwd);
   const lockDir = path.join(locksDir, `${params.lockName ?? "heavy-check"}.lock`);
   const ownerPath = path.join(lockDir, "owner.json");
   const timeoutMs = readPositiveInt(
