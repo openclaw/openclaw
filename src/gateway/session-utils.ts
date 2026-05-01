@@ -333,9 +333,8 @@ function shouldKeepStoreOnlyChildLink(entry: SessionEntry, now: number): boolean
   );
 }
 
-function resolveChildSessionKeys(
+function resolveRuntimeChildSessionKeys(
   controllerSessionKey: string,
-  store: Record<string, SessionEntry>,
   now = Date.now(),
 ): string[] | undefined {
   const childSessionKeys = new Set<string>();
@@ -364,23 +363,47 @@ function resolveChildSessionKeys(
     }
     childSessionKeys.add(childSessionKey);
   }
+  const childSessions = Array.from(childSessionKeys);
+  return childSessions.length > 0 ? childSessions : undefined;
+}
+
+function addChildSessionKey(
+  childSessionsByKey: Map<string, string[]>,
+  parentKey: string,
+  childKey: string,
+) {
+  const current = childSessionsByKey.get(parentKey);
+  if (current) {
+    if (!current.includes(childKey)) {
+      current.push(childKey);
+    }
+    return;
+  }
+  childSessionsByKey.set(parentKey, [childKey]);
+}
+
+function buildStoreChildSessionIndex(
+  store: Record<string, SessionEntry>,
+  now = Date.now(),
+): Map<string, string[]> {
+  const childSessionsByKey = new Map<string, string[]>();
   for (const [key, entry] of Object.entries(store)) {
-    if (!entry || key === controllerSessionKey) {
+    if (!entry) {
       continue;
     }
-    const spawnedBy = normalizeOptionalString(entry.spawnedBy);
-    const parentSessionKey = normalizeOptionalString(entry.parentSessionKey);
-    if (spawnedBy !== controllerSessionKey && parentSessionKey !== controllerSessionKey) {
+    const parentKeys = [
+      normalizeOptionalString(entry.spawnedBy),
+      normalizeOptionalString(entry.parentSessionKey),
+    ].filter((value): value is string => Boolean(value) && value !== key);
+    if (parentKeys.length === 0) {
       continue;
     }
     const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
+    let latestControllerSessionKey: string | undefined;
     if (latest) {
-      const latestControllerSessionKey =
+      latestControllerSessionKey =
         normalizeOptionalString(latest.controllerSessionKey) ||
         normalizeOptionalString(latest.requesterSessionKey);
-      if (latestControllerSessionKey !== controllerSessionKey) {
-        continue;
-      }
       if (
         !shouldKeepSubagentRunChildLink(latest, {
           activeDescendants: countActiveDescendantRuns(key),
@@ -392,10 +415,37 @@ function resolveChildSessionKeys(
     } else if (!shouldKeepStoreOnlyChildLink(entry, now)) {
       continue;
     }
-    childSessionKeys.add(key);
+    for (const parentKey of parentKeys) {
+      if (latestControllerSessionKey && latestControllerSessionKey !== parentKey) {
+        continue;
+      }
+      addChildSessionKey(childSessionsByKey, parentKey, key);
+    }
   }
-  const childSessions = Array.from(childSessionKeys);
-  return childSessions.length > 0 ? childSessions : undefined;
+  return childSessionsByKey;
+}
+
+function mergeChildSessionKeys(
+  runtimeChildSessions: string[] | undefined,
+  storeChildSessions: string[] | undefined,
+): string[] | undefined {
+  if (!runtimeChildSessions?.length) {
+    return storeChildSessions?.length ? storeChildSessions : undefined;
+  }
+  if (!storeChildSessions?.length) {
+    return runtimeChildSessions;
+  }
+  return Array.from(new Set([...runtimeChildSessions, ...storeChildSessions]));
+}
+
+function resolveChildSessionKeys(
+  controllerSessionKey: string,
+  store: Record<string, SessionEntry>,
+  now = Date.now(),
+): string[] | undefined {
+  const runtimeChildSessions = resolveRuntimeChildSessionKeys(controllerSessionKey, now);
+  const storeChildSessions = buildStoreChildSessionIndex(store, now).get(controllerSessionKey);
+  return mergeChildSessionKeys(runtimeChildSessions, storeChildSessions);
 }
 
 function resolveTranscriptUsageFallback(params: {
@@ -1313,6 +1363,7 @@ export function buildGatewaySessionRow(params: {
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   transcriptUsageMaxBytes?: number;
+  storeChildSessionsByKey?: Map<string, string[]>;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const now = params.now ?? Date.now();
@@ -1448,7 +1499,12 @@ export function buildGatewaySessionRow(params: {
     typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0
       ? true
       : transcriptUsage?.totalTokensFresh === true;
-  const childSessions = resolveChildSessionKeys(key, store, now);
+  const childSessions = params.storeChildSessionsByKey
+    ? mergeChildSessionKeys(
+        resolveRuntimeChildSessionKeys(key, now),
+        params.storeChildSessionsByKey.get(key),
+      )
+    : resolveChildSessionKeys(key, store, now);
   const latestCompactionCheckpoint = resolveLatestCompactionCheckpoint(entry);
   const agentRuntime = resolveAgentRuntimeMetadata(cfg, sessionAgentId);
   const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelProvider;
@@ -1630,6 +1686,7 @@ export function listSessionsFromStore(params: {
   const now = Date.now();
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const sessionListTranscriptFieldRows = 100;
+  const storeChildSessionsByKey = buildStoreChildSessionIndex(store, now);
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
@@ -1738,6 +1795,7 @@ export function listSessionsFromStore(params: {
       includeDerivedTitles: includeTranscriptFields && includeDerivedTitles,
       includeLastMessage: includeTranscriptFields && includeLastMessage,
       transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
+      storeChildSessionsByKey,
     });
   });
 
