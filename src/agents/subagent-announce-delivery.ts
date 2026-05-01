@@ -536,20 +536,25 @@ export function extractThreadCompletionFallbackText(internalEvents?: AgentIntern
     if (event.type !== "task_completion") {
       continue;
     }
+    const statusLabel = event.statusLabel.trim();
+    const taskLabel = event.taskLabel.trim();
+    const summary =
+      statusLabel && taskLabel ? `${taskLabel}: ${statusLabel}` : statusLabel || taskLabel;
+
+    // Direct fallbacks bypass the requester agent, so nobody gets a chance to
+    // rewrite verbose child output into a user-facing update. Subagent/cron
+    // results often contain code, command output, paths, logs, and internal
+    // orchestration details; never deliver those raw to external channels.
+    if (event.source === "subagent" || event.source === "cron") {
+      return summary;
+    }
+
     const result = event.result.trim();
     if (result) {
       return result;
     }
-    const statusLabel = event.statusLabel.trim();
-    const taskLabel = event.taskLabel.trim();
-    if (statusLabel && taskLabel) {
-      return `${taskLabel}: ${statusLabel}`;
-    }
-    if (statusLabel) {
-      return statusLabel;
-    }
-    if (taskLabel) {
-      return taskLabel;
+    if (summary) {
+      return summary;
     }
   }
   return "";
