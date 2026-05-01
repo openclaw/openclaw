@@ -1,0 +1,301 @@
+{
+  "meta": {
+    "lastTouchedVersion": "2026.4.29",
+    "lastTouchedAt": "2026-05-01T02:33:21.036Z"
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "openai": {
+        "api": "openai-completions",
+        "baseUrl": "http://host.docker.internal:3456/v1",
+        "apiKey": "not-needed",
+        "models": [
+          {
+            "id": "claude-opus-4-7",
+            "name": "Claude Opus 4.7 via Claude Max API Proxy",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 32000
+          }
+        ]
+      },
+      "anthropic": {
+        "api": "anthropic-messages",
+        "baseUrl": "https://api.anthropic.com",
+        "models": [
+          {
+            "id": "claude-opus-4-7",
+            "name": "Claude Opus 4.7",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 32000
+          },
+          {
+            "id": "claude-haiku-4-5-20251001",
+            "name": "Claude Haiku 4.5",
+            "input": [
+              "text"
+            ],
+            "contextWindow": 200000,
+            "maxTokens": 8192
+          }
+        ]
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "openai/claude-opus-4-7",
+        "fallbacks": [
+          "openai-codex/gpt-5.5"
+        ]
+      },
+      "compaction": {
+        "mode": "safeguard",
+        "model": "anthropic/claude-haiku-4-5-20251001",
+        "reserveTokensFloor": 24000,
+        "timeoutSeconds": 900,
+        "keepRecentTokens": 50000,
+        "identifierPolicy": "strict",
+        "qualityGuard": {
+          "enabled": true,
+          "maxRetries": 1
+        },
+        "notifyUser": true
+      },
+      "workspace": "/home/node/.openclaw/workspace",
+      "heartbeat": {
+        "every": "0m"
+      },
+      "maxConcurrent": 1,
+      "subagents": {
+        "maxConcurrent": 2,
+        "requireAgentId": true,
+        "allowAgents": [
+          "sprout-investigator"
+        ]
+      }
+    },
+    "list": [
+      {
+        "id": "sprout",
+        "name": "Sprout",
+        "default": true,
+        "workspace": "/home/node/.openclaw/workspace",
+        "tools": {
+          "allow": [
+            "session_status",
+            "sessions_list",
+            "sessions_history",
+            "sessions_spawn",
+            "web_search"
+          ],
+          "deny": [
+            "sessions_send",
+            "memory",
+            "web_fetch",
+            "browser",
+            "x_search",
+            "tavily_search",
+            "tavily_extract",
+            "group:web",
+            "group:fs",
+            "canvas",
+            "read",
+            "grep",
+            "glob",
+            "write",
+            "edit",
+            "apply_patch",
+            "exec",
+            "process",
+            "package-install",
+            "docker"
+          ]
+        }
+      },
+      {
+        "id": "sprout-investigator",
+        "name": "Sprout Investigator",
+        "workspace": "/home/node/.openclaw/workspace",
+        "subagents": {
+          "allowAgents": [],
+          "requireAgentId": true
+        },
+        "tools": {
+          "allow": [
+            "session_status",
+            "sessions_history"
+          ],
+          "deny": [
+            "sessions_spawn",
+            "sessions_send",
+            "memory",
+            "web_fetch",
+            "web_search",
+            "browser",
+            "x_search",
+            "tavily_search",
+            "tavily_extract",
+            "group:web",
+            "group:fs",
+            "canvas",
+            "read",
+            "grep",
+            "glob",
+            "write",
+            "edit",
+            "apply_patch",
+            "exec",
+            "process",
+            "package-install",
+            "docker"
+          ]
+        }
+      }
+    ]
+  },
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": true,
+    "ownerDisplay": "raw"
+  },
+  "session": {
+    "scope": "per-sender",
+    "store": "/home/node/.openclaw/agents/sprout/sessions/sessions.json"
+  },
+  "hooks": {
+    "enabled": true,
+    "path": "/hooks",
+    "token": "${SPROUT_OPENCLAW_HOOK_TOKEN}",
+    "defaultSessionKey": "hook:sprout",
+    "allowRequestSessionKey": false,
+    "allowedAgentIds": [
+      "sprout"
+    ],
+    "internal": {
+      "enabled": true,
+      "load": {
+        "extraDirs": [
+          "/home/node/.openclaw/hooks/sprout-spr-ocl-002"
+        ]
+      },
+      "entries": {
+        "sprout-message-memory": {
+          "enabled": true
+        },
+        "sprout-tool-attempt": {
+          "enabled": true
+        },
+        "sprout-tool-complete": {
+          "enabled": true
+        },
+        "sprout-hook-error": {
+          "enabled": true
+        }
+      }
+    }
+  },
+  "channels": {
+    "defaults": {
+      "groupPolicy": "allowlist"
+    }
+  },
+  "gateway": {
+    "port": 18789,
+    "mode": "local",
+    "bind": "lan",
+    "auth": {
+      "mode": "token",
+      "token": "${OPENCLAW_GATEWAY_TOKEN}",
+      "rateLimit": {
+        "maxAttempts": 10,
+        "windowMs": 60000,
+        "lockoutMs": 300000,
+        "exemptLoopback": true
+      }
+    }
+  },
+  "messages": {
+    "ackReactionScope": "group-mentions"
+  },
+  "plugins": {
+    "entries": {
+      "anthropic": {
+        "enabled": true
+      },
+      "openai": {
+        "enabled": true
+      },
+      "tavily": {
+        "enabled": true,
+        "config": {
+          "webSearch": {
+            "baseUrl": "https://api.tavily.com"
+          }
+        }
+      }
+    }
+  },
+  "tools": {
+    "deny": [
+      "browser",
+      "web_fetch",
+      "x_search",
+      "tavily_search",
+      "tavily_extract",
+      "group:web",
+      "group:fs",
+      "canvas",
+      "read",
+      "grep",
+      "glob",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "package-install",
+      "docker"
+    ],
+    "elevated": {
+      "enabled": false
+    },
+    "web": {
+      "search": {
+        "enabled": true,
+        "provider": "tavily",
+        "maxResults": 5,
+        "timeoutSeconds": 30,
+        "cacheTtlMinutes": 15
+      }
+    }
+  },
+  "mcp": {
+    "servers": {
+      "zeke-context": {
+        "transport": "streamable-http",
+        "url": "http://host.docker.internal:3005/mcp",
+        "headers": {
+          "Authorization": "Bearer ${SPROUT_MCP_LOOPBACK_TOKEN}"
+        }
+      },
+      "zeke-context-broker": {
+        "transport": "streamable-http",
+        "url": "http://host.docker.internal:3005/mcp",
+        "headers": {
+          "Authorization": "Bearer ${SPROUT_MCP_LOOPBACK_TOKEN}"
+        }
+      }
+    }
+  }
+}

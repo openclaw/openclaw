@@ -1,0 +1,272 @@
+name: ZekeBot Stock Equivalence
+
+on:
+  workflow_run:
+    workflows: ["ZekeBot Image Builds"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Existing immutable zb-* image tag to smoke.
+        required: false
+        type: string
+      promote_latest:
+        description: Promote the smoked immutable tag to latest after environment approval.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+concurrency:
+  group: zekebot-stock-equivalence-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  REGISTRY: ghcr.io
+
+jobs:
+  resolve-candidate:
+    name: Resolve candidate image
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-24.04
+    outputs:
+      image_tag: ${{ steps.resolve.outputs.image_tag }}
+      gateway_image: ${{ steps.resolve.outputs.gateway_image }}
+      gateway_digest_ref: ${{ steps.resolve.outputs.gateway_digest_ref }}
+      sandbox_image: ${{ steps.resolve.outputs.sandbox_image }}
+      sandbox_digest_ref: ${{ steps.resolve.outputs.sandbox_digest_ref }}
+      sandbox_common_image: ${{ steps.resolve.outputs.sandbox_common_image }}
+      sandbox_common_digest_ref: ${{ steps.resolve.outputs.sandbox_common_digest_ref }}
+      sandbox_browser_image: ${{ steps.resolve.outputs.sandbox_browser_image }}
+      sandbox_browser_digest_ref: ${{ steps.resolve.outputs.sandbox_browser_digest_ref }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tag
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_IMAGE_TAG: ${{ inputs.image_tag || '' }}
+          PROMOTE_LATEST: ${{ inputs.promote_latest || false }}
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id || '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .stock-equivalence
+          image_tag="${INPUT_IMAGE_TAG}"
+          if [[ -z "${image_tag}" ]]; then
+            run_id="${WORKFLOW_RUN_ID}"
+            if [[ -z "${run_id}" ]]; then
+              run_id="$(gh run list \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow build-images.yml \
+                --commit "${HEAD_SHA}" \
+                --status success \
+                --json databaseId \
+                --jq '.[0].databaseId // ""')"
+            fi
+            if [[ -n "${run_id}" ]]; then
+              gh run download "${run_id}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --name zekebot-image-metadata \
+                --dir .stock-equivalence
+              image_tag="$(node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync(".stock-equivalence/zekebot-image-metadata.json","utf8")); console.log(m.image_tag || "")')"
+            fi
+          fi
+          if [[ -z "${image_tag}" ]]; then
+            echo "::error::No ZekeBot image metadata found for ${HEAD_SHA}; dispatch with image_tag after the image build succeeds."
+            exit 1
+          fi
+          if [[ ! "${image_tag}" =~ ^zb-[0-9]{4}\.[1-9][0-9]?\.[0-9]{2}-[0-9a-f]{12}$ ]]; then
+            echo "::error::Invalid ZekeBot image tag: ${image_tag}"
+            exit 1
+          fi
+          if [[ "${PROMOTE_LATEST}" == "true" ]]; then
+            current_short="$(git rev-parse --short=12 HEAD)"
+            if [[ "${image_tag}" != *"-${current_short}" ]]; then
+              echo "::error::Latest promotion requires an immutable image for current HEAD ${current_short}, got ${image_tag}"
+              exit 1
+            fi
+          fi
+          resolve_digest_ref() {
+            local image_ref="$1"
+            local digest
+            digest="$(docker buildx imagetools inspect "${image_ref}" | awk '/^Digest:/ { print $2; exit }')"
+            if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Could not resolve digest for ${image_ref}"
+              exit 1
+            fi
+            echo "${image_ref%:*}@${digest}"
+          }
+          gateway_image="ghcr.io/openzeke/zekebot:${image_tag}"
+          sandbox_image="ghcr.io/openzeke/zekebot-sandbox:${image_tag}"
+          sandbox_common_image="ghcr.io/openzeke/zekebot-sandbox-common:${image_tag}"
+          sandbox_browser_image="ghcr.io/openzeke/zekebot-sandbox-browser:${image_tag}"
+          gateway_digest_ref="$(resolve_digest_ref "${gateway_image}")"
+          sandbox_digest_ref="$(resolve_digest_ref "${sandbox_image}")"
+          sandbox_common_digest_ref="$(resolve_digest_ref "${sandbox_common_image}")"
+          sandbox_browser_digest_ref="$(resolve_digest_ref "${sandbox_browser_image}")"
+          {
+            echo "image_tag=${image_tag}"
+            echo "gateway_image=${gateway_image}"
+            echo "gateway_digest_ref=${gateway_digest_ref}"
+            echo "sandbox_image=${sandbox_image}"
+            echo "sandbox_digest_ref=${sandbox_digest_ref}"
+            echo "sandbox_common_image=${sandbox_common_image}"
+            echo "sandbox_common_digest_ref=${sandbox_common_digest_ref}"
+            echo "sandbox_browser_image=${sandbox_browser_image}"
+            echo "sandbox_browser_digest_ref=${sandbox_browser_digest_ref}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## ZekeBot stock-equivalence candidate"
+            echo
+            echo "- Tag: \`${image_tag}\`"
+            echo "- Source SHA: \`${HEAD_SHA}\`"
+            echo "- Gateway digest ref: \`${gateway_digest_ref}\`"
+            echo "- Sandbox digest ref: \`${sandbox_digest_ref}\`"
+            echo "- Sandbox common digest ref: \`${sandbox_common_digest_ref}\`"
+            echo "- Sandbox browser digest ref: \`${sandbox_browser_digest_ref}\`"
+            if [[ "${EVENT_NAME}" == "workflow_dispatch" && -n "${INPUT_IMAGE_TAG}" ]]; then
+              echo "- Source: manual workflow input"
+            else
+              echo "- Source: build-images metadata artifact"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  smoke:
+    name: Run stock-equivalence smoke
+    needs: resolve-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify all candidate image digests
+        env:
+          GATEWAY_DIGEST_REF: ${{ needs.resolve-candidate.outputs.gateway_digest_ref }}
+          SANDBOX_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_digest_ref }}
+          SANDBOX_COMMON_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_common_digest_ref }}
+          SANDBOX_BROWSER_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_browser_digest_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for image_ref in \
+            "${GATEWAY_DIGEST_REF}" \
+            "${SANDBOX_DIGEST_REF}" \
+            "${SANDBOX_COMMON_DIGEST_REF}" \
+            "${SANDBOX_BROWSER_DIGEST_REF}"; do
+            docker buildx imagetools inspect "${image_ref}" >/dev/null
+            echo "- Verified \`${image_ref}\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      - name: Smoke sandbox image variants
+        env:
+          SANDBOX_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_digest_ref }}
+          SANDBOX_COMMON_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_common_digest_ref }}
+          SANDBOX_BROWSER_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_browser_digest_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm "${SANDBOX_DIGEST_REF}" bash -lc 'test "$(whoami)" = sandbox && command -v rg && command -v jq && python3 --version'
+          docker run --rm "${SANDBOX_COMMON_DIGEST_REF}" bash -lc 'test "$(whoami)" = sandbox && command -v node && command -v npm && command -v python3 && command -v rg && command -v git && command -v cargo && command -v go'
+          docker run --rm "${SANDBOX_BROWSER_DIGEST_REF}" bash -lc 'test "$(whoami)" = sandbox && command -v chromium && command -v x11vnc && command -v websockify && command -v openclaw-sandbox-browser'
+          {
+            echo "- Smoked sandbox image tools"
+            echo "- Smoked sandbox-common image tools"
+            echo "- Smoked sandbox-browser image tools"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run smoke
+        run: |
+          node scripts/zekebot/stock-equivalence-smoke.mjs \
+            --image "${{ needs.resolve-candidate.outputs.gateway_digest_ref }}" \
+            --config test/fixtures/zeke/sprout-openclaw \
+            --native-contract test/fixtures/zeke/native-tool-contract.json
+
+  promote-latest:
+    name: Promote latest
+    needs: [resolve-candidate, smoke]
+    if: github.event_name == 'workflow_dispatch' && inputs.promote_latest == true && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    environment: zekebot-latest-promotion
+    steps:
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote immutable manifests by digest
+        env:
+          GATEWAY_IMAGE: ${{ needs.resolve-candidate.outputs.gateway_image }}
+          GATEWAY_DIGEST_REF: ${{ needs.resolve-candidate.outputs.gateway_digest_ref }}
+          SANDBOX_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_digest_ref }}
+          SANDBOX_COMMON_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_common_digest_ref }}
+          SANDBOX_BROWSER_DIGEST_REF: ${{ needs.resolve-candidate.outputs.sandbox_browser_digest_ref }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          promote() {
+            local src="$1"
+            local latest="${src%@sha256:*}:latest"
+            local digest
+            digest="${src##*@}"
+            if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Could not resolve digest for ${src}"
+              exit 1
+            fi
+            docker buildx imagetools inspect "${src}" >/dev/null
+            docker buildx imagetools create -t "${latest}" "${src}"
+            local latest_digest
+            latest_digest="$(docker buildx imagetools inspect "${latest}" | awk '/^Digest:/ { print $2; exit }')"
+            if [[ "${latest_digest}" != "${digest}" ]]; then
+              echo "::error::Latest digest mismatch for ${latest}: ${latest_digest} != ${digest}"
+              exit 1
+            fi
+            echo "- \`${latest}\` -> \`${digest}\`" >> "$GITHUB_STEP_SUMMARY"
+          }
+          echo "## Promoted ZekeBot latest tags" >> "$GITHUB_STEP_SUMMARY"
+          echo >> "$GITHUB_STEP_SUMMARY"
+          promote "${GATEWAY_DIGEST_REF}"
+          promote "${SANDBOX_DIGEST_REF}"
+          promote "${SANDBOX_COMMON_DIGEST_REF}"
+          promote "${SANDBOX_BROWSER_DIGEST_REF}"

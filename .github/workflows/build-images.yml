@@ -54,6 +54,23 @@ jobs:
             echo "image_tag=${image_tag}"
             echo "created=${created}"
           } >> "$GITHUB_OUTPUT"
+          cat > zekebot-image-metadata.json <<EOF
+          {
+            "schema": "zekebot.image-metadata.v1",
+            "source_sha": "${GITHUB_SHA}",
+            "short_sha": "${short_sha}",
+            "created": "${created}",
+            "platform": "linux/amd64",
+            "image_tag": "${image_tag}",
+            "images": {
+              "gateway": "ghcr.io/openzeke/zekebot:${image_tag}",
+              "sandbox": "ghcr.io/openzeke/zekebot-sandbox:${image_tag}",
+              "sandbox_common": "ghcr.io/openzeke/zekebot-sandbox-common:${image_tag}",
+              "sandbox_browser": "ghcr.io/openzeke/zekebot-sandbox-browser:${image_tag}"
+            },
+            "latest_promotion": "not-performed-by-build-images"
+          }
+          EOF
           {
             echo "## ZekeBot image build"
             echo
@@ -62,6 +79,14 @@ jobs:
             echo "- Platform: \`linux/amd64\`"
             echo "- Latest promotion: not performed by S2"
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload image metadata
+        uses: actions/upload-artifact@v7
+        with:
+          name: zekebot-image-metadata
+          path: zekebot-image-metadata.json
+          if-no-files-found: error
+          retention-days: 30
 
   build-primary:
     name: Build ${{ matrix.name }}
