@@ -14,6 +14,26 @@ describe("agent concurrency defaults", () => {
     expect(resolveSubagentMaxConcurrent({})).toBe(DEFAULT_SUBAGENT_MAX_CONCURRENT);
   });
 
+  it("default subagent concurrency is bounded to prevent event-loop saturation (#75378)", () => {
+    // Each subagent startup performs heavy synchronous work (plugin loading,
+    // model warmup, system prompt assembly) on the main event loop. The default
+    // must be low enough that parallel spawns don't saturate the loop and
+    // trigger liveness 1012 restarts, while still allowing useful fan-out.
+    expect(DEFAULT_SUBAGENT_MAX_CONCURRENT).toBeLessThanOrEqual(4);
+    expect(DEFAULT_SUBAGENT_MAX_CONCURRENT).toBeGreaterThanOrEqual(1);
+  });
+
+  it("allows users to override subagent concurrency above the default", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          subagents: { maxConcurrent: 8 },
+        },
+      },
+    };
+    expect(resolveSubagentMaxConcurrent(cfg)).toBe(8);
+  });
+
   it("clamps invalid values to at least 1", () => {
     const cfg = {
       agents: {

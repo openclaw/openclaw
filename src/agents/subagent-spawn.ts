@@ -1050,6 +1050,7 @@ export async function spawnSubagentDirect(
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly
     ? false
     : expectsCompletionMessage;
+
   try {
     const {
       spawnedBy: _spawnedBy,
