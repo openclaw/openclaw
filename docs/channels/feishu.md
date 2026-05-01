@@ -226,13 +226,17 @@ Typical symptoms:
 - the WebSocket connection never becomes ready
 - logs show TLS/proxy errors while provider requests still need the proxy
 
+For a one-off foreground gateway, set the proxy environment in the same shell
+that starts `openclaw gateway`. This makes the gateway process inherit the
+values directly.
+
 PowerShell example for Feishu China:
 
 ```powershell
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 $env:NO_PROXY = "open.feishu.cn,*.feishu.cn"
-openclaw gateway restart
+openclaw gateway
 ```
 
 PowerShell example for Lark global:
@@ -241,8 +245,15 @@ PowerShell example for Lark global:
 $env:HTTPS_PROXY = "http://127.0.0.1:7890"
 $env:HTTP_PROXY = "http://127.0.0.1:7890"
 $env:NO_PROXY = "open.larksuite.com,*.larksuite.com"
-openclaw gateway restart
+openclaw gateway
 ```
+
+For an installed or managed gateway service, a new terminal's `$env:*` values
+do not automatically update the background service environment. Put the proxy
+variables in the service launcher or wrapper environment, reinstall or refresh
+that service environment if needed, and then restart the managed gateway. Do not
+expect `openclaw gateway restart` by itself to inject transient shell variables
+into an already-installed service.
 
 If you use a custom Feishu/Lark domain, add that hostname to `NO_PROXY` as
 well. `NO_PROXY` entries can be comma- or whitespace-separated, and wildcard
@@ -250,7 +261,8 @@ suffixes such as `*.example.com` are supported by OpenClaw's proxy matching.
 
 To verify the boundary:
 
-1. Restart the gateway after setting the environment variables
+1. Confirm the gateway was launched from the environment that contains the
+   proxy variables
 2. Run `openclaw gateway status`
 3. Send a DM or @mention the bot
 4. Watch logs with `openclaw logs --follow`
