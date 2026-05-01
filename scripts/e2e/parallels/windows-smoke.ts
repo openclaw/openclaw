@@ -107,6 +107,10 @@ const defaultOptions = (): WindowsOptions => ({
   vmName: "Windows 11",
 });
 
+const windowsPortableGitPathScript = `$portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps') 'portable-git') ''
+$env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
+where.exe git.exe`;
+
 function usage(): string {
   return `Usage: bash scripts/e2e/parallels-windows-smoke.sh [options]
 
@@ -800,9 +804,7 @@ if ((Test-Path $logPath) -or (Test-Path $donePath)) {
   private runDevChannelUpdate(): void {
     this.guestPowerShell(
       `$ErrorActionPreference = 'Stop'
-$portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps') 'portable-git') ''
-$env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
-where.exe git.exe
+${windowsPortableGitPathScript}
 $configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
 $config = Get-Content $configPath -Raw | ConvertFrom-Json
 if ($null -eq $config.update) {
@@ -822,9 +824,7 @@ Invoke-OpenClaw update status --json`,
 
   private verifyDevChannelUpdate(): void {
     const status = this.guestPowerShell(
-      `$portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps') 'portable-git') ''
-$env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
-where.exe git.exe
+      `${windowsPortableGitPathScript}
 Invoke-OpenClaw update status --json`,
     );
     for (const needle of ['"installKind": "git"', '"value": "dev"', '"branch": "main"']) {
@@ -890,6 +890,7 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
       "agent-turn",
       `$ErrorActionPreference = 'Continue'
 $PSNativeCommandUseErrorActionPreference = $false
+${windowsPortableGitPathScript}
 Invoke-OpenClaw models set ${psSingleQuote(this.auth.modelId)}
 if ($LASTEXITCODE -ne 0) { throw "models set failed" }
 ${windowsModelProviderTimeoutScript(this.auth.modelId)}
