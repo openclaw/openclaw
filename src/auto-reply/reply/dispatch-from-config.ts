@@ -1152,12 +1152,14 @@ export async function dispatchReplyFromConfig(
     const wrapProgressCallback = <Args extends unknown[]>(
       callback: ((...args: Args) => Promise<void> | void) | undefined,
     ): ((...args: Args) => Promise<void>) | undefined => {
-      if (suppressAutomaticSourceDelivery || !callback) {
+      if (!callback && (!suppressAutomaticSourceDelivery || !canTrackSession)) {
         return undefined;
       }
       return async (...args: Args) => {
         markProgress();
-        await callback(...args);
+        if (!suppressAutomaticSourceDelivery) {
+          await callback?.(...args);
+        }
       };
     };
 

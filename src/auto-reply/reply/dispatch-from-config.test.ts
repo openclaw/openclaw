@@ -2987,6 +2987,54 @@ describe("dispatchReplyFromConfig", () => {
     });
   });
 
+  it("keeps diagnostic progress when source progress callbacks are suppressed", async () => {
+    setNoAbort();
+    const cfg = { diagnostics: { enabled: true } } as OpenClawConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      ChatType: "channel",
+      SessionKey: "agent:main:discord:channel:C1",
+      To: "discord:channel:C1",
+    });
+    const callbacks = {
+      toolStart: vi.fn(async () => {}),
+      itemEvent: vi.fn(async () => {}),
+      commandOutput: vi.fn(async () => {}),
+    };
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onToolStart?.({ name: "lookup" });
+      await opts?.onItemEvent?.({ progressText: "working" });
+      await opts?.onCommandOutput?.({ output: "line", status: "running" });
+      return { text: "hi" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        onToolStart: callbacks.toolStart,
+        onItemEvent: callbacks.itemEvent,
+        onCommandOutput: callbacks.commandOutput,
+      },
+      replyResolver,
+    });
+
+    expect(callbacks.toolStart).not.toHaveBeenCalled();
+    expect(callbacks.itemEvent).not.toHaveBeenCalled();
+    expect(callbacks.commandOutput).not.toHaveBeenCalled();
+    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledTimes(3);
+    expect(diagnosticMocks.markDiagnosticSessionProgress).toHaveBeenCalledWith({
+      sessionKey: "agent:main:discord:channel:C1",
+    });
+  });
+
   it("routes plugin-owned bindings to the owning plugin before generic inbound claim broadcast", async () => {
     setNoAbort();
     hookMocks.runner.hasHooks.mockImplementation(
