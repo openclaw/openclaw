@@ -92,6 +92,16 @@ scripts or machine-readable output. Use `--transport chrome`,
 `--transport chrome-node`, or `--transport twilio` to preflight a specific
 transport before an agent tries it.
 
+For Twilio, always preflight the transport explicitly when the default transport
+is Chrome:
+
+```bash
+openclaw googlemeet setup --transport twilio
+```
+
+That catches missing `voice-call` wiring, Twilio credentials, or unreachable
+webhook exposure before the agent tries to dial the meeting.
+
 Join a meeting:
 
 ```bash
@@ -1310,10 +1320,52 @@ exposure, or when `publicUrl` points at loopback or private network space.
 Set `plugins.entries.voice-call.config.publicUrl` to the public provider URL or
 configure a `voice-call` tunnel/Tailscale exposure.
 
+Loopback and private URLs are not valid for carrier callbacks. Do not use
+`localhost`, `127.0.0.1`, `0.0.0.0`, `10.x`, `172.16.x`-`172.31.x`,
+`192.168.x`, `169.254.x`, `fc00::/7`, or `fd00::/8` as `publicUrl`.
+
+For a stable public URL:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        enabled: true,
+        config: {
+          provider: "twilio",
+          fromNumber: "+15550001234",
+          publicUrl: "https://voice.example.com/voice/webhook",
+        },
+      },
+    },
+  },
+}
+```
+
+For local development, use a tunnel or Tailscale exposure instead of a private
+host URL:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "voice-call": {
+        config: {
+          tunnel: { provider: "ngrok" },
+          // or
+          tailscale: { mode: "funnel", path: "/voice/webhook" },
+        },
+      },
+    },
+  },
+}
+```
+
 Then restart or reload the Gateway and run:
 
 ```bash
-openclaw googlemeet setup
+openclaw googlemeet setup --transport twilio
 openclaw voicecall setup
 openclaw voicecall smoke
 ```
@@ -1345,6 +1397,24 @@ openclaw googlemeet join https://meet.google.com/abc-defg-hij \
 
 Use leading `w` or commas in `--dtmf-sequence` if the provider needs a pause
 before entering the PIN.
+
+If the phone call is created but the Meet roster never shows the dial-in
+participant:
+
+- Run `openclaw voicecall status --call-id <id>` and confirm the call is still
+  active.
+- Run `openclaw voicecall tail` and check that Twilio webhooks are arriving at
+  the Gateway.
+- Re-run `openclaw googlemeet setup --transport twilio`; a green setup check is
+  required but does not prove the meeting PIN sequence is correct.
+- Confirm the dial-in number belongs to the same Meet invitation and region as
+  the PIN.
+- Increase the leading pauses in `--dtmf-sequence` if Meet answers slowly, for
+  example `wwww123456#`.
+
+If webhooks do not arrive, debug the Voice Call plugin first: the provider must
+reach `plugins.entries.voice-call.config.publicUrl` or the configured tunnel.
+See [Voice call troubleshooting](/plugins/voice-call#troubleshooting).
 
 ## Notes
 
