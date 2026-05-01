@@ -1523,8 +1523,14 @@ export async function runEmbeddedAttempt(
         sandboxEnabled: !!sandbox?.enabled,
       });
 
-      // Add client tools (OpenResponses hosted tools) to customTools
-      let clientToolCallDetected: { name: string; params: Record<string, unknown> } | null = null;
+      // Add client tools (OpenResponses hosted tools) to customTools.
+      // Accumulate every detected call in arrival order; the LLM may invoke
+      // multiple client tools in a single turn and earlier callers were
+      // silently dropped by a last-write-wins variable.
+      const clientToolCallsDetected: Array<{
+        name: string;
+        params: Record<string, unknown>;
+      }> = [];
       const clientToolLoopDetection = resolveToolLoopDetectionConfig({
         cfg: params.config,
         agentId: sessionAgentId,
@@ -1564,7 +1570,7 @@ export async function runEmbeddedAttempt(
         ? toClientToolDefinitions(
             clientTools,
             (toolName, toolParams) => {
-              clientToolCallDetected = { name: toolName, params: toolParams };
+              clientToolCallsDetected.push({ name: toolName, params: toolParams });
             },
             {
               agentId: sessionAgentId,
@@ -3567,8 +3573,10 @@ export async function runEmbeddedAttempt(
         promptCache,
         compactionCount: getCompactionCount(),
         compactionTokensAfter: getLastCompactionTokensAfter(),
-        // Client tool call detected (OpenResponses hosted tools)
-        clientToolCall: clientToolCallDetected ?? undefined,
+        // Client tool calls detected (OpenResponses hosted tools).
+        // Stay `undefined` (not `[]`) when none were detected so downstream
+        // truthiness predicates keep working without a `.length` check.
+        clientToolCalls: clientToolCallsDetected.length > 0 ? clientToolCallsDetected : undefined,
         yieldDetected: yieldDetected || undefined,
       };
     } finally {
