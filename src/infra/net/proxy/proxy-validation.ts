@@ -78,10 +78,10 @@ function isHttpProxyUrl(value: string): boolean {
 
 function validateProxyUrl(value: string | undefined): string[] {
   if (!value) {
-    return ["proxy validation requires proxy.proxyUrl or OPENCLAW_PROXY_URL"];
+    return ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"];
   }
   if (!isHttpProxyUrl(value)) {
-    return ["proxy URL must use http://"];
+    return ["proxyUrl must use http://"];
   }
   return [];
 }
