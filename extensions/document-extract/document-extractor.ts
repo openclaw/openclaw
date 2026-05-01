@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
+import { execSync } from "node:child_process";
 import type {
   DocumentExtractedImage,
   DocumentExtractionRequest,
@@ -145,6 +146,62 @@ function resolveRenderPlan(
   return best;
 }
 
+/**
+ * Check if pdftoppm (from poppler-utils) is available on the system.
+ * Used as fallback when @napi-rs/canvas is not installed.
+ */
+function isPdftoppmAvailable(): boolean {
+  try {
+    execSync("pdftoppm -v", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const FS = /* #__PURE__ */ (() => {
+  try {
+    return require("node:fs");
+  } catch {
+    return require("fs");
+  }
+})();
+
+/**
+ * Render a single PDF page to PNG using pdftoppm.
+ * Returns PNG image data as a Buffer, or null if rendering failed.
+ * Uses a temp file approach since pdftoppm doesn't support stdin reliably.
+ */
+function renderPageWithPdftoppm(
+  pdfBuffer: Buffer,
+  pageNumber: number,
+  scale: number,
+): Buffer | null {
+  const dpi = Math.max(72, Math.round(scale * 72));
+  const timestamp = Date.now();
+  const rand = Math.random().toString(36).slice(2, 8);
+  const pdfPath = `/tmp/openclaw-pdf-${timestamp}-${rand}.pdf`;
+  const outputBase = `/tmp/openclaw-page-${timestamp}-${rand}`;
+
+  try {
+    FS.writeFileSync(pdfPath, pdfBuffer);
+
+    execSync(
+      `pdftoppm -r ${dpi} -png -f ${pageNumber} -l ${pageNumber} "${pdfPath}" "${outputBase}"`,
+      { stdio: "ignore" },
+    );
+
+    const pngPath = `${outputBase}-${pageNumber}.png`;
+    const pngBuffer = FS.readFileSync(pngPath);
+    return pngBuffer;
+  } catch {
+    return null;
+  } finally {
+    try { FS.unlinkSync(pdfPath); } catch {}
+    try { FS.unlinkSync(`${outputBase}-${pageNumber}.png`); } catch {}
+  }
+}
+
 async function extractPdfContent(
   request: DocumentExtractionRequest,
 ): Promise<DocumentExtractionResult> {
@@ -182,11 +239,16 @@ async function extractPdfContent(
   }
 
   let canvasModule: CanvasModule;
+  let usePdftoppmFallback = false;
   try {
     canvasModule = await loadCanvasModule();
   } catch (err) {
-    request.onImageExtractionError?.(err);
-    return { text, images: [] };
+    if (isPdftoppmAvailable()) {
+      usePdftoppmFallback = true;
+    } else {
+      request.onImageExtractionError?.(err);
+      return { text, images: [] };
+    }
   }
 
   const images: DocumentExtractedImage[] = [];
@@ -196,21 +258,32 @@ async function extractPdfContent(
     if (remainingPixels <= 0) {
       break;
     }
+
     const page = await pdf.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1 });
     const plan = resolveRenderPlan(viewport, remainingPixels);
     if (!plan) {
       break;
     }
-    const scaled = page.getViewport({ scale: plan.scale });
-    const canvas = canvasModule.createCanvas(plan.width, plan.height);
-    await page.render({
-      canvas: canvas as unknown as HTMLCanvasElement,
-      viewport: scaled,
-    }).promise;
-    const png = canvas.toBuffer("image/png");
-    images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
-    remainingPixels -= plan.pixels;
+
+    if (usePdftoppmFallback) {
+      const pngBuffer = renderPageWithPdftoppm(request.buffer, pageNum, plan.scale);
+      if (!pngBuffer) {
+        break;
+      }
+      images.push({ type: "image", data: pngBuffer.toString("base64"), mimeType: "image/png" });
+      remainingPixels -= plan.pixels;
+    } else {
+      const scaled = page.getViewport({ scale: plan.scale });
+      const canvas = canvasModule.createCanvas(plan.width, plan.height);
+      await page.render({
+        canvas: canvas as unknown as HTMLCanvasElement,
+        viewport: scaled,
+      }).promise;
+      const png = canvas.toBuffer("image/png");
+      images.push({ type: "image", data: png.toString("base64"), mimeType: "image/png" });
+      remainingPixels -= plan.pixels;
+    }
   }
 
   return { text, images };
