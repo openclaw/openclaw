@@ -68,6 +68,10 @@ import {
 } from "./host-hook-runtime.js";
 import { enqueuePluginNextTurnInjection } from "./host-hook-state.js";
 import {
+  schedulePluginSessionTurn,
+  unschedulePluginSessionTurnsByTag,
+} from "./host-hook-workflow.js";
+import {
   isPluginJsonValue,
   normalizePluginHostHookId,
   type PluginAgentEventSubscriptionRegistration,
@@ -107,6 +111,7 @@ import type {
   PluginRegistryParams,
   PluginTextTransformsRegistration,
 } from "./registry-types.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
@@ -2545,6 +2550,41 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                 });
               },
               registerSessionSchedulerJob: (job) => registerSessionSchedulerJob(record, job),
+              scheduleSessionTurn: (schedule) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return Promise.resolve(undefined);
+                }
+                const shouldCommit = () =>
+                  getActivePluginRegistry() === registry &&
+                  registry.plugins.some(
+                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
+                  );
+                return schedulePluginSessionTurn({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  origin: record.origin,
+                  schedule,
+                  shouldCommit,
+                });
+              },
+              unscheduleSessionTurnsByTag: (request) => {
+                if (registryParams.activateGlobalSideEffects === false) {
+                  return Promise.resolve({ removed: 0, failed: 0 });
+                }
+                const pluginLoaded =
+                  getActivePluginRegistry() === registry &&
+                  registry.plugins.some(
+                    (plugin) => plugin.id === record.id && plugin.status === "loaded",
+                  );
+                if (!pluginLoaded) {
+                  return Promise.resolve({ removed: 0, failed: 0 });
+                }
+                return unschedulePluginSessionTurnsByTag({
+                  pluginId: record.id,
+                  origin: record.origin,
+                  request,
+                });
+              },
               registerMemoryCapability: (capability) => {
                 if (!hasKind(record.kind, "memory")) {
                   throwRegistrationError("only memory plugins can register a memory capability");
