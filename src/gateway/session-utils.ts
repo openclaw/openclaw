@@ -1629,6 +1629,7 @@ export function listSessionsFromStore(params: {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
+  const sessionListTranscriptFieldRows = 100;
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
@@ -1724,8 +1725,9 @@ export function listSessionsFromStore(params: {
     entries = entries.slice(0, limit);
   }
 
-  const sessions = entries.map(([key, entry]) =>
-    buildGatewaySessionRow({
+  const sessions = entries.map(([key, entry], index) => {
+    const includeTranscriptFields = index < sessionListTranscriptFieldRows;
+    return buildGatewaySessionRow({
       cfg,
       storePath,
       store,
@@ -1733,11 +1735,11 @@ export function listSessionsFromStore(params: {
       entry,
       modelCatalog: params.modelCatalog,
       now,
-      includeDerivedTitles,
-      includeLastMessage,
+      includeDerivedTitles: includeTranscriptFields && includeDerivedTitles,
+      includeLastMessage: includeTranscriptFields && includeLastMessage,
       transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
-    }),
-  );
+    });
+  });
 
   return {
     ts: now,
