@@ -975,6 +975,15 @@ function resolveWorkspaceSkillPromptState(
     promptBlock = formatSkillsProgressiveIndex(skillsForPrompt, promptMode);
   }
   const prompt = [remoteNote, promptModeNote, promptBlock].filter(Boolean).join("\n");
+  skillsLogger.info("skills_prompt", {
+    mode: promptMode,
+    agentId: opts?.agentId,
+    eligibleCount: eligible.length,
+    resolvedSkillCount: resolvedSkills.length,
+    promptSkillCount: skillsForPrompt.length,
+    truncated,
+    promptChars: prompt.length,
+  });
   return { eligible, prompt, resolvedSkills };
 }
 

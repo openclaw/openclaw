@@ -1,9 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Type } from "typebox";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { Skill } from "../skills/skill-contract.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, readStringParam } from "./common.js";
+
+const log = createSubsystemLogger("agents/tools/skill-view");
 
 const SkillViewToolSchema = Type.Object({
   name: Type.String({ minLength: 1 }),
@@ -127,6 +130,12 @@ export function createSkillViewTool(opts: SkillViewOptions): AnyAgentTool {
       const skill = findSkill(opts.resolvedSkills, name);
 
       if (!skill) {
+        log.info("skill_view", {
+          ok: false,
+          reason: "skill_not_found",
+          requestedName: name,
+          resolvedSkillCount: opts.resolvedSkills.length,
+        });
         return jsonResult({
           ok: false,
           error: "skill not found",
@@ -136,6 +145,12 @@ export function createSkillViewTool(opts: SkillViewOptions): AnyAgentTool {
       }
 
       if (file && isUnsafeRelativeFile(file)) {
+        log.info("skill_view", {
+          ok: false,
+          reason: "invalid_relative_file_path",
+          skill: skill.name,
+          requestedFile: file,
+        });
         return jsonResult({
           ok: false,
           error: "invalid relative file path",
@@ -148,15 +163,29 @@ export function createSkillViewTool(opts: SkillViewOptions): AnyAgentTool {
       try {
         resolved = await resolveReadableFile(skill, file);
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.info("skill_view", {
+          ok: false,
+          reason: "resolve_failed",
+          skill: skill.name,
+          requestedFile: file,
+          error: message,
+        });
         return jsonResult({
           ok: false,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
           skill: toMetadata(skill),
           requestedFile: file,
         });
       }
 
       if (!resolved.ok) {
+        log.info("skill_view", {
+          ok: false,
+          reason: resolved.error,
+          skill: skill.name,
+          requestedFile: file,
+        });
         return jsonResult({
           ok: false,
           error: resolved.error,
@@ -166,6 +195,14 @@ export function createSkillViewTool(opts: SkillViewOptions): AnyAgentTool {
       }
 
       if (resolved.stat.size > maxBytes) {
+        log.info("skill_view", {
+          ok: false,
+          reason: "file_too_large",
+          skill: skill.name,
+          requestedFile: file,
+          bytes: resolved.stat.size,
+          maxBytes,
+        });
         return jsonResult({
           ok: false,
           error: "file too large",
@@ -177,6 +214,12 @@ export function createSkillViewTool(opts: SkillViewOptions): AnyAgentTool {
       }
 
       const content = await fs.readFile(resolved.path, "utf8");
+      log.info("skill_view", {
+        ok: true,
+        skill: skill.name,
+        requestedFile: file,
+        bytes: Buffer.byteLength(content, "utf8"),
+      });
       return jsonResult({
         ok: true,
         skill: toMetadata(skill),

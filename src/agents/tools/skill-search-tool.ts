@@ -1,7 +1,10 @@
 import { Type } from "typebox";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { Skill } from "../skills/skill-contract.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, readNumberParam, readStringParam } from "./common.js";
+
+const log = createSubsystemLogger("agents/tools/skill-search");
 
 const SkillSearchToolSchema = Type.Object({
   query: Type.String({ minLength: 1 }),
@@ -98,6 +101,14 @@ export function createSkillSearchTool(opts: { resolvedSkills: readonly Skill[] }
         .toSorted((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name))
         .slice(0, limit)
         .map((entry) => toSearchResult(entry.skill));
+
+      log.info("skill_search", {
+        queryLength: query.length,
+        termCount: terms.length,
+        limit,
+        resultCount: results.length,
+        resolvedSkillCount: opts.resolvedSkills.length,
+      });
 
       return jsonResult({
         ok: true,
