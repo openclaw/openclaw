@@ -139,6 +139,28 @@ describe("i18n", () => {
     }
   });
 
+  it("keeps high-visibility Thai control UI copy localized", () => {
+    const common = th.common as { light: string; never: string };
+    const languages = th.languages as { en: string; th: string };
+    const agents = th.agents as {
+      noAgents: string;
+      copyIdTitle: string;
+      context: { workspace: string };
+      files: { preview: string };
+    };
+    const cron = th.cron as { form: { deliverySub: string } };
+
+    expect(common.never).toBe("ไม่เคย");
+    expect(common.light).toBe("สว่าง");
+    expect(languages.en).toBe("English (อังกฤษ)");
+    expect(languages.th).toBe("ไทย");
+    expect(agents.noAgents).toBe("ไม่มีเอเจนต์");
+    expect(agents.copyIdTitle).toBe("คัดลอก ID เอเจนต์ไปยังคลิปบอร์ด");
+    expect(agents.context.workspace).toBe("เวิร์กสเปซ");
+    expect(agents.files.preview).toBe("ดูตัวอย่าง");
+    expect(cron.form.deliverySub).toBe("เลือกตำแหน่งที่จะส่งสรุปผลการทำงาน");
+  });
+
   it("keeps shipped locales structurally aligned with English", () => {
     const englishKeys = flatten(en);
     for (const [locale, value] of Object.entries({
