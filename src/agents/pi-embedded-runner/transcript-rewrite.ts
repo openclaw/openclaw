@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type {
@@ -188,6 +189,164 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
   };
 }
 
+type RewriteArtifactCleanupResult = {
+  removedEntries: number;
+  bytesRemoved: number;
+};
+
+/**
+ * Collect the ids of the entries on the currently active branch path. This
+ * is the set of "potentially abandonable" entries — anything not on this path
+ * (legitimate sibling branches from prior `sm.branch()` navigation, etc.) is
+ * never considered for removal.
+ */
+function collectActiveBranchEntryIds(sessionManager: SessionManagerLike): Set<string> {
+  const ids = new Set<string>();
+  for (const entry of sessionManager.getBranch()) {
+    if (entry && typeof (entry as { id?: unknown }).id === "string") {
+      ids.add((entry as { id: string }).id);
+    }
+  }
+  return ids;
+}
+
+/**
+ * Remove ONLY those entry ids that we can prove were just abandoned by this
+ * rewrite (present in the pre-rewrite active branch, absent from the
+ * post-rewrite active branch) AND that no surviving entry still references
+ * as an ancestor via `parentId`.
+ *
+ * Single pass: read the file once, parse each line once, compute the
+ * ancestry-live set from non-abandoned entries, and write the kept lines
+ * back atomically. Session files can reach multiple megabytes near the
+ * compaction boundary (which is exactly when this cleanup runs), so we
+ * avoid doing the read + parse twice.
+ *
+ * Legitimate sibling branches — alternate paths the user navigated to via
+ * `sm.branch(...)` — never appear in `getBranch()` directly, so their ids
+ * are never part of the abandoned set. But a sibling can hang off an entry
+ * that IS in the abandoned set (the rewrite replaced what used to be a
+ * branch point). The ancestry-reference filter catches that case and keeps
+ * the shared-ancestor entry in the file so the sibling stays grounded.
+ *
+ * Matches the repo-wide invariant documented in session-truncation: rewrite /
+ * maintenance operations must preserve unsummarized sibling branches.
+ */
+function removeSpecificAbandonedEntriesFromSessionFile(
+  sessionFile: string,
+  abandonedEntryIds: ReadonlySet<string>,
+): RewriteArtifactCleanupResult {
+  if (abandonedEntryIds.size === 0) {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  let content: string;
+  try {
+    content = fs.readFileSync(sessionFile, "utf-8");
+  } catch {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  // Single parse pass: we need each line's raw form (for write-back), its id
+  // (for candidate lookup) and its parentId (for ancestry traversal).
+  type ParsedLine = {
+    raw: string;
+    id?: string;
+    parentId?: string | null;
+  };
+  const parsed: ParsedLine[] = [];
+  for (const raw of content.split("\n")) {
+    if (!raw.trim()) {
+      continue;
+    }
+    try {
+      const obj = JSON.parse(raw) as { id?: unknown; parentId?: unknown };
+      parsed.push({
+        raw,
+        id: typeof obj.id === "string" ? obj.id : undefined,
+        parentId:
+          typeof obj.parentId === "string"
+            ? obj.parentId
+            : obj.parentId === null
+              ? null
+              : undefined,
+      });
+    } catch {
+      // Malformed line: kept verbatim by the write step, ignored for ancestry.
+      parsed.push({ raw });
+    }
+  }
+  const byId = new Map<string, ParsedLine>();
+  for (const line of parsed) {
+    if (line.id) {
+      byId.set(line.id, line);
+    }
+  }
+  // Walk parentId chains backward from every non-abandoned entry. Ids visited
+  // on any such walk are load-bearing ancestors of surviving entries and must
+  // not be removed even if they are in the candidate set.
+  const ancestryLive = new Set<string>();
+  for (const line of parsed) {
+    if (!line.id) {
+      continue;
+    }
+    if (abandonedEntryIds.has(line.id)) {
+      continue;
+    }
+    let cursor: ParsedLine | undefined = line;
+    while (cursor && cursor.id) {
+      if (ancestryLive.has(cursor.id)) {
+        break;
+      }
+      ancestryLive.add(cursor.id);
+      const parentId = cursor.parentId;
+      if (typeof parentId !== "string" || !parentId) {
+        break;
+      }
+      cursor = byId.get(parentId);
+    }
+  }
+  // Final removable set = candidates \ ancestry-of-non-abandoned.
+  const safeAbandonedIds = new Set<string>();
+  for (const id of abandonedEntryIds) {
+    if (!ancestryLive.has(id)) {
+      safeAbandonedIds.add(id);
+    }
+  }
+  if (safeAbandonedIds.size === 0) {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  const kept: string[] = [];
+  let removed = 0;
+  for (const line of parsed) {
+    if (line.id && safeAbandonedIds.has(line.id)) {
+      removed += 1;
+      continue;
+    }
+    kept.push(line.raw);
+  }
+  if (removed === 0) {
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  const newContent = `${kept.join("\n")}\n`;
+  const originalSize = Buffer.byteLength(content, "utf-8");
+  const newSize = Buffer.byteLength(newContent, "utf-8");
+  const tmp = `${sessionFile}.rewrite-cleanup.tmp`;
+  try {
+    fs.writeFileSync(tmp, newContent, "utf-8");
+    fs.renameSync(tmp, sessionFile);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // Best-effort cleanup.
+    }
+    log.warn(
+      `[transcript-rewrite] abandoned-entry cleanup write failed: ${formatErrorMessage(err)}`,
+    );
+    return { removedEntries: 0, bytesRemoved: 0 };
+  }
+  return { removedEntries: removed, bytesRemoved: originalSize - newSize };
+}
+
 /**
  * Open a transcript file, rewrite message entries on the active branch, and
  * emit a transcript update when the active branch changed.
@@ -204,16 +363,36 @@ export async function rewriteTranscriptEntriesInSessionFile(params: {
       sessionFile: params.sessionFile,
     });
     const sessionManager = SessionManager.open(params.sessionFile);
+    // Snapshot of the active-branch ids BEFORE the rewrite. Sibling branches
+    // that already exist as alternate paths are not on this branch and are
+    // therefore excluded from the abandoned set by construction.
+    const branchIdsBefore = collectActiveBranchEntryIds(sessionManager);
     const result = rewriteTranscriptEntriesInSessionManager({
       sessionManager,
       replacements: params.request.replacements,
     });
     if (result.changed) {
+      // Entries that were on the active branch before the rewrite but are no
+      // longer part of the post-rewrite active branch have been abandoned by
+      // this specific rewrite and are safe to drop from the file.
+      const branchIdsAfter = collectActiveBranchEntryIds(sessionManager);
+      const abandonedIds = new Set<string>();
+      for (const id of branchIdsBefore) {
+        if (!branchIdsAfter.has(id)) {
+          abandonedIds.add(id);
+        }
+      }
+      const cleanupResult = removeSpecificAbandonedEntriesFromSessionFile(
+        params.sessionFile,
+        abandonedIds,
+      );
       emitSessionTranscriptUpdate(params.sessionFile);
       log.info(
         `[transcript-rewrite] rewrote ${result.rewrittenEntries} entr` +
           `${result.rewrittenEntries === 1 ? "y" : "ies"} ` +
           `bytesFreed=${result.bytesFreed} ` +
+          `abandonedArtifactsRemoved=${cleanupResult.removedEntries}/` +
+          `bytes:${cleanupResult.bytesRemoved} ` +
           `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"}`,
       );
     }
