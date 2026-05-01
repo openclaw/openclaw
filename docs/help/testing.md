@@ -231,13 +231,13 @@ gh workflow run package-acceptance.yml --ref main \
   - Packs and installs the current OpenClaw build in Docker, starts the Gateway
     with OpenAI configured, then enables bundled channel/plugins via config
     edits.
-  - Verifies setup discovery leaves unconfigured plugin runtime dependencies
-    absent, the first configured Gateway or doctor run installs each bundled
-    plugin's runtime dependencies on demand, and a second restart does not
-    reinstall dependencies that were already activated.
+  - Verifies setup discovery leaves unconfigured downloadable plugins absent,
+    the first configured doctor repair installs each missing downloadable
+    plugin explicitly, and a second restart does not run hidden dependency
+    repair.
   - Also installs a known older npm baseline, enables Telegram before running
     `openclaw update --tag <candidate>`, and verifies the candidate's
-    post-update doctor repairs bundled channel runtime dependencies without a
+    post-update doctor cleans legacy plugin dependency debris without a
     harness-side postinstall repair.
 - `pnpm test:parallels:npm-update`
   - Runs the native packaged-install update smoke across Parallels guests. Each
@@ -263,9 +263,9 @@ gh workflow run package-acceptance.yml --ref main \
   - The script writes nested lane logs under `/tmp/openclaw-parallels-npm-update.*`.
     Inspect `windows-update.log`, `macos-update.log`, or `linux-update.log`
     before assuming the outer wrapper is hung.
-  - Windows update can spend 10 to 15 minutes in post-update doctor/runtime
-    dependency repair on a cold guest; that is still healthy when the nested
-    npm debug log is advancing.
+  - Windows update can spend 10 to 15 minutes in post-update doctor and package
+    update work on a cold guest; that is still healthy when the nested npm
+    debug log is advancing.
   - Do not run this aggregate wrapper in parallel with individual Parallels
     macOS, Windows, or Linux smoke lanes. They share VM state and can collide on
     snapshot restore, package serving, or guest gateway state.

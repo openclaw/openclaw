@@ -28,12 +28,7 @@ import {
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
-import {
-  collectBundledPluginRootRuntimeMirrorErrors,
-  collectBundledPluginRuntimeDependencySpecs,
-  collectDeclaredRootRuntimeDependencyMetadataErrors,
-  collectRootDistBundledRuntimeMirrors,
-} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+import { collectBundledPluginRuntimeDependencySpecs } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
 import {
@@ -45,12 +40,7 @@ import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./s
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 export { collectBundledExtensionManifestErrors } from "./lib/bundled-extension-manifest.ts";
-export {
-  collectBundledPluginRootRuntimeMirrorErrors,
-  collectDeclaredRootRuntimeDependencyMetadataErrors,
-  collectRootDistBundledRuntimeMirrors,
-  packageNameFromSpecifier,
-} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+export { packageNameFromSpecifier } from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
 
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
@@ -164,17 +154,15 @@ function checkBundledExtensionMetadata() {
   const bundledRuntimeDependencySpecs = collectBundledPluginRuntimeDependencySpecs(
     resolve("extensions"),
   );
-  const requiredRootMirrors = collectRootDistBundledRuntimeMirrors({
-    bundledRuntimeDependencySpecs,
-    distDir: resolve("dist"),
-  });
-  const rootMirrorErrors = collectBundledPluginRootRuntimeMirrorErrors({
-    bundledRuntimeDependencySpecs,
-    requiredRootMirrors,
-    rootPackageJson: rootPackage,
-  });
-  const rootMirrorMetadataErrors = collectDeclaredRootRuntimeDependencyMetadataErrors(rootPackage);
-  const errors = [...manifestErrors, ...rootMirrorErrors, ...rootMirrorMetadataErrors];
+  const dependencyConflictErrors = [...bundledRuntimeDependencySpecs.entries()]
+    .flatMap(([dependencyName, record]) =>
+      record.conflicts.map(
+        (conflict) =>
+          `bundled runtime dependency '${dependencyName}' has conflicting plugin specs: ${record.pluginIds.join(", ")} use '${record.spec}', ${conflict.pluginId} uses '${conflict.spec}'.`,
+      ),
+    )
+    .toSorted((left, right) => left.localeCompare(right));
+  const errors = [...manifestErrors, ...dependencyConflictErrors];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
     for (const error of errors) {

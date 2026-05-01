@@ -920,7 +920,7 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("honors explicit bundled runtime dependency install opt-out for fallback snapshots", () => {
+  it("loads fallback snapshots without startup dependency repair", () => {
     const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
     const enablementCompat = {
       plugins: {

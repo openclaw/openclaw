@@ -934,8 +934,8 @@ describe("qa bundled plugin dir", () => {
     ).resolves.toBeTruthy();
   });
 
-  it("skips transient runtime dependency artifacts while staging built bundled plugins", async () => {
-    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-"));
+  it("skips legacy dependency debris while staging built bundled plugins", async () => {
+    const repoRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-legacy-deps-"));
     cleanups.push(async () => {
       await rm(repoRoot, { recursive: true, force: true });
     });
@@ -961,7 +961,7 @@ describe("qa bundled plugin dir", () => {
       "export {};\n",
       "utf8",
     );
-    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-runtime-deps-target-"));
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "qa-bundled-legacy-deps-target-"));
     cleanups.push(async () => {
       await rm(tempRoot, { recursive: true, force: true });
     });

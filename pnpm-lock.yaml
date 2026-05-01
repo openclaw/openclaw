@@ -111,15 +111,15 @@ importers:
       openai:
         specifier: ^6.35.0
         version: 6.35.0(ws@8.20.0)(zod@4.4.1)
+      playwright-core:
+        specifier: 1.59.1
+        version: 1.59.1
       proxy-agent:
         specifier: ^8.0.1
         version: 8.0.1
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
-      semver:
-        specifier: 7.7.4
-        version: 7.7.4
       sqlite-vec:
         specifier: 0.1.9
         version: 0.1.9

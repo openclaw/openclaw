@@ -14,7 +14,7 @@ import {
 } from "../../scripts/lib/local-build-metadata-paths.mjs";
 
 describe("check-gateway-watch-regression", () => {
-  it("ignores top-level dist-runtime extension dependency repairs", () => {
+  it("ignores top-level dist-runtime extension dependency debris", () => {
     expect(isIgnoredDistRuntimeWatchPath("dist-runtime/extensions/node_modules")).toBe(true);
     expect(
       isIgnoredDistRuntimeWatchPath(

@@ -63,24 +63,10 @@ describe("collectModuleSpecifiers", () => {
 });
 
 describe("classifyRootDependencyOwnership", () => {
-  it("treats root-dist bundled runtime imports as localizable extension deps", () => {
-    expect(
-      classifyRootDependencyOwnership({
-        sections: ["extensions"],
-        rootMirrorImporters: ["discovery-DZDwKJdJ.js"],
-      }),
-    ).toEqual({
-      category: "extension_only_localizable",
-      recommendation:
-        "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-    });
-  });
-
   it("treats scripts and tests as dev-only candidates", () => {
     expect(
       classifyRootDependencyOwnership({
         sections: ["scripts", "test"],
-        rootMirrorImporters: [],
       }),
     ).toEqual({
       category: "script_or_test_only",
@@ -88,11 +74,10 @@ describe("classifyRootDependencyOwnership", () => {
     });
   });
 
-  it("treats extension-only deps as localizable when no root mirror exists", () => {
+  it("treats extension-only deps as localizable", () => {
     expect(
       classifyRootDependencyOwnership({
         sections: ["extensions", "test"],
-        rootMirrorImporters: [],
       }),
     ).toEqual({
       category: "extension_only_localizable",
@@ -105,7 +90,6 @@ describe("classifyRootDependencyOwnership", () => {
     expect(
       classifyRootDependencyOwnership({
         sections: ["src"],
-        rootMirrorImporters: [],
       }),
     ).toEqual({
       category: "core_runtime",
@@ -117,7 +101,6 @@ describe("classifyRootDependencyOwnership", () => {
     expect(
       classifyRootDependencyOwnership({
         sections: [],
-        rootMirrorImporters: [],
       }),
     ).toEqual({
       category: "unreferenced",
