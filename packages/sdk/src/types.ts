@@ -62,7 +62,9 @@ export type SDKMessage = {
 export type ArtifactSummary = {
   id: string;
   runId?: string;
+  taskId?: string;
   sessionId?: string;
+  sessionKey?: string;
   type:
     | "file"
     | "patch"
@@ -77,8 +79,33 @@ export type ArtifactSummary = {
   title?: string;
   mimeType?: string;
   sizeBytes?: number;
+  messageSeq?: number;
+  source?: string;
+  download?: {
+    mode: "bytes" | "url" | "unsupported" | (string & {});
+  };
   createdAt?: string;
   expiresAt?: string;
+};
+
+export type ArtifactQuery =
+  | { sessionKey: string; runId?: string; taskId?: string }
+  | { runId: string; sessionKey?: string; taskId?: string }
+  | { taskId: string; sessionKey?: string; runId?: string };
+
+export type ArtifactsListResult = {
+  artifacts: ArtifactSummary[];
+};
+
+export type ArtifactsGetResult = {
+  artifact: ArtifactSummary;
+};
+
+export type ArtifactsDownloadResult = {
+  artifact: ArtifactSummary;
+  encoding?: "base64";
+  data?: string;
+  url?: string;
 };
 
 export type SDKError = {

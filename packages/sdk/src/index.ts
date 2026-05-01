@@ -20,7 +20,11 @@ export { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 export type {
   AgentRunParams,
   ApprovalMode,
+  ArtifactQuery,
   ArtifactSummary,
+  ArtifactsDownloadResult,
+  ArtifactsGetResult,
+  ArtifactsListResult,
   ConnectableOpenClawTransport,
   EnvironmentSelection,
   GatewayEvent,

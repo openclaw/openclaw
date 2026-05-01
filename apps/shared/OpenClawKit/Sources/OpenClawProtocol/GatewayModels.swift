@@ -3208,6 +3208,188 @@ public struct AgentsFilesSetResult: Codable, Sendable {
     }
 }
 
+public struct ArtifactSummary: Codable, Sendable {
+    public let id: String
+    public let type: String
+    public let title: String
+    public let mimetype: String?
+    public let sizebytes: Int?
+    public let sessionkey: String?
+    public let runid: String?
+    public let taskid: String?
+    public let messageseq: Int?
+    public let source: String?
+    public let download: [String: AnyCodable]
+
+    public init(
+        id: String,
+        type: String,
+        title: String,
+        mimetype: String?,
+        sizebytes: Int?,
+        sessionkey: String?,
+        runid: String?,
+        taskid: String?,
+        messageseq: Int?,
+        source: String?,
+        download: [String: AnyCodable])
+    {
+        self.id = id
+        self.type = type
+        self.title = title
+        self.mimetype = mimetype
+        self.sizebytes = sizebytes
+        self.sessionkey = sessionkey
+        self.runid = runid
+        self.taskid = taskid
+        self.messageseq = messageseq
+        self.source = source
+        self.download = download
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case type
+        case title
+        case mimetype = "mimeType"
+        case sizebytes = "sizeBytes"
+        case sessionkey = "sessionKey"
+        case runid = "runId"
+        case taskid = "taskId"
+        case messageseq = "messageSeq"
+        case source
+        case download
+    }
+}
+
+public struct ArtifactsListParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let runid: String?
+    public let taskid: String?
+
+    public init(
+        sessionkey: String?,
+        runid: String?,
+        taskid: String?)
+    {
+        self.sessionkey = sessionkey
+        self.runid = runid
+        self.taskid = taskid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case runid = "runId"
+        case taskid = "taskId"
+    }
+}
+
+public struct ArtifactsListResult: Codable, Sendable {
+    public let artifacts: [ArtifactSummary]
+
+    public init(
+        artifacts: [ArtifactSummary])
+    {
+        self.artifacts = artifacts
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case artifacts
+    }
+}
+
+public struct ArtifactsGetParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let runid: String?
+    public let taskid: String?
+    public let artifactid: String
+
+    public init(
+        sessionkey: String?,
+        runid: String?,
+        taskid: String?,
+        artifactid: String)
+    {
+        self.sessionkey = sessionkey
+        self.runid = runid
+        self.taskid = taskid
+        self.artifactid = artifactid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case runid = "runId"
+        case taskid = "taskId"
+        case artifactid = "artifactId"
+    }
+}
+
+public struct ArtifactsGetResult: Codable, Sendable {
+    public let artifact: ArtifactSummary
+
+    public init(
+        artifact: ArtifactSummary)
+    {
+        self.artifact = artifact
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case artifact
+    }
+}
+
+public struct ArtifactsDownloadParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let runid: String?
+    public let taskid: String?
+    public let artifactid: String
+
+    public init(
+        sessionkey: String?,
+        runid: String?,
+        taskid: String?,
+        artifactid: String)
+    {
+        self.sessionkey = sessionkey
+        self.runid = runid
+        self.taskid = taskid
+        self.artifactid = artifactid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case runid = "runId"
+        case taskid = "taskId"
+        case artifactid = "artifactId"
+    }
+}
+
+public struct ArtifactsDownloadResult: Codable, Sendable {
+    public let artifact: ArtifactSummary
+    public let encoding: String?
+    public let data: String?
+    public let url: String?
+
+    public init(
+        artifact: ArtifactSummary,
+        encoding: String?,
+        data: String?,
+        url: String?)
+    {
+        self.artifact = artifact
+        self.encoding = encoding
+        self.data = data
+        self.url = url
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case artifact
+        case encoding
+        case data
+        case url
+    }
+}
+
 public struct AgentsListParams: Codable, Sendable {}
 
 public struct AgentsListResult: Codable, Sendable {

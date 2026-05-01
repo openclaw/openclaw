@@ -4,6 +4,10 @@ import { normalizeGatewayEvent } from "./normalize.js";
 import { GatewayClientTransport, isConnectableTransport } from "./transport.js";
 import type {
   AgentRunParams,
+  ArtifactQuery,
+  ArtifactsDownloadResult,
+  ArtifactsGetResult,
+  ArtifactsListResult,
   GatewayEvent,
   GatewayRequestOptions,
   OpenClawEvent,
@@ -183,6 +187,20 @@ type ChatProjection = {
 
 function asRecord(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function hasArtifactQueryScope(params: unknown): params is ArtifactQuery {
+  const record = asRecord(params);
+  return [record.sessionKey, record.runId, record.taskId].some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+}
+
+function requireArtifactQueryScope(api: string, params: unknown): ArtifactQuery {
+  if (!hasArtifactQueryScope(params)) {
+    throw new Error(`${api} requires one of sessionKey, runId, or taskId`);
+  }
+  return params;
 }
 
 function readChatProjection(event: OpenClawEvent): ChatProjection | undefined {
@@ -758,19 +776,22 @@ export class ArtifactsNamespace extends RpcNamespace {
     super(client, "artifacts");
   }
 
-  async list(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.artifacts.list");
+  async list(params: ArtifactQuery): Promise<ArtifactsListResult> {
+    return await this.call("list", requireArtifactQueryScope("oc.artifacts.list", params));
   }
 
-  async get(id: string): Promise<unknown> {
-    void id;
-    return unsupportedGatewayApi("oc.artifacts.get");
+  async get(id: string, params: ArtifactQuery): Promise<ArtifactsGetResult> {
+    return await this.call("get", {
+      ...requireArtifactQueryScope("oc.artifacts.get", params),
+      artifactId: id,
+    });
   }
 
-  async download(id: string): Promise<unknown> {
-    void id;
-    return unsupportedGatewayApi("oc.artifacts.download");
+  async download(id: string, params: ArtifactQuery): Promise<ArtifactsDownloadResult> {
+    return await this.call("download", {
+      ...requireArtifactQueryScope("oc.artifacts.download", params),
+      artifactId: id,
+    });
   }
 }
 
