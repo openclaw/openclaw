@@ -1,7 +1,11 @@
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+
 type ParsedTwilioApiError = {
   code?: number;
   message?: string;
 };
+
+const TWILIO_API_TIMEOUT_MS = 30_000;
 
 function parseTwilioApiError(text: string): ParsedTwilioApiError {
   try {
@@ -57,23 +61,31 @@ export async function twilioApiRequest<T = unknown>(params: {
           return acc;
         }, new URLSearchParams());
 
-  const response = await fetch(`${params.baseUrl}${params.endpoint}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
-      "Content-Type": "application/x-www-form-urlencoded",
+  const { response, release } = await fetchWithSsrFGuard({
+    url: `${params.baseUrl}${params.endpoint}`,
+    init: {
+      method: "POST",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${params.accountSid}:${params.authToken}`).toString("base64")}`,
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: bodyParams,
     },
-    body: bodyParams,
+    timeoutMs: TWILIO_API_TIMEOUT_MS,
+    auditContext: "voice-call.twilio_api",
   });
-
-  if (!response.ok) {
-    if (params.allowNotFound && response.status === 404) {
-      return undefined as T;
+  try {
+    if (!response.ok) {
+      if (params.allowNotFound && response.status === 404) {
+        return undefined as T;
+      }
+      const errorText = await response.text();
+      throw new TwilioApiError(response.status, errorText);
     }
-    const errorText = await response.text();
-    throw new TwilioApiError(response.status, errorText);
-  }
 
-  const text = await response.text();
-  return text ? (JSON.parse(text) as T) : (undefined as T);
+    const text = await response.text();
+    return text ? (JSON.parse(text) as T) : (undefined as T);
+  } finally {
+    await release();
+  }
 }
