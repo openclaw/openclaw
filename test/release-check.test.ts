@@ -33,6 +33,26 @@ describe("collectAppcastSparkleVersionErrors", () => {
 });
 
 describe("collectBundledExtensionRootDependencyGapErrors", () => {
+  it("flags packaged built extension dependency gaps that source manifests cannot see", () => {
+    expect(
+      collectBundledExtensionRootDependencyGapErrors({
+        rootPackage: { dependencies: {} },
+        sourceLabel: "built root",
+        extensions: [
+          {
+            id: "telegram",
+            packageJson: {
+              dependencies: { grammy: "^1.42.0" },
+              openclaw: { install: { npmSpec: "@openclaw/telegram" } },
+            },
+          },
+        ],
+      }),
+    ).toEqual([
+      "bundled extension 'telegram' built root dependency mirror drift | missing in root package: grammy | new gaps: grammy",
+    ]);
+  });
+
   it("allows known gaps but still flags unallowlisted ones", () => {
     expect(
       collectBundledExtensionRootDependencyGapErrors({

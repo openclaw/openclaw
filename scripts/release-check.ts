@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --import tsx
 
 import { execSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -128,6 +128,7 @@ function normalizePluginSyncVersion(version: string): string {
 export function collectBundledExtensionRootDependencyGapErrors(params: {
   rootPackage: PackageJson;
   extensions: BundledExtension[];
+  sourceLabel?: string;
 }): string[] {
   const rootDeps = {
     ...params.rootPackage.dependencies,
@@ -148,7 +149,7 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
       const unexpected = missing.filter((dep) => !allowlisted.includes(dep));
       const resolved = allowlisted.filter((dep) => !missing.includes(dep));
       const parts = [
-        `bundled extension '${extension.id}' root dependency mirror drift`,
+        `bundled extension '${extension.id}' ${params.sourceLabel ?? "root"} dependency mirror drift`,
         `missing in root package: ${missing.length > 0 ? missing.join(", ") : "(none)"}`,
       ];
       if (unexpected.length > 0) {
@@ -164,8 +165,10 @@ export function collectBundledExtensionRootDependencyGapErrors(params: {
   return errors;
 }
 
-function collectBundledExtensions(): BundledExtension[] {
-  const extensionsDir = resolve("extensions");
+function collectBundledExtensionsFromDir(extensionsDir: string): BundledExtension[] {
+  if (!existsSync(extensionsDir)) {
+    return [];
+  }
   const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
     entry.isDirectory(),
   );
@@ -185,6 +188,14 @@ function collectBundledExtensions(): BundledExtension[] {
   });
 }
 
+function collectBundledExtensions(): BundledExtension[] {
+  return collectBundledExtensionsFromDir(resolve("extensions"));
+}
+
+function collectBuiltBundledExtensions(): BundledExtension[] {
+  return collectBundledExtensionsFromDir(resolve("dist", "extensions"));
+}
+
 function checkBundledExtensionRootDependencyMirrors() {
   const rootPackage = JSON.parse(readFileSync(resolve("package.json"), "utf8")) as PackageJson;
   const extensions = collectBundledExtensions();
@@ -200,6 +211,13 @@ function checkBundledExtensionRootDependencyMirrors() {
     rootPackage,
     extensions,
   });
+  errors.push(
+    ...collectBundledExtensionRootDependencyGapErrors({
+      rootPackage,
+      extensions: collectBuiltBundledExtensions(),
+      sourceLabel: "built root",
+    }),
+  );
   if (errors.length > 0) {
     console.error("release-check: bundled extension root dependency mirror validation failed:");
     for (const error of errors) {
