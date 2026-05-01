@@ -20,7 +20,7 @@ export function createBundleMcpTempHarness() {
   };
 }
 
-export function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
+function resolveBundlePluginRoot(homeDir: string, pluginId: string) {
   return path.join(homeDir, ".openclaw", "extensions", pluginId);
 }
 
