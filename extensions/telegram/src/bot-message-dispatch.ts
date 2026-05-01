@@ -17,7 +17,7 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-runtime";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import type {
   OpenClawConfig,
   ReplyToMode,
@@ -494,9 +494,16 @@ export const dispatchTelegramMessage = async ({
         value: sinkCfg.secret,
         path: "channels.telegram.reasoningStreamSink.secret",
       });
-      resolvedSecret = resolution.value;
+      if (resolution.unresolvedRefReason) {
+        logVerbose(
+          `reasoning stream sink: secret unresolved (${resolution.unresolvedRefReason}), sink disabled`,
+        );
+      } else {
+        resolvedSecret = resolution.value;
+      }
     }
     let resolvedHeaders: Record<string, string> | undefined;
+    let headersUnresolved = false;
     if (sinkCfg.headers) {
       const resolved: Record<string, string> = {};
       for (const [key, val] of Object.entries(sinkCfg.headers)) {
@@ -506,24 +513,40 @@ export const dispatchTelegramMessage = async ({
           value: val,
           path: `channels.telegram.reasoningStreamSink.headers.${key}`,
         });
+        if (resolution.unresolvedRefReason) {
+          logVerbose(
+            `reasoning stream sink: header "${key}" unresolved (${resolution.unresolvedRefReason}), sink disabled`,
+          );
+          headersUnresolved = true;
+          break;
+        }
         if (resolution.value !== undefined) {
           resolved[key] = resolution.value;
         }
       }
-      resolvedHeaders = resolved;
+      if (!headersUnresolved) {
+        resolvedHeaders = resolved;
+      }
     }
-    reasoningStreamSink = createReasoningStreamSink({
-      config: sinkCfg,
-      context: {
-        chatId: String(chatId),
-        threadId: typeof threadSpec.id === "number" ? threadSpec.id : undefined,
-        accountId: route.accountId,
-        sessionKey: ctxPayload.SessionKey,
-      },
-      resolvedSecret,
-      resolvedHeaders,
-      warn: logVerbose,
-    });
+    if (
+      (sinkCfg.secret && resolvedSecret === undefined) ||
+      headersUnresolved
+    ) {
+      // Configured credentials could not be resolved; skip sink to avoid posting unsigned events.
+    } else {
+      reasoningStreamSink = createReasoningStreamSink({
+        config: sinkCfg,
+        context: {
+          chatId: String(chatId),
+          threadId: typeof threadSpec.id === "number" ? threadSpec.id : undefined,
+          accountId: route.accountId,
+          sessionKey: ctxPayload.SessionKey,
+        },
+        resolvedSecret,
+        resolvedHeaders,
+        warn: logVerbose,
+      });
+    }
   }
   const previewToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
