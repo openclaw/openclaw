@@ -1,4 +1,4 @@
-export const LEGACY_DAEMON_CLI_EXPORTS = [
+const LEGACY_DAEMON_CLI_EXPORTS = [
   "registerDaemonCli",
   "runDaemonInstall",
   "runDaemonRestart",
@@ -10,7 +10,7 @@ export const LEGACY_DAEMON_CLI_EXPORTS = [
 
 type LegacyDaemonCliExport = (typeof LEGACY_DAEMON_CLI_EXPORTS)[number];
 type LegacyDaemonCliRunnerExport = Exclude<LegacyDaemonCliExport, "registerDaemonCli">;
-export type LegacyDaemonCliAccessors = {
+type LegacyDaemonCliAccessors = {
   registerDaemonCli: string;
   runDaemonRestart: string;
 } & Partial<
