@@ -648,9 +648,4 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }
 }
 
-export const __testing = {
-  resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
-  resolveDefaultGroupPolicy,
-};
-
 export const resolveIMessageRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
