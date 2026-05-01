@@ -31,8 +31,123 @@ function normalizeMattermostDraftText(text: string, maxChars: number): string {
   return `${trimmed.slice(0, Math.max(0, maxChars - 3)).trimEnd()}...`;
 }
 
-export function buildMattermostToolStatusText(params: { name?: string; phase?: string }): string {
+/**
+ * Hard upper bound on how much of an args summary we'll embed in a single
+ * Mattermost preview post. The summary is rendered inside a fenced code
+ * block, so we can comfortably show much more than the old inline limit -
+ * but we still cap to avoid pasting megabytes of structured tool input into
+ * a chat post.
+ */
+const MATTERMOST_TOOL_ARGS_MAX_CHARS = 4000;
+
+function summarizeMattermostToolArgValue(value: unknown): string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Best-effort summary of a tool's args object for display in a preview
+ * post. Returns a multi-line string suitable for embedding in a fenced code
+ * block. Common single-arg shapes (command/path/input/text) come out as the
+ * raw value; multi-arg shapes are rendered as `key=value` lines.
+ */
+export function summarizeMattermostToolArgs(
+  args: Record<string, unknown> | undefined,
+  options: { maxChars?: number } = {},
+): string | undefined {
+  if (!args) {
+    return undefined;
+  }
+  const entries = Object.entries(args).filter(([, value]) => value !== undefined);
+  if (entries.length === 0) {
+    return undefined;
+  }
+  const maxChars = Math.max(40, options.maxChars ?? MATTERMOST_TOOL_ARGS_MAX_CHARS);
+  let body: string;
+  if (entries.length === 1) {
+    const [key, value] = entries[0]!;
+    const summarized = summarizeMattermostToolArgValue(value);
+    if (summarized === undefined) {
+      return undefined;
+    }
+    if (key === "command" || key === "path" || key === "input" || key === "text") {
+      body = summarized;
+    } else {
+      body = `${key}=${summarized}`;
+    }
+  } else {
+    const lines: string[] = [];
+    for (const [key, value] of entries) {
+      const summarized = summarizeMattermostToolArgValue(value);
+      if (summarized === undefined) {
+        continue;
+      }
+      // For multi-arg payloads keep each key/value on its own line so the
+      // user can scan them without horizontal wrapping.
+      lines.push(`${key}=${summarized}`);
+    }
+    if (lines.length === 0) {
+      return undefined;
+    }
+    body = lines.join("\n");
+  }
+  // Trim trailing whitespace but keep newlines inside the body.
+  body = body.replace(/[\u0020\t]+$/gmu, "").replace(/^\s+|\s+$/gu, "");
+  if (!body) {
+    return undefined;
+  }
+  if (body.length > maxChars) {
+    return `${body.slice(0, Math.max(0, maxChars - 1))}…`;
+  }
+  return body;
+}
+
+/**
+ * Pick a Mattermost code-fence info string ID-style hint based on the tool
+ * name so the preview post gets at least best-effort syntax highlighting.
+ */
+function resolveMattermostToolCodeFenceLanguage(toolName?: string): string {
+  const normalized = toolName?.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "exec" || normalized === "shell" || normalized.endsWith("_exec")) {
+    return "bash";
+  }
+  return "";
+}
+
+export function buildMattermostToolStatusText(params: {
+  name?: string;
+  phase?: string;
+  args?: Record<string, unknown>;
+}): string {
   const tool = params.name?.trim() ? ` \`${params.name.trim()}\`` : " tool";
+  const summary = summarizeMattermostToolArgs(params.args);
+  if (summary) {
+    const language = resolveMattermostToolCodeFenceLanguage(params.name);
+    // Use a fenced code block on its own line so the full args are visible
+    // even when they span multiple lines (e.g. heredocs, multi-line shell
+    // commands, or large structured inputs). Mattermost renders the fenced
+    // block monospaced and preserves whitespace, which is what we want for
+    // commands and file paths.
+    return `Running${tool}\n\`\`\`${language}\n${summary}\n\`\`\``;
+  }
   return `Running${tool}…`;
 }
 

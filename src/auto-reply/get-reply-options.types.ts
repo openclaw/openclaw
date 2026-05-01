@@ -84,6 +84,11 @@ export type GetReplyOptions = {
   onToolStart?: (payload: {
     name?: string;
     phase?: string;
+    /**
+     * Tool input arguments, if the agent runtime emitted them. Channels that
+     * surface tool activity to users may format these in their status text;
+     * keep in mind that args can be arbitrarily large or sensitive.
+     */
     args?: Record<string, unknown>;
   }) => Promise<void> | void;
   /** Called when a concrete work item starts, updates, or completes. */

@@ -1532,7 +1532,9 @@ export async function runAgentTurnWithFallback(params: {
                         name,
                         phase,
                         args:
-                          evt.data.args && typeof evt.data.args === "object"
+                          evt.data.args &&
+                          typeof evt.data.args === "object" &&
+                          !Array.isArray(evt.data.args)
                             ? (evt.data.args as Record<string, unknown>)
                             : undefined,
                       });

@@ -21,9 +21,31 @@ export type MattermostChatTypeKey = "direct" | "channel" | "group";
  */
 export type MattermostPreviewStreamMode = "partial" | "block";
 
+/**
+ * Tool preview verbosity for the Mattermost draft preview stream.
+ * - "name":  preview shows just the tool name, e.g. ``Running `exec`…``.
+ *            This is the historical behavior and the safer default for
+ *            shared channels where tool inputs may be sensitive.
+ * - "args":  preview shows the tool name plus a code-block with the tool's
+ *            input arguments, e.g.:
+ *              Running `exec`
+ *              ```bash
+ *              ls -la /tmp
+ *              ```
+ *            Useful when you want to see exactly what the agent is doing.
+ */
+export type MattermostToolPreviewMode = "name" | "args";
+
 export type MattermostStreamingConfig = {
   /** Draft preview mode. Default: "partial" (historical behavior). */
   mode?: MattermostPreviewStreamMode;
+  /**
+   * How much detail to render in tool-status preview posts. Default: "name"
+   * (just the tool name) for backward compatibility and to avoid leaking
+   * potentially sensitive command/path/input data into chat by default.
+   * Set to "args" to render the actual tool args in a code block.
+   */
+  toolPreview?: MattermostToolPreviewMode;
 };
 
 export type MattermostChatMode = "oncall" | "onmessage" | "onchar";
