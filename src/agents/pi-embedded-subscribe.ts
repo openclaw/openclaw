@@ -39,6 +39,7 @@ import {
   stripDowngradedToolCallText,
   THINKING_TAG_SCAN_RE,
 } from "./pi-embedded-utils.js";
+import { classifyInternalToolOutputShape } from "./tool-output-shapes.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
@@ -534,10 +535,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
+    const internalShape = classifyInternalToolOutputShape({ toolName, result });
     try {
       void params.onToolResult({
         text: cleanedText,
         mediaUrls: filteredMediaUrls.length ? filteredMediaUrls : undefined,
+        ...(internalShape ? { internalShape } : {}),
       });
     } catch {
       // ignore tool result delivery failures

@@ -83,6 +83,7 @@ title: "Thinking levels"
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool call back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command). These tool summaries are sent as soon as each tool starts (separate bubbles), not as streaming deltas.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `on` or `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
+- Shared chat surfaces can still suppress internal operator-environment inventory, such as image/video provider lists, even when verbose is `full`; direct chats keep that diagnostic output visible.
 
 ## Plugin trace directives (/trace)
 

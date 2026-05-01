@@ -151,6 +151,7 @@ export type AgentRuntimeReplyPayload = {
   isReasoning?: boolean;
   isCompactionNotice?: boolean;
   channelData?: Record<string, unknown>;
+  internalShape?: "provider-inventory";
 };
 
 export type AgentRuntimeSystemPromptSectionId =

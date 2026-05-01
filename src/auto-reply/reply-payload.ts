@@ -46,6 +46,11 @@ export type ReplyPayload = {
   isCompactionNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
+  /**
+   * Internal payload shape whose visible delivery needs stricter handling on
+   * shared chat surfaces. Optional so older producers/consumers ignore it.
+   */
+  internalShape?: "provider-inventory";
 };
 
 export type ReplyPayloadMetadata = {

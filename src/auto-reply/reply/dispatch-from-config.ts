@@ -1098,6 +1098,8 @@ export async function dispatchReplyFromConfig(
       ? createTtsDirectiveTextStreamCleaner()
       : undefined;
 
+    const isRestrictedInternalToolOutput = (payload: ReplyPayload): boolean =>
+      payload.internalShape === "provider-inventory" && ctx.ChatType !== "direct";
     const resolveToolDeliveryPayload = (payload: ReplyPayload): ReplyPayload | null => {
       if (
         shouldSuppressLocalExecApprovalPrompt({
@@ -1108,6 +1110,13 @@ export async function dispatchReplyFromConfig(
         })
       ) {
         return null;
+      }
+      if (isRestrictedInternalToolOutput(payload)) {
+        const hasMedia = resolveSendableOutboundReplyParts(payload).hasMedia;
+        if (!hasMedia) {
+          return null;
+        }
+        return { ...payload, text: undefined, spokenText: undefined };
       }
       if (shouldSendToolSummaries) {
         return payload;
@@ -1189,16 +1198,18 @@ export async function dispatchReplyFromConfig(
             if (suppressDelivery) {
               return;
             }
-            const ttsPayload = await maybeApplyTtsToReplyPayload({
-              payload,
-              cfg,
-              channel: deliveryChannel,
-              kind: "tool",
-              inboundAudio,
-              ttsAuto: sessionTtsAuto,
-              agentId: sessionAgentId,
-              accountId: replyRoute.accountId,
-            });
+            const ttsPayload = isRestrictedInternalToolOutput(payload)
+              ? payload
+              : await maybeApplyTtsToReplyPayload({
+                  payload,
+                  cfg,
+                  channel: deliveryChannel,
+                  kind: "tool",
+                  inboundAudio,
+                  ttsAuto: sessionTtsAuto,
+                  agentId: sessionAgentId,
+                  accountId: replyRoute.accountId,
+                });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
             const deliveryPayload = resolveToolDeliveryPayload(normalizedPayload);
             if (!deliveryPayload) {
