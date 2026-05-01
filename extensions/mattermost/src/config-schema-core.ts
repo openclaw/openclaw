@@ -88,9 +88,17 @@ const MattermostNetworkSchema = z
  */
 const MattermostPreviewStreamModeSchema = z.enum(["partial", "block"]);
 
+/**
+ * Tool-status preview verbosity for Mattermost.
+ * - "name": just `Running \`exec\``
+ * - "args": tool name + a code block with the args (command/path/etc.)
+ */
+const MattermostToolPreviewModeSchema = z.enum(["name", "args"]);
+
 const MattermostStreamingSchema = z
   .object({
     mode: MattermostPreviewStreamModeSchema.optional(),
+    toolPreview: MattermostToolPreviewModeSchema.optional(),
   })
   .strict()
   .optional();

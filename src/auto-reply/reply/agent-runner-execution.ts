@@ -1500,7 +1500,12 @@ export async function runAgentTurnWithFallback(params: {
                     const name = readStringValue(evt.data.name);
                     if (phase === "start" || phase === "update") {
                       await params.typingSignals.signalToolStart();
-                      await params.opts?.onToolStart?.({ name, phase });
+                      const argsValue = evt.data.args;
+                      const args =
+                        argsValue && typeof argsValue === "object" && !Array.isArray(argsValue)
+                          ? (argsValue as Record<string, unknown>)
+                          : undefined;
+                      await params.opts?.onToolStart?.({ name, phase, args });
                     }
                   }
                   if (evt.stream === "item") {

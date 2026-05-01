@@ -1863,12 +1863,40 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                             }
                           },
                           onToolStart: async (payload) => {
+                            // The agent runtime fires this callback for both
+                            // "start" and "update" tool phases (see
+                            // agent-runner-execution.ts). For preview
+                            // splitting we only want to treat "start" as a
+                            // turn boundary - a single tool call should
+                            // produce a single preview post, even if the
+                            // runtime emits multiple update events as the
+                            // tool progresses. "update" events also typically
+                            // arrive without args, so re-rendering the
+                            // status would replace the rich "Running `exec`\n
+                            // ...command..." preview with a bare
+                            // "Running `exec`…".
+                            if (payload.phase !== "start") {
+                              return;
+                            }
                             // Boundary: a tool is about to run. In block
                             // mode, split before the tool status replaces
                             // any partial reply / thinking content the
                             // user may already have read.
                             previewBoundary.signalBoundary();
-                            draftStream.update(buildMattermostToolStatusText(payload));
+                            // Suppress args from the rendered status when
+                            // the account is configured for the bare
+                            // "Running \`tool\`…" preview. We still receive
+                            // them from the agent runtime; we just don't
+                            // expose them in chat.
+                            const renderArgs =
+                              account.toolPreviewMode === "args" ? payload.args : undefined;
+                            draftStream.update(
+                              buildMattermostToolStatusText({
+                                name: payload.name,
+                                phase: payload.phase,
+                                args: renderArgs,
+                              }),
+                            );
                             previewBoundary.markStreamedContent();
                           },
                         },

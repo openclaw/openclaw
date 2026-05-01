@@ -5,6 +5,7 @@ import {
   resolveMattermostAccount,
   resolveMattermostPreviewStreamMode,
   resolveMattermostReplyToMode,
+  resolveMattermostToolPreviewMode,
 } from "./accounts.js";
 
 describe("resolveDefaultMattermostAccountId", () => {
@@ -191,5 +192,62 @@ describe("resolveMattermostPreviewStreamMode", () => {
     const alerts = resolveMattermostAccount({ cfg, accountId: "alerts" });
     expect(def.previewStreamMode).toBe("partial");
     expect(alerts.previewStreamMode).toBe("block");
+  });
+});
+
+describe("resolveMattermostToolPreviewMode", () => {
+  it("defaults to 'name' when streaming.toolPreview is not set", () => {
+    expect(resolveMattermostToolPreviewMode({})).toBe("name");
+  });
+
+  it("returns 'args' when streaming.toolPreview is explicitly 'args'", () => {
+    expect(resolveMattermostToolPreviewMode({ streaming: { toolPreview: "args" } })).toBe("args");
+  });
+
+  it("returns 'name' when streaming.toolPreview is explicitly 'name'", () => {
+    expect(resolveMattermostToolPreviewMode({ streaming: { toolPreview: "name" } })).toBe("name");
+  });
+
+  it("falls back to default when streaming exists but toolPreview is undefined", () => {
+    expect(resolveMattermostToolPreviewMode({ streaming: { mode: "block" } })).toBe("name");
+  });
+
+  it("surfaces toolPreviewMode through resolveMattermostAccount", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          streaming: { mode: "block", toolPreview: "args" },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg, accountId: "default" });
+    expect(account.previewStreamMode).toBe("block");
+    expect(account.toolPreviewMode).toBe("args");
+  });
+
+  it("defaults toolPreviewMode to 'name' when no streaming config is present", () => {
+    const account = resolveMattermostAccount({ cfg: {}, accountId: "default" });
+    expect(account.toolPreviewMode).toBe("name");
+  });
+
+  it("allows accounts to override channel-wide streaming.toolPreview", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          streaming: { toolPreview: "name" },
+          accounts: {
+            verbose: {
+              streaming: { toolPreview: "args" },
+            },
+          },
+        },
+      },
+    };
+
+    const def = resolveMattermostAccount({ cfg, accountId: "default" });
+    const verbose = resolveMattermostAccount({ cfg, accountId: "verbose" });
+    expect(def.toolPreviewMode).toBe("name");
+    expect(verbose.toolPreviewMode).toBe("args");
   });
 });

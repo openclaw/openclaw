@@ -14,6 +14,7 @@ import type {
   MattermostChatTypeKey,
   MattermostPreviewStreamMode,
   MattermostReplyToMode,
+  MattermostToolPreviewMode,
 } from "../types.js";
 import { normalizeMattermostBaseUrl } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -44,9 +45,16 @@ export type ResolvedMattermostAccount = {
    * the preview at turn boundaries so prior content stays visible.
    */
   previewStreamMode: MattermostPreviewStreamMode;
+  /**
+   * Effective tool-status preview verbosity for this account. Defaults to
+   * "name" (just the tool name in the preview post) for backward
+   * compatibility and to avoid leaking sensitive input by default.
+   */
+  toolPreviewMode: MattermostToolPreviewMode;
 };
 
 const DEFAULT_MATTERMOST_PREVIEW_STREAM_MODE: MattermostPreviewStreamMode = "partial";
+const DEFAULT_MATTERMOST_TOOL_PREVIEW_MODE: MattermostToolPreviewMode = "name";
 
 /**
  * Resolve the effective Mattermost preview stream mode for an account config.
@@ -67,6 +75,23 @@ export function resolveMattermostPreviewStreamMode(
     return explicit;
   }
   return DEFAULT_MATTERMOST_PREVIEW_STREAM_MODE;
+}
+
+/**
+ * Resolve the effective Mattermost tool-status preview verbosity.
+ *
+ * Resolution order:
+ * 1. `streaming.toolPreview` on the account config ("name" | "args")
+ * 2. Default: "name" (matches historical behavior - just the tool name).
+ */
+export function resolveMattermostToolPreviewMode(
+  config: Pick<MattermostAccountConfig, "streaming">,
+): MattermostToolPreviewMode {
+  const explicit = config.streaming?.toolPreview;
+  if (explicit === "name" || explicit === "args") {
+    return explicit;
+  }
+  return DEFAULT_MATTERMOST_TOOL_PREVIEW_MODE;
 }
 
 const mattermostAccountHelpers = createAccountListHelpers("mattermost");
@@ -155,6 +180,7 @@ export function resolveMattermostAccount(params: {
     blockStreamingCoalesce:
       resolveChannelStreamingBlockCoalesce(merged) ?? merged.blockStreamingCoalesce,
     previewStreamMode: resolveMattermostPreviewStreamMode(merged),
+    toolPreviewMode: resolveMattermostToolPreviewMode(merged),
   };
 }
 
