@@ -101,6 +101,114 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     });
   });
+
+  it("preserves existing default model selection when provider patches register defaults", () => {
+    const patch = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["moonshot/kimi-k2.6"],
+          },
+          models: {
+            "openai-codex/gpt-5.5": {},
+            "moonshot/kimi-k2.6": {},
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(base, patch, {
+      preserveExistingDefaultModel: true,
+    });
+
+    expect(next.agents?.defaults?.model).toEqual(base.agents.defaults.model);
+    expect(next.agents?.defaults?.models).toEqual({
+      ...base.agents.defaults.models,
+      "openai-codex/gpt-5.5": {},
+      "moonshot/kimi-k2.6": {},
+    });
+  });
+
+  it("preserves an explicit empty fallback selection when provider patches suggest fallbacks", () => {
+    const cfg = {
+      ...base,
+      agents: {
+        defaults: {
+          ...base.agents.defaults,
+          model: { primary: "anthropic/claude-sonnet-4-6", fallbacks: [] },
+        },
+      },
+    };
+    const patch = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["moonshot/kimi-k2.6"],
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(cfg, patch, {
+      preserveExistingDefaultModel: true,
+    });
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+      fallbacks: [],
+    });
+  });
+
+  it("preserves fallback absence for an existing primary-only default model", () => {
+    const cfg = {
+      ...base,
+      agents: {
+        defaults: {
+          ...base.agents.defaults,
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    };
+    const patch = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["moonshot/kimi-k2.6"],
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(cfg, patch, {
+      preserveExistingDefaultModel: true,
+    });
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-sonnet-4-6",
+    });
+  });
+
+  it("fills default model selection when none exists", () => {
+    const patch = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai-codex/gpt-5.5",
+            fallbacks: ["moonshot/kimi-k2.6"],
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch({}, patch, {
+      preserveExistingDefaultModel: true,
+    });
+
+    expect(next.agents?.defaults?.model).toEqual(patch.agents.defaults.model);
+  });
 });
 
 describe("applyDefaultModel", () => {

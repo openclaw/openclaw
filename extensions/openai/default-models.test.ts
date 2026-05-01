@@ -26,10 +26,14 @@ describe("openai default models", () => {
     expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL });
   });
 
-  it("overrides model.primary while preserving fallbacks", () => {
+  it("preserves existing model.primary and fallbacks", () => {
     const next = applyOpenAIConfig({
       agents: { defaults: { model: { primary: "anthropic/claude-opus-4-6", fallbacks: [] } } },
     } as OpenClawConfig);
-    expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL, fallbacks: [] });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-6",
+      fallbacks: [],
+    });
+    expect(next.agents?.defaults?.models?.[OPENAI_DEFAULT_MODEL]).toEqual({ alias: "GPT" });
   });
 });

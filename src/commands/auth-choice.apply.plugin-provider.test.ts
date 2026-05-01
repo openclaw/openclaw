@@ -653,6 +653,66 @@ describe("applyAuthChoiceLoadedPluginProvider", () => {
     });
   });
 
+  it("preserves existing default model selection when provider auth patches are deferred", async () => {
+    const method: ProviderAuthMethod = {
+      id: "local",
+      label: "Local",
+      kind: "custom",
+      run: async () => ({
+        profiles: [],
+        configPatch: {
+          agents: {
+            defaults: {
+              model: {
+                primary: LOCAL_DEFAULT_MODEL,
+                fallbacks: ["moonshot/kimi-k2.6"],
+              },
+              models: {
+                [LOCAL_DEFAULT_MODEL]: {},
+                "moonshot/kimi-k2.6": {},
+              },
+            },
+          },
+        },
+        defaultModel: LOCAL_DEFAULT_MODEL,
+      }),
+    };
+
+    const result = await runProviderPluginAuthMethod({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "claude-max-proxy/claude-opus-4-7",
+              fallbacks: ["claude-max-proxy/claude-sonnet-4-6"],
+            },
+            models: {
+              "claude-max-proxy/claude-opus-4-7": {},
+              "claude-max-proxy/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      },
+      runtime: {} as ApplyAuthChoiceParams["runtime"],
+      prompter: {
+        note: vi.fn(async () => {}),
+      } as unknown as ApplyAuthChoiceParams["prompter"],
+      method,
+      preserveExistingDefaultModel: true,
+    });
+
+    expect(result.config.agents?.defaults?.model).toEqual({
+      primary: "claude-max-proxy/claude-opus-4-7",
+      fallbacks: ["claude-max-proxy/claude-sonnet-4-6"],
+    });
+    expect(result.config.agents?.defaults?.models).toEqual({
+      "claude-max-proxy/claude-opus-4-7": {},
+      "claude-max-proxy/claude-sonnet-4-6": {},
+      [LOCAL_DEFAULT_MODEL]: {},
+      "moonshot/kimi-k2.6": {},
+    });
+  });
+
   it("returns an agent-scoped override for plugin auth choices when default model application is deferred", async () => {
     const provider = buildProvider();
     resolvePluginProviders.mockReturnValue([provider]);
