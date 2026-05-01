@@ -258,9 +258,42 @@ export function resolveRequiredOperatorScopeForMethod(method: string): OperatorS
   return resolveScopedMethod(method);
 }
 
-export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): OperatorScope[] {
-  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+function normalizeSessionActionParam(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScope[] {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
     return [WRITE_SCOPE];
+  }
+  const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
+  const actionId = normalizeSessionActionParam((params as { actionId?: unknown }).actionId);
+  if (!pluginId || !actionId) {
+    return [WRITE_SCOPE];
+  }
+  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
+    (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
+  );
+  const requiredScopes = registration?.action.requiredScopes;
+  return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
+}
+
+function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
+  method: string,
+  params: unknown,
+): OperatorScope[] {
+  if (method === "plugins.sessionAction") {
+    return resolveSessionActionLeastPrivilegeScopes(params);
+  }
+  return [WRITE_SCOPE];
+}
+
+export function resolveLeastPrivilegeOperatorScopesForMethod(
+  method: string,
+  params?: unknown,
+): OperatorScope[] {
+  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+    return resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params);
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method);
   if (requiredScope) {
