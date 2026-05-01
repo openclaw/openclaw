@@ -82,16 +82,17 @@ function buildNormalizedModelAllowlist(
   }
   const allowedKeys = normalizeTextList(modelAllowlist.allowedKeys);
   const initialSelections = normalizeTextList(modelAllowlist.initialSelections);
-  const loadCatalog = modelAllowlist.loadCatalog === true;
   const message = normalizeOptionalString(modelAllowlist.message);
-  if (!allowedKeys && !initialSelections && !loadCatalog && !message) {
+  const loadCatalog =
+    typeof modelAllowlist.loadCatalog === "boolean" ? modelAllowlist.loadCatalog : undefined;
+  if (!allowedKeys && !initialSelections && !message && loadCatalog === undefined) {
     return undefined;
   }
   return {
     ...(allowedKeys ? { allowedKeys } : {}),
     ...(initialSelections ? { initialSelections } : {}),
-    ...(loadCatalog ? { loadCatalog } : {}),
     ...(message ? { message } : {}),
+    ...(loadCatalog === undefined ? {} : { loadCatalog }),
   };
 }
 

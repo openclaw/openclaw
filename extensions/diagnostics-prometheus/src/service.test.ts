@@ -87,6 +87,74 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("sk-secret");
   });
 
+  it("records inbound dispatch and session turn telemetry", () => {
+    const store = __test__.createPrometheusMetricStore();
+
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.received",
+        channel: "telegram",
+        source: "webhook",
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.started",
+        channel: "telegram",
+        source: "webhook",
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.completed",
+        channel: "telegram",
+        source: "webhook",
+        durationMs: 250,
+        outcome: "completed",
+      },
+      trusted,
+    );
+    __test__.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session.turn.created",
+        runId: "run-should-not-export",
+        agentId: "agent.default",
+        channel: "telegram",
+        trigger: "user",
+      },
+      trusted,
+    );
+
+    const rendered = __test__.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_message_received_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_started_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="telegram",outcome="completed",reason="none",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="telegram",outcome="completed",reason="none",source="webhook"} 0.25',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_turn_created_total{agent="agent.default",channel="telegram",trigger="user"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+  });
+
   it("caps metric series growth and reports dropped series", () => {
     const store = __test__.createPrometheusMetricStore();
 

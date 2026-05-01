@@ -25,6 +25,8 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
+  logMessageDispatchCompleted: vi.fn(),
+  logMessageDispatchStarted: vi.fn(),
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
@@ -174,6 +176,8 @@ vi.mock("./abort.runtime.js", () => ({
   formatAbortReplyText: () => "⚙️ Agent was aborted.",
 }));
 vi.mock("../../logging/diagnostic.js", () => ({
+  logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
+  logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,

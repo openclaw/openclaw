@@ -39,6 +39,8 @@ const mocks = vi.hoisted(() => ({
   })),
 }));
 const diagnosticMocks = vi.hoisted(() => ({
+  logMessageDispatchCompleted: vi.fn(),
+  logMessageDispatchStarted: vi.fn(),
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
   logSessionStateChange: vi.fn(),
@@ -340,6 +342,8 @@ vi.mock("./abort.runtime.js", () => ({
 }));
 
 vi.mock("../../logging/diagnostic.js", () => ({
+  logMessageDispatchCompleted: diagnosticMocks.logMessageDispatchCompleted,
+  logMessageDispatchStarted: diagnosticMocks.logMessageDispatchStarted,
   logMessageQueued: diagnosticMocks.logMessageQueued,
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
@@ -749,6 +753,8 @@ describe("dispatchReplyFromConfig", () => {
     diagnosticMocks.logMessageQueued.mockClear();
     diagnosticMocks.logMessageProcessed.mockClear();
     diagnosticMocks.logSessionStateChange.mockClear();
+    diagnosticMocks.logMessageDispatchStarted.mockClear();
+    diagnosticMocks.logMessageDispatchCompleted.mockClear();
     hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "reply_dispatch",
@@ -2944,6 +2950,19 @@ describe("dispatchReplyFromConfig", () => {
     const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
+    expect(diagnosticMocks.logMessageDispatchStarted).toHaveBeenCalledWith({
+      channel: "slack",
+      sessionKey: "agent:main:main",
+      source: "replyResolver",
+    });
+    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        outcome: "completed",
+        sessionKey: "agent:main:main",
+        source: "replyResolver",
+      }),
+    );
     expect(diagnosticMocks.logMessageQueued).toHaveBeenCalledTimes(1);
     expect(diagnosticMocks.logSessionStateChange).toHaveBeenCalledWith({
       sessionKey: "agent:main:main",
@@ -4015,6 +4034,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("passes suppressUserDelivery to tail reply_dispatch when sendPolicy is deny", async () => {
     setNoAbort();
+    diagnosticMocks.logMessageDispatchStarted.mockClear();
+    diagnosticMocks.logMessageDispatchCompleted.mockClear();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
       updatedAt: 0,
@@ -4039,7 +4060,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     await dispatchReplyFromConfig({
       ctx,
-      cfg: emptyConfig,
+      cfg: { diagnostics: { enabled: true } } as OpenClawConfig,
       dispatcher,
       replyResolver: async () => ({ text: "agent reply" }),
     });
@@ -4052,6 +4073,14 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         suppressReplyLifecycle: true,
       }),
       expect.any(Object),
+    );
+    expect(diagnosticMocks.logMessageDispatchStarted).toHaveBeenCalledTimes(1);
+    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outcome: "completed",
+        sessionKey: "test:session",
+        source: "replyResolver",
+      }),
     );
   });
 

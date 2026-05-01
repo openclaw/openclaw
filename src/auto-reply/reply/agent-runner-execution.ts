@@ -42,7 +42,9 @@ import {
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -916,6 +918,19 @@ export async function runAgentTurnWithFallback(params: {
         };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  if (isDiagnosticsEnabled(runtimeConfig)) {
+    logSessionTurnCreated({
+      runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.followupRun.run.sessionId,
+      agentId: params.followupRun.run.agentId,
+      channel:
+        params.followupRun.run.messageProvider ??
+        params.sessionCtx.Surface ??
+        params.sessionCtx.Provider,
+      trigger: params.isHeartbeat ? "heartbeat" : "user",
+    });
+  }
   const replyMediaContext =
     params.replyMediaContext ??
     createReplyMediaContext({

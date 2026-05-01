@@ -202,6 +202,21 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.source = event.source;
       record.queueDepth = event.queueDepth;
       break;
+    case "message.received":
+      record.channel = event.channel;
+      record.source = event.source;
+      break;
+    case "message.dispatch.started":
+      record.channel = event.channel;
+      record.source = event.source;
+      break;
+    case "message.dispatch.completed":
+      record.channel = event.channel;
+      record.source = event.source;
+      record.durationMs = event.durationMs;
+      record.outcome = event.outcome;
+      assignReasonCode(record, event.reason);
+      break;
     case "message.processed":
       record.channel = event.channel;
       record.durationMs = event.durationMs;
@@ -236,6 +251,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       assignReasonCode(record, event.reason);
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
+      break;
+    case "session.turn.created":
+      record.source = event.agentId;
+      record.channel = event.channel;
+      record.outcome = event.trigger;
       break;
     case "queue.lane.enqueue":
       record.source = event.lane;

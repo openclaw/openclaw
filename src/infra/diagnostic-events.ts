@@ -77,6 +77,36 @@ export type DiagnosticMessageQueuedEvent = DiagnosticBaseEvent & {
   queueDepth?: number;
 };
 
+export type DiagnosticMessageReceivedEvent = DiagnosticBaseEvent & {
+  type: "message.received";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  source: string;
+};
+
+export type DiagnosticMessageDispatchStartedEvent = DiagnosticBaseEvent & {
+  type: "message.dispatch.started";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  source: string;
+};
+
+export type DiagnosticMessageDispatchCompletedEvent = DiagnosticBaseEvent & {
+  type: "message.dispatch.completed";
+  sessionKey?: string;
+  sessionId?: string;
+  channel?: string;
+  source: string;
+  durationMs: number;
+  outcome: "completed" | "skipped" | "error";
+  reason?: string;
+  error?: string;
+};
+
 export type DiagnosticMessageProcessedEvent = DiagnosticBaseEvent & {
   type: "message.processed";
   channel: string;
@@ -132,6 +162,16 @@ export type DiagnosticSessionStuckEvent = DiagnosticBaseEvent & {
   ageMs: number;
   queueDepth?: number;
   reason?: string;
+};
+
+export type DiagnosticSessionTurnCreatedEvent = DiagnosticBaseEvent & {
+  type: "session.turn.created";
+  runId: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+  channel?: string;
+  trigger: "user" | "heartbeat";
 };
 
 export type DiagnosticLaneEnqueueEvent = DiagnosticBaseEvent & {
@@ -450,12 +490,16 @@ export type DiagnosticEventPayload =
   | DiagnosticWebhookProcessedEvent
   | DiagnosticWebhookErrorEvent
   | DiagnosticMessageQueuedEvent
+  | DiagnosticMessageReceivedEvent
+  | DiagnosticMessageDispatchStartedEvent
+  | DiagnosticMessageDispatchCompletedEvent
   | DiagnosticMessageProcessedEvent
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionStuckEvent
+  | DiagnosticSessionTurnCreatedEvent
   | DiagnosticLaneEnqueueEvent
   | DiagnosticLaneDequeueEvent
   | DiagnosticRunAttemptEvent
