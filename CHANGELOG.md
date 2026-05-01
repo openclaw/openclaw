@@ -69,7 +69,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime-deps: hash the OS-canonical `packageRoot` via `fs.realpathSync.native` (with `path.resolve` fallback) when computing the bundled runtime-deps stage key, so loader and channel `bundled-root` callers no longer derive divergent stage directories under `~/.openclaw/plugin-runtime-deps/openclaw-<version>-<hash>/` and bundled channels stop failing with `ENOENT` on shared dist chunks under Windows npm symlinks, junctions, or PM2 multi-instance worker layouts. Fixes #74963. (#75048) Thanks @openperf and @vincentkoc.
 - fix(logging): add redaction patterns for Tencent Cloud, Alibaba Cloud, HuggingFace and Replicate API keys (#58162). Thanks @gavyngong
 - Pairing: surface unexpected allowlist filesystem stat errors instead of treating the allowlist as missing, so permission and I/O failures are visible during pairing authorization checks. (#63324) Thanks @franciscomaestre.
-- macOS app: reserve layout space for exec approval command details so the allow dialog no longer overlaps the command, context, and action buttons. Thanks @ngutman.
+- macOS app: reserve layout space for exec approval command details so the allow dialog no longer overlaps the command, context, and action buttons. (#75470) Thanks @ngutman.
 
 ## 2026.4.29
 
