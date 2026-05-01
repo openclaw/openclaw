@@ -237,8 +237,9 @@ What this does:
    - Writes a minimal config if missing (`gateway.mode=local`, bind loopback).
    - Sets `agent.workspace` to the dev workspace.
    - Sets `agent.skipBootstrap=true` (no BOOTSTRAP.md).
-   - Seeds the workspace files if missing:
+   - Seeds brand-new workspaces with:
      `AGENTS.md`, `SOUL.md`, `voice.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`.
+     Existing workspaces may still get missing core bootstrap files, but `voice.md` is not backfilled after deletion.
    - Default identity: **C3‑PO** (protocol droid).
    - Skips channel providers in dev mode (`OPENCLAW_SKIP_CHANNELS=1`).
 
