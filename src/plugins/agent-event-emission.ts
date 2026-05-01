@@ -23,6 +23,10 @@ const HOST_OWNED_AGENT_EVENT_STREAMS = new Set<string>([
   "model",
 ]);
 
+function isPluginOwnedAgentEventStream(pluginId: string, stream: string): boolean {
+  return stream === pluginId || stream.startsWith(`${pluginId}.`);
+}
+
 function normalizePluginEventData(params: {
   pluginId: string;
   pluginName?: string;
@@ -58,6 +62,12 @@ export function emitPluginAgentEvent(params: {
   }
   if (params.origin !== "bundled" && HOST_OWNED_AGENT_EVENT_STREAMS.has(stream)) {
     return { emitted: false, reason: `stream ${stream} is reserved for bundled plugins` };
+  }
+  if (params.origin !== "bundled" && !isPluginOwnedAgentEventStream(params.pluginId, stream)) {
+    return {
+      emitted: false,
+      reason: `stream ${stream} must be scoped to plugin ${params.pluginId}`,
+    };
   }
   emitAgentEvent({
     runId,
