@@ -16,6 +16,7 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { collectEnabledInsecureOrDangerousFlags } from "../../security/dangerous-config-flags.js";
 import { normalizeOptionalString, readStringValue } from "../../shared/string-coerce.js";
+import { parseBooleanValue } from "../../utils/boolean.js";
 import { stringEnum } from "../schema/typebox.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
@@ -300,6 +301,14 @@ function readDottedConfigValue(config: Record<string, unknown>, path: string): u
   return value;
 }
 
+function cacheTraceContentEnvOverridesDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_MESSAGES) !== true &&
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_PROMPT) !== true &&
+    parseBooleanValue(env.OPENCLAW_CACHE_TRACE_SYSTEM) !== true
+  );
+}
+
 function isSafeCacheTraceMutation(path: string, nextConfig: Record<string, unknown>): boolean {
   const cacheTrace = readDottedConfigValue(nextConfig, "diagnostics.cacheTrace");
   if (!isPlainObject(cacheTrace)) {
@@ -310,7 +319,7 @@ function isSafeCacheTraceMutation(path: string, nextConfig: Record<string, unkno
     cacheTrace.includeMessages === false &&
     cacheTrace.includePrompt === false &&
     cacheTrace.includeSystem === false;
-  if (!contentCaptureDisabled) {
+  if (!contentCaptureDisabled || !cacheTraceContentEnvOverridesDisabled()) {
     return false;
   }
 

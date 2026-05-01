@@ -709,6 +709,46 @@ describe("gateway tool", () => {
     );
   });
 
+  it("rejects cache trace patches when env overrides would capture raw content", async () => {
+    await withEnvAsync(
+      {
+        OPENCLAW_CACHE_TRACE_MESSAGES: "1",
+      },
+      async () => {
+        vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
+          if (method === "config.get") {
+            return { hash: "hash-1", config: {} };
+          }
+          return { ok: true };
+        });
+        const tool = requireGatewayTool();
+
+        await expect(
+          tool.execute("call-env-unsafe-cache-trace", {
+            action: "config.patch",
+            raw: `{
+              diagnostics: {
+                cacheTrace: {
+                  enabled: true,
+                  includeMessages: false,
+                  includePrompt: false,
+                  includeSystem: false,
+                },
+              },
+            }`,
+          }),
+        ).rejects.toThrow(
+          "gateway config.patch cannot change protected config paths: diagnostics.cacheTrace.enabled",
+        );
+        expect(callGatewayTool).not.toHaveBeenCalledWith(
+          "config.patch",
+          expect.any(Object),
+          expect.anything(),
+        );
+      },
+    );
+  });
+
   it("rejects config.patch that enables cache trace content capture", async () => {
     vi.mocked(callGatewayTool).mockImplementationOnce(async (method: string) => {
       if (method === "config.get") {
