@@ -2,11 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveBundledRuntimeDependencyInstallRoot } from "../plugins/bundled-runtime-deps-roots.js";
 import {
   clearBundledRuntimeDependencyNodePaths,
-  resolveBundledRuntimeDependencyInstallRoot,
+  ensureBundledPluginRuntimeDeps,
 } from "../plugins/bundled-runtime-deps.js";
-import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModule,
@@ -90,6 +90,24 @@ function createBundledPluginFixture(params: {
   return { bundledPluginsDir, pluginId, pluginRoot };
 }
 
+function createPackageSourcePluginFixture(params: {
+  prefix: string;
+  marker: string;
+}): TrustedBundledPluginFixture {
+  const bundledPluginsDir = path.join(packageRoot, "extensions");
+  const pluginId = nextTrustedPluginId(params.prefix);
+  const pluginRoot = path.join(bundledPluginsDir, pluginId);
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  trustedBundledPluginFixtureRoots.push(pluginRoot);
+  writeFixturePackageJson(pluginRoot, pluginId);
+  fs.writeFileSync(
+    path.join(pluginRoot, "api.ts"),
+    `export const marker = ${JSON.stringify(params.marker)};\n`,
+    "utf8",
+  );
+  return { bundledPluginsDir, pluginId, pluginRoot };
+}
+
 function createThrowingPluginFixture(prefix: string): TrustedBundledPluginFixture {
   const bundledPluginsDir = createTrustedBundledPluginsRoot();
   const pluginId = nextTrustedPluginId(prefix);
@@ -162,6 +180,18 @@ function writeStagedRuntimeDepPackage(params: {
   fs.writeFileSync(path.join(depRoot, "index.js"), params.source ?? "export {};\n", "utf8");
 }
 
+function concreteRuntimeDepVersionForTest(version: string): string {
+  return version.startsWith("^") || version.startsWith("~") ? version.slice(1) : version;
+}
+
+function parseRuntimeDepSpecForTest(spec: string): { name: string; version: string } {
+  const atIndex = spec.lastIndexOf("@");
+  return {
+    name: spec.slice(0, atIndex),
+    version: spec.slice(atIndex + 1),
+  };
+}
+
 function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
   marker: string;
   prefix: string;
@@ -209,14 +239,24 @@ function createPackagedBundledPluginDirWithStagedRuntimeDep(params: {
   const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, {
     env,
   });
-  writeStagedRuntimeDepPackage({
-    installRoot,
-    name: STAGED_RUNTIME_DEP_NAME,
-    version: "1.0.0",
-    source: `export const marker = ${JSON.stringify(params.marker)};\n`,
+  ensureBundledPluginRuntimeDeps({
+    env,
+    pluginId,
+    pluginRoot,
+    installDeps: ({ installRoot: runtimeInstallRoot, installSpecs = [] }) => {
+      for (const spec of installSpecs) {
+        const dep = parseRuntimeDepSpecForTest(spec);
+        writeStagedRuntimeDepPackage({
+          installRoot: runtimeInstallRoot,
+          name: dep.name,
+          version: concreteRuntimeDepVersionForTest(dep.version),
+          ...(dep.name === STAGED_RUNTIME_DEP_NAME
+            ? { source: `export const marker = ${JSON.stringify(params.marker)};\n` }
+            : {}),
+        });
+      }
+    },
   });
-  writeStagedRuntimeDepPackage({ installRoot, name: "semver", version: "7.7.4" });
-  writeStagedRuntimeDepPackage({ installRoot, name: "tslog", version: "4.10.2" });
 
   return {
     bundledPluginsDir,
@@ -286,16 +326,20 @@ describe("plugin-sdk facade loader", () => {
   });
 
   it("falls back to package source surfaces when an override dir lacks a bundled plugin", () => {
+    const fixture = createPackageSourcePluginFixture({
+      prefix: "openclaw-facade-loader-source-fallback-",
+      marker: "source-fallback",
+    });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = createTempDirSync("openclaw-facade-loader-empty-");
 
     const loaded = loadBundledPluginPublicSurfaceModuleSync<{
-      emptyPluginConfigSchema: unknown;
+      marker: string;
     }>({
-      dirName: "diagnostics-prometheus",
+      dirName: fixture.pluginId,
       artifactBasename: "api.js",
     });
 
-    expect(loaded.emptyPluginConfigSchema).toEqual(expect.any(Function));
+    expect(loaded.marker).toBe("source-fallback");
   });
 
   it("keeps bundled facade loads disabled when bundled plugins are disabled", () => {
@@ -332,7 +376,7 @@ describe("plugin-sdk facade loader", () => {
     expect(listImportedFacadeRuntimeIds()).toEqual([fixture.pluginId]);
   });
 
-  it("uses the runtime-supported Jiti boundary for Windows dist facade loads", () => {
+  it("uses the runtime-supported native boundary for Windows dist facade loads", () => {
     const fixture = createBundledPluginFixture({
       prefix: "openclaw-facade-loader-windows-",
       marker: "windows-dist-ok",
@@ -343,7 +387,7 @@ describe("plugin-sdk facade loader", () => {
     setFacadeLoaderJitiFactoryForTest(((...args) => {
       createJitiCalls.push(args);
       return vi.fn(() => ({
-        marker: "windows-dist-ok",
+        marker: "jiti-fallback",
       })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
     }) as FacadeLoaderJitiFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -356,13 +400,7 @@ describe("plugin-sdk facade loader", () => {
           artifactBasename: "api.js",
         }).marker,
       ).toBe("windows-dist-ok");
-      expect(createJitiCalls).toHaveLength(1);
-      expect(createJitiCalls[0]?.[0]).toEqual(expect.any(String));
-      expect(createJitiCalls[0]?.[1]).toEqual(
-        expect.objectContaining({
-          tryNative: shouldExpectNativeJitiForJavaScriptTestRuntime(),
-        }),
-      );
+      expect(createJitiCalls).toHaveLength(0);
     } finally {
       restoreVersions();
       platformSpy.mockRestore();

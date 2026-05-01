@@ -12,6 +12,10 @@ import {
 } from "./facade-loader.js";
 import { getRuntimeConfig, getRuntimeConfigSnapshot } from "./runtime-config-snapshot.js";
 
+/**
+ * @deprecated Compatibility facade for the `openclaw/plugin-sdk/discord` subpath.
+ * New channel plugins should use generic channel SDK subpaths.
+ */
 export type { ChannelMessageActionAdapter, ChannelMessageActionName } from "./channel-contract.js";
 export type { ChannelPlugin } from "./channel-core.js";
 export type { OpenClawConfig } from "./config-types.js";

@@ -278,6 +278,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         blockStreaming: {
           type: "boolean",
         },
+        replyContextApiFallback: {
+          type: "boolean",
+        },
         groups: {
           type: "object",
           properties: {},
@@ -595,6 +598,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               blockStreaming: {
                 type: "boolean",
               },
+              replyContextApiFallback: {
+                type: "boolean",
+              },
               groups: {
                 type: "object",
                 properties: {},
@@ -788,6 +794,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               ],
             },
           ],
+        },
+        applicationId: {
+          type: "string",
         },
         proxy: {
           type: "string",
@@ -1492,6 +1501,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               minimum: 0,
               maximum: 9007199254740991,
             },
+            connectTimeoutMs: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 120000,
+            },
+            reconnectGraceMs: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 120000,
+            },
             tts: {
               type: "object",
               properties: {
@@ -2151,6 +2170,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     ],
                   },
                 ],
+              },
+              applicationId: {
+                type: "string",
               },
               proxy: {
                 type: "string",
@@ -2855,6 +2877,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     minimum: 0,
                     maximum: 9007199254740991,
                   },
+                  connectTimeoutMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 120000,
+                  },
+                  reconnectGraceMs: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 120000,
+                  },
                   tts: {
                     type: "object",
                     properties: {
@@ -3489,10 +3521,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Thread Parent Inheritance",
         help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",
       },
-      "inboundWorker.runTimeoutMs": {
-        label: "Deprecated Discord Inbound Worker Timeout",
-        help: "Ignored compatibility setting. Discord no longer aborts queued agent runs at the channel layer; session/tool/runtime lifecycle controls long-running work.",
-      },
       "eventQueue.listenerTimeout": {
         label: "Discord EventQueue Listener Timeout (ms)",
         help: "Canonical Discord listener timeout control in ms for gateway normalization/enqueue handlers. Default is 120000 in OpenClaw; set per account via channels.discord.accounts.<id>.eventQueue.listenerTimeout.",
@@ -3565,6 +3593,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Voice Decrypt Failure Tolerance",
         help: "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
       },
+      "voice.connectTimeoutMs": {
+        label: "Discord Voice Connect Timeout (ms)",
+        help: "Initial @discordjs/voice Ready wait before a join is treated as failed. Default: 30000.",
+      },
+      "voice.reconnectGraceMs": {
+        label: "Discord Voice Reconnect Grace (ms)",
+        help: "Grace period for a disconnected Discord voice session to enter Signalling or Connecting before OpenClaw destroys it. Default: 15000.",
+      },
       "voice.tts": {
         label: "Discord Voice Text-to-Speech",
         help: "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
@@ -3625,6 +3661,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         label: "Discord Bot Token",
         help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",
         sensitive: true,
+      },
+      applicationId: {
+        label: "Discord Application ID",
+        help: "Optional Discord application/client ID. Set this when hosted environments cannot reach Discord's application lookup endpoint during startup.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [
@@ -9780,6 +9820,92 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             ],
           },
         },
+        groupPolicy: {
+          type: "string",
+          enum: ["open", "allowlist", "disabled"],
+        },
+        groupAllowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        groups: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              requireMention: {
+                type: "boolean",
+              },
+              tools: {
+                type: "object",
+                properties: {
+                  allow: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  alsoAllow: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  deny: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+              toolsBySender: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    allow: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    alsoAllow: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                    deny: {
+                      type: "array",
+                      items: {
+                        type: "string",
+                      },
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            additionalProperties: false,
+          },
+        },
         defaultTo: {
           type: "string",
         },
@@ -9841,6 +9967,92 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                       type: "number",
                     },
                   ],
+                },
+              },
+              groupPolicy: {
+                type: "string",
+                enum: ["open", "allowlist", "disabled"],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                    tools: {
+                      type: "object",
+                      properties: {
+                        allow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        alsoAllow: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                        deny: {
+                          type: "array",
+                          items: {
+                            type: "string",
+                          },
+                        },
+                      },
+                      additionalProperties: false,
+                    },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
+                  },
+                  additionalProperties: false,
                 },
               },
               defaultTo: {
@@ -15966,9 +16178,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
-        exposeErrorText: {
-          type: "boolean",
-        },
         heartbeat: {
           type: "object",
           properties: {
@@ -16257,9 +16466,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
-              exposeErrorText: {
-                type: "boolean",
-              },
               heartbeat: {
                 type: "object",
                 properties: {
@@ -16347,10 +16553,6 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       configWrites: {
         label: "WhatsApp Config Writes",
         help: "Allow WhatsApp to write config in response to channel events/commands (default: true).",
-      },
-      exposeErrorText: {
-        label: "WhatsApp Error Text",
-        help: "Deliver user-visible agent/provider error text into WhatsApp (default: true). Disable to keep failures quiet on WhatsApp.",
       },
     },
     unsupportedSecretRefSurfacePatterns: [

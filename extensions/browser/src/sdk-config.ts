@@ -3,6 +3,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runti
 export {
   getRuntimeConfig,
   getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 export { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 export {
@@ -23,7 +24,7 @@ export {
 } from "openclaw/plugin-sdk/text-runtime";
 export { normalizeOptionalLowercaseString };
 
-export type PortRange = { start: number; end: number };
+type PortRange = { start: number; end: number };
 
 const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
 const DEFAULT_BROWSER_CDP_PORT_RANGE_END = 18899;
@@ -60,7 +61,7 @@ export function deriveDefaultBrowserCdpPortRange(browserControlPort: number): Po
   };
 }
 
-export type BooleanParseOptions = {
+type BooleanParseOptions = {
   truthy?: string[];
   falsy?: string[];
 };

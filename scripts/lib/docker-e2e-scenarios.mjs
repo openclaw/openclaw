@@ -9,7 +9,8 @@ const LIVE_ACP_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_PROFILE_TIMEOUT_MS = 20 * 60 * 1000;
 const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
-export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 8;
+export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
+const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor";
 
 export const LIVE_RETRY_PATTERNS = [
   /529\b/i,
@@ -180,7 +181,7 @@ const bundledPluginInstallUninstallLanes = Array.from(
       `bundled-plugin-install-uninstall-${index}`,
       `OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL=${BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS} OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX=${index} OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:bundled-plugin-install-uninstall`,
       {
-        estimateSeconds: 280,
+        estimateSeconds: 120,
         resources: ["npm"],
         stateScenario: "empty",
         weight: 1,
@@ -278,6 +279,20 @@ export const mainLanes = [
       weight: 3,
     },
   ),
+  npmLane("upgrade-survivor", upgradeSurvivorCommand, {
+    stateScenario: "upgrade-survivor",
+    timeoutMs: 20 * 60 * 1000,
+    weight: 3,
+  }),
+  npmLane(
+    "published-upgrade-survivor",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
+    {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    },
+  ),
   lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
     resources: ["npm", "service"],
     stateScenario: "empty",
@@ -322,6 +337,9 @@ export const mainLanes = [
     "session-runtime-context",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
   ),
+  lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
+    stateScenario: "empty",
+  }),
   lane("qr", "pnpm test:docker:qr"),
 ];
 
@@ -530,6 +548,20 @@ const releasePathPackageUpdateCoreLanes = [
       weight: 3,
     },
   ),
+  npmLane("upgrade-survivor", upgradeSurvivorCommand, {
+    stateScenario: "upgrade-survivor",
+    timeoutMs: 20 * 60 * 1000,
+    weight: 3,
+  }),
+  npmLane(
+    "published-upgrade-survivor",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
+    {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    },
+  ),
 ];
 
 const primaryReleasePathChunks = {
@@ -547,6 +579,9 @@ const primaryReleasePathChunks = {
       "session-runtime-context",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
     ),
+    lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
+      stateScenario: "empty",
+    }),
     lane(
       "pi-bundle-mcp-tools",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools",
@@ -563,10 +598,14 @@ const primaryReleasePathChunks = {
   "package-update-core": releasePathPackageUpdateCoreLanes,
   "plugins-runtime-plugins": releasePathPluginRuntimePluginLanes,
   "plugins-runtime-services": releasePathPluginRuntimeServiceLanes,
-  "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 2),
-  "plugins-runtime-install-b": bundledPluginInstallUninstallLanes.slice(2, 4),
-  "plugins-runtime-install-c": bundledPluginInstallUninstallLanes.slice(4, 6),
-  "plugins-runtime-install-d": bundledPluginInstallUninstallLanes.slice(6),
+  "plugins-runtime-install-a": bundledPluginInstallUninstallLanes.slice(0, 3),
+  "plugins-runtime-install-b": bundledPluginInstallUninstallLanes.slice(3, 6),
+  "plugins-runtime-install-c": bundledPluginInstallUninstallLanes.slice(6, 9),
+  "plugins-runtime-install-d": bundledPluginInstallUninstallLanes.slice(9, 12),
+  "plugins-runtime-install-e": bundledPluginInstallUninstallLanes.slice(12, 15),
+  "plugins-runtime-install-f": bundledPluginInstallUninstallLanes.slice(15, 18),
+  "plugins-runtime-install-g": bundledPluginInstallUninstallLanes.slice(18, 21),
+  "plugins-runtime-install-h": bundledPluginInstallUninstallLanes.slice(21),
   "bundled-channels-core": [releasePathBundledChannelLanes[0], ...bundledChannelSmokeLanes],
   "bundled-channels-update-a": [bundledChannelUpdateLanes[0], bundledChannelUpdateLanes[4]],
   "bundled-channels-update-discord": [bundledChannelUpdateLanes[1]],

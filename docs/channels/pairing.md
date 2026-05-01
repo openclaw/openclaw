@@ -21,6 +21,11 @@ When a channel is configured with DM policy `pairing`, unknown senders get a sho
 
 Default DM policies are documented in: [Security](/gateway/security)
 
+`dmPolicy: "open"` is public only when the effective DM allowlist includes `"*"`.
+Setup and validation require that wildcard for public-open configs. If existing
+state contains `open` with concrete `allowFrom` entries, runtime still admits
+only those senders, and pairing-store approvals do not widen `open` access.
+
 Pairing codes:
 
 - 8 characters, uppercase, no ambiguous chars (`0O1I`).

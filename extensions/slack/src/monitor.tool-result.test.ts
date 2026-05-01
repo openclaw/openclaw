@@ -687,14 +687,14 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
-  it("restores ack reaction when dispatch fails before any reply is delivered", async () => {
+  it("keeps the error reaction when dispatch fails before any reply is delivered", async () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();
     await runMentionGatedChannelMessageAndFlush();
 
     expect(sendMock).not.toHaveBeenCalled();
-    expectReactionNames(["eyes", "scream", "eyes", "eyes", "scream"]);
+    expectReactionNames(["eyes", "scream", "scream"]);
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {

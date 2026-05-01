@@ -6,6 +6,7 @@ docker-compose.extra.yml
 docker-compose.sandbox.yml
 dist
 dist-runtime/
+dist-sea/
 pnpm-lock.yaml
 bun.lock
 bun.lockb
@@ -103,6 +104,8 @@ USER.md
 .agents/skills/*
 !.agents/skills/blacksmith-testbox/
 !.agents/skills/blacksmith-testbox/**
+!.agents/skills/crabbox/
+!.agents/skills/crabbox/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-ghsa-maintainer/
@@ -137,6 +140,7 @@ USER.md
 .agent/*.json
 !.agent/workflows/
 /local/
+/client_secret_*.json
 package-lock.json
 .claude/
 .agent/
@@ -186,8 +190,13 @@ changelog/fragments/
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
+/runs/
+/data/rtt.jsonl
 extensions/qa-lab/web/dist/
 
 # Generated bundled plugin runtime dependency manifests
 extensions/**/.openclaw-runtime-deps.json
 extensions/**/.openclaw-runtime-deps-stamp.json
+
+# Output dir for scripts/run-opengrep.sh (local opengrep scans)
+/.opengrep-out/

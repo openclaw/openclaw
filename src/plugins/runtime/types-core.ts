@@ -77,6 +77,10 @@ export type RunHeartbeatOnceOptions = {
   heartbeat?: { target?: string };
 };
 
+type RuntimeRunEmbeddedPiAgent = (
+  params: import("../../agents/pi-embedded-runner/run/params.js").RunEmbeddedPiAgentParams,
+) => Promise<import("../../agents/pi-embedded-runner/types.js").EmbeddedPiRunResult>;
+
 /** Core runtime helpers exposed to trusted native plugins. */
 export type PluginRuntimeCore = {
   version: string;
@@ -135,8 +139,8 @@ export type PluginRuntimeCore = {
     resolveThinkingPolicy: (
       params: PluginRuntimeThinkingPolicyRequest,
     ) => PluginRuntimeThinkingPolicy;
-    runEmbeddedAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedAgentFn;
-    runEmbeddedPiAgent: import("../../agents/pi-embedded-runtime.types.js").RunEmbeddedPiAgentFn;
+    runEmbeddedAgent: RuntimeRunEmbeddedPiAgent;
+    runEmbeddedPiAgent: RuntimeRunEmbeddedPiAgent;
     resolveAgentTimeoutMs: typeof import("../../agents/timeout.js").resolveAgentTimeoutMs;
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
@@ -227,6 +231,9 @@ export type PluginRuntimeCore = {
   };
   state: {
     resolveStateDir: typeof import("../../config/paths.js").resolveStateDir;
+    openKeyedStore: <T>(
+      options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
+    ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T>;
   };
   tasks: {
     runs: PluginRuntimeTaskRuns;
@@ -238,10 +245,11 @@ export type PluginRuntimeCore = {
   /** @deprecated Use runtime.tasks.flows for DTO-based TaskFlow access. */
   taskFlow: import("./runtime-taskflow.types.js").PluginRuntimeTaskFlow;
   modelAuth: {
-    /** Resolve auth for a model. Only provider/model and optional cfg are used. */
+    /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */
     getApiKeyForModel: (params: {
       model: import("@mariozechner/pi-ai").Model<import("@mariozechner/pi-ai").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
     /** Resolve request-ready auth for a model, including provider runtime exchanges. */
     getRuntimeAuthForModel: (params: {
@@ -249,10 +257,11 @@ export type PluginRuntimeCore = {
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
       workspaceDir?: string;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
-    /** Resolve auth for a provider by name. Only provider and optional cfg are used. */
+    /** Resolve auth for a provider by name. Only provider, optional cfg, and workspaceDir are used. */
     resolveApiKeyForProvider: (params: {
       provider: string;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
+      workspaceDir?: string;
     }) => Promise<import("../../agents/model-auth-runtime-shared.js").ResolvedProviderAuth>;
   };
 };

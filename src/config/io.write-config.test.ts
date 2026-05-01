@@ -12,7 +12,7 @@ import {
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.openclaw.js";
 
 // Mock the plugin manifest registry so we can register a fake channel whose
 // AJV JSON Schema carries a `default` value.  This lets the #56772 regression
@@ -599,6 +599,148 @@ describe("config io write", () => {
       const entries = await fs.readdir(path.dirname(configPath));
       expect(entries.some((entry) => entry.includes(".rejected."))).toBe(true);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("Config write rejected:"));
+    });
+  });
+
+  it("allows intentional size-drop writes without disabling gateway-mode protection", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        meta: { lastTouchedVersion: "2026.4.30" },
+        gateway: { mode: "local" },
+        channels: {
+          telegram: {
+            enabled: true,
+            allowFrom: Array.from({ length: 80 }, (_, index) => `telegram:${index}`),
+          },
+        },
+      } satisfies ConfigFileSnapshot["config"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: original,
+        config: original,
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      await expect(
+        io.writeConfigFile(
+          { meta: original.meta, gateway: { mode: "local" } },
+          {
+            allowConfigSizeDrop: true,
+            baseSnapshot,
+          },
+        ),
+      ).resolves.toMatchObject({
+        persistedConfig: expect.objectContaining({ gateway: { mode: "local" } }),
+      });
+
+      await expect(
+        io.writeConfigFile(
+          { meta: original.meta },
+          {
+            allowConfigSizeDrop: true,
+            baseSnapshot,
+          },
+        ),
+      ).rejects.toMatchObject({
+        code: "CONFIG_WRITE_REJECTED",
+      });
+    });
+  });
+
+  it("keeps authored agent provider params during narrowed internal agent writes", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      const original = {
+        gateway: { mode: "local" },
+        agents: {
+          defaults: {
+            params: { transport: "sse", openaiWsWarmup: false },
+            models: {
+              "openai/gpt-5.4": {
+                alias: "GPT",
+                params: { transport: "sse", openaiWsWarmup: false },
+              },
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      } satisfies ConfigFileSnapshot["sourceConfig"];
+      const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
+      await fs.writeFile(configPath, originalRaw, "utf-8");
+      const io = createConfigIO({
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+      const baseSnapshot = {
+        path: configPath,
+        exists: true,
+        raw: originalRaw,
+        parsed: original,
+        sourceConfig: original,
+        resolved: original,
+        valid: true,
+        runtimeConfig: {
+          ...original,
+          agents: {
+            ...original.agents,
+            defaults: {
+              ...original.agents.defaults,
+              maxConcurrent: 4,
+            },
+          },
+        },
+        config: {
+          ...original,
+          agents: {
+            ...original.agents,
+            defaults: {
+              ...original.agents.defaults,
+              maxConcurrent: 4,
+            },
+          },
+        },
+        issues: [],
+        warnings: [],
+        legacyIssues: [],
+      } satisfies ConfigFileSnapshot;
+
+      await io.writeConfigFile(
+        {
+          gateway: { mode: "local" },
+          agents: { list: [{ id: "main" }, { id: "ops" }] },
+        },
+        { baseSnapshot },
+      );
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
+      expect(persisted.agents?.defaults?.params).toEqual({
+        transport: "sse",
+        openaiWsWarmup: false,
+      });
+      expect(persisted.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
+        alias: "GPT",
+        params: { transport: "sse", openaiWsWarmup: false },
+      });
+      expect(persisted.agents?.list).toEqual([{ id: "main" }, { id: "ops" }]);
     });
   });
 

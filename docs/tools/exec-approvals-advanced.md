@@ -262,6 +262,12 @@ agent-facing path. The agent should not also echo a duplicate plain chat
 `/approve` command unless the tool result says chat approvals are unavailable or
 manual approval is the only remaining path.
 
+If a native approval client is configured but no native runtime is active for
+the originating channel, OpenClaw keeps the local deterministic `/approve`
+prompt visible. If the native runtime is active and attempts delivery but no
+target receives the card, OpenClaw sends a same-chat fallback notice with the
+exact `/approve <id> <decision>` command so the request can still be resolved.
+
 Generic model:
 
 - host exec policy still decides whether exec approval is required

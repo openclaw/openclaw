@@ -75,6 +75,9 @@ assembly, and contract enforcement.
 - If setup, discovery, or doctor flows need plugin runtime, make that need
   explicit and narrow. Do not let cold control-plane paths quietly import broad
   runtime surfaces.
+- Resolver and public-surface loader tests must use generated tiny plugin
+  fixtures for broad `api.js` / `runtime-api.js` fallback behavior. Do not point
+  those tests at real bundled plugin source APIs just to prove path resolution.
 
 ## Verification
 

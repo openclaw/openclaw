@@ -8,6 +8,7 @@ import {
 } from "./bash-process-registry.js";
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { createProcessTool } from "./bash-tools.process.js";
+import { processSchema } from "./bash-tools.schemas.js";
 
 afterEach(() => {
   resetProcessRegistryForTests();
@@ -123,6 +124,13 @@ test("process poll clamps long waits to 30 seconds", async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("process poll schema advertises the 30 second wait cap", () => {
+  const timeoutSchema = processSchema.properties.timeout;
+  expect(timeoutSchema).toMatchObject({
+    description: expect.stringContaining("max 30000 ms"),
+  });
 });
 
 test("process poll aborts while waiting for completion", async () => {

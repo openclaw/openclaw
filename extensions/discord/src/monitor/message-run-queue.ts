@@ -1,5 +1,4 @@
-import { createRunStateMachine } from "openclaw/plugin-sdk/channel-lifecycle";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { createChannelRunQueue } from "openclaw/plugin-sdk/channel-lifecycle";
 import type { ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -23,7 +22,7 @@ type DiscordMessageRunQueueParams = {
   __testing?: DiscordMessageRunQueueTestingHooks;
 };
 
-export type DiscordMessageRunQueue = {
+type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
   deactivate: () => void;
 };
@@ -77,39 +76,26 @@ async function processDiscordQueuedMessage(params: {
 export function createDiscordMessageRunQueue(
   params: DiscordMessageRunQueueParams,
 ): DiscordMessageRunQueue {
-  const runQueue = new KeyedAsyncQueue();
-  const runState = createRunStateMachine({
+  const replayGuard = params.replayGuard ?? createDiscordInboundReplayGuard();
+  const runQueue = createChannelRunQueue({
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
+    onError: (error) => {
+      params.runtime.error?.(danger(`discord message run failed: ${String(error)}`));
+    },
   });
-  const replayGuard = params.replayGuard ?? createDiscordInboundReplayGuard();
 
   return {
     enqueue(job) {
-      void runQueue
-        .enqueue(job.queueKey, async () => {
-          if (!runState.isActive()) {
-            return;
-          }
-          runState.onRunStart();
-          try {
-            if (!runState.isActive()) {
-              return;
-            }
-            await processDiscordQueuedMessage({
-              job,
-              lifecycleSignal: params.abortSignal,
-              replayGuard,
-              testing: params.__testing,
-            });
-          } finally {
-            runState.onRunEnd();
-          }
-        })
-        .catch((error) => {
-          params.runtime.error?.(danger(`discord message run failed: ${String(error)}`));
+      runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+        await processDiscordQueuedMessage({
+          job,
+          lifecycleSignal,
+          replayGuard,
+          testing: params.__testing,
         });
+      });
     },
-    deactivate: runState.deactivate,
+    deactivate: runQueue.deactivate,
   };
 }

@@ -117,8 +117,11 @@ the maintainer-only release runbook.
   Actions run. The workflow resolves the candidate to
   `package-under-test`, reuses the Docker E2E release scheduler against that
   tarball, and can run Telegram QA against the same tarball with
-  `telegram_mode=mock-openai` or `telegram_mode=live-frontier`.
-  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f telegram_mode=mock-openai`
+  `telegram_mode=mock-openai` or `telegram_mode=live-frontier`. When the
+  selected Docker lanes include `published-upgrade-survivor`, the package
+  artifact is the candidate and `published_upgrade_survivor_baseline` selects
+  the published baseline.
+  Example: `gh workflow run package-acceptance.yml --ref main -f workflow_ref=main -f source=npm -f package_spec=openclaw@beta -f suite_profile=product -f published_upgrade_survivor_baseline=openclaw@2026.4.26 -f telegram_mode=mock-openai`
   Common profiles:
   - `smoke`: install/channel/agent, gateway network, and config reload lanes
   - `package`: artifact-native package/update/plugin lanes without OpenWebUI or live ClawHub
@@ -194,7 +197,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
     `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
     for security, because `npm dist-tag add` still needs `NPM_TOKEN` while the
     public repo keeps OIDC-only publish
-  - public `macOS Release` is validation-only
+  - public `macOS Release` is validation-only; when a tag lives only on a
+    release branch but the workflow is dispatched from `main`, set
+    `public_release_branch=release/YYYY.M.D`
   - real private mac publish must pass successful private mac
     `preflight_run_id` and `validate_run_id`
   - the real publish paths promote prepared artifacts instead of rebuilding
@@ -216,8 +221,9 @@ Validation` or from the `main`/release workflow ref so workflow logic and
   before the release publish path
 - If the release work touched CI planning, extension timing manifests, or
   extension test matrices, regenerate and review the planner-owned
-  `checks-node-extensions` workflow matrix outputs from `.github/workflows/ci.yml`
-  before approval so release notes do not describe a stale CI layout
+  `plugin-prerelease-extension-shard` matrix outputs from
+  `.github/workflows/plugin-prerelease.yml` before approval so release notes do
+  not describe a stale CI layout
 - Stable macOS release readiness also includes the updater surfaces:
   - the GitHub release must end up with the packaged `.zip`, `.dmg`, and `.dSYM.zip`
   - `appcast.xml` on `main` must point at the new stable zip after publish
@@ -237,7 +243,7 @@ gh workflow run full-release-validation.yml \
   -f ref=release/YYYY.M.D \
   -f provider=openai \
   -f mode=both \
-  -f release_profile=full \
+  -f release_profile=stable \
   -f evidence_package_spec=openclaw@YYYY.M.D-beta.N
 ```
 
@@ -252,6 +258,9 @@ summary shows `normal_ci` and `release_checks` as successful, and any optional
 `npm_telegram` child is either successful or intentionally skipped. The final
 verifier summary includes slowest-job tables for each child run, so the release
 manager can see the current critical path without downloading logs.
+See [Full release validation](/reference/full-release-validation) for the
+complete stage matrix, exact workflow job names, stable versus full profile
+differences, artifacts, and focused rerun handles.
 Child workflows are dispatched from the trusted ref that runs `Full Release
 Validation`, normally `--ref main`, even when the target `ref` points at an
 older release branch or tag. There is no separate Full Release Validation
@@ -267,6 +276,11 @@ Use `release_profile` to select live/provider breadth:
 ref once as `release-package-under-test` and reuses that artifact in both
 release-path Docker checks and Package Acceptance. This keeps all
 package-facing boxes on the same bytes and avoids repeated package builds.
+The cross-OS OpenAI install smoke uses `OPENCLAW_CROSS_OS_OPENAI_MODEL` when the
+repo/org variable is set, otherwise `openai/gpt-5.4-mini`, because this lane is
+proving package install, onboarding, gateway startup, and one live agent turn
+rather than benchmarking the slowest default model. The broader live provider
+matrix remains the place for model-specific coverage.
 
 Use these variants depending on release stage:
 
@@ -306,10 +320,11 @@ ids, so after a child workflow is rerun successfully, rerun only the failed
 `Verify full validation` parent job.
 
 For bounded recovery, pass `rerun_group` to the umbrella. `all` is the real
-release-candidate run, `ci` runs only the normal CI child, `release-checks` runs
-every release box, and the narrower release groups are `install-smoke`,
-`cross-os`, `live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and
-`npm-telegram` when the standalone package Telegram lane is supplied.
+release-candidate run, `ci` runs only the normal CI child, `plugin-prerelease`
+runs only the release-only plugin child, `release-checks` runs every release
+box, and the narrower release groups are `install-smoke`, `cross-os`,
+`live-e2e`, `package`, `qa`, `qa-parity`, `qa-live`, and `npm-telegram` when the
+standalone package Telegram lane is supplied.
 
 ### Vitest
 
@@ -345,18 +360,26 @@ Docker environments instead of only source-level tests.
 Release Docker coverage includes:
 
 - full install smoke with the slow Bun global install smoke enabled
+- root Dockerfile smoke image preparation/reuse by target SHA, with QR,
+  root/gateway, and installer/Bun smoke jobs running as separate install-smoke
+  shards
 - repository E2E lanes
 - release-path Docker chunks: `core`, `package-update-openai`,
-  `package-update-anthropic`, `package-update-core`, `plugins-runtime-core`,
+  `package-update-anthropic`, `package-update-core`, `plugins-runtime-plugins`,
+  `plugins-runtime-services`,
   `plugins-runtime-install-a`, `plugins-runtime-install-b`,
+  `plugins-runtime-install-c`, `plugins-runtime-install-d`,
+  `plugins-runtime-install-e`, `plugins-runtime-install-f`,
+  `plugins-runtime-install-g`, `plugins-runtime-install-h`,
   `bundled-channels-core`, `bundled-channels-update-a`,
-  `bundled-channels-update-b`, and `bundled-channels-contracts`
-- OpenWebUI coverage inside the `plugins-runtime-core` chunk when requested
+  `bundled-channels-update-discord`, `bundled-channels-update-b`, and
+  `bundled-channels-contracts`
+- OpenWebUI coverage inside the `plugins-runtime-services` chunk when requested
 - split bundled-channel dependency lanes across channel-smoke, update-target,
   and setup/runtime contract chunks instead of one large bundled-channel job
 - split bundled plugin install/uninstall lanes
   `bundled-plugin-install-uninstall-0` through
-  `bundled-plugin-install-uninstall-7`
+  `bundled-plugin-install-uninstall-23`
 - live/E2E provider suites and Docker live model coverage when release checks
   include live suites
 
@@ -437,7 +460,8 @@ gh workflow run package-acceptance.yml \
   -f workflow_ref=main \
   -f source=npm \
   -f package_spec=openclaw@beta \
-  -f suite_profile=product
+  -f suite_profile=product \
+  -f published_upgrade_survivor_baseline=openclaw@2026.4.26
 ```
 
 Common package profiles:
