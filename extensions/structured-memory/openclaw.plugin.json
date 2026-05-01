@@ -1,0 +1,61 @@
+{
+  "id": "structured-memory",
+  "activation": {
+    "onStartup": false
+  },
+  "name": "Structured Memory",
+  "description": "Structured typed memory records with importance scoring and Weibull time-based decay.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": { "type": "boolean", "default": true },
+      "classification": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": { "type": "string" },
+          "timeoutMs": { "type": "integer", "minimum": 250, "maximum": 30000, "default": 5000 }
+        }
+      },
+      "decay": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "halfLifeDays": { "type": "number", "minimum": 1, "maximum": 365, "default": 14 },
+          "minMaintenanceScore": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.1 },
+        }
+      },
+      "recall": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "maxResults": { "type": "integer", "minimum": 1, "maximum": 50, "default": 15 }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "enabled": {
+      "label": "Enable Structured Memory",
+      "help": "Store and search structured typed memory records with importance scoring and automatic decay."
+    },
+    "classification.model": {
+      "label": "Classification Model",
+      "help": "Optional provider/model for importance scoring. Defaults to agent primary model."
+    },
+    "classification.timeoutMs": {
+      "label": "Classification Timeout (ms)"
+    },
+    "decay.halfLifeDays": {
+      "label": "Half-Life (Days)"
+    },
+    "decay.minMaintenanceScore": {
+      "label": "Min Maintenance Score",
+      "help": "Records below this threshold are auto-archived during maintenance."
+    },
+    "recall.maxResults": {
+      "label": "Max Recall Results"
+    }
+  }
+}
