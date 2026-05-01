@@ -5,7 +5,12 @@ import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.
 import { listEnabledInstalledPluginRecords } from "./installed-plugin-index.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import { loadPluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
-import { getActivePluginRegistry } from "./runtime.js";
+import {
+  getActivePluginChannelRegistry,
+  getActivePluginRegistry,
+  getActivePluginRegistryKey,
+  getActivePluginRuntimeSubagentMode,
+} from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
@@ -194,18 +199,25 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
   return undefined;
 }
 
+function addLoadedPluginIdsFromRegistry(
+  registry: ReturnType<typeof getActivePluginRegistry>,
+  pluginIds: Set<string>,
+): void {
+  for (const plugin of registry?.plugins ?? []) {
+    if (plugin.status === undefined || plugin.status === "loaded") {
+      pluginIds.add(plugin.id);
+    }
+  }
+}
+
 function resolvePluginToolRuntimePluginIds(params: {
   config: PluginLoadOptions["config"];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] | undefined {
   const pluginIds = new Set<string>();
-  const activeRegistry = getActivePluginRegistry();
-  for (const plugin of activeRegistry?.plugins ?? []) {
-    if (plugin.status === undefined || plugin.status === "loaded") {
-      pluginIds.add(plugin.id);
-    }
-  }
+  addLoadedPluginIdsFromRegistry(getActivePluginChannelRegistry(), pluginIds);
+  addLoadedPluginIdsFromRegistry(getActivePluginRegistry(), pluginIds);
   const index = loadPluginRegistrySnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -217,6 +229,37 @@ function resolvePluginToolRuntimePluginIds(params: {
   return pluginIds.size > 0
     ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
     : undefined;
+}
+
+function registryContainsPluginIds(
+  registry: ReturnType<typeof getActivePluginRegistry>,
+  pluginIds?: readonly string[],
+): boolean {
+  if (!registry || pluginIds === undefined) {
+    return false;
+  }
+  const loadedPluginIds = new Set<string>();
+  addLoadedPluginIdsFromRegistry(registry, loadedPluginIds);
+  return pluginIds.every((pluginId) => loadedPluginIds.has(pluginId));
+}
+
+function resolvePluginToolRegistry(params: {
+  loadOptions: PluginLoadOptions;
+  onlyPluginIds?: readonly string[];
+}) {
+  const activeRegistry = getActivePluginRegistry();
+  const channelRegistry = getActivePluginChannelRegistry();
+  const activeRegistryIsGatewayBindable =
+    getActivePluginRegistryKey() && getActivePluginRuntimeSubagentMode() === "gateway-bindable";
+  const hasPinnedGatewayRegistry = Boolean(channelRegistry && channelRegistry !== activeRegistry);
+  if (
+    channelRegistry &&
+    (activeRegistryIsGatewayBindable || hasPinnedGatewayRegistry) &&
+    registryContainsPluginIds(channelRegistry, params.onlyPluginIds)
+  ) {
+    return channelRegistry;
+  }
+  return resolveRuntimePluginRegistry(params.loadOptions);
 }
 
 export function resolvePluginTools(params: {
@@ -255,7 +298,10 @@ export function resolvePluginTools(params: {
     ...(onlyPluginIds !== undefined ? { onlyPluginIds } : {}),
     runtimeOptions,
   });
-  const registry = resolveRuntimePluginRegistry(loadOptions);
+  const registry = resolvePluginToolRegistry({
+    loadOptions,
+    onlyPluginIds,
+  });
   if (!registry) {
     return [];
   }
