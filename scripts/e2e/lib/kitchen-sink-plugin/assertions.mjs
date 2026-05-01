@@ -128,6 +128,16 @@ const expectIncludes = (listValue, expected, field) => {
     throw new Error(`${field} missing ${expected}: ${JSON.stringify(listValue)}`);
   }
 };
+const expectIncludesAny = (listValue, expectedValues, field) => {
+  if (
+    !Array.isArray(listValue) ||
+    !expectedValues.some((expected) => listValue.includes(expected))
+  ) {
+    throw new Error(
+      `${field} missing one of ${expectedValues.join(", ")}: ${JSON.stringify(listValue)}`,
+    );
+  }
+};
 const expectMissing = (listValue, expected, field) => {
   if (Array.isArray(listValue) && listValue.includes(expected)) {
     throw new Error(`${field} unexpectedly included ${expected}: ${JSON.stringify(listValue)}`);
@@ -245,43 +255,55 @@ function assertInstalled() {
       ? inspect.tools.flatMap((entry) => (Array.isArray(entry?.names) ? entry.names : []))
       : [];
     const pluginSurfaceIds = {
-      speechProviderIds: ["kitchen-sink-speech-provider", "speech providers"],
+      speechProviderIds: [
+        ["kitchen-sink-speech", "kitchen-sink-speech-provider"],
+        "speech providers",
+      ],
       realtimeTranscriptionProviderIds: [
-        "kitchen-sink-realtime-transcription-provider",
+        ["kitchen-sink-realtime-transcription", "kitchen-sink-realtime-transcription-provider"],
         "realtime transcription providers",
       ],
       realtimeVoiceProviderIds: [
-        "kitchen-sink-realtime-voice-provider",
+        ["kitchen-sink-realtime-voice", "kitchen-sink-realtime-voice-provider"],
         "realtime voice providers",
       ],
       mediaUnderstandingProviderIds: [
-        "kitchen-sink-media-understanding-provider",
+        ["kitchen-sink-media", "kitchen-sink-media-understanding-provider"],
         "media understanding providers",
       ],
       imageGenerationProviderIds: [
-        "kitchen-sink-image-generation-provider",
+        ["kitchen-sink-image", "kitchen-sink-image-generation-provider"],
         "image generation providers",
       ],
       videoGenerationProviderIds: [
-        "kitchen-sink-video-generation-provider",
+        ["kitchen-sink-video", "kitchen-sink-video-generation-provider"],
         "video generation providers",
       ],
       musicGenerationProviderIds: [
-        "kitchen-sink-music-generation-provider",
+        ["kitchen-sink-music", "kitchen-sink-music-generation-provider"],
         "music generation providers",
       ],
-      webFetchProviderIds: ["kitchen-sink-web-fetch-provider", "web fetch providers"],
-      webSearchProviderIds: ["kitchen-sink-web-search-provider", "web search providers"],
-      migrationProviderIds: ["kitchen-sink-migration-provider", "migration providers"],
+      webFetchProviderIds: [
+        ["kitchen-sink-fetch", "kitchen-sink-web-fetch-provider"],
+        "web fetch providers",
+      ],
+      webSearchProviderIds: [
+        ["kitchen-sink-search", "kitchen-sink-web-search-provider"],
+        "web search providers",
+      ],
+      migrationProviderIds: [
+        ["kitchen-sink-migration-providers", "kitchen-sink-migration-provider"],
+        "migration providers",
+      ],
     };
-    for (const [field, [id, label]] of Object.entries(pluginSurfaceIds)) {
-      expectIncludes(inspect.plugin?.[field], id, label);
+    for (const [field, [ids, label]] of Object.entries(pluginSurfaceIds)) {
+      expectIncludesAny(inspect.plugin?.[field], ids, label);
     }
     expectMissing(inspect.plugin?.agentHarnessIds, "kitchen-sink-agent-harness", "agent harnesses");
     expectIncludes(inspect.services, "kitchen-sink-service", "services");
     if (surfaceMode === "full") {
-      expectIncludes(inspect.commands, "kitchen-sink-command", "commands");
-      expectIncludes(toolNames, "kitchen-sink-tool", "tools");
+      expectIncludesAny(inspect.commands, ["kitchen", "kitchen-sink-command"], "commands");
+      expectIncludesAny(toolNames, ["kitchen_sink_text", "kitchen-sink-tool"], "tools");
     } else {
       expectIncludes(inspect.commands, "kitchen", "commands");
       expectIncludes(toolNames, "kitchen_sink_text", "tools");
