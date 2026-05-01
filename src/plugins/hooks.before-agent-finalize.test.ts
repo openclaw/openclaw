@@ -97,6 +97,41 @@ describe("before_agent_finalize hook runner", () => {
     });
   });
 
+  it("skips malformed retry instructions when merging revise decisions", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "malformed retry payload should not crash",
+            retry: { instruction: 123, idempotencyKey: "bad-retry" } as never,
+          }),
+        },
+        {
+          hookName: "before_agent_finalize",
+          handler: vi.fn().mockResolvedValue({
+            action: "revise",
+            reason: "valid retry still applies",
+            retry: {
+              instruction: " rerun the focused tests ",
+              idempotencyKey: "valid-retry",
+            },
+          }),
+        },
+      ]),
+    );
+
+    await expect(runner.runBeforeAgentFinalize(EVENT, TEST_PLUGIN_AGENT_CTX)).resolves.toEqual({
+      action: "revise",
+      reason: "malformed retry payload should not crash\n\nvalid retry still applies",
+      retry: {
+        instruction: "rerun the focused tests",
+        idempotencyKey: "valid-retry",
+      },
+    });
+  });
+
   it("lets finalize override earlier revise decisions", async () => {
     const runner = createHookRunner(
       createMockPluginRegistry([

@@ -322,7 +322,7 @@ export function createHookRunner(
     const normalizeRetry = (
       retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
     ): PluginHookBeforeAgentFinalizeResult["retry"] | undefined => {
-      const instruction = retry?.instruction.trim();
+      const instruction = typeof retry?.instruction === "string" ? retry.instruction.trim() : "";
       if (!instruction) {
         return undefined;
       }

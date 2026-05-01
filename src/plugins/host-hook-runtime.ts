@@ -115,6 +115,9 @@ function waitForTerminalEventHandlers(params: {
   }
   let timeout: NodeJS.Timeout | undefined;
   const settled = Promise.allSettled(pendingHandlers).then(() => "settled" as const);
+  // Promise.race bounds the host wait; JavaScript cannot cancel the plugin
+  // promises themselves, so timeout also marks the run expired to block late
+  // run-context resurrection by handlers that eventually settle.
   const timedOut = new Promise<"timeout">((resolve) => {
     timeout = setTimeout(() => {
       markTerminalEventCleanupExpired(runId);
