@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   realtimeHandlerRegisterToolHandler: vi.fn(),
   realtimeHandlerSetPublicUrl: vi.fn(),
   resolveConfiguredRealtimeVoiceProvider: vi.fn(),
+  getActiveMemorySearchManager: vi.fn(),
+  memorySearch: vi.fn(),
   startTunnel: vi.fn(),
   setupTailscaleExposure: vi.fn(),
   cleanupTailscaleExposure: vi.fn(),
@@ -63,6 +65,10 @@ vi.mock("./webhook/realtime-handler.js", () => ({
     registerToolHandler = mocks.realtimeHandlerRegisterToolHandler;
     setPublicUrl = mocks.realtimeHandlerSetPublicUrl;
   },
+}));
+
+vi.mock("openclaw/plugin-sdk/memory-host-search", () => ({
+  getActiveMemorySearchManager: mocks.getActiveMemorySearchManager,
 }));
 
 vi.mock("./tunnel.js", () => ({
@@ -132,6 +138,14 @@ describe("createVoiceCallRuntime lifecycle", () => {
       provider: { id: "openai" },
       providerConfig: { model: "gpt-realtime" },
     });
+    mocks.getActiveMemorySearchManager.mockReset();
+    mocks.memorySearch.mockReset();
+    mocks.getActiveMemorySearchManager.mockResolvedValue({
+      manager: {
+        search: mocks.memorySearch,
+      },
+    });
+    mocks.memorySearch.mockResolvedValue([]);
     mocks.startTunnel.mockResolvedValue(null);
     mocks.setupTailscaleExposure.mockResolvedValue(null);
     mocks.cleanupTailscaleExposure.mockResolvedValue(undefined);
@@ -336,9 +350,17 @@ describe("createVoiceCallRuntime lifecycle", () => {
     );
 
     const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
-      | ((args: unknown, callId: string) => Promise<unknown>)
+      | ((
+          args: unknown,
+          callId: string,
+          context?: { partialUserTranscript?: string },
+        ) => Promise<unknown>)
       | undefined;
-    await expect(handler?.({ question: "What should I say?" }, "call-1")).resolves.toEqual({
+    await expect(
+      handler?.({ question: "What should I say?" }, "call-1", {
+        partialUserTranscript: "Also check the ETA.",
+      }),
+    ).resolves.toEqual({
       text: "Use the shipment status.",
     });
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
@@ -353,5 +375,84 @@ describe("createVoiceCallRuntime lifecycle", () => {
         prompt: expect.stringContaining("Caller: Can you check shipment status?"),
       }),
     );
+    expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: expect.stringContaining("Caller: Also check the ETA."),
+      }),
+    );
+  });
+
+  it("answers realtime consults from fast memory context before starting the full agent", async () => {
+    const config = createBaseConfig();
+    config.realtime.enabled = true;
+    config.realtime.fastContext = {
+      enabled: true,
+      timeoutMs: 800,
+      maxResults: 2,
+      sources: ["memory"],
+      fallbackToConsult: false,
+    };
+    const runEmbeddedPiAgent = vi.fn(async () => ({
+      payloads: [{ text: "slow answer" }],
+      meta: {},
+    }));
+    const sessionStore: Record<string, unknown> = {};
+    const agentRuntime = {
+      resolveAgentDir: vi.fn(() => "/tmp/agent"),
+      resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
+      resolveAgentIdentity: vi.fn(),
+      resolveThinkingDefault: vi.fn(() => "high"),
+      resolveAgentTimeoutMs: vi.fn(() => 30_000),
+      ensureAgentWorkspace: vi.fn(async () => {}),
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+        loadSessionStore: vi.fn(() => sessionStore),
+        saveSessionStore: vi.fn(async () => {}),
+        resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+      },
+      runEmbeddedPiAgent,
+    };
+    mocks.managerGetCall.mockReturnValue({
+      callId: "call-1",
+      direction: "inbound",
+      from: "+15550001234",
+      to: "+15550009999",
+      transcript: [],
+    });
+    mocks.memorySearch.mockResolvedValue([
+      {
+        source: "memory",
+        path: "MEMORY.md",
+        startLine: 12,
+        endLine: 14,
+        score: 0.91,
+        snippet: "The caller's basement lights are on.",
+      },
+    ]);
+
+    await createVoiceCallRuntime({
+      config,
+      coreConfig: {} as CoreConfig,
+      agentRuntime: agentRuntime as never,
+    });
+
+    const handler = mocks.realtimeHandlerRegisterToolHandler.mock.calls[0]?.[1] as
+      | ((
+          args: unknown,
+          callId: string,
+          context?: { partialUserTranscript?: string },
+        ) => Promise<unknown>)
+      | undefined;
+    await expect(handler?.({ question: "Are the basement lights on?" }, "call-1")).resolves.toEqual(
+      {
+        text: expect.stringContaining("The caller's basement lights are on."),
+      },
+    );
+    expect(mocks.memorySearch).toHaveBeenCalledWith("Are the basement lights on?", {
+      maxResults: 2,
+      sessionKey: "voice:15550001234",
+      sources: ["memory"],
+    });
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   });
 });

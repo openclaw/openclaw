@@ -17,7 +17,14 @@ import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
 
-export type ToolHandlerFn = (args: unknown, callId: string) => Promise<unknown>;
+export type ToolHandlerContext = {
+  partialUserTranscript?: string;
+};
+export type ToolHandlerFn = (
+  args: unknown,
+  callId: string,
+  context: ToolHandlerContext,
+) => Promise<unknown>;
 
 const STREAM_TOKEN_TTL_MS = 30_000;
 const DEFAULT_HOST = "localhost:8443";
@@ -73,6 +80,7 @@ export class RealtimeCallHandler {
   private readonly toolHandlers = new Map<string, ToolHandlerFn>();
   private readonly pendingStreamTokens = new Map<string, PendingStreamToken>();
   private readonly activeBridgesByCallId = new Map<string, ActiveRealtimeVoiceBridge>();
+  private readonly partialUserTranscriptsByCallId = new Map<string, string>();
   private publicOrigin: string | null = null;
   private publicPathPrefix = "";
 
@@ -297,9 +305,13 @@ export class RealtimeCallHandler {
       },
       onTranscript: (role, text, isFinal) => {
         if (!isFinal) {
+          if (role === "user" && text.trim()) {
+            this.partialUserTranscriptsByCallId.set(callId, text);
+          }
           return;
         }
         if (role === "user") {
+          this.partialUserTranscriptsByCallId.delete(callId);
           const event: NormalizedEvent = {
             id: `realtime-speech-${callSid}-${Date.now()}`,
             type: "call.speech",
@@ -336,6 +348,7 @@ export class RealtimeCallHandler {
       onClose: (reason) => {
         this.activeBridgesByCallId.delete(callId);
         this.activeBridgesByCallId.delete(callSid);
+        this.partialUserTranscriptsByCallId.delete(callId);
         if (reason !== "error") {
           return;
         }
@@ -360,6 +373,7 @@ export class RealtimeCallHandler {
     bridge.close = () => {
       this.activeBridgesByCallId.delete(callId);
       this.activeBridgesByCallId.delete(callSid);
+      this.partialUserTranscriptsByCallId.delete(callId);
       closeBridge();
     };
 
@@ -450,7 +464,8 @@ export class RealtimeCallHandler {
     if (
       handler &&
       name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME &&
-      bridge.bridge.supportsToolResultContinuation
+      bridge.bridge.supportsToolResultContinuation &&
+      !this.config.fastContext.enabled
     ) {
       bridge.submitToolResult(
         bridgeCallId,
@@ -460,7 +475,9 @@ export class RealtimeCallHandler {
     }
     const result = !handler
       ? { error: `Tool "${name}" not available` }
-      : await handler(args, callId).catch((error: unknown) => ({
+      : await handler(args, callId, {
+          partialUserTranscript: this.partialUserTranscriptsByCallId.get(callId),
+        }).catch((error: unknown) => ({
           error: formatErrorMessage(error),
         }));
     bridge.submitToolResult(bridgeCallId, result);
