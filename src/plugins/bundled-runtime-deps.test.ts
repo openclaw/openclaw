@@ -2095,6 +2095,34 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     ]);
   });
 
+  it("reports declared package mirror deps even when no plugin deps are selected", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.4.25",
+        dependencies: { jiti: "^2.6.1" },
+        openclaw: {
+          bundle: {
+            mirroredRootRuntimeDependencies: ["jiti"],
+          },
+        },
+      }),
+    );
+    fs.mkdirSync(path.join(packageRoot, "dist", "extensions"), { recursive: true });
+
+    const result = createBundledRuntimeDepsPackagePlan({
+      packageRoot,
+      config: {},
+      env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
+    });
+
+    expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["jiti@^2.6.1"]);
+    expect(result.missing.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["jiti@^2.6.1"]);
+  });
+
   it("includes selected plugin deps that can be used by mirrored root chunks", () => {
     const packageRoot = makeTempDir();
     const stageDir = makeTempDir();
