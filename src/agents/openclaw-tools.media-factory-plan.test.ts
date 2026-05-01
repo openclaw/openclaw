@@ -393,6 +393,140 @@ describe("optional media tool factory planning", () => {
     });
   });
 
+  it("does not expose manifest-backed generation providers when plugins are globally disabled", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        enabled: false,
+        entries: {
+          comfy: {
+            config: {
+              mode: "local",
+              workflow: { "1": { inputs: {} } },
+              promptNodeId: "1",
+            },
+          },
+        },
+      },
+    };
+    const configSignals = [
+      {
+        rootPath: "plugins.entries.comfy.config",
+        mode: {
+          path: "mode",
+          default: "local",
+          allowed: ["local"],
+        },
+        requiredAny: ["workflow", "workflowPath"],
+        required: ["promptNodeId"],
+      },
+    ];
+    installSnapshot(config, [
+      createPlugin({
+        id: "comfy",
+        contracts: {
+          imageGenerationProviders: ["comfy"],
+          videoGenerationProviders: ["comfy"],
+          musicGenerationProviders: ["comfy"],
+        },
+        imageGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+        videoGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+        musicGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    });
+    expect(
+      createOpenClawTools({
+        config,
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
+      }).map((tool) => tool.name),
+    ).not.toEqual(expect.arrayContaining(["image_generate", "video_generate", "music_generate"]));
+  });
+
+  it("does not count unresolved SecretRef config signals as configured", () => {
+    vi.stubEnv("COMFY_TEST_API_KEY", "");
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          comfy: {
+            config: {
+              mode: "cloud",
+              apiKey: { source: "env", provider: "default", id: "COMFY_TEST_API_KEY" },
+              workflow: { "1": { inputs: {} } },
+              promptNodeId: "1",
+            },
+          },
+        },
+      },
+    };
+    const configSignals = [
+      {
+        rootPath: "plugins.entries.comfy.config",
+        mode: {
+          path: "mode",
+          allowed: ["cloud"],
+        },
+        requiredAny: ["workflow", "workflowPath"],
+        required: ["promptNodeId", "apiKey"],
+      },
+    ];
+    installSnapshot(config, [
+      createPlugin({
+        id: "comfy",
+        contracts: {
+          imageGenerationProviders: ["comfy"],
+          videoGenerationProviders: ["comfy"],
+          musicGenerationProviders: ["comfy"],
+        },
+        imageGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+        videoGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+        musicGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    });
+    expect(
+      createOpenClawTools({
+        config,
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
+      }).map((tool) => tool.name),
+    ).not.toEqual(expect.arrayContaining(["image_generate", "video_generate", "music_generate"]));
+  });
+
   it.each([
     {
       name: "legacy local provider config",

@@ -307,6 +307,9 @@ export function hasGenerationToolAvailability(params: {
   providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
   providerKey: GenerationCapabilityProviderKey;
 }): boolean {
+  if (params.cfg?.plugins?.enabled === false) {
+    return false;
+  }
   if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
     return true;
   }

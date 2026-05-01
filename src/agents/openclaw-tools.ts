@@ -147,6 +147,14 @@ function resolveOptionalMediaToolFactoryPlan(params: {
     musicGenerate: allowMusicGenerate,
     pdf: allowPdf,
   };
+  if (params.config?.plugins?.enabled === false) {
+    return {
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
+    };
+  }
   if (!params.authStore) {
     return fallbackPlan;
   }

@@ -1,8 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { coerceSecretRef, type SecretRef } from "../../config/types.secrets.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isManifestPluginAvailableForControlPlane } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveDefaultSecretProviderAlias } from "../../secrets/ref-contract.js";
 import { listProfilesForProvider } from "../auth-profiles.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 
@@ -57,17 +59,44 @@ function readEffectiveConfig(params: {
   return isRecord(overlay) ? { ...root, ...overlay } : root;
 }
 
-function hasConfiguredValue(value: unknown): boolean {
-  if (typeof value === "string") {
-    return value.trim().length > 0;
+function canResolveEnvSecretRefInConfigPath(params: {
+  config?: OpenClawConfig;
+  ref: SecretRef;
+}): boolean {
+  if (params.ref.source !== "env") {
+    return false;
   }
-  if (Array.isArray(value)) {
-    return value.length > 0;
+  const providerConfig = params.config?.secrets?.providers?.[params.ref.provider];
+  if (!providerConfig) {
+    return params.ref.provider === resolveDefaultSecretProviderAlias(params.config ?? {}, "env");
   }
-  if (isRecord(value)) {
-    return Object.keys(value).length > 0;
+  if (providerConfig.source !== "env") {
+    return false;
   }
-  return value !== undefined && value !== null;
+  const allowlist = providerConfig.allowlist;
+  return !allowlist || allowlist.includes(params.ref.id);
+}
+
+function hasConfiguredValue(params: { config?: OpenClawConfig; value: unknown }): boolean {
+  const secretRef = coerceSecretRef(params.value, params.config?.secrets?.defaults);
+  if (secretRef) {
+    return (
+      canResolveEnvSecretRefInConfigPath({
+        config: params.config,
+        ref: secretRef,
+      }) && Boolean(process.env[secretRef.id]?.trim())
+    );
+  }
+  if (typeof params.value === "string") {
+    return params.value.trim().length > 0;
+  }
+  if (Array.isArray(params.value)) {
+    return params.value.length > 0;
+  }
+  if (isRecord(params.value)) {
+    return Object.keys(params.value).length > 0;
+  }
+  return params.value !== undefined && params.value !== null;
 }
 
 function configSignalPasses(params: {
@@ -99,14 +128,24 @@ function configSignalPasses(params: {
     }
   }
   for (const requiredPath of params.signal.required ?? []) {
-    if (!hasConfiguredValue(readPath(effectiveConfig, requiredPath))) {
+    if (
+      !hasConfiguredValue({
+        config: params.config,
+        value: readPath(effectiveConfig, requiredPath),
+      })
+    ) {
       return false;
     }
   }
   const requiredAny = params.signal.requiredAny ?? [];
   if (
     requiredAny.length > 0 &&
-    !requiredAny.some((path) => hasConfiguredValue(readPath(effectiveConfig, path)))
+    !requiredAny.some((path) =>
+      hasConfiguredValue({
+        config: params.config,
+        value: readPath(effectiveConfig, path),
+      }),
+    )
   ) {
     return false;
   }
@@ -210,6 +249,9 @@ export function hasSnapshotCapabilityAvailability(params: {
   config?: OpenClawConfig;
   authStore?: AuthProfileStore;
 }): boolean {
+  if (params.config?.plugins?.enabled === false) {
+    return false;
+  }
   for (const plugin of params.snapshot.plugins) {
     if (
       !isManifestPluginAvailableForControlPlane({
@@ -266,6 +308,9 @@ export function hasSnapshotProviderEnvAvailability(params: {
   providerId: string;
   config?: OpenClawConfig;
 }): boolean {
+  if (params.config?.plugins?.enabled === false) {
+    return false;
+  }
   for (const plugin of params.snapshot.plugins) {
     if (
       !isManifestPluginAvailableForControlPlane({
