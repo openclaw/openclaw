@@ -383,8 +383,8 @@ export class VoiceCallWebhookServer {
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
-
-        // Speak initial message immediately (no delay) to avoid stream timeout
+      },
+      onTranscriptionReady: (callId) => {
         this.manager.speakInitialMessage(callId).catch((err) => {
           console.warn(`[voice-call] Failed to speak initial message:`, err);
         });
