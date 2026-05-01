@@ -110,6 +110,41 @@ export type PluginControlUiDescriptor = {
   requiredScopes?: OperatorScope[];
 };
 
+export type PluginSessionActionContext = {
+  pluginId: string;
+  actionId: string;
+  sessionKey?: string;
+  payload?: PluginJsonValue;
+  client?: {
+    connId?: string;
+    scopes: string[];
+  };
+};
+
+export type PluginSessionActionResult =
+  | {
+      ok?: true;
+      data?: PluginJsonValue;
+      reply?: PluginJsonValue;
+      continueAgent?: boolean;
+    }
+  | {
+      ok: false;
+      error: string;
+      code?: string;
+      details?: PluginJsonValue;
+    };
+
+export type PluginSessionActionRegistration = {
+  id: string;
+  description?: string;
+  schema?: PluginJsonValue;
+  requiredScopes?: OperatorScope[];
+  handler: (
+    ctx: PluginSessionActionContext,
+  ) => PluginSessionActionResult | void | Promise<PluginSessionActionResult | void>;
+};
+
 export type PluginRuntimeLifecycleRegistration = {
   id: string;
   description?: string;
@@ -136,6 +171,17 @@ export type PluginAgentEventSubscriptionRegistration = {
     },
   ) => void | Promise<void>;
 };
+
+export type PluginAgentEventEmitParams = {
+  runId: string;
+  stream: AgentEventStream;
+  data: PluginJsonValue;
+  sessionKey?: string;
+};
+
+export type PluginAgentEventEmitResult =
+  | { emitted: true; stream: AgentEventStream }
+  | { emitted: false; reason: string };
 
 export type PluginRunContextPatch = {
   runId: string;

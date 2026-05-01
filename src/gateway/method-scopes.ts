@@ -7,6 +7,7 @@ import {
   READ_SCOPE,
   TALK_SECRETS_SCOPE,
   WRITE_SCOPE,
+  isOperatorScope,
   type OperatorScope,
 } from "./operator-scopes.js";
 
@@ -38,6 +39,8 @@ const NODE_ROLE_METHODS = new Set([
   "node.pending.ack",
   "skills.bins",
 ]);
+
+const DYNAMIC_OPERATOR_SCOPE_METHODS = new Set(["plugins.sessionAction"]);
 
 const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   [APPROVALS_SCOPE]: [
@@ -256,6 +259,9 @@ export function resolveRequiredOperatorScopeForMethod(method: string): OperatorS
 }
 
 export function resolveLeastPrivilegeOperatorScopesForMethod(method: string): OperatorScope[] {
+  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+    return [WRITE_SCOPE];
+  }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method);
   if (requiredScope) {
     return [requiredScope];
@@ -270,6 +276,11 @@ export function authorizeOperatorScopesForMethod(
 ): { allowed: true } | { allowed: false; missingScope: OperatorScope } {
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
+  }
+  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+    return scopes.some((scope) => isOperatorScope(scope))
+      ? { allowed: true }
+      : { allowed: false, missingScope: WRITE_SCOPE };
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method) ?? ADMIN_SCOPE;
   if (requiredScope === READ_SCOPE) {
@@ -286,6 +297,9 @@ export function authorizeOperatorScopesForMethod(
 
 export function isGatewayMethodClassified(method: string): boolean {
   if (isNodeRoleMethod(method)) {
+    return true;
+  }
+  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
     return true;
   }
   return resolveRequiredOperatorScopeForMethod(method) !== undefined;
