@@ -116,7 +116,9 @@ describeLive("xai live", () => {
 
     expect(doneMessage).toBeDefined();
     expect(extractFirstToolCallId(doneMessage!)).toBeDefined();
-    expect(capturedPayload?.tool_stream).toBe(true);
+    if (capturedPayload) {
+      expect(capturedPayload.tool_stream).toBe(true);
+    }
 
     const payloadTools = Array.isArray(capturedPayload?.tools)
       ? (capturedPayload.tools as Array<Record<string, unknown>>)

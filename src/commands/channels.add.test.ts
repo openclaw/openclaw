@@ -548,6 +548,65 @@ describe("channelsAddCommand", () => {
     expectExternalChatEnabledConfigWrite();
   });
 
+  it("uses setup-entry snapshots when an already loaded channel plugin has no setup adapter", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+          source: "test",
+        },
+      ]),
+    );
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram", label: "Telegram" }),
+            setup: {
+              applyAccountConfig: ({ cfg, input }) => ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  telegram: {
+                    enabled: true,
+                    botToken: input.token,
+                  },
+                },
+              }),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsAddCommand(
+      {
+        channel: "telegram",
+        token: "123456:token",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledTimes(1);
+    expect(configMocks.writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: expect.objectContaining({
+          telegram: expect.objectContaining({
+            enabled: true,
+            botToken: "123456:token",
+          }),
+        }),
+      }),
+    );
+    expect(runtime.error).not.toHaveBeenCalledWith("Channel telegram does not support add.");
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("falls back from untrusted workspace catalog shadows when adding by alias", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(createTestRegistry());

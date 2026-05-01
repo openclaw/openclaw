@@ -284,7 +284,7 @@ export async function channelsAddCommand(
     pluginId?: string,
   ): Promise<ChannelPlugin | undefined> => {
     const existing = getLoadedChannelPlugin(channelId);
-    if (existing) {
+    if (existing?.setup?.applyAccountConfig) {
       return existing;
     }
     const { loadChannelSetupPluginRegistrySnapshotForChannel } =
@@ -299,7 +299,8 @@ export async function channelsAddCommand(
     });
     return (
       snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
-      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin
+      snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      existing
     );
   };
 
