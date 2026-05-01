@@ -36,6 +36,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import {
@@ -708,6 +709,13 @@ export async function runCodexAppServerAttempt(
   const touchTurnCompletionActivity = (reason: string, options?: { arm?: boolean }) => {
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
+    emitTrustedDiagnosticEvent({
+      type: "run.progress",
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      reason: `codex_app_server:${reason}`,
+    });
     if (options?.arm) {
       turnCompletionIdleWatchArmed = true;
     }
