@@ -709,8 +709,6 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.managedIdentityClientId`: client ID for user-assigned managed identity.
 - `channels.msteams.sharePointSiteId`: SharePoint site ID for file uploads in group chats/channels (see [Sending files in group chats](#sending-files-in-group-chats)).
 
-Microsoft Teams sent-message markers use best-effort SDK-backed persistent state behind the in-memory cache. Replies to recent bot-sent Teams messages can still be classified as `reply_to_bot` after a Gateway restart; if the persistent store is unavailable or fails, OpenClaw logs the failure and keeps the previous process-local cache behavior.
-
 ## Routing & Sessions
 
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
