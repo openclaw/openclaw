@@ -41,6 +41,9 @@ const workflowMocks = vi.hoisted(() => ({
     if (method === "cron.add") {
       return { payload: { jobId: "workflow-cron-job" } };
     }
+    if (method === "cron.remove") {
+      return { ok: true, removed: true };
+    }
     return { ok: true };
   }),
   sendMessage: vi.fn(async (params: { channel?: string; to: string; mediaUrls?: string[] }) => ({
@@ -49,6 +52,7 @@ const workflowMocks = vi.hoisted(() => ({
     via: "gateway" as const,
     mediaUrl: params.mediaUrls?.[0] ?? null,
     mediaUrls: params.mediaUrls,
+    result: { channel: params.channel ?? "telegram", messageId: "workflow-artifact-1" },
   })),
 }));
 
@@ -133,7 +137,7 @@ describe("advanced workflow plugin contract fixtures", () => {
     resetAgentEventsForTest();
   });
 
-  it("runs a generic approval workflow through Control UI action dispatch and priority resume injection", async () => {
+  it("runs a generic approval workflow through Control UI action dispatch and resume injection", async () => {
     const seenEvents: unknown[] = [];
 
     await withSessionStore(async ({ storePath }) => {
@@ -184,7 +188,6 @@ describe("advanced workflow plugin contract fixtures", () => {
                 pluginId: "approval-workflow-fixture",
                 text: "low priority context",
                 placement: "append_context",
-                priority: 1,
                 createdAt: 1,
               },
             ],
@@ -282,22 +285,23 @@ describe("advanced workflow plugin contract fixtures", () => {
         }),
       ]);
 
-      await expect(
-        drainPluginNextTurnInjections({
-          sessionKey: "agent:main:main",
-          now: Date.now(),
-        }),
-      ).resolves.toEqual([
-        expect.objectContaining({
-          id: "approval:approved",
-          priority: 100,
-          text: expect.stringContaining("Operator decision received"),
-        }),
-        expect.objectContaining({
-          id: "low-priority",
-          priority: 1,
-        }),
-      ]);
+      const drainedInjections = await drainPluginNextTurnInjections({
+        cfg: config,
+        sessionKey: "agent:main:main",
+        now: Date.now(),
+      });
+      expect(drainedInjections).toHaveLength(2);
+      expect(drainedInjections).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "approval:approved",
+            text: expect.stringContaining("Operator decision received"),
+          }),
+          expect.objectContaining({
+            id: "low-priority",
+          }),
+        ]),
+      );
 
       await updateSessionStore(storePath, (store) => {
         const extension = store["agent:main:main"]?.pluginExtensions?.["approval-workflow-fixture"];

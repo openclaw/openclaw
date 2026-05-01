@@ -81,7 +81,6 @@ export function registerApprovalWorkflowFixture(api: OpenClawPluginApi) {
       await api.enqueueNextTurnInjection({
         sessionKey: ctx.sessionKey ?? SESSION_KEY,
         placement: "prepend_context",
-        priority: 100,
         idempotencyKey: `approval:${decision}`,
         text: `Operator decision received: ${decision}. Continue the workflow.`,
       });
