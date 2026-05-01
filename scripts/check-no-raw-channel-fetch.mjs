@@ -31,7 +31,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("github-copilot", "login.ts", 101),
   bundledPluginCallsite("googlechat", "src/auth.ts", 83),
   bundledPluginCallsite("huggingface", "models.ts", 142),
-  bundledPluginCallsite("kilocode", "provider-models.ts", 130),
+  bundledPluginCallsite("kilocode", "provider-models.ts", 138),
   bundledPluginCallsite("matrix", "src/matrix/sdk/transport.ts", 112),
   bundledPluginCallsite("microsoft-foundry", "onboard.ts", 479),
   bundledPluginCallsite("microsoft", "speech-provider.ts", 140),
@@ -63,7 +63,7 @@ const allowedRawFetchCallsites = new Set([
   bundledPluginCallsite("slack", "src/monitor/media.ts", 130),
   bundledPluginCallsite("venice", "models.ts", 552),
   bundledPluginCallsite("vercel-ai-gateway", "models.ts", 181),
-  bundledPluginCallsite("voice-call", "src/providers/twilio/api.ts", 23),
+  bundledPluginCallsite("voice-call", "src/providers/twilio/api.ts", 60),
 ]);
 
 function isRawFetchCall(expression) {
