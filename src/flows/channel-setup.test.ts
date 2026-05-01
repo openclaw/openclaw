@@ -471,7 +471,7 @@ describe("setupChannels workspace shadow exclusion", () => {
         channel: "external-chat",
         pluginId: "external-chat",
         workspaceDir: "/tmp/openclaw-workspace",
-        installRuntimeDeps: false,
+        forceSetupOnlyChannelPlugins: true,
       }),
     );
     expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenNthCalledWith(
@@ -480,7 +480,6 @@ describe("setupChannels workspace shadow exclusion", () => {
         channel: "external-chat",
         workspaceDir: "/tmp/openclaw-workspace",
         forceSetupOnlyChannelPlugins: true,
-        installRuntimeDeps: true,
       }),
     );
     expect(getChannelSetupPlugin).not.toHaveBeenCalled();

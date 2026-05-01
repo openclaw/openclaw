@@ -185,7 +185,7 @@ current OpenClaw or a local checkout until a newer npm package is published.
 
   <Accordion title="Memory plugins">
     - `memory-core` — bundled memory search (default via `plugins.slots.memory`)
-    - `memory-lancedb` — install-on-demand long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
+    - `memory-lancedb` — LanceDB-backed long-term memory with auto-recall/capture (set `plugins.slots.memory = "memory-lancedb"`)
 
     See [Memory LanceDB](/plugins/memory-lancedb) for OpenAI-compatible
     embedding setup, Ollama examples, recall limits, and troubleshooting.

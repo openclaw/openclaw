@@ -167,7 +167,7 @@ afterEach(() => {
 describe("resolveBundledPluginsDir", () => {
   it.each([
     [
-      "prefers the staged runtime bundled plugin tree from the package root",
+      "prefers the runtime bundled plugin tree from the package root",
       {
         prefix: "openclaw-bundled-dir-runtime-",
         hasDistRuntimeExtensions: true,

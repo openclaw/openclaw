@@ -113,7 +113,7 @@ async function resolveInstalledAcpPackageBinPath(
 
 async function resolveInstalledCodexAcpBinPath(): Promise<string | undefined> {
   // Keep OpenClaw's isolated CODEX_HOME wrapper, but launch the plugin-local
-  // Codex ACP adapter when runtime-deps staging made it available.
+  // Codex ACP adapter when the package dependency is available.
   return await resolveInstalledAcpPackageBinPath(CODEX_ACP_PACKAGE, CODEX_ACP_BIN);
 }
 

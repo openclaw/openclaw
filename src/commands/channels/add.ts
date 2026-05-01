@@ -296,7 +296,7 @@ export async function channelsAddCommand(
       channel: channelId,
       ...(pluginId ? { pluginId } : {}),
       workspaceDir: resolveWorkspaceDir(),
-      installRuntimeDeps: false,
+      forceSetupOnlyChannelPlugins: true,
     });
     return (
       snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
