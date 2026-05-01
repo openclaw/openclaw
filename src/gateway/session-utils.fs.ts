@@ -259,7 +259,7 @@ function hasSessionTreeEntry(line: string): boolean {
   }
 }
 
-function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown | null {
+function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
