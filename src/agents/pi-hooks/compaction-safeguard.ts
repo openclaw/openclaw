@@ -42,6 +42,9 @@ import {
   auditSummaryQuality,
   buildCompactionStructureInstructions,
   buildStructuredFallbackSummary,
+  computeLostIdentifiers,
+  extractIdentifiersFromMessages,
+  extractMessageTextForIdentifiers,
   extractOpaqueIdentifiers,
   wrapUntrustedInstructionBlock,
 } from "./compaction-safeguard-quality.js";
@@ -1035,6 +1038,10 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         .filter(Boolean)
         .join("\n");
       const identifiers = extractOpaqueIdentifiers(identifierSeedText);
+      const transcriptIdentifiers = extractIdentifiersFromMessages([
+        ...messagesToSummarize,
+        ...turnPrefixMessages,
+      ]);
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -1136,8 +1143,18 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           latestAsk: latestUserAsk,
           identifierPolicy,
         });
+        const lostIdentifiers =
+          identifierPolicy === "strict"
+            ? computeLostIdentifiers(transcriptIdentifiers, summaryWithoutPreservedTurns)
+            : [];
+        const identifierSurvivalFailed = lostIdentifiers.length > 2;
         summary = summaryWithPreservedTurns;
-        if (quality.ok || attempt >= totalAttempts - 1) {
+        if ((quality.ok && !identifierSurvivalFailed) || attempt >= totalAttempts - 1) {
+          if (lostIdentifiers.length > 0) {
+            log.info(
+              `Compaction safeguard: ${lostIdentifiers.length} identifier(s) lost from transcript.`,
+            );
+          }
           break;
         }
         const reasons = quality.reasons.join(", ");
@@ -1145,9 +1162,17 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           identifierPolicy === "strict"
             ? "Fix all issues and include every required section with exact identifiers preserved."
             : "Fix all issues and include every required section while following the configured identifier policy.";
+        let feedbackText = !quality.ok
+          ? `Previous summary failed quality checks (${reasons}).`
+          : "";
+        if (identifierSurvivalFailed) {
+          const lostList = lostIdentifiers.slice(0, 5).join(", ");
+          const hint = `These identifiers from the original transcript were lost and must be preserved in ## Exact identifiers: ${lostList}`;
+          feedbackText = feedbackText ? `${feedbackText}\n${hint}` : hint;
+        }
         const qualityFeedbackReasons = wrapUntrustedInstructionBlock(
           "Quality check feedback",
-          `Previous summary failed quality checks (${reasons}).`,
+          feedbackText,
         );
         currentInstructions = qualityFeedbackReasons
           ? `${structuredInstructions}\n\n${qualityFeedbackInstruction}\n\n${qualityFeedbackReasons}`
@@ -1205,6 +1230,9 @@ export const __testing = {
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
+  extractMessageTextForIdentifiers,
+  extractIdentifiersFromMessages,
+  computeLostIdentifiers,
   auditSummaryQuality,
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,

@@ -43,6 +43,9 @@ const {
   resolveRecentTurnsPreserve,
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
+  extractMessageTextForIdentifiers,
+  extractIdentifiersFromMessages,
+  computeLostIdentifiers,
   auditSummaryQuality,
   capCompactionSummary,
   capCompactionSummaryPreservingSuffix,
@@ -1114,6 +1117,90 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(quality.reasons).toContain("latest_user_ask_not_reflected");
   });
 
+  it("extracts identifiers from tool call arguments", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        { type: "text", text: "running tool" },
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "exec",
+          arguments: { path: "/srv/deploy/config.yaml", hash: "a1b2c3d4e5f6" },
+        },
+      ],
+    });
+    expect(text).toContain("/srv/deploy/config.yaml");
+    expect(text).toContain("a1b2c3d4e5f6"); // pragma: allowlist secret
+  });
+
+  it("extracts identifiers from tool result content but not details", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "exec",
+      content: [{ type: "text", text: "deployed to https://app.example.com/v2" }],
+      details: { secret: "sk-secret-value-12345678" },
+    });
+    expect(text).toContain("https://app.example.com/v2");
+    expect(text).not.toContain("sk-secret-value-12345678");
+  });
+
+  it("extracts identifiers from string arguments (OpenAI format)", () => {
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_2",
+          name: "read",
+          arguments: '{"file":"/etc/nginx/nginx.conf"}',
+        },
+      ],
+    });
+    expect(text).toContain("/etc/nginx/nginx.conf");
+  });
+
+  it("extracts identifiers across all messages in a transcript", () => {
+    const ids = extractIdentifiersFromMessages([
+      { role: "user", content: "check hash a1b2c3d4e5f6" },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "exec",
+            arguments: { path: "/srv/deploy/config.yaml" },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: [{ type: "text", text: "port host.local:18789" }],
+      },
+    ]);
+    expect(ids).toContain("A1B2C3D4E5F6"); // pragma: allowlist secret
+    expect(ids).toContain("/srv/deploy/config.yaml");
+    expect(ids).toContain("host.local:18789");
+  });
+
+  it("computes lost identifiers between source and summary", () => {
+    const source = ["A1B2C3D4E5F6", "https://example.com/api", "/tmp/data.log"]; // pragma: allowlist secret
+    const summary = "Deployed to https://example.com/api with config at /tmp/data.log";
+    const lost = computeLostIdentifiers(source, summary);
+    expect(lost).toEqual(["A1B2C3D4E5F6"]); // pragma: allowlist secret
+  });
+
+  it("matches hex identifiers case-insensitively in lost computation", () => {
+    const source = ["A1B2C3D4E5F6"]; // pragma: allowlist secret
+    const summary = "Hash: a1b2c3d4e5f6"; // pragma: allowlist secret
+    const lost = computeLostIdentifiers(source, summary);
+    expect(lost).toEqual([]);
+  });
+
   it("clamps quality-guard retries into a safe range", () => {
     expect(resolveQualityGuardMaxRetries(undefined)).toBe(1);
     expect(resolveQualityGuardMaxRetries(-1)).toBe(0);
@@ -1576,6 +1663,253 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
     const secondCall = mockSummarizeInStages.mock.calls[1]?.[0];
     expect(secondCall?.customInstructions).toContain("latest_user_ask_not_reflected");
+  });
+
+  it("retries when more than 2 transcript identifiers are lost from summary on strict policy", async () => {
+    mockSummarizeInStages.mockReset();
+    const goodSections = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow rules.",
+      "## Pending user asks",
+      "check deployment status",
+      "## Exact identifiers",
+    ].join("\n");
+    // First attempt: passes quality audit but loses identifiers
+    mockSummarizeInStages.mockResolvedValueOnce(`${goodSections}\nNone.`);
+    // Second attempt: includes all identifiers
+    mockSummarizeInStages.mockResolvedValueOnce(
+      `${goodSections}\na1b2c3d4e5f6, https://deploy.example.com/v2, /srv/app/config.yaml`,
+    );
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "check deployment status for hash a1b2c3d4e5f6", timestamp: 1 },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "deploy",
+                arguments: { url: "https://deploy.example.com/v2" },
+              },
+            ],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "deploy",
+            content: [{ type: "text", text: "deployed config at /srv/app/config.yaml" }],
+            timestamp: 3,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(2);
+    const retryCall = mockSummarizeInStages.mock.calls[1]?.[0];
+    expect(retryCall?.customInstructions).toContain("must be preserved");
+  });
+
+  it("does not retry when 2 or fewer identifiers are lost", async () => {
+    mockSummarizeInStages.mockReset();
+    // Summary includes the user ask text and identifiers from text content,
+    // but loses 2 identifiers that only appear in tool call arguments.
+    // Since <= 2 lost, no survival retry is triggered.
+    const goodSections = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow rules.",
+      "## Pending user asks",
+      "check deployment status for a1b2c3d4e5f6",
+      "## Exact identifiers",
+      "a1b2c3d4e5f6", // pragma: allowlist secret
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValueOnce(goodSections);
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "check deployment status for a1b2c3d4e5f6",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "deploy",
+                arguments: { path: "/srv/lost/config.yaml", port: "443" },
+              },
+            ],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "deploy",
+            content: [{ type: "text", text: "done" }],
+            timestamp: 3,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry identifier survival when policy is off", async () => {
+    mockSummarizeInStages.mockReset();
+    // Summary omits all identifiers, but policy is "off" so no survival retry.
+    const goodSections = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Follow rules.",
+      "## Pending user asks",
+      "check deployment config status",
+      "## Exact identifiers",
+      "None.",
+    ].join("\n");
+    mockSummarizeInStages.mockResolvedValueOnce(goodSections);
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 1,
+      identifierPolicy: "off",
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "check deployment config status for a1b2c3d4e5f6",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "read",
+                arguments: { path: "/srv/app/config.yaml" },
+              },
+            ],
+            timestamp: 2,
+          } as unknown as AgentMessage,
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read",
+            content: [{ type: "text", text: "config at https://lost.example.com/api" }],
+            timestamp: 3,
+          } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
   });
 
   it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {

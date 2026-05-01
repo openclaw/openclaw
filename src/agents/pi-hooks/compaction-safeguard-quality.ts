@@ -167,6 +167,55 @@ export function extractOpaqueIdentifiers(text: string): string[] {
   ).slice(0, MAX_EXTRACTED_IDENTIFIERS);
 }
 
+const TOOL_CALL_BLOCK_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+export function extractMessageTextForIdentifiers(message: unknown): string {
+  if (!message || typeof message !== "object") {
+    return "";
+  }
+  const parts: string[] = [];
+  const msg = message as { content?: unknown };
+  const content = msg.content;
+  if (typeof content === "string") {
+    parts.push(content);
+  } else if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const rec = block as Record<string, unknown>;
+      if (rec.type === "text" && typeof rec.text === "string") {
+        parts.push(rec.text);
+      }
+      if (typeof rec.type === "string" && TOOL_CALL_BLOCK_TYPES.has(rec.type)) {
+        const args = rec.arguments ?? rec.input;
+        if (typeof args === "string") {
+          parts.push(args);
+        } else if (args && typeof args === "object") {
+          try {
+            parts.push(JSON.stringify(args));
+          } catch {
+            // skip unserializable args
+          }
+        }
+      }
+    }
+  }
+  return parts.join("\n");
+}
+
+export function extractIdentifiersFromMessages(messages: unknown[]): string[] {
+  const text = messages
+    .map((msg) => extractMessageTextForIdentifiers(msg))
+    .filter(Boolean)
+    .join("\n");
+  return extractOpaqueIdentifiers(text);
+}
+
+export function computeLostIdentifiers(sourceIdentifiers: string[], summary: string): string[] {
+  return sourceIdentifiers.filter((identifier) => !summaryIncludesIdentifier(summary, identifier));
+}
+
 function tokenizeAskOverlapText(text: string): string[] {
   const normalized = localeLowercasePreservingWhitespace(text.normalize("NFKC")).trim();
   if (!normalized) {
