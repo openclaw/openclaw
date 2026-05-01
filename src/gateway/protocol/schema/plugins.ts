@@ -3,14 +3,7 @@ import { NonEmptyString } from "./primitives.js";
 
 export const PluginJsonValueSchema = Type.Cyclic(
   {
-    PluginJsonValue: Type.Union([
-      Type.Null(),
-      Type.String(),
-      Type.Number(),
-      Type.Boolean(),
-      Type.Array(Type.Ref("PluginJsonValue")),
-      Type.Record(Type.String(), Type.Ref("PluginJsonValue")),
-    ]),
+    PluginJsonValue: Type.Unknown(),
   },
   "PluginJsonValue",
 );

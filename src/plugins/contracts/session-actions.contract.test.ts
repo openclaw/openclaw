@@ -551,7 +551,7 @@ describe("plugin session actions", () => {
       ok: false,
       error: {
         code: "INVALID_REQUEST",
-        message: `plugin session action requires gateway scope: ${APPROVALS_SCOPE}`,
+        message: `missing scope: ${APPROVALS_SCOPE}`,
       },
     });
     expect(handlerCalls).toEqual([
@@ -826,5 +826,52 @@ describe("plugin session actions", () => {
     }
 
     expect(observed).toEqual([]);
+  });
+
+  it("allows reactivated cached registries to emit agent events again", () => {
+    const observed: unknown[] = [];
+    const unsubscribe = onAgentEvent((event) => observed.push(event));
+    const { config, registry } = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "reactivated-event-plugin",
+        name: "Reactivated Event Plugin",
+        origin: "bundled",
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+
+    setActivePluginRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    setActivePluginRegistry(registry.registry);
+
+    try {
+      expect(
+        capturedApi?.emitAgentEvent({
+          runId: "reactivated-run",
+          stream: "approval",
+          data: { active: true },
+        }),
+      ).toEqual({ emitted: true, stream: "approval" });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(observed).toEqual([
+      expect.objectContaining({
+        runId: "reactivated-run",
+        stream: "approval",
+        data: {
+          active: true,
+          pluginId: "reactivated-event-plugin",
+          pluginName: "Reactivated Event Plugin",
+        },
+      }),
+    ]);
   });
 });
