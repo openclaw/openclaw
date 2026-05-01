@@ -167,19 +167,27 @@ function renderPageWithPdftoppm(
   pdfBuffer: Buffer,
   pageNumber: number,
   scale: number,
+  maxOutputPixels: number,
+  viewport: PdfViewport,
 ): Buffer | null {
-  const dpi = Math.max(72, Math.round(scale * 72));
+  const viewportArea = Math.max(1, viewport.width * viewport.height);
+  const targetArea = Math.min(maxOutputPixels, viewportArea * scale * scale);
+  const dpi = Math.max(72, Math.round(Math.sqrt(targetArea / viewportArea) * 72));
+
   const timestamp = Date.now();
   const rand = Math.random().toString(36).slice(2, 8);
-  const pdfPath = `/tmp/openclaw-pdf-${timestamp}-${rand}.pdf`;
-  const outputBase = `/tmp/openclaw-page-${timestamp}-${rand}`;
 
+  let tmpDir: string | undefined;
   try {
+    tmpDir = FS.mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/openclaw-pdf-`);
+    const pdfPath = path.join(tmpDir, `doc-${rand}.pdf`);
+    const outputBase = path.join(tmpDir, `page-${rand}`);
+
     FS.writeFileSync(pdfPath, pdfBuffer);
 
     execSync(
       `pdftoppm -r ${dpi} -png -f ${pageNumber} -l ${pageNumber} "${pdfPath}" "${outputBase}"`,
-      { stdio: "ignore" },
+      { stdio: "ignore", timeout: 30_000 },
     );
 
     const pngPath = `${outputBase}-${pageNumber}.png`;
@@ -188,8 +196,9 @@ function renderPageWithPdftoppm(
   } catch {
     return null;
   } finally {
-    try { FS.unlinkSync(pdfPath); } catch {}
-    try { FS.unlinkSync(`${outputBase}-${pageNumber}.png`); } catch {}
+    if (tmpDir) {
+      try { FS.rmSync(tmpDir, { recursive: true }); } catch {}
+    }
   }
 }
 
@@ -258,7 +267,13 @@ async function extractPdfContent(
     }
 
     if (usePdftoppmFallback) {
-      const pngBuffer = renderPageWithPdftoppm(request.buffer, pageNum, plan.scale);
+      const pngBuffer = renderPageWithPdftoppm(
+        request.buffer,
+        pageNum,
+        plan.scale,
+        remainingPixels,
+        viewport,
+      );
       if (!pngBuffer) {
         break;
       }
