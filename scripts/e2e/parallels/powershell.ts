@@ -1,4 +1,8 @@
-import { providerIdFromModelId, providerTimeoutConfigJson } from "./provider-auth.ts";
+import {
+  configPathMapKey,
+  providerIdFromModelId,
+  providerTimeoutConfigJson,
+} from "./provider-auth.ts";
 
 export function psSingleQuote(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
@@ -26,7 +30,7 @@ export function windowsModelProviderTimeoutScript(modelId: string): string {
       value: JSON.parse(configJson) as unknown,
     },
     {
-      path: `agents.defaults.models.${modelId}`,
+      path: `agents.defaults.models${configPathMapKey(modelId)}`,
       value: {
         alias: "GPT",
         params: {
