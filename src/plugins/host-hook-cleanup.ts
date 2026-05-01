@@ -159,7 +159,11 @@ function collectSessionEntrySlotKeys(
     if (!shouldCleanPlugin(registration.pluginId, pluginId)) {
       continue;
     }
-    const normalized = normalizeSessionEntrySlotKey(registration.extension.sessionEntrySlotKey);
+    const slotKey = registration.extension.sessionEntrySlotKey;
+    if (slotKey === undefined) {
+      continue;
+    }
+    const normalized = normalizeSessionEntrySlotKey(slotKey);
     if (normalized.ok) {
       slotKeys.add(normalized.key);
     }

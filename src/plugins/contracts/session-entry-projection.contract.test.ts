@@ -162,8 +162,11 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ ok: true });
           expect(
-            (loadSessionStore(storePath, { skipCache: true })["agent:main:main"] as never)
-              .approvalSnapshot,
+            (
+              loadSessionStore(storePath, { skipCache: true })[
+                "agent:main:main"
+              ] as unknown as Record<string, unknown>
+            ).approvalSnapshot,
           ).toEqual({ state: "ready" });
 
           await expect(
@@ -195,8 +198,11 @@ describe("plugin session extension SessionEntry projection", () => {
             }),
           ).resolves.toMatchObject({ ok: true });
           expect(
-            (loadSessionStore(storePath, { skipCache: true })["agent:main:main"] as never)
-              .approvalSnapshot,
+            (
+              loadSessionStore(storePath, { skipCache: true })[
+                "agent:main:main"
+              ] as unknown as Record<string, unknown>
+            ).approvalSnapshot,
           ).toEqual({ state: "ready-again" });
 
           await expect(

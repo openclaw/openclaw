@@ -103,6 +103,14 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "acp",
 ] as const satisfies ReadonlyArray<keyof SessionEntry | "__proto__" | "constructor" | "prototype">;
 
+type ReservedSessionEntrySlotKey = Extract<
+  (typeof SESSION_ENTRY_RESERVED_SLOT_KEY_LIST)[number],
+  keyof SessionEntry
+>;
+type MissingSessionEntryReservedSlotKeys = Exclude<keyof SessionEntry, ReservedSessionEntrySlotKey>;
+type AssertNever<T extends never> = T;
+type _AssertAllSessionEntryKeysAreReserved = AssertNever<MissingSessionEntryReservedSlotKeys>;
+
 const SESSION_ENTRY_RESERVED_SLOT_KEYS = new Set<string>(SESSION_ENTRY_RESERVED_SLOT_KEY_LIST);
 
 const SESSION_ENTRY_SLOT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]*$/u;
