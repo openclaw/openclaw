@@ -40,11 +40,9 @@ async function resolveThreadTsFromHistory(params: {
       response.messages?.find((entry) => entry.ts === params.messageTs) ?? response.messages?.[0];
     return normalizeThreadTs(message?.thread_ts);
   } catch (err) {
-    if (shouldLogVerbose()) {
-      logVerbose(
-        `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${formatErrorMessage(err)}`,
-      );
-    }
+    logVerbose(
+      `slack inbound: failed to resolve thread_ts via conversations.history for channel=${params.channelId} ts=${params.messageTs}: ${formatErrorMessage(err)}`,
+    );
     return undefined;
   }
 }

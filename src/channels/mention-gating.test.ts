@@ -39,6 +39,19 @@ describe("resolveMentionGating", () => {
     });
     expect(res.shouldSkip).toBe(false);
   });
+
+  it("treats thread continuation as an effective mention", () => {
+    const res = resolveMentionGating({
+      requireMention: true,
+      canDetectMention: true,
+      wasMentioned: false,
+      implicitMention: false,
+      threadContinuation: true,
+      shouldBypassMention: false,
+    });
+    expect(res.effectiveWasMentioned).toBe(true);
+    expect(res.shouldSkip).toBe(false);
+  });
 });
 
 describe("resolveMentionGatingWithBypass", () => {
@@ -68,6 +81,23 @@ describe("resolveMentionGatingWithBypass", () => {
     });
     expect(res.shouldBypassMention).toBe(shouldBypassMention);
     expect(res.shouldSkip).toBe(shouldSkip);
+  });
+
+  it("treats thread continuation as an effective mention", () => {
+    const res = resolveMentionGatingWithBypass({
+      isGroup: true,
+      requireMention: true,
+      canDetectMention: true,
+      wasMentioned: false,
+      implicitMention: false,
+      threadContinuation: true,
+      hasAnyMention: false,
+      allowTextCommands: true,
+      hasControlCommand: false,
+      commandAuthorized: false,
+    });
+    expect(res.effectiveWasMentioned).toBe(true);
+    expect(res.shouldSkip).toBe(false);
   });
 });
 
