@@ -230,6 +230,7 @@ import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
+import { ensureActiveToolsBeforePrompt } from "./attempt.ensure-active-tools.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
   appendBootstrapFileToUserPromptPrefix,
@@ -2859,24 +2860,14 @@ export async function runEmbeddedAttempt(
             // Fix for issue #74377: Pi's active tool set can be silently
             // emptied between session creation and prompt-time when an
             // extension or session reload triggers `_refreshToolRegistry`.
-            // Re-apply the allowlist at the boundary we own (right before the
-            // provider stream) so the Anthropic transport never sees tools:[]
-            // when the runner built a non-empty tool surface. Raw model probes
-            // legitimately empty tools; skip them.
-            if (!isRawModelRun && sessionToolAllowlist.length > 0) {
-              const activeBefore = activeSession.agent.state.tools.length;
-              activeSession.setActiveToolsByName(sessionToolAllowlist);
-              const activeAfter = activeSession.agent.state.tools.length;
-              if (activeBefore === 0) {
-                log.warn(
-                  `[OPENCLAW_TOOLS_DIAG] active tools were empty at prompt dispatch; restored to ${activeAfter}/${sessionToolAllowlist.length} (effective=${effectiveTools.length})`,
-                );
-              } else if (activeAfter < sessionToolAllowlist.length) {
-                log.warn(
-                  `[OPENCLAW_TOOLS_DIAG] re-apply restored only ${activeAfter}/${sessionToolAllowlist.length} tools (allowlist contains entries missing from Pi registry)`,
-                );
-              }
-            }
+            // Re-apply the allowlist at the boundary we own — see helper.
+            ensureActiveToolsBeforePrompt({
+              session: activeSession,
+              isRawModelRun,
+              sessionToolAllowlist,
+              effectiveToolCount: effectiveTools.length,
+              warn: (message) => log.warn(message),
+            });
             if (promptSubmission.runtimeOnly) {
               await abortable(activeSession.prompt(promptSubmission.prompt));
             } else {
