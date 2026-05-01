@@ -404,6 +404,21 @@ describe("resolvePromptModeForSession", () => {
     expect(resolvePromptModeForSession("agent:main")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:thread:abc")).toBe("full");
   });
+
+  it("respects configPromptMode for primary sessions", () => {
+    expect(resolvePromptModeForSession("agent:main", "minimal")).toBe("minimal");
+    expect(resolvePromptModeForSession("agent:main:thread:abc", "minimal")).toBe("minimal");
+    expect(resolvePromptModeForSession(undefined, "minimal")).toBe("minimal");
+  });
+
+  it("subagent and cron sessions stay minimal regardless of config", () => {
+    expect(resolvePromptModeForSession("agent:main:subagent:child", "full")).toBe("minimal");
+    expect(resolvePromptModeForSession("agent:main:cron:job-1", "full")).toBe("minimal");
+  });
+
+  it("defaults to full when configPromptMode is undefined", () => {
+    expect(resolvePromptModeForSession("agent:main", undefined)).toBe("full");
+  });
 });
 
 describe("shouldStripBootstrapFromEmbeddedContext", () => {

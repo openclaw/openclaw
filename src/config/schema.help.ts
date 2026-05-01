@@ -204,6 +204,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Agent runtime configuration root covering defaults and explicit agent entries used for routing and execution context. Keep this section explicit so model/tool behavior stays predictable across multi-agent workflows.",
   "agents.defaults":
     "Shared default settings inherited by agents unless overridden per entry in agents.list. Use defaults to enforce consistent baseline behavior and reduce duplicated per-agent configuration.",
+  "agents.defaults.promptMode":
+    "System prompt verbosity for primary sessions. 'minimal' strips Documentation, Self-Update, Model Aliases, and other non-essential sections to reduce token overhead — especially useful for local models (Ollama) where every system prompt token is re-sent on every turn. Subagent and cron sessions always use 'minimal' regardless of this setting. Default: 'full'.",
   "agents.defaults.skills":
     "Optional default skill allowlist inherited by agents that omit agents.list[].skills. Omit for unrestricted skills, set [] to give inheriting agents no skills, and remember explicit agents.list[].skills replaces this default instead of merging with it.",
   "agents.defaults.contextLimits":

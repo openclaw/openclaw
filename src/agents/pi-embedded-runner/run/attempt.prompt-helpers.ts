@@ -203,11 +203,17 @@ export async function resolvePromptBuildHookResult(params: {
   };
 }
 
-export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
+export function resolvePromptModeForSession(
+  sessionKey?: string,
+  configPromptMode?: "full" | "minimal",
+): "minimal" | "full" {
   if (!sessionKey) {
-    return "full";
+    return configPromptMode ?? "full";
   }
-  return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
+  if (isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey)) {
+    return "minimal";
+  }
+  return configPromptMode ?? "full";
 }
 
 export function shouldInjectHeartbeatPrompt(params: {

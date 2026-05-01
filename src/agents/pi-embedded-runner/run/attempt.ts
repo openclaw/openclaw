@@ -1135,9 +1135,10 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
+    const configPromptMode = params.config?.agents?.defaults?.promptMode;
     const promptMode =
       params.promptMode ??
-      (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey));
+      (isRawModelRun ? "none" : resolvePromptModeForSession(params.sessionKey, configPromptMode));
 
     // When toolsAllow is set, use minimal prompt and strip skills catalog
     const effectivePromptMode = params.toolsAllow?.length ? ("minimal" as const) : promptMode;
