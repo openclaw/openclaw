@@ -1,11 +1,57 @@
 {
   "id": "payment",
   "activation": {
-    "onStartup": false
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["payment"]
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false
+      },
+      "provider": {
+        "type": "string",
+        "enum": ["stripe-link", "mock"]
+      },
+      "defaultCurrency": {
+        "type": "string",
+        "default": "usd"
+      },
+      "store": {
+        "type": "string",
+        "default": "~/.openclaw/payments"
+      },
+      "providers": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stripe-link": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "command": { "type": "string", "default": "link-cli" },
+              "clientName": { "type": "string", "default": "OpenClaw" },
+              "testMode": { "type": "boolean", "default": false },
+              "maxAmountCents": {
+                "type": "integer",
+                "default": 50000,
+                "maximum": 50000,
+                "minimum": 1
+              }
+            }
+          },
+          "mock": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    }
   }
 }
