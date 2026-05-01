@@ -176,7 +176,37 @@ describe("normalizeToolParameters", () => {
     expect(parameters.properties).toEqual({});
   });
 
-  it("preserves existing properties on type:object schemas", () => {
+  it("injects properties:{} when properties key exists but is undefined (MCP SDK edge case #75362)", () => {
+    const tool: AnyAgentTool = {
+      name: "get_flux_instance",
+      label: "get_flux_instance",
+      description: "Get flux instance",
+      parameters: { type: "object", properties: undefined } as unknown as Record<string, unknown>,
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toEqual({});
+  });
+
+  it("injects properties:{} when properties key is null (MCP SDK edge case #75362)", () => {
+    const tool: AnyAgentTool = {
+      name: "get_flux_instance",
+      label: "get_flux_instance",
+      description: "Get flux instance",
+      parameters: { type: "object", properties: null } as unknown as Record<string, unknown>,
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool);
+
+    const parameters = normalized.parameters as Record<string, unknown>;
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties).toEqual({});
+  });
     const tool: AnyAgentTool = {
       name: "query",
       label: "query",
