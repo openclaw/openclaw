@@ -407,9 +407,9 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       "--format",
       "json",
     ];
-    if (opts.testMode) {
-      pollArgs.push("--test");
-    }
+    // Note: --test is NOT a valid flag on `spend-request retrieve`; only on
+    // `spend-request create`. The retrieved spend-request inherits its test
+    // mode from the create call.
 
     const pollResult = await runCli(pollArgs, { timeoutMs: pollTimeoutMs });
 
@@ -538,9 +538,8 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       "--format",
       "json",
     ];
-    if (opts.testMode) {
-      args.push("--test");
-    }
+    // Note: --test is NOT a valid flag on `spend-request retrieve`; the
+    // retrieved spend-request inherits its test mode from the create call.
 
     const result = await runCli(args);
 
@@ -703,9 +702,7 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       "--format",
       "json",
     ];
-    if (opts.testMode) {
-      pollArgs.push("--test");
-    }
+    // Note: --test is NOT valid on `spend-request retrieve`; only on `create`.
 
     const pollResult = await runCli(pollArgs, { timeoutMs: pollTimeoutMs });
 
@@ -835,10 +832,8 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     const spendRequestId = meta.spendRequestId;
 
     // Security: --include card MUST NOT appear in args here.
+    // Note: --test is NOT valid on `spend-request retrieve`; only on `create`.
     const args: string[] = ["spend-request", "retrieve", spendRequestId, "--format", "json"];
-    if (opts.testMode) {
-      args.push("--test");
-    }
 
     const result = await runCli(args);
 

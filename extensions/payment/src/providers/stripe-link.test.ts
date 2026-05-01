@@ -665,7 +665,9 @@ describe("issueVirtualCard", () => {
     expect(createArgs).not.toContain("--idempotency-key");
   });
 
-  it("includes --test flag in create and poll calls when testMode=true", async () => {
+  it("includes --test on create only (NOT on retrieve poll) when testMode=true", async () => {
+    // link-cli 0.4.0 supports --test on `spend-request create` only;
+    // `spend-request retrieve` rejects it as Unknown flag.
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApproved),
       fixtureOk(spendRequestRetrievePollApproved),
@@ -680,7 +682,7 @@ describe("issueVirtualCard", () => {
     const [_cmd1, createArgs] = spy.mock.calls[0]!;
     const [_cmd2, pollArgs] = spy.mock.calls[1]!;
     expect(createArgs).toContain("--test");
-    expect(pollArgs).toContain("--test");
+    expect(pollArgs).not.toContain("--test");
   });
 
   it("throws ProviderUnavailableError when create exit code is non-zero", async () => {
@@ -829,12 +831,12 @@ describe("retrieveCardSecrets", () => {
     );
   });
 
-  it("includes --test flag when testMode=true", async () => {
+  it("does NOT include --test on retrieve --include card (Unknown flag in link-cli 0.4.0)", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeTestAdapter({ runner });
     await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     const [_cmd, args] = spy.mock.calls[0]!;
-    expect(args).toContain("--test");
+    expect(args).not.toContain("--test");
   });
 });
 
@@ -1062,7 +1064,9 @@ describe("executeMachinePayment", () => {
     ).rejects.toThrow(ProviderUnavailableError);
   });
 
-  it("includes --test flag in all steps when testMode=true", async () => {
+  it("includes --test on create + mpp pay but NOT on retrieve poll when testMode=true", async () => {
+    // link-cli 0.4.0: --test valid on spend-request create and (assumed) mpp pay,
+    // NOT valid on spend-request retrieve.
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
       fixtureOk(spendRequestRetrievePollMppApproved),
@@ -1079,7 +1083,7 @@ describe("executeMachinePayment", () => {
     const [_cmd2, step2Args] = spy.mock.calls[1]!;
     const [_cmd3, step3Args] = spy.mock.calls[2]!;
     expect(step1Args).toContain("--test");
-    expect(step2Args).toContain("--test");
+    expect(step2Args).not.toContain("--test");
     expect(step3Args).toContain("--test");
   });
 
@@ -1228,7 +1232,7 @@ describe("getStatus", () => {
     expect(caught?.providerId).toBe("stripe-link");
   });
 
-  it("includes --test flag when testMode=true", async () => {
+  it("does NOT include --test on getStatus retrieve (Unknown flag in link-cli 0.4.0)", async () => {
     handleMap.set("slh-lsrq_test_approved_001", {
       spendRequestId: "lsrq_test_approved_001",
       providerId: "stripe-link",
@@ -1240,7 +1244,7 @@ describe("getStatus", () => {
     const adapter = makeTestAdapter({ runner });
     await adapter.getStatus("slh-lsrq_test_approved_001");
     const [_cmd, args] = spy.mock.calls[0]!;
-    expect(args).toContain("--test");
+    expect(args).not.toContain("--test");
   });
 });
 
