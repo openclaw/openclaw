@@ -2,7 +2,6 @@ import { lstat, open } from "node:fs/promises";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
 import { detectMime, FILE_TYPE_SNIFF_MAX_BYTES, normalizeMimeType } from "../media/mime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
@@ -24,6 +23,17 @@ async function loadSendMessage(): Promise<SendMessage> {
     (module) => module.sendMessage,
   );
   return sendMessagePromise;
+}
+
+type ResolveOutboundChannelPlugin =
+  typeof import("../infra/outbound/channel-resolution.js").resolveOutboundChannelPlugin;
+let resolveOutboundChannelPluginPromise: Promise<ResolveOutboundChannelPlugin> | undefined;
+
+async function loadResolveOutboundChannelPlugin(): Promise<ResolveOutboundChannelPlugin> {
+  resolveOutboundChannelPluginPromise ??= import("../infra/outbound/channel-resolution.js").then(
+    (module) => module.resolveOutboundChannelPlugin,
+  );
+  return resolveOutboundChannelPluginPromise;
 }
 
 type ResolvedAttachmentDelivery = {
@@ -190,6 +200,7 @@ export async function sendPluginSessionAttachment(
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }
+  const resolveOutboundChannelPlugin = await loadResolveOutboundChannelPlugin();
   const deliveryPlugin = resolveOutboundChannelPlugin({
     channel: deliveryContext.channel,
     cfg: params.config,

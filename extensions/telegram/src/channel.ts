@@ -1084,6 +1084,7 @@ export const telegramPlugin = createChatChannelPlugin({
         threadId,
         silent,
         forceDocument,
+        formatting,
         gatewayClientScopes,
       }) => {
         const send = await resolveTelegramSend(deps);
@@ -1099,6 +1100,7 @@ export const telegramPlugin = createChatChannelPlugin({
             threadId,
             silent,
             forceDocument,
+            parseMode: formatting?.parseMode,
             gatewayClientScopes,
           }),
         });

@@ -221,6 +221,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     replyToId,
     threadId,
     forceDocument,
+    formatting,
     gatewayClientScopes,
   }) => {
     const { send, baseOpts } = await resolveTelegramSendContext({
@@ -237,6 +238,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       payload,
       baseOpts: {
         ...baseOpts,
+        ...(formatting?.parseMode ? { textMode: "html" as const } : {}),
         mediaLocalRoots,
         mediaReadFile,
         forceDocument: forceDocument ?? false,
