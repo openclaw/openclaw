@@ -10,8 +10,8 @@ export const DEEPINFRA_MODELS_URL = `${DEEPINFRA_BASE_URL}/models?sort_by=opencl
 export const DEEPINFRA_DEFAULT_MODEL_ID = "deepseek-ai/DeepSeek-V3.2";
 export const DEEPINFRA_DEFAULT_MODEL_REF = `deepinfra/${DEEPINFRA_DEFAULT_MODEL_ID}`;
 
-export const DEEPINFRA_DEFAULT_CONTEXT_WINDOW = 128000;
-export const DEEPINFRA_DEFAULT_MAX_TOKENS = 8192;
+const DEEPINFRA_DEFAULT_CONTEXT_WINDOW = 128000;
+const DEEPINFRA_DEFAULT_MAX_TOKENS = 8192;
 
 export const DEEPINFRA_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
