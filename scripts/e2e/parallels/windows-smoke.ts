@@ -14,7 +14,7 @@ import {
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
-  resolveProviderAuth,
+  resolveWindowsProviderAuth,
   resolveSnapshot,
   run,
   runStreaming,
@@ -241,7 +241,7 @@ class WindowsSmoke {
   };
 
   constructor(private options: WindowsOptions) {
-    this.auth = resolveProviderAuth({
+    this.auth = resolveWindowsProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
       provider: options.provider,
@@ -666,7 +666,7 @@ if (!(Test-Path $scriptPath)) { throw "background script was not written" }`,
     );
     let launched = false;
     let lastLaunchStatus = 0;
-    for (let attempt = 1; attempt <= 3; attempt++) {
+    for (let attempt = 1; attempt <= 5; attempt++) {
       this.waitForGuestReady(120);
       const launchLogPath = path.join(this.runDir, `${safeLabel}-launch-${attempt}.log`);
       const launchStatus = await runStreaming(
@@ -675,17 +675,30 @@ if (!(Test-Path $scriptPath)) { throw "background script was not written" }`,
           "exec",
           this.options.vmName,
           "--current-user",
-          "cmd.exe",
-          "/d",
-          "/s",
-          "/c",
-          `start "" /min powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "%TEMP%\\${fileBase}.ps1"`,
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
+Start-Process -FilePath powershell.exe -WindowStyle Hidden -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $scriptPath)
+'started'`),
         ],
-        { logPath: launchLogPath, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(20_000) },
+        { logPath: launchLogPath, quiet: true, timeoutMs: this.remainingPhaseTimeoutMs(30_000) },
       );
       const launchLog = await readFile(launchLogPath, "utf8").catch(() => "");
       this.log(launchLog);
+      if (launchStatus === 0 && launchLog.includes("started")) {
+        launched = true;
+        break;
+      }
       if (launchStatus === 0 || launchStatus === 124) {
+        const materialized = this.waitForBackgroundMaterialized(pathsScript, 45_000);
+        if (!materialized) {
+          warn(`${label} launch retry ${attempt}: background log/done file did not materialize`);
+          lastLaunchStatus = launchStatus;
+          continue;
+        }
         launched = true;
         break;
       }
@@ -754,12 +767,45 @@ Remove-Item -Path $scriptPath, $logPath, $donePath, $exitPath -Force -ErrorActio
     throw new Error(`${label} timed out`);
   }
 
+  private waitForBackgroundMaterialized(pathsScript: string, timeoutMs: number): boolean {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const result = this.guest.run(
+        [
+          "powershell.exe",
+          "-NoProfile",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-EncodedCommand",
+          encodePowerShell(`${pathsScript}
+if ((Test-Path $logPath) -or (Test-Path $donePath)) {
+  'materialized'
+}`),
+        ],
+        { check: false, timeoutMs: this.remainingPhaseTimeoutMs(15_000) },
+      );
+      if (result.stdout.includes("materialized")) {
+        return true;
+      }
+      run("sleep", ["2"], { quiet: true });
+    }
+    return false;
+  }
+
   private runDevChannelUpdate(): void {
     this.guestPowerShell(
       `$ErrorActionPreference = 'Stop'
 $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps') 'portable-git') ''
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
 where.exe git.exe
+$configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if ($null -eq $config.update) {
+  $config | Add-Member -MemberType NoteProperty -Name update -Value ([pscustomobject]@{})
+}
+$config.update | Add-Member -Force -MemberType NoteProperty -Name channel -Value 'dev'
+$config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$env:OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
 Invoke-OpenClaw update --channel dev --yes --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
@@ -843,6 +889,24 @@ Invoke-OpenClaw models set ${psSingleQuote(this.auth.modelId)}
 if ($LASTEXITCODE -ne 0) { throw "models set failed" }
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
+Invoke-OpenClaw config set tools.profile minimal
+if ($LASTEXITCODE -ne 0) { throw "tools profile config set failed" }
+$configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if ($null -eq $config.models) {
+  $config | Add-Member -MemberType NoteProperty -Name models -Value ([pscustomobject]@{})
+}
+if ($null -eq $config.models.providers) {
+  $config.models | Add-Member -MemberType NoteProperty -Name providers -Value ([pscustomobject]@{})
+}
+$config.models.providers | Add-Member -Force -MemberType NoteProperty -Name openai -Value ([pscustomobject]@{
+  baseUrl = 'https://api.openai.com/v1'
+  models = @()
+  timeoutSeconds = 300
+})
+$config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-windows-smoke.jsonl'
+Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $args = ${psArray([
@@ -854,6 +918,8 @@ $args = ${psArray([
         "parallels-windows-smoke",
         "--message",
         "Reply with exact ASCII text OK only.",
+        "--thinking",
+        "minimal",
         "--json",
       ])}
 $output = Invoke-OpenClaw @args 2>&1

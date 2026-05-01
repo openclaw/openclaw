@@ -595,16 +595,16 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
   plugins?: NormalizedPluginsConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   pluginId: string;
   pluginDir: string;
   configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  if (params.selectedPluginIds) {
+  if (params.exactPluginIds) {
     return (
-      params.selectedPluginIds.has(params.pluginId) &&
+      params.exactPluginIds.has(params.pluginId) &&
       !(
         params.config &&
         params.plugins &&
@@ -658,7 +658,7 @@ export function collectBundledPluginRuntimeDeps(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
   normalizePluginId?: NormalizePluginId;
@@ -702,7 +702,7 @@ export function collectBundledPluginRuntimeDeps(params: {
         config: params.config,
         plugins,
         pluginIds: params.pluginIds,
-        selectedPluginIds: params.selectedPluginIds,
+        exactPluginIds: params.exactPluginIds,
         pluginId,
         pluginDir,
         configuredModelOwnerPluginIds,

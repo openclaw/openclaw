@@ -35,8 +35,10 @@ import {
   CAPTURE_FINALIZE_GRACE_MS,
   isVoiceChannel,
   logVoiceVerbose,
+  resolveVoiceTimeoutMs,
   MIN_SEGMENT_SECONDS,
   VOICE_CONNECT_READY_TIMEOUT_MS,
+  VOICE_RECONNECT_GRACE_MS,
   type VoiceOperationResult,
   type VoiceSessionEntry,
 } from "./session.js";
@@ -172,13 +174,22 @@ export class DiscordVoiceManager {
       return { ok: false, message: "Discord voice plugin is not available." };
     }
 
+    const voiceConfig = this.params.discordConfig.voice;
     const adapterCreator = voicePlugin.getGatewayAdapterCreator(guildId);
-    const daveEncryption = this.params.discordConfig.voice?.daveEncryption;
-    const decryptionFailureTolerance = this.params.discordConfig.voice?.decryptionFailureTolerance;
+    const daveEncryption = voiceConfig?.daveEncryption;
+    const decryptionFailureTolerance = voiceConfig?.decryptionFailureTolerance;
+    const connectReadyTimeoutMs = resolveVoiceTimeoutMs(
+      voiceConfig?.connectTimeoutMs,
+      VOICE_CONNECT_READY_TIMEOUT_MS,
+    );
+    const reconnectGraceMs = resolveVoiceTimeoutMs(
+      voiceConfig?.reconnectGraceMs,
+      VOICE_RECONNECT_GRACE_MS,
+    );
     logVoiceVerbose(
       `join: DAVE settings encryption=${daveEncryption === false ? "off" : "on"} tolerance=${
         decryptionFailureTolerance ?? "default"
-      }`,
+      } connectTimeout=${connectReadyTimeoutMs}ms reconnectGrace=${reconnectGraceMs}ms`,
     );
     const voiceSdk = loadDiscordVoiceSdk();
     const connection = voiceSdk.joinVoiceChannel({
@@ -195,10 +206,13 @@ export class DiscordVoiceManager {
       await voiceSdk.entersState(
         connection,
         voiceSdk.VoiceConnectionStatus.Ready,
-        VOICE_CONNECT_READY_TIMEOUT_MS,
+        connectReadyTimeoutMs,
       );
       logVoiceVerbose(`join: connected to guild ${guildId} channel ${channelId}`);
     } catch (err) {
+      logger.warn(
+        `discord voice: join failed before ready: guild ${guildId} channel ${channelId} timeout=${connectReadyTimeoutMs}ms error=${formatErrorMessage(err)}`,
+      );
       connection.destroy();
       return { ok: false, message: `Failed to join voice channel: ${formatErrorMessage(err)}` };
     }
@@ -289,11 +303,26 @@ export class DiscordVoiceManager {
 
     disconnectedHandler = async () => {
       try {
+        logVoiceVerbose(
+          `disconnected: attempting recovery guild ${guildId} channel ${channelId} grace=${reconnectGraceMs}ms`,
+        );
         await Promise.race([
-          voiceSdk.entersState(connection, voiceSdk.VoiceConnectionStatus.Signalling, 5_000),
-          voiceSdk.entersState(connection, voiceSdk.VoiceConnectionStatus.Connecting, 5_000),
+          voiceSdk.entersState(
+            connection,
+            voiceSdk.VoiceConnectionStatus.Signalling,
+            reconnectGraceMs,
+          ),
+          voiceSdk.entersState(
+            connection,
+            voiceSdk.VoiceConnectionStatus.Connecting,
+            reconnectGraceMs,
+          ),
         ]);
-      } catch {
+        logVoiceVerbose(`disconnected: recovery started guild ${guildId} channel ${channelId}`);
+      } catch (err) {
+        logger.warn(
+          `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
+        );
         clearSessionIfCurrent();
         connection.destroy();
       }

@@ -228,6 +228,7 @@ import {
 import { splitSdkTools } from "../tool-split.js";
 import { mapThinkingLevel } from "../utils.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
+import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
@@ -352,7 +353,6 @@ export {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 export {
-  buildSessionsYieldContextMessage,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
   stripSessionsYieldArtifacts,
@@ -564,6 +564,13 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   return params.toolsAllow.some(
     (toolName) => toolName === "bundle-mcp" || toolName.includes(TOOL_NAME_SEPARATOR),
   );
+}
+
+export function resolveAttemptToolPolicyMessageProvider(params: {
+  messageProvider?: string;
+  messageChannel?: string;
+}): string | undefined {
+  return params.messageProvider ?? params.messageChannel;
 }
 
 function collectAttemptExplicitToolAllowlistSources(params: {
@@ -784,7 +791,7 @@ export async function runEmbeddedAttempt(
                 elevated: params.bashElevated,
               },
               sandbox,
-              messageProvider: params.messageChannel ?? params.messageProvider,
+              messageProvider: resolveAttemptToolPolicyMessageProvider(params),
               agentAccountId: params.agentAccountId,
               messageTo: params.messageTo,
               messageThreadId: params.messageThreadId,
@@ -1003,7 +1010,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
-      messageProvider: params.messageChannel ?? params.messageProvider,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
@@ -1030,7 +1037,7 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
       modelProvider: params.provider,
       modelId: params.modelId,
-      messageProvider: params.messageChannel ?? params.messageProvider,
+      messageProvider: resolveAttemptToolPolicyMessageProvider(params),
       agentAccountId: params.agentAccountId,
       groupId: params.groupId,
       groupChannel: params.groupChannel,
@@ -1684,11 +1691,19 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransport({
-        provider: params.provider,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-      });
+      const hasExplicitSseTransport = [
+        (params.streamParams as { transport?: unknown } | undefined)?.transport,
+        (params.model as { params?: { transport?: unknown } }).params?.transport,
+      ]
+        .map((value) => (typeof value === "string" ? value.trim().toLowerCase() : ""))
+        .includes("sse");
+      const shouldUseWebSocketTransport =
+        !hasExplicitSseTransport &&
+        shouldUseOpenAIWebSocketTransport({
+          provider: params.provider,
+          modelApi: params.model.api,
+          modelBaseUrl: params.model.baseUrl,
+        });
       const wsApiKey = shouldUseWebSocketTransport
         ? await resolveEmbeddedAgentApiKey({
             provider: params.provider,
@@ -2108,19 +2123,6 @@ export async function runEmbeddedAttempt(
         err.name = "TimeoutError";
         return err;
       };
-      const makeAbortError = (signal: AbortSignal): Error => {
-        const reason = getAbortReason(signal);
-        // If the reason is already an Error, preserve it to keep the original message
-        // (e.g., "LLM idle timeout (<n>s): no response from model" instead of "aborted")
-        if (reason instanceof Error) {
-          const err = new Error(reason.message, { cause: reason });
-          err.name = "AbortError";
-          return err;
-        }
-        const err = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-        err.name = "AbortError";
-        return err;
-      };
       const abortCompaction = () => {
         if (!activeSession.isCompacting) {
           return;
@@ -2152,29 +2154,8 @@ export async function runEmbeddedAttempt(
         idleTimedOut = true;
         abortRun(true, error);
       };
-      const abortable = <T>(promise: Promise<T>): Promise<T> => {
-        const signal = runAbortController.signal;
-        if (signal.aborted) {
-          return Promise.reject(makeAbortError(signal));
-        }
-        return new Promise<T>((resolve, reject) => {
-          const onAbort = () => {
-            signal.removeEventListener("abort", onAbort);
-            reject(makeAbortError(signal));
-          };
-          signal.addEventListener("abort", onAbort, { once: true });
-          promise.then(
-            (value) => {
-              signal.removeEventListener("abort", onAbort);
-              resolve(value);
-            },
-            (err) => {
-              signal.removeEventListener("abort", onAbort);
-              reject(err);
-            },
-          );
-        });
-      };
+      const abortable = <T>(promise: Promise<T>): Promise<T> =>
+        abortableWithSignal(runAbortController.signal, promise);
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
@@ -2391,6 +2372,7 @@ export async function runEmbeddedAttempt(
           if (truncationResult.truncated) {
             preflightRecovery = {
               route: "truncate_tool_results_only",
+              source: "mid-turn",
               handled: true,
               truncatedCount: truncationResult.truncatedCount,
             };
@@ -2401,7 +2383,7 @@ export async function runEmbeddedAttempt(
               `handled=true truncatedCount=${truncationResult.truncatedCount}`,
             );
           } else {
-            preflightRecovery = { route: "compact_only" };
+            preflightRecovery = { route: "compact_only", source: "mid-turn" };
             promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
             promptErrorSource = "precheck";
             logMidTurnPrecheck(
@@ -2410,7 +2392,7 @@ export async function runEmbeddedAttempt(
             );
           }
         } else {
-          preflightRecovery = { route: request.route };
+          preflightRecovery = { route: request.route, source: "mid-turn" };
           promptError = new Error(PREEMPTIVE_OVERFLOW_ERROR_TEXT);
           promptErrorSource = "precheck";
           logMidTurnPrecheck(request.route);
