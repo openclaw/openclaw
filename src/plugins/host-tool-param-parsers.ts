@@ -3,10 +3,11 @@ import { extractApplyPatchTargetPaths } from "../agents/apply-patch-paths.js";
 /**
  * Derived metadata stamped on `before_tool_call` events for plugin handlers.
  *
- * The host owns parsing of well-known tool param shapes (e.g. apply_patch)
- * once per call so plugins do not need to re-parse and re-validate the same
- * envelopes. Fields are optional and additive: a missing field means the
- * derivation produced nothing usable, never that it failed loudly.
+ * The host owns parsing of well-known tool param shapes (e.g. apply_patch) so
+ * plugins do not need to re-parse and re-validate the same envelopes. The host
+ * derives the initial call and re-derives only when a trusted policy rewrites
+ * params. Fields are optional and additive: a missing field means derivation
+ * produced nothing usable, never that it failed loudly.
  */
 export type HostToolDerivedParams = {
   /** Destination paths the tool intends to read or write, when discoverable. */
