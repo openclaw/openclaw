@@ -69,14 +69,16 @@ function delay(ms: number): Promise<void> {
 }
 
 function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
+  const mergedEnv = { ...process.env, ...config.env };
   const program = resolveWindowsSpawnProgram({
     command: config.command,
+    env: mergedEnv,
     allowShellFallback: true,
   });
   const invocation = materializeWindowsSpawnProgram(program, config.args ?? []);
   return spawn(invocation.command, invocation.argv, {
     stdio: ["pipe", "pipe", "pipe"],
-    env: { ...process.env, ...config.env },
+    env: mergedEnv,
     cwd: config.cwd,
     detached: process.platform !== "win32",
     windowsHide: invocation.windowsHide ?? process.platform === "win32",
