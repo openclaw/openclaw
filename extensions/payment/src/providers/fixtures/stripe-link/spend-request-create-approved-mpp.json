@@ -1,12 +1,22 @@
-{
-  "spend_request": {
-    "id": "spreq_test_mpp_approved_001",
-    "status": "approved",
-    "credential_type": "shared_payment_token",
-    "amount_cents": 2500,
+[
+  {
+    "id": "lsrq_test_mpp_approved_001",
+    "merchant_name": "Test API Merchant",
+    "merchant_url": "https://api.example.com/pay",
+    "context": "https://api.example.com/pay",
+    "amount": 2500,
     "currency": "usd",
-    "valid_until": "2026-05-01T03:26:21.000Z",
-    "shared_payment_token": "spt_test_abc123def456",
-    "merchant_name": "Test API Merchant"
+    "line_items": [],
+    "totals": [],
+    "payment_details": "pm_test_card_visa_4242",
+    "status": "pending_approval",
+    "approval_url": "https://app.link.com/activity/approve/lsrq_test_mpp_approved_001",
+    "created_at": "2026-05-01T04:28:20Z",
+    "updated_at": "2026-05-01T04:28:21Z",
+    "credential_type": "shared_payment_token",
+    "instruction": "Present the approval_url to the user to approve this spend request.",
+    "_next": {
+      "command": "spend-request retrieve lsrq_test_mpp_approved_001 --interval 2 --max-attempts 150"
+    }
   }
-}
+]

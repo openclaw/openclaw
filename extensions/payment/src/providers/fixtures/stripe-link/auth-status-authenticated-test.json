@@ -1,10 +1,13 @@
-{
-  "authenticated": true,
-  "account": {
-    "id": "acct_test_1234567890",
-    "email": "testuser@example.com",
-    "display_name": "Test User"
-  },
-  "version": "1.2.3",
-  "test_mode": true
-}
+[
+  {
+    "authenticated": true,
+    "access_token": "liwltoken_test_abc123",
+    "token_type": "Bearer",
+    "credentials_path": "/Users/testuser/.link-cli/credentials.json",
+    "update": {
+      "current_version": "0.4.0",
+      "latest_version": "0.4.1",
+      "update_command": "brew upgrade link-cli"
+    }
+  }
+]

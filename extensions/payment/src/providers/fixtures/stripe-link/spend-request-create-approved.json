@@ -1,17 +1,22 @@
-{
-  "spend_request": {
-    "id": "spreq_test_approved_001",
-    "status": "approved",
-    "credential_type": "virtual_card",
-    "amount_cents": 2500,
-    "currency": "usd",
-    "valid_until": "2026-05-01T03:26:21.000Z",
+[
+  {
+    "id": "lsrq_test_approved_001",
     "merchant_name": "Test Merchant",
-    "card": {
-      "brand": "visa",
-      "last4": "4242",
-      "exp_month": 12,
-      "exp_year": 2030
+    "merchant_url": "https://merchant.example.com",
+    "context": "I am authorizing a software subscription purchase from Acme Corp for the monthly developer plan. This charge is approved by the account holder for business use.",
+    "amount": 2500,
+    "currency": "usd",
+    "line_items": [],
+    "totals": [],
+    "payment_details": "pm_test_card_visa_4242",
+    "status": "pending_approval",
+    "approval_url": "https://app.link.com/activity/approve/lsrq_test_approved_001",
+    "created_at": "2026-05-01T04:28:20Z",
+    "updated_at": "2026-05-01T04:28:21Z",
+    "credential_type": "card",
+    "instruction": "Present the approval_url to the user to approve this spend request.",
+    "_next": {
+      "command": "spend-request retrieve lsrq_test_approved_001 --interval 2 --max-attempts 150"
     }
   }
-}
+]

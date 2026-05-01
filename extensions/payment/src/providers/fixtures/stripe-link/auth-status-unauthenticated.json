@@ -1,6 +1,13 @@
-{
-  "authenticated": false,
-  "account": null,
-  "version": "1.2.3",
-  "test_mode": false
-}
+[
+  {
+    "authenticated": false,
+    "access_token": null,
+    "token_type": null,
+    "credentials_path": null,
+    "update": {
+      "current_version": "0.4.0",
+      "latest_version": "0.4.1",
+      "update_command": "brew upgrade link-cli"
+    }
+  }
+]

@@ -541,31 +541,60 @@ describe("createPaymentManager — adapter registry", () => {
 
 // Fixture data inlined for manager-layer tests (avoids importing from the
 // provider's fixture directory directly from payments.test.ts).
-const STRIPE_LINK_APPROVED_FIXTURE = {
-  spend_request: {
-    id: "spreq_test_approved_001",
-    status: "approved",
-    credential_type: "virtual_card",
-    amount_cents: 2500,
-    currency: "usd",
-    valid_until: "2026-05-01T03:26:21.000Z",
-    merchant_name: "Test Merchant",
-    card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2030 },
-  },
-};
+// Updated to link-cli 0.4.0 actual shapes (array-wrapped, lsrq_ prefix).
 
-const STRIPE_LINK_APPROVED_MPP_FIXTURE = {
-  spend_request: {
-    id: "spreq_test_mpp_approved_001",
-    status: "approved",
-    credential_type: "shared_payment_token",
-    amount_cents: 2500,
+// Create response: returns pending_approval immediately
+const STRIPE_LINK_CREATE_FIXTURE = [
+  {
+    id: "lsrq_test_approved_001",
+    merchant_name: "Test Merchant",
+    merchant_url: "https://merchant.example.com",
+    amount: 2500,
     currency: "usd",
-    valid_until: "2026-05-01T03:26:21.000Z",
-    shared_payment_token: "spt_test_abc123def456",
-    merchant_name: "Test API Merchant",
+    status: "pending_approval",
+    credential_type: "card",
+    approval_url: "https://app.link.com/activity/approve/lsrq_test_approved_001",
+    created_at: "2026-05-01T04:28:20Z",
+    updated_at: "2026-05-01T04:28:21Z",
   },
-};
+];
+
+// Poll response: transitions pending_approval → approved
+const STRIPE_LINK_POLL_APPROVED_FIXTURE = [
+  { id: "lsrq_test_approved_001", status: "pending_approval", updated_at: "2026-05-01T04:28:21Z" },
+  { id: "lsrq_test_approved_001", status: "approved", updated_at: "2026-05-01T04:29:10Z" },
+];
+
+// MPP create: pending_approval
+const STRIPE_LINK_CREATE_MPP_FIXTURE = [
+  {
+    id: "lsrq_test_mpp_approved_001",
+    merchant_name: "Test API Merchant",
+    merchant_url: "https://api.example.com/pay",
+    amount: 2500,
+    currency: "usd",
+    status: "pending_approval",
+    credential_type: "shared_payment_token",
+    approval_url: "https://app.link.com/activity/approve/lsrq_test_mpp_approved_001",
+    created_at: "2026-05-01T04:28:20Z",
+    updated_at: "2026-05-01T04:28:21Z",
+  },
+];
+
+// MPP poll: pending_approval → approved with shared_payment_token
+const STRIPE_LINK_POLL_MPP_APPROVED_FIXTURE = [
+  {
+    id: "lsrq_test_mpp_approved_001",
+    status: "pending_approval",
+    updated_at: "2026-05-01T04:28:21Z",
+  },
+  {
+    id: "lsrq_test_mpp_approved_001",
+    status: "approved",
+    shared_payment_token: "spt_test_abc123def456",
+    updated_at: "2026-05-01T04:29:10Z",
+  },
+];
 
 const STRIPE_LINK_MPP_SETTLED_FIXTURE = {
   result: {
@@ -577,18 +606,18 @@ const STRIPE_LINK_MPP_SETTLED_FIXTURE = {
   },
 };
 
-const STRIPE_LINK_WITHOUT_CARD_FIXTURE = {
-  spend_request: {
-    id: "spreq_test_approved_001",
-    status: "approved",
-    credential_type: "virtual_card",
-    amount_cents: 2500,
-    currency: "usd",
-    valid_until: "2026-05-01T03:26:21.000Z",
+// getStatus response: single-element array (no --include card)
+const STRIPE_LINK_WITHOUT_CARD_FIXTURE = [
+  {
+    id: "lsrq_test_approved_001",
     merchant_name: "Test Merchant",
-    card: { brand: "visa", last4: "4242", exp_month: 12, exp_year: 2030 },
+    amount: 2500,
+    currency: "usd",
+    status: "approved",
+    created_at: "2026-05-01T04:28:20Z",
+    updated_at: "2026-05-01T04:29:51Z",
   },
-};
+];
 
 describe("PaymentManager + Stripe Link adapter integration", () => {
   function makeSequentialRunner(
@@ -611,7 +640,11 @@ describe("PaymentManager + Stripe Link adapter integration", () => {
   }
 
   it("issueVirtualCard via manager dispatches to stripe-link adapter and returns approved handle", async () => {
-    const runner = makeSequentialRunner([fixtureOk(STRIPE_LINK_APPROVED_FIXTURE)]);
+    // link-cli 0.4.0: create (pending_approval) + poll (approved) = 2 CLI calls
+    const runner = makeSequentialRunner([
+      fixtureOk(STRIPE_LINK_CREATE_FIXTURE),
+      fixtureOk(STRIPE_LINK_POLL_APPROVED_FIXTURE),
+    ]);
     const stripeAdapter = createStripeLinkAdapter({
       clientName: "TestClient",
       testMode: true,
@@ -634,7 +667,9 @@ describe("PaymentManager + Stripe Link adapter integration", () => {
 
     expect(handle.status).toBe("approved");
     expect(handle.provider).toBe("stripe-link");
-    expect(handle.display?.last4).toBe("4242");
+    // display is not populated at issue time in 0.4.0 (requires separate --include card call)
+    // providerRequestId uses lsrq_ prefix
+    expect(handle.providerRequestId).toBe("lsrq_test_approved_001");
 
     // handleMap is populated so getStatus can dispatch to stripe-link
     const meta = handleMap.get(handle.id);
@@ -643,8 +678,10 @@ describe("PaymentManager + Stripe Link adapter integration", () => {
   });
 
   it("executeMachinePayment via manager dispatches to stripe-link adapter and returns settled receipt", async () => {
+    // link-cli 0.4.0: create (pending_approval) + poll (approved+token) + mpp pay = 3 CLI calls
     const runner = makeSequentialRunner([
-      fixtureOk(STRIPE_LINK_APPROVED_MPP_FIXTURE),
+      fixtureOk(STRIPE_LINK_CREATE_MPP_FIXTURE),
+      fixtureOk(STRIPE_LINK_POLL_MPP_APPROVED_FIXTURE),
       fixtureOk(STRIPE_LINK_MPP_SETTLED_FIXTURE),
     ]);
     const stripeAdapter = createStripeLinkAdapter({
@@ -674,7 +711,11 @@ describe("PaymentManager + Stripe Link adapter integration", () => {
 
   it("getStatus via manager dispatches to stripe-link adapter using handleMap.providerId", async () => {
     // First: issue a card to populate handleMap via the adapter
-    const issueRunner = makeSequentialRunner([fixtureOk(STRIPE_LINK_APPROVED_FIXTURE)]);
+    // link-cli 0.4.0: create + poll = 2 calls
+    const issueRunner = makeSequentialRunner([
+      fixtureOk(STRIPE_LINK_CREATE_FIXTURE),
+      fixtureOk(STRIPE_LINK_POLL_APPROVED_FIXTURE),
+    ]);
     const stripeAdapter = createStripeLinkAdapter({
       clientName: "TestClient",
       testMode: true,

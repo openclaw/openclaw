@@ -1,20 +1,24 @@
-{
-  "spend_request": {
-    "id": "spreq_test_approved_001",
+[
+  {
+    "id": "lsrq_test_approved_001",
     "status": "approved",
-    "credential_type": "virtual_card",
-    "amount_cents": 2500,
-    "currency": "usd",
-    "valid_until": "2026-05-01T03:26:21.000Z",
-    "merchant_name": "Test Merchant",
+    "updated_at": "2026-05-01T04:29:51Z",
     "card": {
+      "id": "ic_test_001",
       "number": "4242424242424242",
       "cvc": "123",
+      "brand": "visa",
       "exp_month": 12,
       "exp_year": 2030,
-      "brand": "visa",
-      "last4": "4242",
-      "cardholder_name": "OPENCLAW VIRTUAL"
+      "billing_address": {
+        "name": "Jane Doe",
+        "line1": "510 Townsend St",
+        "city": "San Francisco",
+        "state": "CA",
+        "postal_code": "94103",
+        "country": "US"
+      },
+      "valid_until": "2026-05-01T05:29:51Z"
     }
   }
-}
+]

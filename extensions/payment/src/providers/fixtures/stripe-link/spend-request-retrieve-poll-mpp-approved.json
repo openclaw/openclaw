@@ -1,0 +1,13 @@
+[
+  {
+    "id": "lsrq_test_mpp_approved_001",
+    "status": "pending_approval",
+    "updated_at": "2026-05-01T04:28:21Z"
+  },
+  {
+    "id": "lsrq_test_mpp_approved_001",
+    "status": "approved",
+    "shared_payment_token": "spt_test_abc123def456",
+    "updated_at": "2026-05-01T04:29:10Z"
+  }
+]

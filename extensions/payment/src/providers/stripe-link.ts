@@ -1,9 +1,11 @@
 /**
  * stripe-link.ts — Stripe Link adapter for the OpenClaw payment plugin.
  *
+ * Rewritten against link-cli 0.4.0 actual JSON shapes (smoke-tested 2026-05-01).
+ *
  * Security invariants (from feature plan U4):
  *
- * 1. `--include=card` MUST appear in EXACTLY ONE place: inside `retrieveCardSecrets`.
+ * 1. `--include card` MUST appear in EXACTLY ONE place: inside `retrieveCardSecrets`.
  *    Any other use is a security defect.
  *
  * 2. MPP token (shared_payment_token) is function-scoped inside `executeMachinePayment`.
@@ -16,41 +18,41 @@
  * 4. Card data MUST NEVER appear in error messages, log output, or audit records.
  *    Only redacted display values (`brand`, `last4`) are used in errors.
  *
- * Assumptions about link-cli output shape (to be verified during U6 acceptance):
+ * Verified link-cli 0.4.0 output shapes:
  *
- * A. `link-cli auth status --format json` returns `{ authenticated: boolean, account: ..., version: string }`.
- *    We check `parsed.authenticated === true` for the auth state.
+ * A. `link-cli auth status --format json` returns an ARRAY:
+ *    [{ authenticated: boolean, access_token, token_type, credentials_path,
+ *       update: { current_version, latest_version, update_command } }]
+ *    NOTE: --test flag is NOT valid for auth status (rejected with "Unknown flag").
+ *    providerVersion comes from update.current_version.
  *
- * B. `link-cli payment-methods list --format json` returns a JSON array of objects.
- *    Each has: `id`, `funding_source_type` (e.g. "card" or "stablecoin"), `card.brand`,
- *    `card.last4`, `currency`, `available_balance_cents`, `display_name`.
+ * B. `link-cli payment-methods list --format json` returns an ARRAY:
+ *    [{ id, type: "CARD", name, is_default, card_details: { brand, last4, exp_month: number, exp_year: number } }]
+ *    NOTE: --test flag is NOT valid here. No USDC discriminator in 0.4.0; all items are CARD.
+ *    TODO: USDC/stablecoin detection requires a different signal once the CLI exposes it.
  *
- * C. `link-cli spend-request create --format json ...` returns `{ spend_request: { id, status,
- *    valid_until, card: { brand, last4, exp_month, exp_year } } }`.
- *    Statuses: "approved", "denied", "pending", "expired".
+ * C. `link-cli spend-request create ... --format json` returns ARRAY with pending_approval
+ *    immediately (does NOT block):
+ *    [{ id: "lsrq_...", status: "pending_approval", approval_url, _next: { command }, ... }]
+ *    id prefix is lsrq_, NOT spreq_.
+ *    --test IS valid for spend-request create.
  *
- * D. `link-cli spend-request retrieve --format json --include=card <id>` returns the same shape
- *    but `card.number` contains the PAN and `card.cvc` contains the CVV.
- *    Without `--include=card`, `card.number` and `card.cvc` are absent.
+ * D. `link-cli spend-request retrieve <id> --interval 2 --max-attempts 150 --format json`
+ *    polls and returns transition snapshots array. Take LAST element as terminal state.
+ *    --test IS valid here (per spend-request commands).
+ *    NOTE: MPP flow (shared_payment_token) not validated against live link-cli;
+ *    smoke-test before V1 ship.
  *
- * E. `link-cli spend-request create --credential-type=shared_payment_token ...` returns
- *    `{ spend_request: { id, status, shared_payment_token: "spt_..." } }`.
+ * E. `link-cli spend-request retrieve <id> --include card --format json` returns array;
+ *    one element with card nested object:
+ *    [{ id, status: "approved", card: { id, number, cvc, brand, exp_month: number,
+ *       exp_year: number, billing_address: { name, ... }, valid_until }, ... }]
+ *    NOTE: `--include card` is TWO ARGS (space-separated), NOT `--include=card`.
+ *    card.number = PAN, card.cvc = CVV, card.billing_address.name = holder name.
+ *    card.valid_until is INSIDE card object, not at top level.
  *
- * F. `link-cli mpp pay --format json ...` returns `{ result: { outcome, status_code,
- *    receipt_id, issued_at, target_url } }`. Outcomes: "settled", "failed", "pending".
- *
- * G. MPP token is passed via stdin (`--token-stdin`) when available. V1 falls back to
- *    a CLI arg `--token <token>` with a documented process-listing leak risk if
- *    link-cli does not support `--token-stdin`.
- *    JUDGMENT CALL: We pass the token via the `input` (stdin) option of the CommandRunner
- *    and use `--token-stdin` as the flag. This avoids process listing exposure entirely.
- *    If link-cli does not support `--token-stdin`, U6 acceptance will surface this and
- *    a fallback to env-var (`STRIPE_LINK_MPP_TOKEN`) should be considered over CLI args.
- *
- * H. `--request-approval` causes link-cli to block until the spend request reaches a
- *    terminal state (approved/denied/expired). The adapter does NOT implement its own
- *    polling loop; it relies on link-cli's built-in polling via this flag. If link-cli
- *    times out internally, it exits non-zero and the adapter surfaces a ProviderUnavailableError.
+ * F. `link-cli mpp pay --format json ...` — shape not validated against live 0.4.0.
+ *    TODO: MPP flow not validated against live link-cli; smoke-test before V1 ship.
  */
 
 import { randomUUID } from "node:crypto";
@@ -78,26 +80,71 @@ export type StripeLinkAdapterOptions = {
   command?: string;
   /** Display name embedded in spend-request creation. From config.providers["stripe-link"].clientName. */
   clientName: string;
-  /** If true, append `--test` to commands that support it. */
+  /** If true, append `--test` to commands that support it (spend-request create/retrieve). */
   testMode: boolean;
   /** Hard cap on amounts. Defaults to 50000 cents (Stripe Link's hard cap). */
   maxAmountCents: number;
   /** CommandRunner injected for testing. Defaults to createNodeCommandRunner(). */
   runner?: CommandRunner;
   /**
-   * Reserved for future use. V1 delegates approval polling to link-cli's
-   * built-in `--request-approval` flag, so this option is currently
-   * accepted but not consulted. Default: 1000ms.
+   * Poll interval for spend-request retrieve. Passed as --interval <n> (seconds).
+   * Default: 2 (link-cli recommended value).
    */
   pollIntervalMs?: number;
   /**
-   * Reserved for future use (see pollIntervalMs). V1 delegates polling.
-   * Default: 120 (would yield ~2min total at 1s cadence if polling were enabled).
+   * Max polling attempts for spend-request retrieve. Passed as --max-attempts <n>.
+   * Default: 150 (link-cli recommended value = ~5 min total at 2s interval).
    */
   pollMaxAttempts?: number;
-  /** Subprocess timeout. Default 60000. */
+  /** Subprocess timeout. Default 60000ms for most calls; 400000ms for polling. */
   commandTimeoutMs?: number;
 };
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Unwrap a link-cli response that may be wrapped in an array.
+ * All link-cli 0.4.0 commands return arrays. Take the first element.
+ * For polling responses (retrieve with --interval), there may be multiple
+ * transition snapshots; callers of poll must use unwrapLastArrayElement instead.
+ */
+function unwrapArrayResponse<T>(parsed: unknown): T {
+  if (Array.isArray(parsed)) {
+    return parsed[0] as T;
+  }
+  return parsed as T;
+}
+
+/**
+ * For polling retrieve responses: link-cli returns an array of state-transition
+ * snapshots. The LAST element is the terminal state.
+ */
+function unwrapLastArrayElement<T>(parsed: unknown): T {
+  if (Array.isArray(parsed) && parsed.length > 0) {
+    return parsed[parsed.length - 1] as T;
+  }
+  return parsed as T;
+}
+
+function capitalizeFirst(s: string): string {
+  if (!s) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function generateIdempotencyKey(): string {
+  return randomUUID();
+}
+
+/** Map a link-cli status string to CredentialHandle.status. */
+function mapStatus(status: string): CredentialHandle["status"] {
+  if (status === "approved") return "approved";
+  if (status === "denied") return "denied";
+  if (status === "expired") return "expired";
+  // pending_approval, pending, or unknown — return pending_approval for re-poll
+  return "pending_approval";
+}
 
 // ---------------------------------------------------------------------------
 // Factory
@@ -107,19 +154,10 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
   const command = opts.command ?? "link-cli";
   const runner: CommandRunner = opts.runner ?? createNodeCommandRunner();
   const commandTimeoutMs = opts.commandTimeoutMs ?? 60_000;
-  // reserved — V1 delegates polling to link-cli's --request-approval flag
-  const pollIntervalMs = opts.pollIntervalMs ?? 1000; // reserved
-  const pollMaxAttempts = opts.pollMaxAttempts ?? 120; // reserved
-  void pollIntervalMs;
-  void pollMaxAttempts;
-
-  /** Append --test flag to args array when testMode is enabled. */
-  function maybeTest(args: string[]): string[] {
-    if (opts.testMode) {
-      return [...args, "--test"];
-    }
-    return args;
-  }
+  // Polling timeout: 150 attempts × 2s = 300s, plus headroom
+  const pollTimeoutMs = opts.commandTimeoutMs ?? 400_000;
+  const pollIntervalSec = 2; // link-cli recommended
+  const pollMaxAttempts = opts.pollMaxAttempts ?? 150; // link-cli recommended
 
   /**
    * Run the CLI command with the given args, capture stdout as JSON.
@@ -128,11 +166,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
    */
   async function runCli(
     args: string[],
-    options?: { input?: string },
+    options?: { input?: string; timeoutMs?: number },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     try {
       return await runner(command, args, {
-        timeoutMs: commandTimeoutMs,
+        timeoutMs: options?.timeoutMs ?? commandTimeoutMs,
         input: options?.input,
       });
     } catch (err: unknown) {
@@ -146,13 +184,14 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
   // ---------------------------------------------------------------------------
 
   async function getSetupStatus(): Promise<PaymentProviderSetupStatus> {
-    // Security: --include=card MUST NOT appear in args here.
-    const args = maybeTest(["auth", "status", "--format", "json"]);
+    // Security: --include card MUST NOT appear in args here.
+    // NOTE: --test is NOT valid for auth status (link-cli 0.4.0 rejects it).
+    const args = ["auth", "status", "--format", "json"];
     const result = await runCli(args);
 
     if (result.exitCode !== 0) {
       const reason = opts.testMode
-        ? "not authenticated — run `link-cli auth login --test`"
+        ? "not authenticated — run `link-cli auth login`"
         : "not authenticated — run `link-cli auth login`";
       return {
         available: false,
@@ -162,9 +201,9 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       };
     }
 
-    let parsed: Record<string, unknown>;
+    let raw: unknown;
     try {
-      parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+      raw = JSON.parse(result.stdout) as unknown;
     } catch {
       return {
         available: false,
@@ -174,22 +213,27 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       };
     }
 
-    // Assumption A: field is `authenticated: boolean`
+    // link-cli 0.4.0: response is array; unwrap first element
+    const parsed = unwrapArrayResponse<Record<string, unknown>>(raw);
+
+    // Verified shape A: field is `authenticated: boolean`
     const isAuthenticated =
       parsed["authenticated"] === true ||
       (typeof parsed["account"] === "object" && parsed["account"] !== null);
 
-    // Assumption A: version is at `version` field
-    const providerVersion = typeof parsed["version"] === "string" ? parsed["version"] : undefined;
+    // Version source: update.current_version (shape A)
+    const update = parsed["update"] as Record<string, unknown> | undefined;
+    const providerVersion =
+      typeof update?.["current_version"] === "string"
+        ? update["current_version"]
+        : typeof parsed["version"] === "string"
+          ? parsed["version"]
+          : undefined;
 
     return {
       available: isAuthenticated,
       authState: isAuthenticated ? "authenticated" : "unauthenticated",
-      reason: isAuthenticated
-        ? undefined
-        : opts.testMode
-          ? "not authenticated — run `link-cli auth login --test`"
-          : "not authenticated — run `link-cli auth login`",
+      reason: isAuthenticated ? undefined : "not authenticated — run `link-cli auth login`",
       providerVersion,
       testMode: opts.testMode,
     };
@@ -200,8 +244,9 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
   // ---------------------------------------------------------------------------
 
   async function listFundingSources(_params: ListFundingSourcesParams): Promise<FundingSource[]> {
-    // Security: --include=card MUST NOT appear in args here.
-    const args = maybeTest(["payment-methods", "list", "--format", "json"]);
+    // Security: --include card MUST NOT appear in args here.
+    // NOTE: --test is NOT valid for payment-methods list (link-cli 0.4.0).
+    const args = ["payment-methods", "list", "--format", "json"];
     const result = await runCli(args);
 
     if (result.exitCode !== 0) {
@@ -212,13 +257,12 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       throw new ProviderUnavailableError("stripe-link", reason);
     }
 
-    let parsed: unknown[];
+    let raw: unknown;
     try {
-      const raw = JSON.parse(result.stdout) as unknown;
+      raw = JSON.parse(result.stdout) as unknown;
       if (!Array.isArray(raw)) {
         throw new Error("expected array");
       }
-      parsed = raw;
     } catch (err: unknown) {
       throw new ProviderUnavailableError(
         "stripe-link",
@@ -227,28 +271,31 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       );
     }
 
-    return parsed.map((item): FundingSource => {
+    const items = raw as unknown[];
+
+    return items.map((item): FundingSource => {
       const pm = item as Record<string, unknown>;
       const id = String(pm["id"] ?? "");
-      const currency = typeof pm["currency"] === "string" ? pm["currency"] : "usd";
-      const availableBalanceCents =
-        typeof pm["available_balance_cents"] === "number"
-          ? pm["available_balance_cents"]
-          : undefined;
 
-      // Assumption B: funding_source_type === "stablecoin" means USDC settlement
-      const isStablecoin = pm["funding_source_type"] === "stablecoin";
-      const settlementAssets: FundingSource["settlementAssets"] = isStablecoin
-        ? ["usdc"]
-        : ["usd_card"];
+      // link-cli 0.4.0 shape B: type is "CARD" for all items.
+      // card_details contains brand/last4/exp_month (number)/exp_year (number).
+      const cardDetails = pm["card_details"] as Record<string, unknown> | undefined;
+      const brand =
+        cardDetails && typeof cardDetails["brand"] === "string" ? cardDetails["brand"] : undefined;
+      const last4 =
+        cardDetails && typeof cardDetails["last4"] === "string" ? cardDetails["last4"] : undefined;
 
-      // Derive display name from card info or use provided display_name
-      let displayName = typeof pm["display_name"] === "string" ? pm["display_name"] : id;
-      const card = pm["card"] as Record<string, unknown> | undefined;
-      if (card && typeof card["brand"] === "string" && typeof card["last4"] === "string") {
-        const brand = capitalizeFirst(card["brand"]);
-        displayName = `${brand} •• ${card["last4"]}`;
+      // Use `name` field directly (e.g. "Atmos Rewards Visa Infinite")
+      // Fallback to constructed brand+last4 if name absent.
+      let displayName = typeof pm["name"] === "string" ? pm["name"] : undefined;
+      if (!displayName) {
+        displayName = brand && last4 ? `${capitalizeFirst(brand)} ••${last4}` : id;
       }
+
+      // TODO: USDC/stablecoin detection: link-cli 0.4.0 has no USDC discriminator —
+      // all items have type: "CARD". When the CLI exposes a stablecoin indicator,
+      // use it here to emit ["usdc"] for USDC-settled methods.
+      const settlementAssets: FundingSource["settlementAssets"] = ["usd_card"];
 
       return {
         id,
@@ -257,14 +304,20 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
         rails: ["virtual_card", "machine_payment"],
         settlementAssets,
         displayName,
-        currency,
-        availableBalanceCents,
+        // link-cli 0.4.0 does not expose currency or balance at this endpoint
+        currency: "usd",
+        availableBalanceCents: undefined,
       };
     });
   }
 
   // ---------------------------------------------------------------------------
   // issueVirtualCard
+  //
+  // link-cli 0.4.0 flow:
+  //   1. spend-request create → returns pending_approval immediately
+  //   2. spend-request retrieve <id> --interval 2 --max-attempts 150 → polls; last element = terminal
+  //   3. If approved: spend-request retrieve <id> --include card → get full card data
   // ---------------------------------------------------------------------------
 
   async function issueVirtualCard(params: IssueVirtualCardParams): Promise<CredentialHandle> {
@@ -281,19 +334,19 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       throw new PolicyDeniedError("idempotencyKey must be non-empty when supplied", "stripe-link");
     }
 
-    const idempotencyKey = params.idempotencyKey ?? generateIdempotencyKey();
+    // merchant.url is required by link-cli 0.4.0 for credential_type=card
+    const merchantUrl = params.merchant.url ?? "https://example.invalid";
 
-    // Security: --include=card MUST NOT appear in args here.
-    // DO NOT add --include=card here — card retrieval happens only in retrieveCardSecrets.
-    const args = maybeTest([
+    // Step 1: Create spend-request.
+    // Security: --include card MUST NOT appear in args here.
+    // --test IS valid for spend-request create.
+    const createArgs: string[] = [
       "spend-request",
       "create",
       "--format",
       "json",
       "--request-approval",
-      "--client-name",
-      opts.clientName,
-      "--payment-method",
+      "--payment-method-id",
       params.fundingSourceId,
       "--amount",
       String(params.amount.amountCents),
@@ -301,25 +354,29 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       params.amount.currency,
       "--merchant-name",
       params.merchant.name,
+      "--merchant-url",
+      merchantUrl,
       "--context",
       params.purchaseIntent,
-      "--idempotency-key",
-      idempotencyKey,
-    ]);
+    ];
+    // NOTE: --client-name and --idempotency-key NOT supported in link-cli 0.4.0
+    if (opts.testMode) {
+      createArgs.push("--test");
+    }
 
-    const result = await runCli(args);
+    const createResult = await runCli(createArgs);
 
-    if (result.exitCode !== 0) {
-      const stderrSnippet = result.stderr.trim().slice(0, 200);
+    if (createResult.exitCode !== 0) {
+      const stderrSnippet = createResult.stderr.trim().slice(0, 200);
       const reason = stderrSnippet
         ? `spend-request create failed: ${stderrSnippet}`
-        : `spend-request create failed (exit ${result.exitCode})`;
+        : `spend-request create failed (exit ${createResult.exitCode})`;
       throw new ProviderUnavailableError("stripe-link", reason);
     }
 
-    let parsed: Record<string, unknown>;
+    let createRaw: unknown;
     try {
-      parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+      createRaw = JSON.parse(createResult.stdout) as unknown;
     } catch (err: unknown) {
       throw new ProviderUnavailableError(
         "stripe-link",
@@ -328,54 +385,107 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       );
     }
 
-    // Assumption C: shape is { spend_request: { id, status, valid_until, card: {...} } }
-    const sr = parsed["spend_request"] as Record<string, unknown> | undefined;
-    if (!sr) {
-      throw new ProviderUnavailableError(
-        "stripe-link",
-        "spend-request create: missing spend_request field",
-      );
+    // link-cli 0.4.0: response is array; unwrap first element
+    const created = unwrapArrayResponse<Record<string, unknown>>(createRaw);
+
+    // id prefix is lsrq_ in 0.4.0
+    const spendRequestId = String(created["id"] ?? "");
+    if (!spendRequestId) {
+      throw new ProviderUnavailableError("stripe-link", "spend-request create: missing id field");
     }
 
-    const spendRequestId = String(sr["id"] ?? "");
-    const status = String(sr["status"] ?? "");
-    const validUntil = typeof sr["valid_until"] === "string" ? sr["valid_until"] : undefined;
+    // create always returns pending_approval; we must poll
+    // Step 2: Poll with retrieve --interval 2 --max-attempts 150
+    const pollArgs: string[] = [
+      "spend-request",
+      "retrieve",
+      spendRequestId,
+      "--interval",
+      String(pollIntervalSec),
+      "--max-attempts",
+      String(pollMaxAttempts),
+      "--format",
+      "json",
+    ];
+    if (opts.testMode) {
+      pollArgs.push("--test");
+    }
 
-    // Map Stripe status to CredentialHandle status
-    let handleStatus: CredentialHandle["status"];
-    if (status === "approved") {
-      handleStatus = "approved";
-    } else if (status === "denied") {
-      handleStatus = "denied";
-    } else if (status === "expired") {
-      handleStatus = "expired";
+    const pollResult = await runCli(pollArgs, { timeoutMs: pollTimeoutMs });
+
+    let pollRaw: unknown;
+    let terminalRecord: Record<string, unknown>;
+
+    if (pollResult.exitCode !== 0) {
+      // link-cli non-zero exit on poll could mean max-attempts exhausted (still pending)
+      // or a real error. Treat as pending_approval for re-poll via getStatus.
+      // We still try to parse in case there's useful data.
+      try {
+        pollRaw = JSON.parse(pollResult.stdout) as unknown;
+        terminalRecord = unwrapLastArrayElement<Record<string, unknown>>(pollRaw);
+      } catch {
+        // Can't parse — fall through to pending_approval with no card data
+        terminalRecord = { id: spendRequestId, status: "pending_approval" };
+      }
     } else {
-      // pending or unknown: return pending_approval so the manager can re-poll via getStatus
-      handleStatus = "pending_approval";
+      try {
+        pollRaw = JSON.parse(pollResult.stdout) as unknown;
+      } catch (err: unknown) {
+        throw new ProviderUnavailableError(
+          "stripe-link",
+          "spend-request retrieve (poll) returned non-JSON output",
+          { cause: err },
+        );
+      }
+      // Take LAST element as terminal state
+      terminalRecord = unwrapLastArrayElement<Record<string, unknown>>(pollRaw);
     }
 
-    // Extract redacted card display (no PAN, no CVV — just brand/last4/exp)
-    const card = sr["card"] as Record<string, unknown> | null | undefined;
-    const display: CredentialHandle["display"] = card
-      ? {
-          brand: typeof card["brand"] === "string" ? card["brand"] : undefined,
-          last4: typeof card["last4"] === "string" ? card["last4"] : undefined,
-          expMonth:
-            typeof card["exp_month"] === "number"
-              ? String(card["exp_month"]).padStart(2, "0")
-              : typeof card["exp_month"] === "string"
-                ? card["exp_month"]
-                : undefined,
-          expYear:
-            typeof card["exp_year"] === "number"
-              ? String(card["exp_year"])
-              : typeof card["exp_year"] === "string"
-                ? card["exp_year"]
-                : undefined,
-        }
-      : undefined;
+    const terminalStatus = String(terminalRecord["status"] ?? "pending_approval");
+    const handleStatus = mapStatus(terminalStatus);
 
     const handleId = `slh-${spendRequestId}`;
+
+    // Step 3: If approved, fetch card display data (no PAN/CVV — just brand/last4/exp)
+    // The card display comes from a second retrieve WITH --include card.
+    let displayBrand: string | undefined;
+    let displayLast4: string | undefined;
+    let displayExpMonth: string | undefined;
+    let displayExpYear: string | undefined;
+    let validUntil: string | undefined;
+
+    if (terminalStatus === "approved") {
+      // Security: --include card appears ONLY here, inside retrieveCardSecrets and this step.
+      // WAIT — per security invariant, --include card must appear in EXACTLY ONE place.
+      // Per plan: "valid_until source: from the second retrieve's card.valid_until"
+      // and "display fields: from second retrieve's card.brand, card.last4, etc."
+      // The second retrieve uses --include card. But security invariant says ONLY in retrieveCardSecrets.
+      //
+      // Resolution: We fetch display-only data from the approved terminal record if available,
+      // OR we defer display population to the fill hook's retrieveCardSecrets call.
+      // The --include card path stays EXCLUSIVELY in retrieveCardSecrets.
+      //
+      // For issueVirtualCard, we do NOT call --include card here.
+      // Display data will be populated when retrieveCardSecrets is called by the fill hook.
+      // validUntil is not available without --include card — leave undefined.
+      //
+      // This keeps the security invariant intact: --include card in ONLY ONE place.
+      //
+      // Note: If the adapter needs display data at issue time (for the handle),
+      // a follow-up can add a display-only retrieve path that does NOT expose PAN/CVV.
+      // For V1, leave display as undefined for the "approved" case from polling.
+      void 0; // no --include card here
+    }
+
+    const display: CredentialHandle["display"] =
+      displayBrand || displayLast4
+        ? {
+            brand: displayBrand,
+            last4: displayLast4,
+            expMonth: displayExpMonth,
+            expYear: displayExpYear,
+          }
+        : undefined;
 
     const fillSentinels: CredentialHandle["fillSentinels"] = {
       pan: { $paymentHandle: handleId, field: "pan" },
@@ -397,11 +507,10 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     };
 
     // Populate handleMap with non-sensitive metadata.
-    // Note: last4 is a display value, not a secret.
     handleMap.set(handleId, {
       spendRequestId,
       providerId: "stripe-link",
-      last4: display?.last4,
+      last4: displayLast4,
       targetMerchantName: params.merchant.name,
       issuedAt: new Date().toISOString(),
       validUntil,
@@ -413,20 +522,25 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
   // ---------------------------------------------------------------------------
   // retrieveCardSecrets
   //
-  // SECURITY: This is the ONLY method where --include=card appears.
-  // Do not add --include=card to any other method.
+  // SECURITY: This is the ONLY method where --include card appears.
+  // Do not add --include card to any other method.
   // ---------------------------------------------------------------------------
 
   async function retrieveCardSecrets(spendRequestId: string): Promise<CardSecrets> {
-    // SECURITY: --include=card is intentional here and ONLY here.
-    const args = maybeTest([
+    // SECURITY: --include card is intentional here and ONLY here.
+    // Note: "card" is a separate arg (not --include=card): ["--include", "card"]
+    const args: string[] = [
       "spend-request",
       "retrieve",
+      spendRequestId,
+      "--include",
+      "card",
       "--format",
       "json",
-      "--include=card",
-      spendRequestId,
-    ]);
+    ];
+    if (opts.testMode) {
+      args.push("--test");
+    }
 
     const result = await runCli(args);
 
@@ -440,9 +554,9 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       );
     }
 
-    let parsed: Record<string, unknown>;
+    let raw: unknown;
     try {
-      parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+      raw = JSON.parse(result.stdout) as unknown;
     } catch {
       // Do NOT include stdout in this error — it might contain card data.
       throw new CardUnavailableError(
@@ -452,9 +566,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       );
     }
 
-    // Assumption D: shape is { spend_request: { card: { number, cvc, exp_month, exp_year, cardholder_name } } }
-    const sr = parsed["spend_request"] as Record<string, unknown> | undefined;
-    const card = (sr?.["card"] ?? parsed["card"]) as Record<string, unknown> | undefined;
+    // link-cli 0.4.0: response is array; unwrap first element
+    // Shape E: { id, status, card: { id, number, cvc, brand, exp_month, exp_year,
+    //            billing_address: { name, ... }, valid_until }, ... }
+    const record = unwrapArrayResponse<Record<string, unknown>>(raw);
+    const card = record["card"] as Record<string, unknown> | undefined;
 
     if (!card) {
       throw new CardUnavailableError(
@@ -483,8 +599,10 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
         : String(expMonthRaw ?? "");
     const expYear = typeof expYearRaw === "number" ? String(expYearRaw) : String(expYearRaw ?? "");
 
+    // Holder name from billing_address.name (link-cli 0.4.0 shape E)
+    const billingAddress = card["billing_address"] as Record<string, unknown> | undefined;
     const holderName =
-      typeof card["cardholder_name"] === "string" ? card["cardholder_name"] : "OPENCLAW VIRTUAL";
+      typeof billingAddress?.["name"] === "string" ? billingAddress["name"] : "OPENCLAW VIRTUAL";
 
     // SECURITY: Return the secrets. Do NOT log. Do NOT cache in module scope.
     // The caller (U6 fill hook) must drop the reference after substitution.
@@ -501,8 +619,12 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
   // executeMachinePayment
   //
   // Two-step flow:
-  //   1. Create a spend-request with credential_type=shared_payment_token
+  //   1. Create a spend-request with --credential-type=shared_payment_token, poll until approved
   //   2. Pass the token (via stdin) to `mpp pay`
+  //
+  // TODO: MPP flow not validated against live link-cli 0.4.0; smoke-test before V1 ship.
+  //       The --include card and polling pattern here mirrors the virtual_card flow
+  //       but the shared_payment_token shape in the poll response is unverified.
   //
   // SECURITY: The MPP token is captured in a function-scoped `const sharedPaymentToken`.
   // It is used only for step 2. It goes out of scope when this function returns.
@@ -517,26 +639,27 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       throw new PolicyDeniedError("idempotencyKey must be non-empty when supplied", "stripe-link");
     }
 
-    const idempotencyKey = params.idempotencyKey ?? generateIdempotencyKey();
-
     // Step 1: Create a spend-request for the machine payment token.
-    // Security: --include=card MUST NOT appear in args here.
-    const createArgs = maybeTest([
+    // Security: --include card MUST NOT appear in args here.
+    const createArgs: string[] = [
       "spend-request",
       "create",
       "--format",
       "json",
       "--credential-type=shared_payment_token",
       "--request-approval",
-      "--client-name",
-      opts.clientName,
-      "--payment-method",
+      "--payment-method-id",
       params.fundingSourceId,
       "--context",
       params.targetUrl,
-      "--idempotency-key",
-      idempotencyKey,
-    ]);
+      "--merchant-url",
+      params.targetUrl,
+      "--merchant-name",
+      params.targetUrl,
+    ];
+    if (opts.testMode) {
+      createArgs.push("--test");
+    }
 
     const createResult = await runCli(createArgs);
 
@@ -548,9 +671,9 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       throw new ProviderUnavailableError("stripe-link", reason);
     }
 
-    let createParsed: Record<string, unknown>;
+    let createRaw: unknown;
     try {
-      createParsed = JSON.parse(createResult.stdout) as Record<string, unknown>;
+      createRaw = JSON.parse(createResult.stdout) as unknown;
     } catch (err: unknown) {
       throw new ProviderUnavailableError(
         "stripe-link",
@@ -559,16 +682,47 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       );
     }
 
-    // Assumption E: { spend_request: { id, status, shared_payment_token } }
-    const sr = createParsed["spend_request"] as Record<string, unknown> | undefined;
-    if (!sr) {
+    const created = unwrapArrayResponse<Record<string, unknown>>(createRaw);
+    const spendRequestId = String(created["id"] ?? "");
+    if (!spendRequestId) {
       throw new ProviderUnavailableError(
         "stripe-link",
-        "spend-request create (MPP): missing spend_request field",
+        "spend-request create (MPP): missing id field",
       );
     }
 
-    const mppStatus = String(sr["status"] ?? "");
+    // Poll for approval (same as virtual_card flow)
+    const pollArgs: string[] = [
+      "spend-request",
+      "retrieve",
+      spendRequestId,
+      "--interval",
+      String(pollIntervalSec),
+      "--max-attempts",
+      String(pollMaxAttempts),
+      "--format",
+      "json",
+    ];
+    if (opts.testMode) {
+      pollArgs.push("--test");
+    }
+
+    const pollResult = await runCli(pollArgs, { timeoutMs: pollTimeoutMs });
+
+    let pollRaw: unknown;
+    try {
+      pollRaw = JSON.parse(pollResult.stdout) as unknown;
+    } catch (err: unknown) {
+      throw new ProviderUnavailableError(
+        "stripe-link",
+        "spend-request retrieve (MPP poll) returned non-JSON output",
+        { cause: err },
+      );
+    }
+
+    const terminalRecord = unwrapLastArrayElement<Record<string, unknown>>(pollRaw);
+    const mppStatus = String(terminalRecord["status"] ?? "");
+
     if (mppStatus !== "approved") {
       throw new ProviderUnavailableError(
         "stripe-link",
@@ -576,28 +730,24 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       );
     }
 
-    const spendRequestId = String(sr["id"] ?? "");
-
     // SECURITY: The shared payment token is captured here in a function-scoped const.
     // It is used only for the mpp pay call below. It goes out of scope at function return.
     // Do NOT store this token in module state, instance state, or the returned result.
-    const sharedPaymentToken = String(sr["shared_payment_token"] ?? "");
+    const sharedPaymentToken = String(terminalRecord["shared_payment_token"] ?? "");
 
     if (!sharedPaymentToken) {
       throw new ProviderUnavailableError(
         "stripe-link",
-        "spend-request create (MPP): missing shared_payment_token",
+        "spend-request retrieve (MPP): missing shared_payment_token in approved record",
       );
     }
 
     // Step 2: Execute the machine payment via mpp pay.
     // Token delivery strategy: pass via stdin using --token-stdin if link-cli supports it.
-    // This avoids process listing exposure (passing token as a CLI arg would be visible
-    // to `ps aux` on the system). If link-cli does not support --token-stdin, U6 acceptance
-    // testing will surface this; the fallback would be an env-var (STRIPE_LINK_MPP_TOKEN)
-    // rather than a CLI arg.
-    // Security: --include=card MUST NOT appear in args here.
-    const payArgs: string[] = maybeTest([
+    // This avoids process listing exposure.
+    // TODO: MPP mpp pay flow not validated against live link-cli 0.4.0; smoke-test before V1 ship.
+    // Security: --include card MUST NOT appear in args here.
+    const payArgs: string[] = [
       "mpp",
       "pay",
       "--format",
@@ -607,9 +757,10 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       params.targetUrl,
       "--method",
       params.method,
-      "--idempotency-key",
-      idempotencyKey,
-    ]);
+    ];
+    if (opts.testMode) {
+      payArgs.push("--test");
+    }
 
     if (params.body !== undefined) {
       payArgs.push("--body", JSON.stringify(params.body));
@@ -636,7 +787,8 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       });
     }
 
-    // Assumption F: { result: { outcome, status_code, receipt_id, issued_at, target_url } }
+    // TODO: mpp pay response shape not validated against live link-cli 0.4.0.
+    // Using assumed shape: { result: { outcome, status_code, receipt_id, issued_at } }
     const resultData = payParsed["result"] as Record<string, unknown> | undefined;
     if (!resultData) {
       throw new ProviderUnavailableError("stripe-link", "mpp pay: missing result field");
@@ -682,8 +834,11 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
 
     const spendRequestId = meta.spendRequestId;
 
-    // Security: --include=card MUST NOT appear in args here.
-    const args = maybeTest(["spend-request", "retrieve", "--format", "json", spendRequestId]);
+    // Security: --include card MUST NOT appear in args here.
+    const args: string[] = ["spend-request", "retrieve", spendRequestId, "--format", "json"];
+    if (opts.testMode) {
+      args.push("--test");
+    }
 
     const result = await runCli(args);
 
@@ -691,9 +846,9 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       throw new CardUnavailableError(handleId, "spend-request no longer available", "stripe-link");
     }
 
-    let parsed: Record<string, unknown>;
+    let raw: unknown;
     try {
-      parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+      raw = JSON.parse(result.stdout) as unknown;
     } catch (err: unknown) {
       throw new ProviderUnavailableError(
         "stripe-link",
@@ -702,47 +857,16 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       );
     }
 
-    const sr = parsed["spend_request"] as Record<string, unknown> | undefined;
-    if (!sr) {
-      throw new ProviderUnavailableError(
-        "stripe-link",
-        "spend-request retrieve: missing spend_request field",
-      );
-    }
+    // For getStatus (non-polling retrieve), take last element in case multiple snapshots
+    const record = unwrapLastArrayElement<Record<string, unknown>>(raw);
 
-    const status = String(sr["status"] ?? "");
-    const validUntil = typeof sr["valid_until"] === "string" ? sr["valid_until"] : meta.validUntil;
+    const status = String(record["status"] ?? "");
+    const handleStatus = mapStatus(status);
 
-    let handleStatus: CredentialHandle["status"];
-    if (status === "approved") {
-      handleStatus = "approved";
-    } else if (status === "denied") {
-      handleStatus = "denied";
-    } else if (status === "expired") {
-      handleStatus = "expired";
-    } else {
-      handleStatus = "pending_approval";
-    }
+    // validUntil: not available without --include card in 0.4.0; fall back to stored value
+    const validUntil = meta.validUntil;
 
-    const card = sr["card"] as Record<string, unknown> | null | undefined;
-    const display: CredentialHandle["display"] = card
-      ? {
-          brand: typeof card["brand"] === "string" ? card["brand"] : undefined,
-          last4: typeof card["last4"] === "string" ? card["last4"] : meta.last4,
-          expMonth:
-            typeof card["exp_month"] === "number"
-              ? String(card["exp_month"]).padStart(2, "0")
-              : typeof card["exp_month"] === "string"
-                ? card["exp_month"]
-                : undefined,
-          expYear:
-            typeof card["exp_year"] === "number"
-              ? String(card["exp_year"])
-              : typeof card["exp_year"] === "string"
-                ? card["exp_year"]
-                : undefined,
-        }
-      : { last4: meta.last4 };
+    const display: CredentialHandle["display"] = { last4: meta.last4 };
 
     const fillSentinels: CredentialHandle["fillSentinels"] = {
       pan: { $paymentHandle: handleId, field: "pan" },
@@ -778,17 +902,4 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     executeMachinePayment,
     getStatus,
   };
-}
-
-// ---------------------------------------------------------------------------
-// Internal helpers
-// ---------------------------------------------------------------------------
-
-function capitalizeFirst(s: string): string {
-  if (!s) return s;
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-function generateIdempotencyKey(): string {
-  return randomUUID();
 }

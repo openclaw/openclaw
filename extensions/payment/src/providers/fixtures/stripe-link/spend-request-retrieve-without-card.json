@@ -1,18 +1,14 @@
-{
-  "spend_request": {
-    "id": "spreq_test_approved_001",
-    "status": "approved",
-    "credential_type": "virtual_card",
-    "amount_cents": 2500,
-    "currency": "usd",
-    "valid_until": "2026-05-01T03:26:21.000Z",
+[
+  {
+    "id": "lsrq_test_approved_001",
     "merchant_name": "Test Merchant",
-    "card": {
-      "brand": "visa",
-      "last4": "4242",
-      "exp_month": 12,
-      "exp_year": 2030,
-      "cardholder_name": "OPENCLAW VIRTUAL"
-    }
+    "merchant_url": "https://merchant.example.com",
+    "amount": 2500,
+    "currency": "usd",
+    "payment_details": "pm_test_card_visa_4242",
+    "status": "approved",
+    "created_at": "2026-05-01T04:28:20Z",
+    "updated_at": "2026-05-01T04:29:51Z",
+    "credential_type": "card"
   }
-}
+]

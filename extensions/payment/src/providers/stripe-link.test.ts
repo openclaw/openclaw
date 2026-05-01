@@ -2,40 +2,37 @@
  * stripe-link.test.ts — Adapter tests using fixture-replaying CommandRunner.
  *
  * ============================================================================
- * FIXTURE SHAPE ASSUMPTIONS (to be verified during U6 acceptance testing)
+ * FIXTURE SHAPES (verified against link-cli 0.4.0 live capture 2026-05-01)
  * ============================================================================
  *
- * All fixture JSON files under fixtures/stripe-link/ represent ASSUMED shapes
- * for `link-cli` output. The actual Stripe Link CLI may differ. Discrepancies
- * will be caught during U6 acceptance testing against a real link-cli binary.
- *
- * Key assumptions:
- *
  * A. `link-cli auth status --format json` →
- *      { authenticated: boolean, account: object|null, version?: string }
+ *      Array<{ authenticated: boolean, access_token, token_type, credentials_path,
+ *               update: { current_version, latest_version, update_command } }>
+ *    NOTE: --test flag is NOT valid here.
  *
  * B. `link-cli payment-methods list --format json` →
- *      Array<{ id, funding_source_type ("card"|"stablecoin"), card?: { brand, last4, exp_month, exp_year },
- *               currency, available_balance_cents?, display_name? }>
+ *      Array<{ id, type: "CARD", name, is_default,
+ *               card_details: { brand, last4, exp_month: number, exp_year: number } }>
+ *    NOTE: --test flag is NOT valid here. No stablecoin discriminator in 0.4.0.
  *
- * C. `link-cli spend-request create --format json ...` →
- *      { spend_request: { id, status ("approved"|"denied"|"pending"|"expired"),
- *                          valid_until?: string, card?: { brand, last4, exp_month, exp_year } } }
+ * C. `link-cli spend-request create ... --format json` →
+ *      Array<{ id: "lsrq_...", status: "pending_approval", approval_url, _next, ... }>
+ *    Does NOT block. Returns pending_approval immediately.
  *
- * D. `link-cli spend-request retrieve --format json --include=card <id>` →
- *      { spend_request: { id, status, card: { number, cvc, exp_month, exp_year,
- *                                             brand, last4, cardholder_name } } }
- *      Without --include=card, the `number` and `cvc` fields are absent.
+ * D. `link-cli spend-request retrieve <id> --interval 2 --max-attempts 150 --format json` →
+ *      Array of state-transition snapshots. Last element is terminal state.
  *
- * E. `link-cli spend-request create --credential-type=shared_payment_token ...` →
- *      { spend_request: { id, status, shared_payment_token: "spt_..." } }
+ * E. `link-cli spend-request retrieve <id> --include card --format json` →
+ *      Array<{ id, status: "approved", card: { id, number, cvc, brand,
+ *              exp_month: number, exp_year: number,
+ *              billing_address: { name, ... }, valid_until }, ... }>
+ *    NOTE: --include card is TWO separate args, not --include=card.
  *
- * F. `link-cli mpp pay --format json --token-stdin ...` →
- *      { result: { outcome ("settled"|"failed"|"pending"), status_code, receipt_id, issued_at } }
- *
- * G. Non-zero exit code from `link-cli spend-request retrieve --include=card`
- *    indicates card unavailable/consumed. The adapter throws CardUnavailableError.
- *
+ * Security invariants:
+ *    - `--include` + `"card"` (as consecutive args) appears ONLY in retrieveCardSecrets.
+ *    - MPP token never escapes executeMachinePayment.
+ *    - No PAN/CVV in error messages.
+ *    - No caching of card secrets.
  * ============================================================================
  */
 
@@ -43,13 +40,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MaxAmountExceededError } from "../policy.js";
 import { handleMap } from "../store.js";
 import { CardUnavailableError, PolicyDeniedError, ProviderUnavailableError } from "./base.js";
-// We import the fixture JSON files statically. Vitest supports JSON imports.
 import authStatusAuthenticated from "./fixtures/stripe-link/auth-status-authenticated-test.json" assert { type: "json" };
 import authStatusUnauthenticated from "./fixtures/stripe-link/auth-status-unauthenticated.json" assert { type: "json" };
 import mppPayFailed from "./fixtures/stripe-link/mpp-pay-failed.json" assert { type: "json" };
-// ---------------------------------------------------------------------------
-// Fixture loader helpers
-// ---------------------------------------------------------------------------
 import mppPaySettled from "./fixtures/stripe-link/mpp-pay-settled.json" assert { type: "json" };
 import paymentMethodsList from "./fixtures/stripe-link/payment-methods-list.json" assert { type: "json" };
 import spendRequestCreateApprovedMpp from "./fixtures/stripe-link/spend-request-create-approved-mpp.json" assert { type: "json" };
@@ -58,6 +51,11 @@ import spendRequestCreateDenied from "./fixtures/stripe-link/spend-request-creat
 import spendRequestCreateExpired from "./fixtures/stripe-link/spend-request-create-expired.json" assert { type: "json" };
 import spendRequestCreatePending from "./fixtures/stripe-link/spend-request-create-pending.json" assert { type: "json" };
 import spendRequestRetrieveCardConsumed from "./fixtures/stripe-link/spend-request-retrieve-card-consumed.json" assert { type: "json" };
+import spendRequestRetrievePollApproved from "./fixtures/stripe-link/spend-request-retrieve-poll-approved.json" assert { type: "json" };
+import spendRequestRetrievePollDenied from "./fixtures/stripe-link/spend-request-retrieve-poll-denied.json" assert { type: "json" };
+import spendRequestRetrievePollExpired from "./fixtures/stripe-link/spend-request-retrieve-poll-expired.json" assert { type: "json" };
+import spendRequestRetrievePollMppApproved from "./fixtures/stripe-link/spend-request-retrieve-poll-mpp-approved.json" assert { type: "json" };
+import spendRequestRetrievePollPendingOnly from "./fixtures/stripe-link/spend-request-retrieve-poll-pending-only.json" assert { type: "json" };
 import spendRequestRetrieveWithCard from "./fixtures/stripe-link/spend-request-retrieve-with-card.json" assert { type: "json" };
 import spendRequestRetrieveWithoutCard from "./fixtures/stripe-link/spend-request-retrieve-without-card.json" assert { type: "json" };
 import type { CommandRunner } from "./runner.js";
@@ -86,7 +84,7 @@ function makeFixtureRunner(response: { stdout: string; stderr?: string; exitCode
 
 /**
  * Creates a CommandRunner that returns different responses for each call (in order).
- * Useful for two-step flows (create + pay).
+ * Useful for multi-step flows (create + poll + retrieve-with-card).
  */
 function makeSequentialFixtureRunner(
   responses: Array<{ stdout: string; stderr?: string; exitCode: number }>,
@@ -184,27 +182,29 @@ describe("getSetupStatus", () => {
     expect(status.authState).toBe("unauthenticated");
   });
 
-  it("extracts providerVersion from JSON", async () => {
+  it("extracts providerVersion from update.current_version (link-cli 0.4.0 shape)", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(authStatusAuthenticated));
     const adapter = makeAdapter({ runner });
     const status = await adapter.getSetupStatus();
-    expect(status.providerVersion).toBe("1.2.3");
+    // link-cli 0.4.0 fixture has update.current_version = "0.4.0"
+    expect(status.providerVersion).toBe("0.4.0");
   });
 
-  it("includes --test flag when testMode=true", async () => {
+  it("does NOT include --test flag (auth status does not support --test in 0.4.0)", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(authStatusAuthenticated));
     const adapter = makeTestAdapter({ runner });
     await adapter.getSetupStatus();
     const [_cmd, args] = spy.mock.calls[0]!;
-    expect(args).toContain("--test");
+    expect(args).not.toContain("--test");
   });
 
-  it("does NOT include --include=card (security invariant)", async () => {
+  it("does NOT include --include=card or --include card (security invariant)", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(authStatusAuthenticated));
     const adapter = makeAdapter({ runner });
     await adapter.getSetupStatus();
     const [_cmd, args] = spy.mock.calls[0]!;
     expect(args).not.toContain("--include=card");
+    expect(args).not.toContain("--include");
   });
 
   it("passes correct base args: auth status --format json", async () => {
@@ -248,7 +248,7 @@ describe("listFundingSources", () => {
     expect(sources).toHaveLength(2);
   });
 
-  it("maps card payment method correctly", async () => {
+  it("maps card payment method correctly (link-cli 0.4.0 shape)", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(paymentMethodsList));
     const adapter = makeAdapter({ runner });
     const sources = await adapter.listFundingSources({});
@@ -258,28 +258,46 @@ describe("listFundingSources", () => {
     expect(card?.rails).toContain("virtual_card");
     expect(card?.rails).toContain("machine_payment");
     expect(card?.settlementAssets).toContain("usd_card");
-    expect(card?.displayName).toMatch(/Visa/);
-    expect(card?.displayName).toMatch(/4242/);
+    // displayName uses name field directly: "Atmos Rewards Visa Infinite"
+    expect(card?.displayName).toBe("Atmos Rewards Visa Infinite");
+    // currency defaults to usd (not in 0.4.0 response)
     expect(card?.currency).toBe("usd");
-    expect(card?.availableBalanceCents).toBe(500000);
   });
 
-  it("maps stablecoin payment method to usdc settlement", async () => {
+  it("second card has correct displayName from name field", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(paymentMethodsList));
     const adapter = makeAdapter({ runner });
     const sources = await adapter.listFundingSources({});
-    const usdc = sources.find((s) => s.id === "pm_test_usdc_001");
-    expect(usdc).toBeDefined();
-    expect(usdc?.settlementAssets).toContain("usdc");
-    expect(usdc?.settlementAssets).not.toContain("usd_card");
+    const mc = sources.find((s) => s.id === "pm_test_card_mc_9999");
+    expect(mc).toBeDefined();
+    expect(mc?.displayName).toBe("Chase Sapphire Reserve");
+    expect(mc?.settlementAssets).toContain("usd_card");
   });
 
-  it("does NOT include --include=card (security invariant)", async () => {
+  it("all items map to usd_card settlement (no stablecoin discriminator in 0.4.0)", async () => {
+    const { runner } = makeFixtureRunner(fixtureOk(paymentMethodsList));
+    const adapter = makeAdapter({ runner });
+    const sources = await adapter.listFundingSources({});
+    for (const src of sources) {
+      expect(src.settlementAssets).toContain("usd_card");
+    }
+  });
+
+  it("does NOT include --test flag (payment-methods list does not support --test in 0.4.0)", async () => {
+    const { runner, spy } = makeFixtureRunner(fixtureOk(paymentMethodsList));
+    const adapter = makeTestAdapter({ runner });
+    await adapter.listFundingSources({});
+    const [_cmd, args] = spy.mock.calls[0]!;
+    expect(args).not.toContain("--test");
+  });
+
+  it("does NOT include --include=card or --include card (security invariant)", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(paymentMethodsList));
     const adapter = makeAdapter({ runner });
     await adapter.listFundingSources({});
     const [_cmd, args] = spy.mock.calls[0]!;
     expect(args).not.toContain("--include=card");
+    expect(args).not.toContain("--include");
   });
 
   it("passes correct base args: payment-methods list --format json", async () => {
@@ -303,96 +321,108 @@ describe("listFundingSources", () => {
 
 // ---------------------------------------------------------------------------
 // 3. issueVirtualCard
+//
+// link-cli 0.4.0 flow: create (→ pending_approval) + poll (→ terminal) [+ card-retrieve if approved]
+// Tests use sequential fixture runners for 2-call (create + poll) or 3-call flows.
 // ---------------------------------------------------------------------------
 
 describe("issueVirtualCard", () => {
-  it("happy path: returns approved CredentialHandle", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+  it("happy path: returns approved CredentialHandle after create+poll", async () => {
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved), // create → pending_approval
+      fixtureOk(spendRequestRetrievePollApproved), // poll → approved
+    ]);
     const adapter = makeAdapter({ runner });
     const handle = await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
     expect(handle.status).toBe("approved");
     expect(handle.provider).toBe("stripe-link");
     expect(handle.rail).toBe("virtual_card");
     expect(handle.id).toMatch(/^slh-/);
-    expect(handle.providerRequestId).toBe("spreq_test_approved_001");
+    // spendRequestId from create fixture: lsrq_test_approved_001
+    expect(handle.providerRequestId).toBe("lsrq_test_approved_001");
   });
 
-  it("returns denied status for denied spend request", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateDenied));
+  it("returns denied status after create+poll with denied terminal", async () => {
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateDenied), // create → pending_approval
+      fixtureOk(spendRequestRetrievePollDenied), // poll → denied
+    ]);
     const adapter = makeAdapter({ runner });
     const handle = await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
     expect(handle.status).toBe("denied");
   });
 
-  it("returns pending_approval status for pending spend request", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreatePending));
+  it("returns pending_approval when poll returns only pending_approval (max-attempts case)", async () => {
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreatePending), // create → pending_approval
+      fixtureOk(spendRequestRetrievePollPendingOnly), // poll → still pending
+    ]);
     const adapter = makeAdapter({ runner });
     const handle = await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
     expect(handle.status).toBe("pending_approval");
   });
 
   it("maps expired terminal status to status: 'expired'", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateExpired));
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateExpired), // create → pending_approval
+      fixtureOk(spendRequestRetrievePollExpired), // poll → expired
+    ]);
     const adapter = makeAdapter({ runner });
     const handle = await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
     expect(handle.status).toBe("expired");
     expect(handle.provider).toBe("stripe-link");
-    expect(handle.providerRequestId).toBe("spreq_expired_001");
+    expect(handle.providerRequestId).toBe("lsrq_expired_001");
   });
 
-  it("treats poll-timeout (status still pending after --request-approval times out) as pending_approval", async () => {
-    // When link-cli's --request-approval times out internally it exits non-zero,
-    // but if it exits 0 with a pending status (e.g. on a partial timeout), the
-    // adapter maps it to pending_approval so the manager can re-poll via getStatus.
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreatePending));
+  it("treats poll-timeout (non-zero exit, pending status) as pending_approval", async () => {
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreatePending),
+      { stdout: JSON.stringify(spendRequestRetrievePollPendingOnly), stderr: "", exitCode: 1 }, // non-zero
+    ]);
     const adapter = makeAdapter({ runner });
     const handle = await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-pending-timeout",
     });
     expect(handle.status).toBe("pending_approval");
-    // Manager can call getStatus(handle.id) to re-poll
     const meta = handleMap.get(handle.id);
     expect(meta).toBeDefined();
     expect(meta?.providerId).toBe("stripe-link");
   });
 
   it("populates all 5 fillSentinels referencing the handle id", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     const handle = await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
     expect(handle.fillSentinels).toBeDefined();
     const s = handle.fillSentinels!;
@@ -404,45 +434,55 @@ describe("issueVirtualCard", () => {
   });
 
   it("populates handleMap with providerId='stripe-link' and spendRequestId", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     const handle = await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
     const meta = handleMap.get(handle.id);
     expect(meta).toBeDefined();
     expect(meta?.providerId).toBe("stripe-link");
-    expect(meta?.spendRequestId).toBe("spreq_test_approved_001");
-    expect(meta?.last4).toBe("4242");
+    expect(meta?.spendRequestId).toBe("lsrq_test_approved_001");
   });
 
-  it("does NOT include --include=card (security invariant)", async () => {
-    const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+  it("does NOT include --include=card or --include card in create args (security invariant)", async () => {
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
-    const [_cmd, args] = spy.mock.calls[0]!;
-    expect(args).not.toContain("--include=card");
+    // Check both create (call 0) and poll (call 1)
+    for (const call of spy.mock.calls) {
+      const args = call[1] as string[];
+      expect(args).not.toContain("--include=card");
+      // "--include" should NOT appear in any call from issueVirtualCard
+      expect(args).not.toContain("--include");
+    }
   });
 
-  it("passes correct CLI args for spend-request create", async () => {
-    const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+  it("passes correct CLI args for spend-request create (0.4.0 shape)", async () => {
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: { amountCents: 1500, currency: "usd" },
-      merchant: { name: "Acme Corp" },
+      merchant: { name: "Acme Corp", url: "https://acme.example.com" },
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "my-key-123",
     });
     const [cmd, args] = spy.mock.calls[0]!;
     expect(cmd).toBe("link-cli");
@@ -451,9 +491,8 @@ describe("issueVirtualCard", () => {
     expect(args).toContain("--format");
     expect(args).toContain("json");
     expect(args).toContain("--request-approval");
-    expect(args).toContain("--client-name");
-    expect(args).toContain("TestClient");
-    expect(args).toContain("--payment-method");
+    // 0.4.0: --payment-method-id (not --payment-method)
+    expect(args).toContain("--payment-method-id");
     expect(args).toContain("pm_test_card_visa_4242");
     expect(args).toContain("--amount");
     expect(args).toContain("1500");
@@ -461,12 +500,45 @@ describe("issueVirtualCard", () => {
     expect(args).toContain("usd");
     expect(args).toContain("--merchant-name");
     expect(args).toContain("Acme Corp");
-    expect(args).toContain("--idempotency-key");
-    expect(args).toContain("my-key-123");
+    expect(args).toContain("--merchant-url");
+    expect(args).toContain("https://acme.example.com");
+    expect(args).toContain("--context");
+    // 0.4.0: no --client-name, no --idempotency-key
+    expect(args).not.toContain("--client-name");
+    expect(args).not.toContain("--idempotency-key");
+  });
+
+  it("passes correct CLI args for spend-request retrieve poll", async () => {
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
+    const adapter = makeAdapter({ runner });
+    await adapter.issueVirtualCard({
+      fundingSourceId: "pm_test_card_visa_4242",
+      amount: BASE_AMOUNT,
+      merchant: BASE_MERCHANT,
+      purchaseIntent: VALID_PURCHASE_INTENT,
+    });
+    // Second call is the poll
+    const [cmd, args] = spy.mock.calls[1]!;
+    expect(cmd).toBe("link-cli");
+    expect(args).toContain("spend-request");
+    expect(args).toContain("retrieve");
+    expect(args).toContain("lsrq_test_approved_001");
+    expect(args).toContain("--interval");
+    expect(args).toContain("--max-attempts");
+    expect(args).toContain("--format");
+    expect(args).toContain("json");
+    // No --include here
+    expect(args).not.toContain("--include");
   });
 
   it("rejects purchaseIntent < 100 chars BEFORE calling runner", async () => {
-    const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     await expect(
       adapter.issueVirtualCard({
@@ -474,7 +546,6 @@ describe("issueVirtualCard", () => {
         amount: BASE_AMOUNT,
         merchant: BASE_MERCHANT,
         purchaseIntent: "too short",
-        idempotencyKey: "test-key-001",
       }),
     ).rejects.toThrow(PolicyDeniedError);
     // Runner must NOT have been called — pre-shell-out validation
@@ -482,7 +553,10 @@ describe("issueVirtualCard", () => {
   });
 
   it("PolicyDeniedError has correct providerId and reason for short purchaseIntent", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     let caught: PolicyDeniedError | undefined;
     try {
@@ -491,7 +565,6 @@ describe("issueVirtualCard", () => {
         amount: BASE_AMOUNT,
         merchant: BASE_MERCHANT,
         purchaseIntent: "short",
-        idempotencyKey: "test-key-001",
       });
     } catch (err) {
       caught = err as PolicyDeniedError;
@@ -502,7 +575,10 @@ describe("issueVirtualCard", () => {
   });
 
   it("rejects amount > maxAmountCents with MaxAmountExceededError BEFORE calling runner", async () => {
-    const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = createStripeLinkAdapter({
       command: "link-cli",
       clientName: "TestClient",
@@ -516,7 +592,6 @@ describe("issueVirtualCard", () => {
         amount: { amountCents: 5000, currency: "usd" },
         merchant: BASE_MERCHANT,
         purchaseIntent: VALID_PURCHASE_INTENT,
-        idempotencyKey: "test-key-001",
       }),
     ).rejects.toThrow(MaxAmountExceededError);
     // Runner must NOT have been called
@@ -524,7 +599,10 @@ describe("issueVirtualCard", () => {
   });
 
   it("MaxAmountExceededError has correct maxCents and requestedCents", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = createStripeLinkAdapter({
       command: "link-cli",
       clientName: "TestClient",
@@ -539,7 +617,6 @@ describe("issueVirtualCard", () => {
         amount: { amountCents: 5000, currency: "usd" },
         merchant: BASE_MERCHANT,
         purchaseIntent: VALID_PURCHASE_INTENT,
-        idempotencyKey: "test-key-001",
       });
     } catch (err) {
       caught = err as MaxAmountExceededError;
@@ -550,7 +627,10 @@ describe("issueVirtualCard", () => {
   });
 
   it("rejects empty idempotencyKey with PolicyDeniedError BEFORE calling runner", async () => {
-    const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     await expect(
       adapter.issueVirtualCard({
@@ -564,8 +644,11 @@ describe("issueVirtualCard", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("allows undefined idempotencyKey (key generated internally)", async () => {
-    const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+  it("allows undefined idempotencyKey (no idempotency-key arg in 0.4.0)", async () => {
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     const handle = await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
@@ -575,30 +658,32 @@ describe("issueVirtualCard", () => {
       // no idempotencyKey
     });
     expect(handle.status).toBe("approved");
-    // Runner was called — key was generated internally
-    expect(spy).toHaveBeenCalledTimes(1);
-    const [_cmd, args] = spy.mock.calls[0]!;
-    const keyIdx = (args as string[]).indexOf("--idempotency-key");
-    expect(keyIdx).toBeGreaterThanOrEqual(0);
-    const generatedKey = (args as string[])[keyIdx + 1];
-    expect(generatedKey).toBeTruthy();
+    // Runner was called (create + poll = 2 calls)
+    expect(spy).toHaveBeenCalledTimes(2);
+    // --idempotency-key should NOT appear in 0.4.0 args
+    const [_cmd, createArgs] = spy.mock.calls[0]!;
+    expect(createArgs).not.toContain("--idempotency-key");
   });
 
-  it("includes --test flag when testMode=true", async () => {
-    const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+  it("includes --test flag in create and poll calls when testMode=true", async () => {
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeTestAdapter({ runner });
     await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
-    const [_cmd, args] = spy.mock.calls[0]!;
-    expect(args).toContain("--test");
+    const [_cmd1, createArgs] = spy.mock.calls[0]!;
+    const [_cmd2, pollArgs] = spy.mock.calls[1]!;
+    expect(createArgs).toContain("--test");
+    expect(pollArgs).toContain("--test");
   });
 
-  it("throws ProviderUnavailableError when exit code is non-zero", async () => {
+  it("throws ProviderUnavailableError when create exit code is non-zero", async () => {
     const { runner } = makeFixtureRunner(fixtureErr({ error: "server error" }));
     const adapter = makeAdapter({ runner });
     await expect(
@@ -607,87 +692,93 @@ describe("issueVirtualCard", () => {
         amount: BASE_AMOUNT,
         merchant: BASE_MERCHANT,
         purchaseIntent: VALID_PURCHASE_INTENT,
-        idempotencyKey: "test-key-001",
       }),
     ).rejects.toThrow(ProviderUnavailableError);
   });
 
-  it("extracts display brand, last4, expMonth, expYear from card field", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+  it("uses --merchant-url fallback https://example.invalid when no url provided", async () => {
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
-    const handle = await adapter.issueVirtualCard({
+    await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
-      merchant: BASE_MERCHANT,
+      merchant: { name: "No URL Merchant" }, // no url
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
-    expect(handle.display?.brand).toBe("visa");
-    expect(handle.display?.last4).toBe("4242");
-    expect(handle.display?.expMonth).toBe("12");
-    expect(handle.display?.expYear).toBe("2030");
+    const [_cmd, createArgs] = spy.mock.calls[0]!;
+    expect(createArgs).toContain("--merchant-url");
+    const urlIdx = (createArgs as string[]).indexOf("--merchant-url");
+    expect((createArgs as string[])[urlIdx + 1]).toBe("https://example.invalid");
   });
 });
 
 // ---------------------------------------------------------------------------
-// 4. retrieveCardSecrets — THE ONLY place --include=card appears
+// 4. retrieveCardSecrets — THE ONLY place --include card appears
 // ---------------------------------------------------------------------------
 
 describe("retrieveCardSecrets", () => {
   it("happy path: returns CardSecrets with pan, cvv, expMonth, expYear, holderName", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    const secrets = await adapter.retrieveCardSecrets("spreq_test_approved_001");
+    const secrets = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     // Stripe test PAN — Luhn-valid, documented test value
     expect(secrets.pan).toBe("4242424242424242");
     expect(secrets.cvv).toBe("123");
     expect(secrets.expMonth).toBe("12");
     expect(secrets.expYear).toBe("2030");
-    expect(secrets.holderName).toBe("OPENCLAW VIRTUAL");
+    // holderName from card.billing_address.name in 0.4.0
+    expect(secrets.holderName).toBe("Jane Doe");
   });
 
-  it("DOES include --include=card in the CLI args (security invariant: ONLY here)", async () => {
+  it("DOES include --include card as TWO separate args (security invariant: ONLY here)", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    await adapter.retrieveCardSecrets("spreq_test_approved_001");
+    await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     const [_cmd, args] = spy.mock.calls[0]!;
-    expect(args).toContain("--include=card");
+    // link-cli 0.4.0: --include card as two separate args
+    const argsArr = args as string[];
+    const includeIdx = argsArr.indexOf("--include");
+    expect(includeIdx).toBeGreaterThanOrEqual(0);
+    expect(argsArr[includeIdx + 1]).toBe("card");
+    // NOT the old --include=card form
+    expect(args).not.toContain("--include=card");
   });
 
   it("passes the spendRequestId as an argument", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    await adapter.retrieveCardSecrets("spreq_test_specific_id");
+    await adapter.retrieveCardSecrets("lsrq_test_specific_id");
     const [_cmd, args] = spy.mock.calls[0]!;
-    expect(args).toContain("spreq_test_specific_id");
+    expect(args).toContain("lsrq_test_specific_id");
   });
 
-  it("passes correct base args: spend-request retrieve --format json --include=card <id>", async () => {
+  it("passes correct base args: spend-request retrieve <id> --include card --format json", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    await adapter.retrieveCardSecrets("spreq_test_approved_001");
+    await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     const [cmd, args] = spy.mock.calls[0]!;
     expect(cmd).toBe("link-cli");
     expect(args).toContain("spend-request");
     expect(args).toContain("retrieve");
+    expect(args).toContain("lsrq_test_approved_001");
+    expect(args).toContain("--include");
+    expect(args).toContain("card");
     expect(args).toContain("--format");
     expect(args).toContain("json");
-    expect(args).toContain("--include=card");
-    expect(args).toContain("spreq_test_approved_001");
   });
 
   it("throws CardUnavailableError when exit code is non-zero (card consumed)", async () => {
     const { runner } = makeFixtureRunner({ stdout: "{}", stderr: "error", exitCode: 1 });
     const adapter = makeAdapter({ runner });
-    await expect(adapter.retrieveCardSecrets("spreq_consumed")).rejects.toThrow(
+    await expect(adapter.retrieveCardSecrets("lsrq_consumed")).rejects.toThrow(
       CardUnavailableError,
     );
   });
 
   it("throws CardUnavailableError when retrieve indicates card consumed (fixture-driven)", async () => {
-    // The card-consumed fixture has an error body with code "spend_request_consumed".
-    // link-cli returns non-zero exit when the card is consumed; the adapter throws CardUnavailableError
-    // without leaking any card data from the error body (defense-in-depth).
     const { runner } = makeFixtureRunner({
       stdout: JSON.stringify(spendRequestRetrieveCardConsumed),
       stderr: "spend_request_consumed",
@@ -696,7 +787,7 @@ describe("retrieveCardSecrets", () => {
     const adapter = makeAdapter({ runner });
     let caught: CardUnavailableError | undefined;
     try {
-      await adapter.retrieveCardSecrets("spreq_consumed");
+      await adapter.retrieveCardSecrets("lsrq_consumed");
     } catch (err) {
       caught = err as CardUnavailableError;
     }
@@ -711,12 +802,11 @@ describe("retrieveCardSecrets", () => {
     const adapter = makeAdapter({ runner });
     let caught: CardUnavailableError | undefined;
     try {
-      await adapter.retrieveCardSecrets("spreq_consumed");
+      await adapter.retrieveCardSecrets("lsrq_consumed");
     } catch (err) {
       caught = err as CardUnavailableError;
     }
     expect(caught).toBeInstanceOf(CardUnavailableError);
-    // The error message must not contain any card numbers or CVV values
     expect(caught?.message).not.toMatch(/\d{13,19}/);
     expect(caught?.message).not.toContain("4242");
     expect(caught?.message).not.toContain("123");
@@ -725,16 +815,16 @@ describe("retrieveCardSecrets", () => {
   it("each call re-shells out (no caching — fresh fetch discipline)", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    await adapter.retrieveCardSecrets("spreq_test_approved_001");
-    await adapter.retrieveCardSecrets("spreq_test_approved_001");
+    await adapter.retrieveCardSecrets("lsrq_test_approved_001");
+    await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     // Two calls must have been made — no caching
     expect(spy).toHaveBeenCalledTimes(2);
   });
 
-  it("throws CardUnavailableError when card field missing (no --include=card on server)", async () => {
+  it("throws CardUnavailableError when card field missing (no --include card on server)", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithoutCard));
     const adapter = makeAdapter({ runner });
-    await expect(adapter.retrieveCardSecrets("spreq_test_approved_001")).rejects.toThrow(
+    await expect(adapter.retrieveCardSecrets("lsrq_test_approved_001")).rejects.toThrow(
       CardUnavailableError,
     );
   });
@@ -742,7 +832,7 @@ describe("retrieveCardSecrets", () => {
   it("includes --test flag when testMode=true", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeTestAdapter({ runner });
-    await adapter.retrieveCardSecrets("spreq_test_approved_001");
+    await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     const [_cmd, args] = spy.mock.calls[0]!;
     expect(args).toContain("--test");
   });
@@ -753,10 +843,11 @@ describe("retrieveCardSecrets", () => {
 // ---------------------------------------------------------------------------
 
 describe("executeMachinePayment", () => {
-  it("happy path: returns settled MachinePaymentResult", async () => {
+  it("happy path: returns settled MachinePaymentResult (create + poll + mpp pay)", async () => {
     const { runner } = makeSequentialFixtureRunner([
-      fixtureOk(spendRequestCreateApprovedMpp),
-      fixtureOk(mppPaySettled),
+      fixtureOk(spendRequestCreateApprovedMpp), // create → pending_approval
+      fixtureOk(spendRequestRetrievePollMppApproved), // poll → approved with shared_payment_token
+      fixtureOk(mppPaySettled), // mpp pay → settled
     ]);
     const adapter = makeAdapter({ runner });
     const result = await adapter.executeMachinePayment({
@@ -775,6 +866,7 @@ describe("executeMachinePayment", () => {
   it("returns failed outcome for mpp-pay-failed fixture", async () => {
     const { runner } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPayFailed),
     ]);
     const adapter = makeAdapter({ runner });
@@ -788,9 +880,10 @@ describe("executeMachinePayment", () => {
     expect(result.receipt?.statusCode).toBe(402);
   });
 
-  it("does NOT include --include=card in step 1 (create) args (security invariant)", async () => {
+  it("does NOT include --include=card or --include card in any step (security invariant)", async () => {
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPaySettled),
     ]);
     const adapter = makeAdapter({ runner });
@@ -800,29 +893,17 @@ describe("executeMachinePayment", () => {
       method: "POST",
       idempotencyKey: "test-key-001",
     });
-    const [_cmd, step1Args] = spy.mock.calls[0]!;
-    expect(step1Args).not.toContain("--include=card");
-  });
-
-  it("does NOT include --include=card in step 2 (mpp pay) args (security invariant)", async () => {
-    const { runner, spy } = makeSequentialFixtureRunner([
-      fixtureOk(spendRequestCreateApprovedMpp),
-      fixtureOk(mppPaySettled),
-    ]);
-    const adapter = makeAdapter({ runner });
-    await adapter.executeMachinePayment({
-      fundingSourceId: "pm_test_card_visa_4242",
-      targetUrl: "https://api.example.com/pay",
-      method: "POST",
-      idempotencyKey: "test-key-001",
-    });
-    const [_cmd2, step2Args] = spy.mock.calls[1]!;
-    expect(step2Args).not.toContain("--include=card");
+    for (const call of spy.mock.calls) {
+      const args = call[1] as string[];
+      expect(args).not.toContain("--include=card");
+      expect(args).not.toContain("--include");
+    }
   });
 
   it("passes correct args for step 1 (spend-request create with credential-type)", async () => {
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPaySettled),
     ]);
     const adapter = makeAdapter({ runner });
@@ -838,11 +919,13 @@ describe("executeMachinePayment", () => {
     expect(step1Args).toContain("create");
     expect(step1Args).toContain("--credential-type=shared_payment_token");
     expect(step1Args).toContain("--request-approval");
+    expect(step1Args).toContain("--payment-method-id");
   });
 
-  it("passes correct args for step 2 (mpp pay with --token-stdin)", async () => {
+  it("passes correct args for step 2 (spend-request retrieve poll for MPP)", async () => {
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPaySettled),
     ]);
     const adapter = makeAdapter({ runner });
@@ -852,25 +935,48 @@ describe("executeMachinePayment", () => {
       method: "POST",
       idempotencyKey: "test-key-001",
     });
-    const [cmd2, step2Args] = spy.mock.calls[1]!;
-    expect(cmd2).toBe("link-cli");
-    expect(step2Args).toContain("mpp");
-    expect(step2Args).toContain("pay");
-    expect(step2Args).toContain("--token-stdin");
-    expect(step2Args).toContain("--target");
-    expect(step2Args).toContain("https://api.example.com/pay");
-    expect(step2Args).toContain("--method");
-    expect(step2Args).toContain("POST");
+    const [cmd, step2Args] = spy.mock.calls[1]!;
+    expect(cmd).toBe("link-cli");
+    expect(step2Args).toContain("spend-request");
+    expect(step2Args).toContain("retrieve");
+    expect(step2Args).toContain("lsrq_test_mpp_approved_001");
+    expect(step2Args).toContain("--interval");
+    expect(step2Args).toContain("--max-attempts");
+  });
+
+  it("passes correct args for step 3 (mpp pay with --token-stdin)", async () => {
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
+      fixtureOk(mppPaySettled),
+    ]);
+    const adapter = makeAdapter({ runner });
+    await adapter.executeMachinePayment({
+      fundingSourceId: "pm_test_card_visa_4242",
+      targetUrl: "https://api.example.com/pay",
+      method: "POST",
+      idempotencyKey: "test-key-001",
+    });
+    const [cmd3, step3Args] = spy.mock.calls[2]!;
+    expect(cmd3).toBe("link-cli");
+    expect(step3Args).toContain("mpp");
+    expect(step3Args).toContain("pay");
+    expect(step3Args).toContain("--token-stdin");
+    expect(step3Args).toContain("--target");
+    expect(step3Args).toContain("https://api.example.com/pay");
+    expect(step3Args).toContain("--method");
+    expect(step3Args).toContain("POST");
   });
 
   it("MPP token is passed via stdin input, NOT as a visible CLI arg", async () => {
-    // This verifies the security invariant: the token is delivered via stdin,
-    // not via a CLI arg that would be visible in process listings.
     const callLog: Array<{ args: readonly string[]; input?: string }> = [];
     const capturingRunner: CommandRunner = async (_cmd, args, options) => {
       callLog.push({ args, input: options?.input });
       if (callLog.length === 1) {
         return fixtureOk(spendRequestCreateApprovedMpp);
+      }
+      if (callLog.length === 2) {
+        return fixtureOk(spendRequestRetrievePollMppApproved);
       }
       return fixtureOk(mppPaySettled);
     };
@@ -882,19 +988,19 @@ describe("executeMachinePayment", () => {
       idempotencyKey: "test-key-001",
     });
 
-    const step2 = callLog[1]!;
+    const step3 = callLog[2]!;
     // Token delivered via stdin, not as a CLI arg
-    expect(step2.input).toBe("spt_test_abc123def456");
+    expect(step3.input).toBe("spt_test_abc123def456");
     // Token must NOT appear in the args array
-    expect(step2.args).not.toContain("spt_test_abc123def456");
-    // And must not appear at all as any arg
-    const argsStr = step2.args.join(" ");
+    expect(step3.args).not.toContain("spt_test_abc123def456");
+    const argsStr = step3.args.join(" ");
     expect(argsStr).not.toContain("spt_test_abc123def456");
   });
 
   it("MPP token does NOT appear in the returned MachinePaymentResult", async () => {
     const { runner } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPaySettled),
     ]);
     const adapter = makeAdapter({ runner });
@@ -904,7 +1010,6 @@ describe("executeMachinePayment", () => {
       method: "POST",
       idempotencyKey: "test-key-001",
     });
-    // Serialize to JSON and check no token appears
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain("spt_test_abc123def456");
     expect(serialized).not.toContain("shared_payment_token");
@@ -913,6 +1018,7 @@ describe("executeMachinePayment", () => {
   it("rejects empty idempotencyKey with PolicyDeniedError BEFORE calling runner", async () => {
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPaySettled),
     ]);
     const adapter = makeAdapter({ runner });
@@ -927,8 +1033,11 @@ describe("executeMachinePayment", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 
-  it("throws ProviderUnavailableError when MPP spend-request is not approved", async () => {
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreatePending));
+  it("throws ProviderUnavailableError when MPP poll does not return approved", async () => {
+    const { runner } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollPendingOnly), // poll stays pending
+    ]);
     const adapter = makeAdapter({ runner });
     await expect(
       adapter.executeMachinePayment({
@@ -953,9 +1062,10 @@ describe("executeMachinePayment", () => {
     ).rejects.toThrow(ProviderUnavailableError);
   });
 
-  it("includes --test flag in both steps when testMode=true", async () => {
+  it("includes --test flag in all steps when testMode=true", async () => {
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPaySettled),
     ]);
     const adapter = makeTestAdapter({ runner });
@@ -967,13 +1077,16 @@ describe("executeMachinePayment", () => {
     });
     const [_cmd1, step1Args] = spy.mock.calls[0]!;
     const [_cmd2, step2Args] = spy.mock.calls[1]!;
+    const [_cmd3, step3Args] = spy.mock.calls[2]!;
     expect(step1Args).toContain("--test");
     expect(step2Args).toContain("--test");
+    expect(step3Args).toContain("--test");
   });
 
   it("serializes body as JSON string and passes as --body arg", async () => {
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPaySettled),
     ]);
     const adapter = makeAdapter({ runner });
@@ -984,10 +1097,10 @@ describe("executeMachinePayment", () => {
       body: { amount: 2500 },
       idempotencyKey: "test-key-001",
     });
-    const [_cmd2, step2Args] = spy.mock.calls[1]!;
-    expect(step2Args).toContain("--body");
-    const bodyIdx = (step2Args as string[]).indexOf("--body");
-    expect((step2Args as string[])[bodyIdx + 1]).toBe('{"amount":2500}');
+    const [_cmd3, step3Args] = spy.mock.calls[2]!;
+    expect(step3Args).toContain("--body");
+    const bodyIdx = (step3Args as string[]).indexOf("--body");
+    expect((step3Args as string[])[bodyIdx + 1]).toBe('{"amount":2500}');
   });
 });
 
@@ -997,9 +1110,9 @@ describe("executeMachinePayment", () => {
 
 describe("getStatus", () => {
   it("returns updated CredentialHandle for a known handleId", async () => {
-    // Seed handleMap
-    handleMap.set("slh-spreq_test_approved_001", {
-      spendRequestId: "spreq_test_approved_001",
+    // Seed handleMap with lsrq_ id
+    handleMap.set("slh-lsrq_test_approved_001", {
+      spendRequestId: "lsrq_test_approved_001",
       providerId: "stripe-link",
       last4: "4242",
       issuedAt: new Date().toISOString(),
@@ -1007,42 +1120,41 @@ describe("getStatus", () => {
 
     const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithoutCard));
     const adapter = makeAdapter({ runner });
-    const handle = await adapter.getStatus("slh-spreq_test_approved_001");
-    expect(handle.id).toBe("slh-spreq_test_approved_001");
+    const handle = await adapter.getStatus("slh-lsrq_test_approved_001");
+    expect(handle.id).toBe("slh-lsrq_test_approved_001");
     expect(handle.status).toBe("approved");
     expect(handle.provider).toBe("stripe-link");
-    expect(handle.providerRequestId).toBe("spreq_test_approved_001");
+    expect(handle.providerRequestId).toBe("lsrq_test_approved_001");
   });
 
   it("maps expired status to status: 'expired' in getStatus", async () => {
-    handleMap.set("slh-spreq_expired_001", {
-      spendRequestId: "spreq_expired_001",
+    handleMap.set("slh-lsrq_expired_001", {
+      spendRequestId: "lsrq_expired_001",
       providerId: "stripe-link",
       last4: "0000",
       issuedAt: new Date().toISOString(),
     });
 
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreateExpired));
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrievePollExpired));
     const adapter = makeAdapter({ runner });
-    const handle = await adapter.getStatus("slh-spreq_expired_001");
+    const handle = await adapter.getStatus("slh-lsrq_expired_001");
     expect(handle.status).toBe("expired");
-    expect(handle.providerRequestId).toBe("spreq_expired_001");
+    expect(handle.providerRequestId).toBe("lsrq_expired_001");
   });
 
   it("maps pending status to pending_approval in getStatus (timeout/poll scenario)", async () => {
-    handleMap.set("slh-spreq_test_pending_001", {
-      spendRequestId: "spreq_test_pending_001",
+    handleMap.set("slh-lsrq_test_pending_001", {
+      spendRequestId: "lsrq_test_pending_001",
       providerId: "stripe-link",
       last4: undefined,
       issuedAt: new Date().toISOString(),
     });
 
-    const { runner } = makeFixtureRunner(fixtureOk(spendRequestCreatePending));
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrievePollPendingOnly));
     const adapter = makeAdapter({ runner });
-    const handle = await adapter.getStatus("slh-spreq_test_pending_001");
-    // pending from link-cli maps to pending_approval so manager can re-poll
+    const handle = await adapter.getStatus("slh-lsrq_test_pending_001");
     expect(handle.status).toBe("pending_approval");
-    expect(handle.providerRequestId).toBe("spreq_test_pending_001");
+    expect(handle.providerRequestId).toBe("lsrq_test_pending_001");
   });
 
   it("throws CardUnavailableError for unknown handleId", async () => {
@@ -1051,9 +1163,9 @@ describe("getStatus", () => {
     await expect(adapter.getStatus("unknown-handle")).rejects.toThrow(CardUnavailableError);
   });
 
-  it("does NOT include --include=card (security invariant)", async () => {
-    handleMap.set("slh-spreq_test_approved_001", {
-      spendRequestId: "spreq_test_approved_001",
+  it("does NOT include --include=card or --include card (security invariant)", async () => {
+    handleMap.set("slh-lsrq_test_approved_001", {
+      spendRequestId: "lsrq_test_approved_001",
       providerId: "stripe-link",
       last4: "4242",
       issuedAt: new Date().toISOString(),
@@ -1061,14 +1173,15 @@ describe("getStatus", () => {
 
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithoutCard));
     const adapter = makeAdapter({ runner });
-    await adapter.getStatus("slh-spreq_test_approved_001");
+    await adapter.getStatus("slh-lsrq_test_approved_001");
     const [_cmd, args] = spy.mock.calls[0]!;
     expect(args).not.toContain("--include=card");
+    expect(args).not.toContain("--include");
   });
 
   it("passes correct base args: spend-request retrieve --format json <spendRequestId>", async () => {
-    handleMap.set("slh-spreq_test_approved_001", {
-      spendRequestId: "spreq_test_approved_001",
+    handleMap.set("slh-lsrq_test_approved_001", {
+      spendRequestId: "lsrq_test_approved_001",
       providerId: "stripe-link",
       last4: "4242",
       issuedAt: new Date().toISOString(),
@@ -1076,19 +1189,19 @@ describe("getStatus", () => {
 
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithoutCard));
     const adapter = makeAdapter({ runner });
-    await adapter.getStatus("slh-spreq_test_approved_001");
+    await adapter.getStatus("slh-lsrq_test_approved_001");
     const [cmd, args] = spy.mock.calls[0]!;
     expect(cmd).toBe("link-cli");
     expect(args).toContain("spend-request");
     expect(args).toContain("retrieve");
     expect(args).toContain("--format");
     expect(args).toContain("json");
-    expect(args).toContain("spreq_test_approved_001");
+    expect(args).toContain("lsrq_test_approved_001");
   });
 
   it("throws CardUnavailableError when retrieve returns non-zero", async () => {
-    handleMap.set("slh-spreq_test_approved_001", {
-      spendRequestId: "spreq_test_approved_001",
+    handleMap.set("slh-lsrq_test_approved_001", {
+      spendRequestId: "lsrq_test_approved_001",
       providerId: "stripe-link",
       last4: "4242",
       issuedAt: new Date().toISOString(),
@@ -1096,7 +1209,7 @@ describe("getStatus", () => {
 
     const { runner } = makeFixtureRunner({ stdout: "", stderr: "not found", exitCode: 1 });
     const adapter = makeAdapter({ runner });
-    await expect(adapter.getStatus("slh-spreq_test_approved_001")).rejects.toThrow(
+    await expect(adapter.getStatus("slh-lsrq_test_approved_001")).rejects.toThrow(
       CardUnavailableError,
     );
   });
@@ -1116,8 +1229,8 @@ describe("getStatus", () => {
   });
 
   it("includes --test flag when testMode=true", async () => {
-    handleMap.set("slh-spreq_test_approved_001", {
-      spendRequestId: "spreq_test_approved_001",
+    handleMap.set("slh-lsrq_test_approved_001", {
+      spendRequestId: "lsrq_test_approved_001",
       providerId: "stripe-link",
       last4: "4242",
       issuedAt: new Date().toISOString(),
@@ -1125,56 +1238,62 @@ describe("getStatus", () => {
 
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithoutCard));
     const adapter = makeTestAdapter({ runner });
-    await adapter.getStatus("slh-spreq_test_approved_001");
+    await adapter.getStatus("slh-lsrq_test_approved_001");
     const [_cmd, args] = spy.mock.calls[0]!;
     expect(args).toContain("--test");
   });
 });
 
 // ---------------------------------------------------------------------------
-// 7. Cross-cutting: --include=card appears in EXACTLY retrieveCardSecrets
+// 7. Cross-cutting: --include card appears ONLY in retrieveCardSecrets
 // ---------------------------------------------------------------------------
 
-describe("security invariant: --include=card only in retrieveCardSecrets", () => {
-  it("getSetupStatus never passes --include=card", async () => {
+describe("security invariant: --include card only in retrieveCardSecrets", () => {
+  it("getSetupStatus never passes --include or --include=card", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(authStatusAuthenticated));
     const adapter = makeAdapter({ runner });
     await adapter.getSetupStatus();
     for (const call of spy.mock.calls) {
       const args = call[1] as string[];
       expect(args).not.toContain("--include=card");
+      expect(args).not.toContain("--include");
     }
   });
 
-  it("listFundingSources never passes --include=card", async () => {
+  it("listFundingSources never passes --include or --include=card", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(paymentMethodsList));
     const adapter = makeAdapter({ runner });
     await adapter.listFundingSources({});
     for (const call of spy.mock.calls) {
       const args = call[1] as string[];
       expect(args).not.toContain("--include=card");
+      expect(args).not.toContain("--include");
     }
   });
 
-  it("issueVirtualCard never passes --include=card", async () => {
-    const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestCreateApproved));
+  it("issueVirtualCard never passes --include or --include=card (all CLI calls)", async () => {
+    const { runner, spy } = makeSequentialFixtureRunner([
+      fixtureOk(spendRequestCreateApproved),
+      fixtureOk(spendRequestRetrievePollApproved),
+    ]);
     const adapter = makeAdapter({ runner });
     await adapter.issueVirtualCard({
       fundingSourceId: "pm_test_card_visa_4242",
       amount: BASE_AMOUNT,
       merchant: BASE_MERCHANT,
       purchaseIntent: VALID_PURCHASE_INTENT,
-      idempotencyKey: "test-key-001",
     });
     for (const call of spy.mock.calls) {
       const args = call[1] as string[];
       expect(args).not.toContain("--include=card");
+      expect(args).not.toContain("--include");
     }
   });
 
-  it("executeMachinePayment never passes --include=card (all steps)", async () => {
+  it("executeMachinePayment never passes --include or --include=card (all steps)", async () => {
     const { runner, spy } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApprovedMpp),
+      fixtureOk(spendRequestRetrievePollMppApproved),
       fixtureOk(mppPaySettled),
     ]);
     const adapter = makeAdapter({ runner });
@@ -1187,39 +1306,46 @@ describe("security invariant: --include=card only in retrieveCardSecrets", () =>
     for (const call of spy.mock.calls) {
       const args = call[1] as string[];
       expect(args).not.toContain("--include=card");
+      expect(args).not.toContain("--include");
     }
   });
 
-  it("getStatus never passes --include=card", async () => {
-    handleMap.set("slh-spreq_test_approved_001", {
-      spendRequestId: "spreq_test_approved_001",
+  it("getStatus never passes --include or --include=card", async () => {
+    handleMap.set("slh-lsrq_test_approved_001", {
+      spendRequestId: "lsrq_test_approved_001",
       providerId: "stripe-link",
       last4: "4242",
       issuedAt: new Date().toISOString(),
     });
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithoutCard));
     const adapter = makeAdapter({ runner });
-    await adapter.getStatus("slh-spreq_test_approved_001");
+    await adapter.getStatus("slh-lsrq_test_approved_001");
     for (const call of spy.mock.calls) {
       const args = call[1] as string[];
       expect(args).not.toContain("--include=card");
+      expect(args).not.toContain("--include");
     }
   });
 
-  it("retrieveCardSecrets DOES pass --include=card", async () => {
+  it("retrieveCardSecrets DOES pass --include and card as separate args", async () => {
     const { runner, spy } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    await adapter.retrieveCardSecrets("spreq_test_approved_001");
+    await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     const [_cmd, args] = spy.mock.calls[0]!;
-    expect(args).toContain("--include=card");
+    expect(args).toContain("--include");
+    expect(args).toContain("card");
+    // Verify they're consecutive
+    const argsArr = args as string[];
+    const idx = argsArr.indexOf("--include");
+    expect(argsArr[idx + 1]).toBe("card");
   });
 });
 
 // ---------------------------------------------------------------------------
-// 7b. I-1 and I-2 quality fixes
+// 7b. Quality fixes: cause propagation and stderr in errors
 // ---------------------------------------------------------------------------
 
-describe("U4 quality fixes: cause propagation and stderr in errors", () => {
+describe("quality fixes: cause propagation and stderr in errors", () => {
   it("propagates underlying error as cause when runner subprocess fails", async () => {
     const underlying = new Error("ENOENT: link-cli not on PATH");
     const runner = vi.fn().mockRejectedValue(underlying);
@@ -1266,7 +1392,7 @@ describe("U4 quality fixes: cause propagation and stderr in errors", () => {
       runner,
     });
     try {
-      await adapter.retrieveCardSecrets("spreq_test_001");
+      await adapter.retrieveCardSecrets("lsrq_test_001");
       expect.fail("expected throw");
     } catch (e) {
       expect((e as Error).message).not.toMatch(/4242|pan/i);
@@ -1293,7 +1419,7 @@ describe("adapter metadata", () => {
     expect(adapter.rails).toContain("machine_payment");
   });
 
-  it("accepts pollIntervalMs and pollMaxAttempts options (reserved for future use)", () => {
+  it("accepts pollIntervalMs and pollMaxAttempts options", () => {
     const adapter = createStripeLinkAdapter({
       clientName: "test",
       testMode: true,
