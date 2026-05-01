@@ -583,6 +583,42 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     expect(plan.environment.OPENCLAW_SERVICE_MARKER).toBeUndefined();
   });
 
+  it("drops stale non-minimal PATH entries from an existing service env", async () => {
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+        PATH: "/usr/local/bin:/usr/bin:/bin",
+        TMPDIR: "/tmp",
+      },
+    });
+
+    const home = "/home/testuser";
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+      platform: "linux",
+      existingEnvironment: {
+        PATH: [
+          `${home}/.volta/bin`,
+          `${home}/.asdf/shims`,
+          `${home}/.nvm/current/bin`,
+          `${home}/.local/share/fnm/aliases/default/bin`,
+          `${home}/.local/share/fnm/current/bin`,
+          `${home}/.fnm/aliases/default/bin`,
+          `${home}/.fnm/current/bin`,
+          `${home}/.local/share/pnpm`,
+          "/opt/pnpm/bin",
+          "/custom/go/bin",
+          "/usr/bin",
+        ].join(path.delimiter),
+      },
+    });
+
+    expect(plan.environment.PATH).toBe("/usr/local/bin:/usr/bin:/bin:/custom/go/bin");
+  });
+
   it("drops existing PATH entries that resolve through symlinks into temp dirs", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {

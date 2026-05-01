@@ -19,6 +19,7 @@ import {
   readManagedServiceEnvKeysFromEnvironment,
   writeManagedServiceEnvKeysToEnvironment,
 } from "../daemon/service-managed-env.js";
+import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -173,6 +174,7 @@ function mergeServicePath(
   nextPath: string | undefined,
   existingPath: string | undefined,
   tmpDir: string | undefined,
+  platform: NodeJS.Platform,
 ): string | undefined {
   const segments: string[] = [];
   const seen = new Set<string>();
@@ -233,6 +235,9 @@ function mergeServicePath(
     return normalized;
   };
   const shouldPreserveNormalizedPathSegment = (segment: string) => {
+    if (isNonMinimalServicePathEntry(segment, platform)) {
+      return false;
+    }
     const resolved = path.resolve(segment);
     const realResolved = realpathExistingPath(resolved) ?? resolved;
     return ![...normalizedTmpDirs, ...realTmpDirs].some(
@@ -319,6 +324,7 @@ async function buildGatewayInstallEnvironment(params: {
   warn?: DaemonInstallWarnFn;
   serviceEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
 }): Promise<Record<string, string | undefined>> {
   const durableEnvironment = collectDurableServiceEnvVars({
     env: params.env,
@@ -353,6 +359,7 @@ async function buildGatewayInstallEnvironment(params: {
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
     params.serviceEnvironment.TMPDIR,
+    params.platform,
   );
   if (mergedPath) {
     environment.PATH = mergedPath;
@@ -427,6 +434,7 @@ export async function buildGatewayInstallPlan(params: {
       warn: params.warn,
       serviceEnvironment,
       existingEnvironment: params.existingEnvironment,
+      platform,
     }),
   };
 }
