@@ -54,6 +54,28 @@ function prefersSips(): boolean {
   );
 }
 
+function prefersVips(): boolean {
+  return (
+    process.env.OPENCLAW_IMAGE_BACKEND === "vips" ||
+    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" &&
+      process.env.OPENCLAW_IMAGE_BACKEND !== "sips" &&
+      process.platform === "linux" &&
+      process.arch === "x64")
+  );
+}
+
+/**
+ * Check if vipsthumbnail binary is available on this system.
+ */
+async function isVipsAvailable(): Promise<boolean> {
+  try {
+    await runExec("/usr/bin/vipsthumbnail", ["--version"], { timeoutMs: 5_000, maxBuffer: 4096 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 let mediaAttachmentImageOpsPromise: Promise<MediaAttachmentImageOps> | null = null;
 
 function isMediaAttachmentImageOps(value: unknown): value is MediaAttachmentImageOps {
@@ -445,6 +467,29 @@ async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
   });
 }
 
+async function vipsResizeToJpeg(params: {
+  buffer: Buffer;
+  maxSide: number;
+  quality: number;
+}): Promise<Buffer> {
+  return await withTempDir(async (dir) => {
+    const input = path.join(dir, "in.img");
+    const output = path.join(dir, "out.jpg");
+    await fs.writeFile(input, params.buffer);
+    // vipsthumbnail -o output.jpg -s NxN -Q quality input
+    // Without enlarging: use "N" (fit within) or "NxN" (exact). Using "NxN" with fit=inside.
+    // -S (size) flag: -S N fits within NxN preserving aspect ratio
+    // Actually: vipsthumbnail input -o output.jpg -s 800 -Q 85
+    // -s N: resize so max dim is N
+    await runExec(
+      "/usr/bin/vipsthumbnail",
+      [input, "-o", output, "-s", String(params.maxSide), "-Q", String(params.quality)],
+      { timeoutMs: 30_000, maxBuffer: 1024 * 1024 },
+    );
+    return await fs.readFile(output);
+  });
+}
+
 export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null> {
   const metadataForLimit = await readImageMetadataForLimit(buffer).catch(() => null);
   if (metadataForLimit) {
@@ -575,8 +620,26 @@ export async function resizeToJpeg(params: {
     });
   }
 
-  const ops = await loadMediaAttachmentImageOps();
-  return await ops.resizeToJpeg(params);
+  // Try Sharp (via media-understanding-core plugin). Fall back to vipsthumbnail
+  // when Sharp fails to load — e.g. on SSE2-only CPUs (Intel N355 in Common KVM).
+  try {
+    const ops = await loadMediaAttachmentImageOps();
+    return await ops.resizeToJpeg(params);
+  } catch (sharpErr) {
+    if (prefersVips() || (process.platform === "linux" && process.arch === "x64")) {
+      // On Linux x64, Sharp load failure is likely a CPU-instruction incompatibility.
+      // Fall back to libvips vipsthumbnail.
+      try {
+        const vipsAvailable = await isVipsAvailable();
+        if (vipsAvailable) {
+          return await vipsResizeToJpeg(params);
+        }
+      } catch {
+        // vips fallback also failed — fall through to re-throw original sharp error
+      }
+    }
+    throw sharpErr;
+  }
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
