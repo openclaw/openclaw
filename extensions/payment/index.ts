@@ -2,6 +2,8 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { registerPaymentApprovalsHook } from "./src/approvals.js";
 import { registerPaymentCli } from "./src/cli.js";
 import { defaultPaymentConfig, parsePaymentConfig } from "./src/config.js";
+import { registerFillHook } from "./src/hooks/fill-hook.js";
+import { registerRedactionHook } from "./src/hooks/redaction-hook.js";
 import { createManager } from "./src/manager-factory.js";
 import { registerPaymentTool } from "./src/tool.js";
 
@@ -43,5 +45,7 @@ export default definePluginEntry({
     registerPaymentTool(api, manager);
     registerPaymentApprovalsHook(api);
     registerPaymentCli(api, manager);
+    registerFillHook(api, { manager, storePath: config.store });
+    registerRedactionHook(api);
   },
 });
