@@ -267,6 +267,15 @@ export function createCapturedPluginRegistration(params?: {
             kind: job.kind,
           };
         },
+        scheduleSessionTurn: async (schedule) => {
+          return {
+            id: schedule.name ?? "captured-session-turn",
+            pluginId: "captured-plugin-registration",
+            sessionKey: schedule.sessionKey,
+            kind: "session-turn",
+          };
+        },
+        unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
         registerTool(tool) {
           if (typeof tool !== "function") {
             tools.push(tool);
