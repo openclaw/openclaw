@@ -304,6 +304,7 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromClawHubMock.mockReset();
     installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
   });
 
@@ -1037,6 +1038,97 @@ describe("updateNpmInstalledPlugins", () => {
       clawhubChannel: "official",
       integrity: "sha256-next",
     });
+  });
+
+  it("skips ClawHub plugin update when bundled version is newer", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "whatsapp",
+          {
+            pluginId: "whatsapp",
+            localPath: appBundledPluginRoot("whatsapp"),
+            version: "2026.4.20",
+          },
+        ],
+      ]),
+    );
+
+    const config = createClawHubInstallConfig({
+      pluginId: "whatsapp",
+      installPath: "/tmp/whatsapp",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "whatsapp",
+      clawhubFamily: "bundle-plugin",
+      clawhubChannel: "community",
+    });
+    (config.plugins!.installs!.whatsapp as Record<string, unknown>).version = "2026.2.9";
+
+    const warnMessages: string[] = [];
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["whatsapp"],
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({
+        pluginId: "whatsapp",
+        status: "skipped",
+        message: expect.stringContaining("bundled version 2026.4.20 is newer"),
+      }),
+    ]);
+    expect(warnMessages).toEqual([expect.stringContaining("bundled version 2026.4.20 is newer")]);
+  });
+
+  it("proceeds with ClawHub plugin update when bundled version is older", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "demo",
+          {
+            pluginId: "demo",
+            localPath: appBundledPluginRoot("demo"),
+            version: "1.0.0",
+          },
+        ],
+      ]),
+    );
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/demo",
+      version: "2.0.0",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        integrity: "sha256-new",
+        resolvedAt: "2026-04-30T00:00:00.000Z",
+      },
+    });
+
+    const config = createClawHubInstallConfig({
+      pluginId: "demo",
+      installPath: "/tmp/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+    });
+    (config.plugins!.installs!.demo as Record<string, unknown>).version = "1.5.0";
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["demo"],
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalled();
+    expect(result.changed).toBe(true);
   });
 
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
