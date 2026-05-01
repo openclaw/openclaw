@@ -7,6 +7,7 @@ import {
   expectedIntegrityForUpdate,
   readInstalledPackageVersion,
 } from "../infra/package-update-utils.js";
+import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
@@ -165,6 +166,13 @@ function shouldSkipUnchangedNpmInstall(params: {
     params.record.resolvedSpec === params.metadata.resolvedSpec &&
     params.record.resolvedVersion === params.metadata.version
   );
+}
+
+function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
+  const bundled = parseComparableSemver(bundledVersion);
+  const installed = parseComparableSemver(installedVersion);
+  const cmp = compareComparableSemver(bundled, installed);
+  return cmp !== null && cmp > 0;
 }
 
 function pathsEqual(
@@ -492,6 +500,7 @@ export async function updateNpmInstalledPlugins(params: {
   const normalizedPluginConfig = params.skipDisabledPlugins
     ? normalizePluginsConfig(params.config.plugins)
     : undefined;
+  const bundled = resolveBundledPluginSources({});
   const outcomes: PluginUpdateOutcome[] = [];
   let next = params.config;
   let changed = false;
@@ -579,6 +588,26 @@ export async function updateNpmInstalledPlugins(params: {
         message: `Skipping "${pluginId}" (missing ClawHub package metadata).`,
       });
       continue;
+    }
+
+    if (record.source === "clawhub" || record.source === "marketplace") {
+      const bundledSource = bundled.get(pluginId);
+      if (
+        bundledSource?.version &&
+        record.version &&
+        isBundledVersionNewer(bundledSource.version, record.version)
+      ) {
+        logger.warn?.(
+          `Skipping "${pluginId}" update: bundled version ${bundledSource.version} is newer than the installed ${record.source} version ${record.version}. ` +
+            `Uninstall the ${record.source} plugin to use the bundled version, or pin a newer version explicitly.`,
+        );
+        outcomes.push({
+          pluginId,
+          status: "skipped",
+          message: `Skipping "${pluginId}": bundled version ${bundledSource.version} is newer than ${record.source} version ${record.version}.`,
+        });
+        continue;
+      }
     }
 
     if (
