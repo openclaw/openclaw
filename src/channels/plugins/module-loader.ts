@@ -1,30 +1,66 @@
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
 import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
+  type PluginJitiLoaderFactory,
 } from "../../plugins/jiti-loader-cache.js";
 import { tryNativeRequireJavaScriptModule } from "../../plugins/native-module-require.js";
 export { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 
+const nodeRequire = createRequire(import.meta.url);
+let moduleLoaderJitiFactory: PluginJitiLoaderFactory | undefined;
+
+function getJitiFactory() {
+  if (moduleLoaderJitiFactory) {
+    return moduleLoaderJitiFactory;
+  }
+  const { createJiti } = nodeRequire("jiti") as typeof import("jiti");
+  moduleLoaderJitiFactory = createJiti;
+  return moduleLoaderJitiFactory;
+}
+
 function createModuleLoader() {
   const jitiLoaders: PluginJitiLoaderCache = new Map();
 
-  return (modulePath: string, tryNative?: boolean) => {
-    return getCachedPluginJitiLoader({
-      cache: jitiLoaders,
-      modulePath,
-      importerUrl: import.meta.url,
-      argvEntry: process.argv[1],
-      preferBuiltDist: true,
-      jitiFilename: import.meta.url,
-      tryNative,
-    });
+  return {
+    load(modulePath: string, tryNative?: boolean) {
+      return getCachedPluginJitiLoader({
+        cache: jitiLoaders,
+        modulePath,
+        importerUrl: import.meta.url,
+        argvEntry: process.argv[1],
+        preferBuiltDist: true,
+        jitiFilename: import.meta.url,
+        createLoader: getJitiFactory(),
+        tryNative,
+      });
+    },
+    reset() {
+      jitiLoaders.clear();
+    },
   };
 }
 
-let loadModule = createModuleLoader();
+let moduleLoader = createModuleLoader();
+
+function loadModule(modulePath: string, tryNative?: boolean) {
+  return moduleLoader.load(modulePath, tryNative);
+}
+
+export function resetChannelPluginModuleLoaderStateForTest(): void {
+  moduleLoader.reset();
+  moduleLoader = createModuleLoader();
+  moduleLoaderJitiFactory = undefined;
+}
+
+export function setChannelPluginModuleLoaderJitiFactoryForTest(
+  factory: PluginJitiLoaderFactory | undefined,
+): void {
+  moduleLoaderJitiFactory = factory;
+}
 
 export function resolveCompiledBundledModulePath(modulePath: string): string {
   const compiledDistModulePath = modulePath.replace(

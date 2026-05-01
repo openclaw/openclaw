@@ -377,6 +377,7 @@ describe("plugin-sdk facade loader", () => {
   });
 
   it("uses the runtime-supported native boundary for Windows dist facade loads", () => {
+    resetFacadeLoaderStateForTest();
     const fixture = createBundledPluginFixture({
       prefix: "openclaw-facade-loader-windows-",
       marker: "windows-dist-ok",
