@@ -289,6 +289,46 @@ describe("plugin scheduled turns", () => {
     expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([]);
   });
 
+  it("does not prune long-delay one-shot records before the timeout ceiling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-01T00:00:00.000Z"));
+    workflowMocks.callGatewayTool.mockImplementation(async (method: string) => {
+      if (method === "cron.add") {
+        return { id: "long-delay-job" };
+      }
+      return { ok: true };
+    });
+
+    const maxTimerDelayMs = 2_147_483_647;
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "workflow-plugin",
+        pluginName: "Workflow Plugin",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: maxTimerDelayMs + 10_000,
+        },
+      }),
+    ).resolves.toEqual({
+      id: "long-delay-job",
+      pluginId: "workflow-plugin",
+      sessionKey: "agent:main:main",
+      kind: "session-turn",
+    });
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(maxTimerDelayMs - 1);
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(69_999);
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([]);
+  });
+
   it("rejects invalid schedules and unsupported delivery modes before cron.add", async () => {
     await expect(
       schedulePluginSessionTurn({

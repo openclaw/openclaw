@@ -18,6 +18,7 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const log = createSubsystemLogger("plugins/host-workflow");
 const ONE_SHOT_SCHEDULER_RECORD_PRUNE_GRACE_MS = 60_000;
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 type CallGatewayTool = typeof import("../agents/tools/gateway.js").callGatewayTool;
 let callGatewayToolPromise: Promise<CallGatewayTool> | undefined;
@@ -414,7 +415,7 @@ function pruneOneShotSchedulerRecordAfterRun(params: {
     return;
   }
   const delayMs = Math.max(0, runAtMs - Date.now()) + ONE_SHOT_SCHEDULER_RECORD_PRUNE_GRACE_MS;
-  const timer = setTimeout(() => {
+  scheduleUnrefTimeout(() => {
     deletePluginSessionSchedulerJob({
       pluginId: params.pluginId,
       jobId: params.jobId,
@@ -422,6 +423,18 @@ function pruneOneShotSchedulerRecordAfterRun(params: {
       expectedGeneration,
     });
   }, delayMs);
+}
+
+function scheduleUnrefTimeout(callback: () => void, delayMs: number): void {
+  const boundedDelayMs = Math.min(Math.max(0, delayMs), MAX_TIMER_DELAY_MS);
+  const timer = setTimeout(() => {
+    const remainingDelayMs = delayMs - boundedDelayMs;
+    if (remainingDelayMs > 0) {
+      scheduleUnrefTimeout(callback, remainingDelayMs);
+      return;
+    }
+    callback();
+  }, boundedDelayMs);
   timer.unref?.();
 }
 
