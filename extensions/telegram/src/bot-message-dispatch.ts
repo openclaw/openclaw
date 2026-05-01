@@ -486,8 +486,7 @@ export const dispatchTelegramMessage = async ({
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   // Scale edit throttle by concurrent stream count so the combined edit rate stays within
   // Telegram's per-chat rate limit (~1 edit/second).
-  const activeDraftStreamCount =
-    (canStreamAnswerDraft ? 1 : 0) + (canStreamReasoningDraft ? 1 : 0);
+  const activeDraftStreamCount = (canStreamAnswerDraft ? 1 : 0) + (canStreamReasoningDraft ? 1 : 0);
   const draftThrottleMs = DRAFT_STREAM_BASE_THROTTLE_MS * Math.max(1, activeDraftStreamCount);
   // Shared rate limiter across all lanes: serialises sends so concurrent answer + reasoning
   // edits don't collectively exceed the per-chat edit rate limit even when both loops fire at once.
@@ -495,8 +494,6 @@ export const dispatchTelegramMessage = async ({
     activeDraftStreamCount > 1
       ? createSharedEditRateLimiter(DRAFT_SHARED_RATE_LIMITER_INTERVAL_MS)
       : undefined;
-  // DM draft previews still duplicate briefly at materialize time.
-  const useMessagePreviewTransportForDm = threadSpec?.scope === "dm" && canStreamAnswerDraft;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const archivedAnswerPreviews: ArchivedPreview[] = [];
   const archivedReasoningPreviewIds: number[] = [];

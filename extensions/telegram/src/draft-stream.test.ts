@@ -711,7 +711,6 @@ describe("draft stream 429 rate limit backoff", () => {
       api: api as unknown as Bot["api"],
       chatId: 123,
       throttleMs: 0,
-      previewTransport: "message",
     });
 
     // Establish a message ID so subsequent updates go through editMessageText.
