@@ -355,9 +355,8 @@ export function createTelegramDraftStream(params: {
           `telegram stream preview rate limited; backing off ${retryAfterMs}ms (retry_after from API)`,
         );
         // Return false immediately without sleeping. The backoff wait is deferred to
-        // the start of the next sendOrEditStreamMessage call so any pending text
-        // accumulated during the in-flight send is preserved rather than overwritten
-        // by the draft loop's sent===false restore path.
+        // the start of the next sendOrEditStreamMessage call. The draft loop only
+        // restores the failed snapshot when no newer update() arrived in-flight.
         return false;
       }
       streamState.stopped = true;
