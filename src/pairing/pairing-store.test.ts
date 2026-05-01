@@ -498,6 +498,62 @@ describe("pairing store", () => {
     });
   });
 
+  it("rethrows unexpected async allowFrom read errors", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const allowFromPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["12345"],
+      });
+
+      const error = Object.assign(new Error("read failed"), { code: "EACCES" });
+      const originalReadFile = fsSync.promises.readFile.bind(fsSync.promises);
+      const readSpy = vi
+        .spyOn(fsSync.promises, "readFile")
+        .mockImplementation(async (target, options) => {
+          if (String(target) === allowFromPath) {
+            throw error;
+          }
+          return await originalReadFile(target, options);
+        });
+
+      try {
+        await expect(readChannelAllowFromStore("telegram", process.env, "yy")).rejects.toBe(error);
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
+  it("rethrows unexpected sync allowFrom read errors", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const allowFromPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["12345"],
+      });
+
+      const error = Object.assign(new Error("read failed"), { code: "EACCES" });
+      const originalReadFileSync = fsSync.readFileSync.bind(fsSync);
+      const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((target, options) => {
+        if (String(target) === allowFromPath) {
+          throw error;
+        }
+        return originalReadFileSync(target, options);
+      });
+
+      try {
+        expect(() => readChannelAllowFromStoreSync("telegram", process.env, "yy")).toThrow(error);
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
   it("reads allowFrom variants with account-scoped isolation", async () => {
     await withTempStateDir(async (stateDir) => {
       for (const { setup, accountId, expected, expectedLegacy } of [
