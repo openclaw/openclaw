@@ -166,5 +166,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     clientDisplayName: "agent",
     mode: GATEWAY_CLIENT_MODES.BACKEND,
     scopes,
+    // Agent loopback gateway calls authenticate via the shared gateway token,
+    // not device pairing. Presenting a device identity would gate admin-scope
+    // RPCs (cron.add, agents.create, etc.) behind the device pairing approval
+    // flow — which has no operator to approve in headless agent contexts like
+    // Blink Claw. The shared OPENCLAW_GATEWAY_TOKEN already proves authority
+    // for the loopback caller, so skip device identity entirely.
+    deviceIdentity: null,
   });
 }
