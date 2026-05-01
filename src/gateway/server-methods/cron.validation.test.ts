@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../../cron/types.js";
 
@@ -16,6 +16,8 @@ vi.mock("../../config/config.js", async () => {
 });
 
 import { buildCronListDiagnosticEvent, cronHandlers } from "./cron.js";
+
+const OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG = "OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG";
 
 function createCronContext(currentJob?: CronJob) {
   return {
@@ -128,6 +130,11 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
 describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    delete process.env[OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG];
+  });
+
+  afterEach(() => {
+    delete process.env[OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG];
   });
 
   it("builds cron.list diagnostics from an allow-listed redacted shape", () => {
@@ -173,7 +180,17 @@ describe("cron method validation", () => {
     expect(JSON.stringify(event)).not.toContain("PROMPT_CONTENT_SHOULD_NOT_APPEAR");
   });
 
+  it("does not emit cron.list diagnostics unless explicitly enabled", async () => {
+    const { result, logLines } = await invokeCronList({ includeDisabled: true, limit: 1 }, [
+      createCronJob(),
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(logLines).toEqual([]);
+  });
+
   it("emits redacted cron.list stage timing without changing the response payload", async () => {
+    process.env[OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG] = "1";
     const job = createCronJob({
       id: "cron-sensitive",
       name: "diagnostic list job",
