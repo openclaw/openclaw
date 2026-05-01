@@ -1194,9 +1194,6 @@ export const dispatchTelegramMessage = async ({
                     if (payload.phase === "end" || payload.status === "completed") {
                       return;
                     }
-                    if (payload.kind === "analysis" && /^reasoning$/iu.test(payload.title ?? "")) {
-                      return;
-                    }
                     await pushPreviewToolProgress(
                       formatChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "item",

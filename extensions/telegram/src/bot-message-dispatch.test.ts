@@ -902,7 +902,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
-  it("uses structured command metadata and suppresses generic Codex lifecycle noise", async () => {
+  it("uses structured command metadata and keeps Codex reasoning activity visible", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
@@ -934,9 +934,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({ context: createContext(), streamMode: "partial" });
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Working…\n• `command: pnpm test extensions/telegram`",
+      "Working…\n• `command: pnpm test extensions/telegram`\n• `reasoning`",
     );
-    expect(draftStream.update).toHaveBeenCalledTimes(1);
+    expect(draftStream.update).toHaveBeenCalledTimes(2);
   });
 
   it("suppresses Telegram tool progress when explicitly disabled", async () => {
