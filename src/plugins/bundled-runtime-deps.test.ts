@@ -1860,6 +1860,7 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     ]);
     expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(true);
     expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(true);
+    expect(fs.existsSync(previousRoot)).toBe(true);
     expect(JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8"))).toEqual({
       name: "openclaw-runtime-deps-install",
       private: true,
@@ -1904,6 +1905,7 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
       },
     ]);
     expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(previousRoot)).toBe(true);
   });
 
   it("does not create a reuse symlink when an earlier configured layer already satisfies the plan", async () => {
@@ -1974,6 +1976,7 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
       },
     ]);
     expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(false);
+    expect(fs.existsSync(previousRoot)).toBe(false);
   });
 
   it("does not reuse a compatible external runtime deps root from a different package key", async () => {
@@ -3182,6 +3185,23 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     });
 
     expect(result).toEqual({ installedSpecs: [] });
+  });
+
+  it("accepts package.json runtime-deps supersets when generated metadata is absent", () => {
+    const installRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(installRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw-bundled-runtime-deps",
+        dependencies: {
+          "alpha-runtime": "1.0.0",
+          tokenjuice: "0.7.0",
+        },
+      }),
+    );
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(true);
   });
 
   it("drops stale package versions from the next package-level plan", () => {

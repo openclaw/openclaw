@@ -265,6 +265,83 @@ describe("resolvePluginCapabilityProviders", () => {
     expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
   });
 
+  it("merges configured media-understanding providers missing from the active registry", () => {
+    const active = createEmptyPluginRegistry();
+    active.mediaUnderstandingProviders.push({
+      pluginId: "openai",
+      pluginName: "OpenAI",
+      source: "test",
+      provider: {
+        id: "openai",
+        capabilities: ["image"],
+      },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.mediaUnderstandingProviders.push(
+      {
+        pluginId: "deepgram",
+        pluginName: "Deepgram",
+        source: "test",
+        provider: {
+          id: "deepgram",
+          capabilities: ["audio"],
+        },
+      } as never,
+      {
+        pluginId: "google",
+        pluginName: "Google",
+        source: "test",
+        provider: {
+          id: "google",
+          capabilities: ["image", "audio", "video"],
+        },
+      } as never,
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "deepgram",
+          origin: "bundled",
+          contracts: { mediaUnderstandingProviders: ["deepgram"] },
+        },
+        {
+          id: "google",
+          origin: "bundled",
+          contracts: { mediaUnderstandingProviders: ["google"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg: {
+        plugins: { allow: ["openai", "deepgram", "google"] },
+        tools: {
+          media: {
+            audio: { enabled: true, models: [{ provider: "deepgram", model: "nova-3" }] },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai", "deepgram"]);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith({
+      config: expect.objectContaining({
+        plugins: expect.objectContaining({
+          allow: ["openai", "deepgram", "google"],
+        }),
+      }),
+      onlyPluginIds: ["deepgram", "google"],
+      activate: false,
+      installBundledRuntimeDeps: false,
+    });
+  });
+
   it("keeps active speech providers when cfg requests an active provider alias", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({

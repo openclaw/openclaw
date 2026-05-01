@@ -347,14 +347,63 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
-  it("keeps the shorter timeout for initial voice connection readiness", async () => {
+  it("uses the default timeout for initial voice connection readiness", async () => {
     const connection = createConnectionMock();
     joinVoiceChannelMock.mockReturnValueOnce(connection);
     const manager = createManager();
 
     await manager.join({ guildId: "g1", channelId: "1001" });
 
-    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 15_000);
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 30_000);
+  });
+
+  it("uses configured voice connection and reconnect timeouts", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager({
+      voice: {
+        connectTimeoutMs: 45_000,
+        reconnectGraceMs: 20_000,
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "ready", 45_000);
+
+    entersStateMock.mockClear();
+    entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+    entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+
+    const disconnected = connection.handlers.get("disconnected");
+    expect(disconnected).toBeTypeOf("function");
+    await disconnected?.();
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 20_000);
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 20_000);
+    expect(connection.destroy).toHaveBeenCalledTimes(1);
+    expect(manager.status()).toEqual([]);
+  });
+
+  it("uses the default reconnect grace before destroying disconnected sessions", async () => {
+    const connection = createConnectionMock();
+    joinVoiceChannelMock.mockReturnValueOnce(connection);
+    const manager = createManager();
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+
+    entersStateMock.mockClear();
+    entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+    entersStateMock.mockRejectedValueOnce(new Error("still disconnected"));
+
+    const disconnected = connection.handlers.get("disconnected");
+    expect(disconnected).toBeTypeOf("function");
+    await disconnected?.();
+
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "signalling", 15_000);
+    expect(entersStateMock).toHaveBeenCalledWith(connection, "connecting", 15_000);
+    expect(connection.destroy).toHaveBeenCalledTimes(1);
+    expect(manager.status()).toEqual([]);
   });
 
   it("stores guild metadata on joined voice sessions", async () => {
@@ -572,6 +621,44 @@ describe("DiscordVoiceManager", () => {
         text: "hello back",
       }),
     );
+  });
+
+  it("passes per-channel system prompt overrides to voice agent runs", async () => {
+    const client = createClient();
+    client.fetchMember.mockResolvedValue({
+      nickname: "Guest Nick",
+      user: {
+        id: "u-guest",
+        username: "guest",
+        globalName: "Guest",
+        discriminator: "4321",
+      },
+    });
+    const manager = createManager(
+      {
+        groupPolicy: "open",
+        guilds: {
+          g1: {
+            channels: {
+              "1001": {
+                systemPrompt: "  Use short voice replies.  ",
+              },
+            },
+          },
+        },
+      },
+      client,
+      {
+        commands: { useAccessGroups: false },
+      },
+    );
+    await processVoiceSegment(manager, "u-guest");
+
+    const commandArgs = agentCommandMock.mock.calls.at(-1)?.[0] as
+      | { extraSystemPrompt?: string }
+      | undefined;
+
+    expect(commandArgs?.extraSystemPrompt).toBe("Use short voice replies.");
   });
 
   it("reuses speaker context cache for repeated segments from the same speaker", async () => {
