@@ -12,6 +12,8 @@ function makeToolRuntime(
     tools?: McpCatalogTool[];
     serverName?: string;
     resultText?: string;
+    resultContent?: unknown[];
+    resultIsError?: boolean;
   } = {},
 ): SessionMcpRuntime {
   const serverName = params.serverName ?? "bundleProbe";
@@ -44,10 +46,13 @@ function makeToolRuntime(
       },
       tools,
     }),
-    callTool: async () => ({
-      content: [{ type: "text", text: params.resultText ?? "FROM-BUNDLE" }],
-      isError: false,
-    }),
+    callTool: async () =>
+      ({
+        content: params.resultContent ?? [
+          { type: "text", text: params.resultText ?? "FROM-BUNDLE" },
+        ],
+        isError: params.resultIsError ?? false,
+      }) as never,
     dispose: async () => {},
   };
 }
@@ -169,6 +174,71 @@ describe("createBundleMcpToolRuntime", () => {
       "multi__alpha",
       "multi__mu",
       "multi__zeta",
+    ]);
+  });
+
+  it("normalizes MCP `resource` content with text into a text block (#75674)", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        resultContent: [
+          {
+            type: "resource",
+            resource: {
+              uri: "qmd://memory-root-main/memory/2026-05-01.md",
+              mimeType: "text/markdown",
+              text: "# 2026-05-01\n\nMemory entry markdown body",
+            },
+          },
+        ],
+      }),
+    });
+    const result = await runtime.tools[0].execute("call-resource-text", {}, undefined, undefined);
+    expect(result.content).toEqual([
+      { type: "text", text: "# 2026-05-01\n\nMemory entry markdown body" },
+    ]);
+  });
+
+  it("renders binary MCP `resource` content as an informative text marker", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        resultContent: [
+          {
+            type: "resource",
+            resource: {
+              uri: "file:///tmp/snapshot.bin",
+              mimeType: "application/octet-stream",
+              blob: "AAECAwQ=",
+            },
+          },
+        ],
+      }),
+    });
+    const result = await runtime.tools[0].execute("call-resource-blob", {}, undefined, undefined);
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "[Resource: file:///tmp/snapshot.bin (application/octet-stream)]",
+      },
+    ]);
+  });
+
+  it("passes existing text and image content blocks through unchanged", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        resultContent: [
+          { type: "text", text: "plain text" },
+          {
+            type: "image",
+            data: "AAEC",
+            mimeType: "image/png",
+          },
+        ],
+      }),
+    });
+    const result = await runtime.tools[0].execute("call-mixed", {}, undefined, undefined);
+    expect(result.content).toEqual([
+      { type: "text", text: "plain text" },
+      { type: "image", data: "AAEC", mimeType: "image/png" },
     ]);
   });
 });
