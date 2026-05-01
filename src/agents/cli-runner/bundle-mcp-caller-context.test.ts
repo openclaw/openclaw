@@ -5,7 +5,7 @@ import {
 } from "./bundle-mcp-caller-context.js";
 
 describe("applyBundleMcpCallerContext", () => {
-  it("injects only on remote servers whose name is in the trusted allowlist", () => {
+  it("injects only on remote servers whose name + url match the trusted allowlist", () => {
     const merged = applyBundleMcpCallerContext(
       {
         mcpServers: {
@@ -24,7 +24,7 @@ describe("applyBundleMcpCallerContext", () => {
           },
         },
       },
-      new Set(["withFlag"]),
+      new Map([["withFlag", "https://api.example/mcp"]]),
     );
 
     expect(merged.mcpServers.probe).toEqual({
@@ -56,7 +56,7 @@ describe("applyBundleMcpCallerContext", () => {
           },
         },
       },
-      new Set(),
+      new Map(),
     );
 
     expect(merged.mcpServers.pluginRemote).toEqual({
@@ -68,7 +68,32 @@ describe("applyBundleMcpCallerContext", () => {
     ).toBe(false);
   });
 
-  it("does not inject on stdio servers even when trusted", () => {
+  it("does not inject when the merged URL differs from the owner-trusted URL for that name", () => {
+    // Defense-in-depth: even if an upstream merge somehow flipped the URL,
+    // never attach caller identity to a URL that doesn't byte-for-byte match
+    // what the owner-trusted layer originally declared.
+    const merged = applyBundleMcpCallerContext(
+      {
+        mcpServers: {
+          foo: {
+            type: "http",
+            url: "https://attacker.example/mcp",
+            injectCallerContext: true,
+          },
+        },
+      },
+      new Map([["foo", "https://owner.example/mcp"]]),
+    );
+
+    expect(merged.mcpServers.foo).toEqual({
+      type: "http",
+      url: "https://attacker.example/mcp",
+    });
+    expect("injectCallerContext" in (merged.mcpServers.foo as object)).toBe(false);
+    expect((merged.mcpServers.foo as { headers?: unknown }).headers).toBeUndefined();
+  });
+
+  it("does not inject on stdio servers when the merged entry has no url, even if name is in the trusted map", () => {
     const merged = applyBundleMcpCallerContext(
       {
         mcpServers: {
@@ -79,7 +104,7 @@ describe("applyBundleMcpCallerContext", () => {
           },
         },
       },
-      new Set(["stdio"]),
+      new Map([["stdio", "https://owner.example/mcp"]]),
     );
 
     expect(merged.mcpServers.stdio).toEqual({
@@ -106,7 +131,10 @@ describe("applyBundleMcpCallerContext", () => {
           },
         },
       },
-      new Set(["ext", "mixed"]),
+      new Map([
+        ["ext", "http://127.0.0.1:9180/mcp"],
+        ["mixed", "https://api.example/mcp"],
+      ]),
     );
 
     expect(merged.mcpServers.ext).toMatchObject({
@@ -142,7 +170,7 @@ describe("applyBundleMcpCallerContext", () => {
           },
         },
       },
-      new Set(["remote"]),
+      new Map([["remote", "https://api.example/mcp"]]),
     );
 
     expect(merged.mcpServers.remote.headers).toEqual({
@@ -174,7 +202,7 @@ describe("applyBundleMcpCallerContext", () => {
           },
         },
       },
-      new Set(["mixed"]),
+      new Map([["mixed", "https://api.example/mcp"]]),
     );
 
     expect(merged.mcpServers.mixed.headers).toEqual({

@@ -14,16 +14,18 @@ export const OPENCLAW_MCP_CALLER_HEADERS: Record<string, string> = {
   "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
 };
 
-function hasRemoteMcpUrl(server: BundleMcpServerConfig): boolean {
-  return typeof server.url === "string" && server.url.trim().length > 0;
-}
-
 /**
  * Adds OpenClaw caller identity headers to bundled HTTP/SSE MCP servers whose
- * NAME appears in `trustedServerNames`. Trust is decided by the caller (owner
- * config + OpenClaw runtime layers), NOT by the merged config — so plugin
- * `.mcp.json` entries cannot smuggle caller identity to a URL of their choice
- * just by setting `injectCallerContext: true`.
+ * NAME appears in `trustedServerUrls` AND whose merged `url` exactly matches
+ * the URL the owner-trusted layer declared for that name.
+ *
+ * Trust is decided by the caller (owner config + OpenClaw runtime layers),
+ * NOT by the merged config — so plugin `.mcp.json` entries cannot smuggle
+ * caller identity to a URL of their choice just by setting
+ * `injectCallerContext: true`. The post-merge URL match also blocks the case
+ * where an unrelated earlier merge layer supplied a different URL for the
+ * same name as an owner opt-in: if the merged URL has been changed, no
+ * caller headers are injected.
  *
  * `injectCallerContext` is always stripped from the emitted config, regardless
  * of source layer, so it never leaks downstream.
@@ -37,18 +39,25 @@ function hasRemoteMcpUrl(server: BundleMcpServerConfig): boolean {
  */
 export function applyBundleMcpCallerContext(
   mergedConfig: BundleMcpConfig,
-  trustedServerNames: ReadonlySet<string>,
+  trustedServerUrls: ReadonlyMap<string, string>,
 ): BundleMcpConfig {
   const mcpServers: BundleMcpConfig["mcpServers"] = {};
   for (const [name, raw] of Object.entries(mergedConfig.mcpServers)) {
     const server = { ...raw } as Record<string, unknown>;
     delete server.injectCallerContext;
 
-    if (!trustedServerNames.has(name)) {
+    const trustedUrl = trustedServerUrls.get(name);
+    if (trustedUrl === undefined) {
       mcpServers[name] = server as BundleMcpServerConfig;
       continue;
     }
-    if (!hasRemoteMcpUrl(server as BundleMcpServerConfig)) {
+    // Defense in depth: even though owner-managed config is the rightmost
+    // scalar in deep merge-patch (so its `url` should win), still require
+    // exact equality between the trusted URL and the merged URL before
+    // attaching caller identity. If something stripped or changed the URL
+    // along the way, refuse to inject.
+    const mergedUrl = server.url;
+    if (typeof mergedUrl !== "string" || mergedUrl !== trustedUrl) {
       mcpServers[name] = server as BundleMcpServerConfig;
       continue;
     }
