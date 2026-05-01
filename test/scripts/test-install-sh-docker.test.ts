@@ -211,8 +211,9 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("timeout 45m docker buildx build");
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
-    expect(workflow).not.toContain("cache-from: type=gha,scope=openclaw-dockerfile-smoke");
-    expect(workflow).not.toContain("cache-to: type=gha,scope=openclaw-dockerfile-smoke");
+    expect(workflow).not.toContain("--cache-from");
+    expect(workflow).not.toContain("--cache-to");
+    expect(workflow).not.toContain("type=gha");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"');
     expect(releaseChecks).toContain("install_smoke_release_checks:");
     expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");

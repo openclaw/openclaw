@@ -3,10 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  clearBundledRuntimeDependencyNodePaths,
-  resolveBundledRuntimeDependencyInstallRoot,
-} from "./bundled-runtime-deps.js";
+import { resolveBundledRuntimeDependencyInstallRoot } from "./bundled-runtime-deps-roots.js";
+import { clearBundledRuntimeDependencyNodePaths } from "./bundled-runtime-deps.js";
 
 const tempDirs: string[] = [];
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -111,7 +109,7 @@ afterEach(() => {
 });
 
 describe("bundled plugin public surface loader", () => {
-  it("uses transpiled Jiti import for Windows dist public artifact loads", async () => {
+  it("uses native Jiti import for Windows dist public artifact loads", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ marker: "windows-dist-ok" })));
     vi.doMock("jiti", () => ({
       createJiti,
@@ -140,7 +138,7 @@ describe("bundled plugin public surface loader", () => {
       expect(createJiti).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          tryNative: false,
+          tryNative: true,
         }),
       );
     } finally {

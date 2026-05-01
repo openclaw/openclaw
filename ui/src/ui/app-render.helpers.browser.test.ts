@@ -15,6 +15,9 @@ function createState(overrides: Partial<AppViewState> = {}) {
   return {
     connected: true,
     chatLoading: false,
+    chatRunId: null,
+    chatSending: false,
+    chatStream: null,
     onboarding: false,
     sessionKey: "main",
     sessionsHideCron: true,
@@ -49,6 +52,17 @@ function createState(overrides: Partial<AppViewState> = {}) {
   } as unknown as AppViewState;
 }
 
+function renderRefreshButton(overrides: Partial<AppViewState> = {}) {
+  const container = document.createElement("div");
+  render(renderChatControls(createState(overrides)), container);
+
+  const button = container.querySelector<HTMLButtonElement>(
+    `.chat-controls .btn--icon[data-tooltip="${t("chat.refreshTitle")}"]`,
+  );
+  expect(button).not.toBeNull();
+  return button!;
+}
+
 describe("chat header controls (browser)", () => {
   it("renders explicit hover tooltip metadata for the top-right action buttons", async () => {
     const container = document.createElement("div");
@@ -74,6 +88,19 @@ describe("chat header controls (browser)", () => {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
       expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
     }
+  });
+
+  it.each([
+    ["connected and idle", {}, false],
+    ["chat history loading", { chatLoading: true }, true],
+    ["chat send in flight", { chatSending: true }, true],
+    ["active run", { chatRunId: "run-123" }, true],
+    ["active stream", { chatStream: "streaming" }, true],
+    ["disconnected", { connected: false }, true],
+  ] as const)("sets refresh disabled state while %s", (_name, overrides, disabled) => {
+    const button = renderRefreshButton(overrides);
+
+    expect(button.disabled).toBe(disabled);
   });
 
   it("renders the cron session filter in the mobile dropdown controls", async () => {

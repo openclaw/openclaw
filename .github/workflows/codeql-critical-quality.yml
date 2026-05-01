@@ -10,8 +10,12 @@ on:
         type: choice
         options:
           - all
+          - agent-runtime-boundary
+          - config-boundary
+          - core-auth-secrets
           - channel-runtime-boundary
           - gateway-runtime-boundary
+          - memory-runtime-boundary
           - mcp-process-runtime-boundary
           - plugin-boundary
           - plugin-sdk-package-contract
@@ -25,13 +29,82 @@ on:
       - ".github/workflows/codeql-critical-quality.yml"
       - "packages/plugin-package-contract/**"
       - "packages/plugin-sdk/**"
+      - "packages/memory-host-sdk/**"
+      - "src/config/**"
+      - "extensions/bluebubbles/src/**"
+      - "extensions/discord/src/**"
+      - "extensions/feishu/src/**"
+      - "extensions/googlechat/src/**"
+      - "extensions/imessage/src/**"
+      - "extensions/irc/src/**"
+      - "extensions/line/src/**"
+      - "extensions/matrix/src/**"
+      - "extensions/mattermost/src/**"
+      - "extensions/msteams/src/**"
+      - "extensions/nextcloud-talk/src/**"
+      - "extensions/nostr/src/**"
+      - "extensions/qa-channel/src/**"
+      - "extensions/qqbot/src/**"
+      - "extensions/signal/src/**"
+      - "extensions/slack/src/**"
+      - "extensions/synology-chat/src/**"
+      - "extensions/telegram/src/**"
+      - "extensions/tlon/src/**"
+      - "extensions/twitch/src/**"
+      - "extensions/whatsapp/src/**"
+      - "extensions/zalo/src/**"
+      - "extensions/zalouser/src/**"
+      - "src/agents/*auth*.ts"
+      - "src/agents/**/*auth*.ts"
+      - "src/agents/auth-health*.ts"
+      - "src/agents/auth-profiles"
+      - "src/agents/auth-profiles/**"
+      - "src/agents/bash-tools.exec-host-shared.ts"
+      - "src/agents/sandbox"
+      - "src/agents/sandbox/**"
+      - "src/agents/sandbox.ts"
+      - "src/agents/sandbox-*.ts"
+      - "src/acp/control-plane/**"
+      - "src/agents/cli-runner/**"
+      - "src/agents/command/**"
+      - "src/agents/pi-embedded-runner/**"
+      - "src/agents/tools/**"
+      - "src/agents/*completion*.ts"
+      - "src/agents/*transport*.ts"
+      - "src/agents/model-*.ts"
+      - "src/agents/openclaw-tools*.ts"
+      - "src/agents/provider-*.ts"
+      - "src/agents/session*.ts"
+      - "src/agents/tool-call*.ts"
+      - "src/auto-reply/reply/agent-runner*.ts"
+      - "src/auto-reply/reply/commands*.ts"
+      - "src/auto-reply/reply/directive-handling*.ts"
+      - "src/auto-reply/reply/dispatch-*.ts"
+      - "src/auto-reply/reply/get-reply-run*.ts"
+      - "src/auto-reply/reply/provider-dispatcher*.ts"
+      - "src/auto-reply/reply/queue*.ts"
+      - "src/auto-reply/reply/reply-run-registry*.ts"
+      - "src/auto-reply/reply/session*.ts"
       - "src/channels/**"
       - "src/auto-reply/reply/post-compaction-context.ts"
       - "src/auto-reply/reply/queue/**"
       - "src/auto-reply/reply/startup-context.ts"
+      - "src/commands/doctor-cron-dreaming-payload-migration.ts"
+      - "src/commands/doctor-memory-search.ts"
       - "src/commands/doctor-session-*.ts"
       - "src/commands/session-store-targets.ts"
       - "src/commands/sessions*.ts"
+      - "src/cron/service/jobs.ts"
+      - "src/cron/stagger.ts"
+      - "src/gateway/*auth*.ts"
+      - "src/gateway/**/*auth*.ts"
+      - "src/gateway/*secret*.ts"
+      - "src/gateway/**/*secret*.ts"
+      - "src/gateway/protocol/**/*secret*.ts"
+      - "src/gateway/resolve-configured-secret-input-string*.ts"
+      - "src/gateway/security-path*.ts"
+      - "src/gateway/server-methods/secrets*.ts"
+      - "src/gateway/server-startup-memory.ts"
       - "src/gateway/method-scopes.ts"
       - "src/gateway/protocol/**"
       - "src/gateway/server-methods/**"
@@ -40,13 +113,18 @@ on:
       - "src/infra/diagnostic-*.ts"
       - "src/infra/diagnostics-timeline.ts"
       - "src/infra/outbound/**"
+      - "src/infra/secret-file*.ts"
       - "src/infra/session-delivery-queue*.ts"
       - "src/logging/diagnostic*.ts"
+      - "src/memory/**"
+      - "src/memory-host-sdk/**"
       - "src/mcp/**"
       - "src/model-catalog/**"
       - "src/plugin-sdk/**"
       - "src/plugins/**"
       - "src/process/**"
+      - "src/secrets/**"
+      - "src/security/**"
   schedule:
     - cron: "30 6 * * *"
 
@@ -69,8 +147,12 @@ jobs:
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 5
     outputs:
+      agent: ${{ steps.detect.outputs.agent }}
       channel: ${{ steps.detect.outputs.channel }}
+      config: ${{ steps.detect.outputs.config }}
+      core_auth_secrets: ${{ steps.detect.outputs.core_auth_secrets }}
       gateway: ${{ steps.detect.outputs.gateway }}
+      memory: ${{ steps.detect.outputs.memory }}
       mcp_process: ${{ steps.detect.outputs.mcp_process }}
       plugin: ${{ steps.detect.outputs.plugin }}
       plugin_sdk_package: ${{ steps.detect.outputs.plugin_sdk_package }}
@@ -88,8 +170,12 @@ jobs:
         run: |
           set -euo pipefail
 
+          agent=false
           channel=false
+          config=false
+          core_auth_secrets=false
           gateway=false
+          memory=false
           mcp_process=false
           plugin=false
           plugin_sdk_package=false
@@ -98,8 +184,12 @@ jobs:
           session_diagnostics=false
 
           if [[ "${EVENT_NAME}" != "pull_request" ]]; then
+            agent=true
             channel=true
+            config=true
+            core_auth_secrets=true
             gateway=true
+            memory=true
             mcp_process=true
             plugin=true
             plugin_sdk_package=true
@@ -110,8 +200,12 @@ jobs:
             while IFS= read -r file; do
               case "${file}" in
                 .github/codeql/*|.github/workflows/codeql-critical-quality.yml)
+                  agent=true
                   channel=true
+                  config=true
+                  core_auth_secrets=true
                   gateway=true
+                  memory=true
                   mcp_process=true
                   plugin=true
                   plugin_sdk_package=true
@@ -119,14 +213,30 @@ jobs:
                   provider=true
                   session_diagnostics=true
                   ;;
+                src/acp/control-plane/*|src/agents/cli-runner/*|src/agents/command/*|src/agents/pi-embedded-runner/*|src/agents/tools/*|src/agents/*completion*.ts|src/agents/*transport*.ts|src/agents/model-*.ts|src/agents/openclaw-tools*.ts|src/agents/provider-*.ts|src/agents/session*.ts|src/agents/tool-call*.ts|src/auto-reply/reply/agent-runner*.ts|src/auto-reply/reply/commands*.ts|src/auto-reply/reply/directive-handling*.ts|src/auto-reply/reply/dispatch-*.ts|src/auto-reply/reply/get-reply-run*.ts|src/auto-reply/reply/provider-dispatcher*.ts|src/auto-reply/reply/queue*.ts|src/auto-reply/reply/reply-run-registry*.ts|src/auto-reply/reply/session*.ts)
+                  agent=true
+                  ;;
                 src/auto-reply/reply/post-compaction-context.ts|src/auto-reply/reply/queue/*|src/auto-reply/reply/startup-context.ts|src/commands/doctor-session-*.ts|src/commands/session-store-targets.ts|src/commands/sessions*.ts|src/infra/diagnostic-*.ts|src/infra/diagnostics-timeline.ts|src/infra/session-delivery-queue*.ts|src/logging/diagnostic*.ts)
                   session_diagnostics=true
                   ;;
-                src/channels/*)
+                extensions/bluebubbles/src/*|extensions/discord/src/*|extensions/feishu/src/*|extensions/googlechat/src/*|extensions/imessage/src/*|extensions/irc/src/*|extensions/line/src/*|extensions/matrix/src/*|extensions/mattermost/src/*|extensions/msteams/src/*|extensions/nextcloud-talk/src/*|extensions/nostr/src/*|extensions/qa-channel/src/*|extensions/qqbot/src/*|extensions/signal/src/*|extensions/slack/src/*|extensions/synology-chat/src/*|extensions/telegram/src/*|extensions/tlon/src/*|extensions/twitch/src/*|extensions/whatsapp/src/*|extensions/zalo/src/*|extensions/zalouser/src/*|src/channels/*)
                   channel=true
+                  ;;
+                src/config/*)
+                  config=true
+                  ;;
+                src/gateway/protocol/*secret*.ts|src/gateway/server-methods/secrets*.ts)
+                  core_auth_secrets=true
+                  gateway=true
+                  ;;
+                src/agents/*auth*.ts|src/agents/auth-health*.ts|src/agents/auth-profiles|src/agents/auth-profiles/*|src/agents/bash-tools.exec-host-shared.ts|src/agents/sandbox|src/agents/sandbox.ts|src/agents/sandbox-*.ts|src/agents/sandbox/*|src/cron/service/jobs.ts|src/cron/stagger.ts|src/gateway/*auth*.ts|src/gateway/*secret*.ts|src/gateway/resolve-configured-secret-input-string*.ts|src/gateway/security-path*.ts|src/infra/secret-file*.ts|src/secrets/*|src/security/*)
+                  core_auth_secrets=true
                   ;;
                 src/gateway/method-scopes.ts|src/gateway/protocol/*|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
+                  ;;
+                packages/memory-host-sdk/*|src/commands/doctor-cron-dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/gateway/server-startup-memory.ts|src/memory/*|src/memory-host-sdk/*)
+                  memory=true
                   ;;
                 src/infra/outbound/base-session-key.ts|src/infra/outbound/delivery-queue*.ts|src/infra/outbound/outbound-session.ts|src/infra/outbound/session-binding*.ts|src/infra/outbound/session-context.ts|src/infra/outbound/targets-session.ts)
                   mcp_process=true
@@ -140,6 +250,11 @@ jobs:
                   plugin_sdk_package=true
                   plugin_sdk_reply=true
                   ;;
+                src/plugin-sdk/memory-*.ts|src/plugin-sdk/memory-core-host-*.ts)
+                  memory=true
+                  plugin=true
+                  plugin_sdk_package=true
+                  ;;
                 src/plugin-sdk/*)
                   plugin=true
                   plugin_sdk_package=true
@@ -147,6 +262,13 @@ jobs:
                 src/plugins/provider-contract-public-artifacts.ts|src/plugins/provider-public-artifacts.ts|src/plugins/web-provider-public-artifacts*.ts)
                   plugin=true
                   provider=true
+                  ;;
+                src/plugins/memory-embedding-provider*.ts|src/plugins/memory-embedding-providers*.ts)
+                  memory=true
+                  provider=true
+                  ;;
+                src/plugins/memory-*.ts)
+                  memory=true
                   ;;
                 src/model-catalog/*|src/plugins/*provider*.ts|src/plugins/capability-provider-runtime.ts|src/plugins/compaction-provider.ts|src/plugins/memory-embedding-provider*.ts|src/plugins/memory-embedding-providers*.ts|src/plugins/migration-provider-runtime.ts|src/plugins/synthetic-auth.runtime.ts|src/plugins/web-fetch-providers*.ts|src/plugins/web-search-providers*.ts)
                   provider=true
@@ -162,8 +284,12 @@ jobs:
           fi
 
           {
+            echo "agent=${agent}"
             echo "channel=${channel}"
+            echo "config=${config}"
+            echo "core_auth_secrets=${core_auth_secrets}"
             echo "gateway=${gateway}"
+            echo "memory=${memory}"
             echo "mcp_process=${mcp_process}"
             echo "plugin=${plugin}"
             echo "plugin_sdk_package=${plugin_sdk_package}"
@@ -174,7 +300,8 @@ jobs:
 
   core-auth-secrets:
     name: Critical Quality (core-auth-secrets)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.core_auth_secrets == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'core-auth-secrets') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -196,7 +323,8 @@ jobs:
 
   config-boundary:
     name: Critical Quality (config-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.config == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'config-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -264,7 +392,8 @@ jobs:
 
   agent-runtime-boundary:
     name: Critical Quality (agent-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.agent == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'agent-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:
@@ -309,7 +438,8 @@ jobs:
 
   memory-runtime-boundary:
     name: Critical Quality (memory-runtime-boundary)
-    if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || inputs.profile == 'all') }}
+    needs: quality-shards
+    if: ${{ needs.quality-shards.outputs.memory == 'true' && (github.event_name != 'pull_request' || !github.event.pull_request.draft) && (github.event_name == 'pull_request' || github.event_name != 'workflow_dispatch' || inputs.profile == 'all' || inputs.profile == 'memory-runtime-boundary') }}
     runs-on: blacksmith-4vcpu-ubuntu-2404
     timeout-minutes: 25
     steps:

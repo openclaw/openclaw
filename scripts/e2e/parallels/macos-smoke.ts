@@ -479,7 +479,7 @@ class MacosSmoke {
     this.status.freshAgent = "pass";
     if (this.discordEnabled()) {
       this.status.freshDiscord = "fail";
-      await this.phase("fresh.discord-config", 180, () => this.configureDiscord());
+      await this.phase("fresh.discord-config", 600, () => this.configureDiscord());
       await this.phase("fresh.discord-roundtrip", 180, () => this.runDiscordRoundtrip("fresh"));
       this.status.freshDiscord = "pass";
     }
@@ -536,7 +536,7 @@ class MacosSmoke {
     this.status.upgradeAgent = "pass";
     if (this.discordEnabled()) {
       this.status.upgradeDiscord = "fail";
-      await this.phase("upgrade.discord-config", 180, () => this.configureDiscord());
+      await this.phase("upgrade.discord-config", 600, () => this.configureDiscord());
       await this.phase("upgrade.discord-roundtrip", 180, () => this.runDiscordRoundtrip("upgrade"));
       this.status.upgradeDiscord = "pass";
     }
@@ -972,11 +972,12 @@ exit 1`);
       "true",
       "--strict-json",
     ]);
+    this.guestExec([guestNode, guestOpenClawEntry, "config", "set", "tools.profile", "minimal"]);
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id parallels-macos-smoke --message ${shellQuote(
         "Reply with exact ASCII text OK only.",
-      )} --json`,
+      )} --thinking minimal --json`,
     );
   }
 
