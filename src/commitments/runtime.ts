@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../agents/pi-embedded.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -21,6 +20,7 @@ import type {
 } from "./types.js";
 
 type TimerHandle = ReturnType<typeof setTimeout>;
+type ModelRef = { provider: string; model: string };
 
 export type CommitmentExtractionEnqueueInput = CommitmentScope & {
   cfg?: OpenClawConfig;
@@ -36,6 +36,7 @@ export type CommitmentExtractionRuntime = {
     cfg?: OpenClawConfig;
     items: CommitmentExtractionItem[];
   }) => Promise<CommitmentExtractionBatchResult>;
+  resolveDefaultModel?: (params: { cfg: OpenClawConfig; agentId?: string }) => ModelRef;
   setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
   clearTimer?: (timer: TimerHandle) => void;
   forceInTests?: boolean;
@@ -200,6 +201,17 @@ function joinPayloadText(result: EmbeddedPiRunResult): string {
   );
 }
 
+async function resolveDefaultModel(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+}): Promise<ModelRef> {
+  if (runtime.resolveDefaultModel) {
+    return runtime.resolveDefaultModel(params);
+  }
+  const { resolveCommitmentDefaultModelRef } = await import("./model-selection.runtime.js");
+  return resolveCommitmentDefaultModelRef(params);
+}
+
 async function defaultExtractBatch(params: {
   cfg?: OpenClawConfig;
   items: CommitmentExtractionItem[];
@@ -211,7 +223,7 @@ async function defaultExtractBatch(params: {
   }
   const resolved = resolveCommitmentsConfig(cfg);
   const runId = `commitments-${randomUUID()}`;
-  const modelRef = resolveDefaultModelForAgent({ cfg, agentId: first.agentId });
+  const modelRef = await resolveDefaultModel({ cfg, agentId: first.agentId });
   const result = await runEmbeddedPiAgent({
     sessionId: runId,
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,

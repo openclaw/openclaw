@@ -14,9 +14,14 @@ import { loadCommitmentStore } from "./store.js";
 import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
 const runEmbeddedPiAgentMock = vi.hoisted(() => vi.fn());
+const resolveDefaultModelMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: runEmbeddedPiAgentMock,
+}));
+
+vi.mock("./model-selection.runtime.js", () => ({
+  resolveCommitmentDefaultModelRef: resolveDefaultModelMock,
 }));
 
 describe("commitment extraction runtime", () => {
@@ -26,6 +31,7 @@ describe("commitment extraction runtime", () => {
   afterEach(async () => {
     resetCommitmentExtractionRuntimeForTests();
     runEmbeddedPiAgentMock.mockReset();
+    resolveDefaultModelMock.mockReset();
     vi.useRealTimers();
     vi.unstubAllEnvs();
     await Promise.all(tmpDirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -165,6 +171,10 @@ describe("commitment extraction runtime", () => {
     runEmbeddedPiAgentMock.mockResolvedValue({
       payloads: [{ text: '{"candidates":[]}' }],
     });
+    resolveDefaultModelMock.mockReturnValue({
+      provider: "openai-codex",
+      model: "gpt-5.5",
+    });
     configureCommitmentExtractionRuntime({
       forceInTests: true,
       setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
@@ -184,6 +194,7 @@ describe("commitment extraction runtime", () => {
     ).toBe(true);
 
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
+    expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai-codex",
