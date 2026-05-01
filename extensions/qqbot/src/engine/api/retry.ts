@@ -211,7 +211,7 @@ export function buildPartFinishPersistentPolicy(
 }
 
 /** Business error codes that trigger persistent part-finish retry. */
-export const PART_FINISH_RETRYABLE_CODES: Set<number> = new Set([40093001]);
+const PART_FINISH_RETRYABLE_CODES: Set<number> = new Set([40093001]);
 
 /** upload_prepare error code indicating daily limit exceeded. */
 export const UPLOAD_PREPARE_FALLBACK_CODE = 40093002;
