@@ -134,6 +134,31 @@ describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
     expect(payload.messages[3]).toHaveProperty("reasoning_content", "");
     expect(payload.messages[4]).toHaveProperty("reasoning_content", "native reasoning");
   });
+
+  it("can be enabled without a provider/model predicate for per-model compat", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: "read file" },
+        { role: "assistant", content: "done" },
+      ],
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload as never, _model as never);
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: "high",
+    });
+    void wrapped?.({ provider: "custom", id: "deepseek-v4-proxy" } as never, {} as never, {});
+
+    expect(payload.messages[1]).toHaveProperty("reasoning_content", "");
+    expect(payload).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+  });
 });
 
 describe("buildCopilotDynamicHeaders", () => {

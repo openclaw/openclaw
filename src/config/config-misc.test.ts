@@ -691,6 +691,7 @@ describe("model compat config schema", () => {
                   requiresThinkingAsText: false,
                   requiresMistralToolIds: false,
                   requiresOpenAiAnthropicToolPayload: true,
+                  requiresDeepSeekV4ReasoningContent: true,
                 },
               },
             ],

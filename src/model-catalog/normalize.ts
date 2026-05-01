@@ -175,6 +175,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
     "nativeWebSearchTool",
     "requiresMistralToolIds",
     "requiresOpenAiAnthropicToolPayload",
+    "requiresDeepSeekV4ReasoningContent",
   ] as const;
   for (const field of booleanFields) {
     if (typeof value[field] === "boolean") {

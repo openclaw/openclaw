@@ -656,6 +656,47 @@ describe("applyExtraParamsToAgent", () => {
     return calls[0]?.headers;
   }
 
+  it("applies per-model DeepSeek V4 reasoning_content compat", () => {
+    const payload = {
+      messages: [
+        { role: "user", content: "run" },
+        { role: "assistant", content: "done" },
+      ],
+    } as Record<string, unknown>;
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+    const model = {
+      api: "openai-completions",
+      provider: "custom-deepseek-proxy",
+      id: "deepseek-v4-pro",
+      compat: { requiresDeepSeekV4ReasoningContent: true },
+      reasoning: true,
+    } as Model<"openai-completions">;
+
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "custom-deepseek-proxy",
+      "deepseek-v4-pro",
+      undefined,
+      "high",
+      undefined,
+      undefined,
+      model,
+    );
+    void agent.streamFn?.(model, { messages: [] }, {});
+
+    expect((payload.messages as Array<Record<string, unknown>>)[1]).toHaveProperty(
+      "reasoning_content",
+      "",
+    );
+    expect(payload.thinking).toEqual({ type: "enabled" });
+    expect(payload.reasoning_effort).toBe("high");
+  });
+
   it("disables thinking for MiniMax anthropic-messages payloads", () => {
     const payloads: Record<string, unknown>[] = [];
     const baseStreamFn: StreamFn = (_model, _context, options) => {

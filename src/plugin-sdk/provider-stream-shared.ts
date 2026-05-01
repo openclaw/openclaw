@@ -280,14 +280,14 @@ function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unkno
 export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   thinkingLevel: DeepSeekV4ThinkingLevel;
-  shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+  shouldPatchModel?: (model: Parameters<StreamFn>[0]) => boolean;
 }): StreamFn | undefined {
   if (!params.baseStreamFn) {
     return undefined;
   }
   const underlying = params.baseStreamFn;
   return (model, context, options) => {
-    if (!params.shouldPatchModel(model)) {
+    if (params.shouldPatchModel && !params.shouldPatchModel(model)) {
       return underlying(model, context, options);
     }
 

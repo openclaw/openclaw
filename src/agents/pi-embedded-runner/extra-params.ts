@@ -4,6 +4,7 @@ import { streamSimple } from "@mariozechner/pi-ai";
 import type { SettingsManager } from "@mariozechner/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "../../plugin-sdk/provider-stream-shared.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   resolveProviderExtraParamsForTransport as resolveProviderExtraParamsForTransportRuntime,
@@ -697,6 +698,12 @@ export function applyExtraParamsToAgent(
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
+  if (model?.compat?.requiresDeepSeekV4ReasoningContent === true) {
+    agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: agent.streamFn,
+      thinkingLevel,
+    });
+  }
   // Apply caller/config extra params outside provider defaults so explicit values
   // like `openaiWsWarmup=false` can override provider-added defaults.
   applyPrePluginStreamWrappers(wrapperContext);
