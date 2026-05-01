@@ -272,7 +272,11 @@ export async function runSubagentAnnounceFlow(params: {
     }
 
     if (!reply && params.waitForCompletion !== false) {
-      const wait = await waitForSubagentRunOutcome(params.childRunId, settleTimeoutMs);
+      const wait = await waitForSubagentRunOutcome(
+        params.childRunId,
+        settleTimeoutMs,
+        params.childSessionKey,
+      );
       const applied = applySubagentWaitOutcome({
         wait,
         outcome,
@@ -404,7 +408,11 @@ export async function runSubagentAnnounceFlow(params: {
       // outcome instead of dropping the announcement entirely.
       if (outcome?.status === "timeout" && reply?.trim() && params.waitForCompletion !== false) {
         try {
-          const rechecked = await waitForSubagentRunOutcome(params.childRunId, 0);
+          const rechecked = await waitForSubagentRunOutcome(
+            params.childRunId,
+            0,
+            params.childSessionKey,
+          );
           const applied = applySubagentWaitOutcome({
             wait: rechecked,
             outcome,
