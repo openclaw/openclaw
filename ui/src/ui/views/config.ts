@@ -4,6 +4,7 @@ import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
 import { BORDER_RADIUS_STOPS, type BorderRadiusStop } from "../storage.ts";
 import type { ThemeTransitionContext } from "../theme-transition.ts";
+import { prefersLightScheme } from "../theme.ts";
 import type { ThemeMode, ThemeName } from "../theme.ts";
 import type { ConfigUiHints } from "../types.ts";
 import {
@@ -17,6 +18,7 @@ import {
   type JsonSchema,
 } from "./config-form.shared.ts";
 import { analyzeConfigSchema, renderConfigForm, SECTION_META } from "./config-form.ts";
+import "./config-editor.ts";
 
 const BORDER_RADIUS_LABELS: Record<BorderRadiusStop, string> = {
   0: "None",
@@ -1773,52 +1775,18 @@ export function renderConfig(props: ConfigProps) {
                               Use Raw mode to edit those entries.
                             </div>
                           `
-                        : nothing}
-                      <div class="field config-raw-field">
-                        <span style="display:flex;align-items:center;gap:8px;">
-                          Raw config (JSON/JSON5)
-                          ${sensitiveCount > 0
-                            ? html`
-                                <span class="pill pill--sm"
-                                  >${sensitiveCount} secret${sensitiveCount === 1 ? "" : "s"}
-                                  ${blurred ? "redacted" : "visible"}</span
-                                >
-                                <button
-                                  class="btn btn--icon config-raw-toggle ${blurred ? "" : "active"}"
-                                  title=${blurred
-                                    ? "Reveal sensitive values"
-                                    : "Hide sensitive values"}
-                                  aria-label="Toggle raw config redaction"
-                                  aria-pressed=${!blurred}
-                                  @click=${() => {
-                                    cvs.rawRevealed = !cvs.rawRevealed;
-                                    requestUpdate();
-                                  }}
-                                >
-                                  ${blurred ? icons.eyeOff : icons.eye}
-                                </button>
-                              `
-                            : nothing}
-                        </span>
-                        ${blurred
-                          ? html`
-                              <div class="callout info" style="margin-top: 12px">
-                                ${sensitiveCount} sensitive value${sensitiveCount === 1 ? "" : "s"}
-                                hidden. Use the reveal button above to edit the raw config.
-                              </div>
-                            `
-                          : html`
-                              <textarea
-                                placeholder="Raw config (JSON/JSON5)"
-                                .value=${props.raw}
-                                @input=${(e: Event) => {
-                                  props.onRawChange((e.target as HTMLTextAreaElement).value);
-                                }}
-                              ></textarea>
-                            `}
-                      </div>
-                    `;
-                  })()}
+                        : html`
+                            <config-editor
+                              .value=${props.raw}
+                              ?readonly=${blurred}
+                              ?dark=${props.themeMode === "dark" ||
+                              (props.themeMode === "system" && !prefersLightScheme())}
+                              @change=${(e: CustomEvent) => props.onRawChange(e.detail.value)}
+                            ></config-editor>
+                          `}
+                    </div>
+                  `;
+                })()}
         </div>
 
         ${props.issues.length > 0
