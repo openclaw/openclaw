@@ -5,6 +5,7 @@ import type {
   GroupPolicy,
   MarkdownConfig,
   OutboundRetryConfig,
+  ReasoningStreamSinkConfig,
   ReplyToMode,
   SessionThreadBindingsConfig,
 } from "./types.base.js";
@@ -224,21 +225,7 @@ export type TelegramAccountConfig = {
    * Forward reasoning/thinking stream tokens to an external HTTP endpoint.
    * Useful for dashboards or external UIs that want to consume reasoning output in real-time.
    */
-  reasoningStreamSink?: TelegramReasoningStreamSinkConfig;
-};
-
-export type TelegramReasoningStreamSinkConfig = {
-  /** HTTP endpoint to POST reasoning stream updates to. Required. */
-  url: string;
-  /**
-   * HMAC-SHA256 signing secret. When set, each request includes
-   * `X-Openclaw-Signature: sha256=<hex>` so the receiver can verify authenticity.
-   */
-  secret?: string;
-  /** Extra HTTP headers merged into every request (e.g. Authorization). */
-  headers?: Record<string, string>;
-  /** Per-request timeout in milliseconds. Default: 5000. */
-  timeoutMs?: number;
+  reasoningStreamSink?: ReasoningStreamSinkConfig;
 };
 
 export type TelegramDmThreadReplies = "off" | "inbound" | "always";

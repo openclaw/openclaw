@@ -17,6 +17,7 @@ import {
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/config-runtime";
 import type {
   OpenClawConfig,
   ReplyToMode,
@@ -480,17 +481,30 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
-  const reasoningStreamSink = telegramCfg.reasoningStreamSink?.url
-    ? createReasoningStreamSink({
-        config: telegramCfg.reasoningStreamSink,
-        context: {
-          chatId: String(chatId),
-          threadId: typeof threadSpec.id === "number" ? threadSpec.id : undefined,
-          accountId: route.accountId,
-        },
-        warn: logVerbose,
-      })
-    : undefined;
+  let reasoningStreamSink: ((text: string) => void) | undefined;
+  if (telegramCfg.reasoningStreamSink?.url) {
+    const sinkCfg = telegramCfg.reasoningStreamSink;
+    let resolvedSecret: string | undefined;
+    if (sinkCfg.secret) {
+      const resolution = await resolveConfiguredSecretInputString({
+        config: cfg,
+        env: process.env,
+        value: sinkCfg.secret,
+        path: "channels.telegram.reasoningStreamSink.secret",
+      });
+      resolvedSecret = resolution.value;
+    }
+    reasoningStreamSink = createReasoningStreamSink({
+      config: sinkCfg,
+      context: {
+        chatId: String(chatId),
+        threadId: typeof threadSpec.id === "number" ? threadSpec.id : undefined,
+        accountId: route.accountId,
+      },
+      resolvedSecret,
+      warn: logVerbose,
+    });
+  }
   const previewToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let previewToolProgressSuppressed = false;

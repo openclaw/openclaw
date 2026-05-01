@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { TelegramReasoningStreamSinkConfig } from "openclaw/plugin-sdk/config-types";
+import type { ReasoningStreamSinkConfig } from "openclaw/plugin-sdk/config-types";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -19,11 +19,12 @@ export type ReasoningStreamSinkEvent = {
 };
 
 export function createReasoningStreamSink(params: {
-  config: TelegramReasoningStreamSinkConfig;
+  config: ReasoningStreamSinkConfig;
   context: ReasoningStreamSinkContext;
+  resolvedSecret?: string;
   warn?: (message: string) => void;
 }): (text: string) => void {
-  const { config, context, warn } = params;
+  const { config, context, resolvedSecret, warn } = params;
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   return (text: string) => {
@@ -44,8 +45,8 @@ export function createReasoningStreamSink(params: {
       "Content-Type": "application/json",
       ...config.headers,
     };
-    if (config.secret) {
-      const sig = crypto.createHmac("sha256", config.secret).update(body).digest("hex");
+    if (resolvedSecret) {
+      const sig = crypto.createHmac("sha256", resolvedSecret).update(body).digest("hex");
       headers["X-Openclaw-Signature"] = `sha256=${sig}`;
     }
 
