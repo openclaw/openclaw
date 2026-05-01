@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type ModelRef = {
+type ModelRef = {
   provider?: string | null;
   id?: string | null;
 };
