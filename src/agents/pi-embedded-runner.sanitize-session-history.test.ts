@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, UserMessage, Usage } from "@mariozechner/pi-ai";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { GOOGLE_THOUGHT_SIGNATURE_SENTINEL } from "./pi-embedded-helpers/google.js";
 import {
   expectOpenAIResponsesStrictSanitizeCall,
   loadSanitizeSessionHistoryWithCleanMocks,
@@ -297,6 +298,45 @@ describe("sanitizeSessionHistory", () => {
     });
 
     expect(result).toEqual(mockMessages);
+  });
+
+  it("adds Google thought signatures to tool calls when missing", async () => {
+    vi.mocked(mockedHelpers.isGoogleModelApi).mockReturnValue(true);
+
+    const user: UserMessage = {
+      role: "user",
+      content: "ping",
+      timestamp: nextTimestamp(),
+    };
+    const assistant: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_1",
+          name: "notify",
+          arguments: { message: "hi" },
+        },
+      ],
+      api: "google-generative-ai",
+      provider: "google",
+      model: "gemini-2.5-pro",
+      usage: makeUsage(0, 0, 0),
+      stopReason: "stop",
+      timestamp: nextTimestamp(),
+    };
+
+    const result = await sanitizeSessionHistory({
+      messages: [user, assistant],
+      modelApi: "google-generative-ai",
+      provider: "google",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const updated = getAssistantMessage(result);
+    const toolCall = updated.content[0] as { thoughtSignature?: string };
+    expect(toolCall.thoughtSignature).toBe(GOOGLE_THOUGHT_SIGNATURE_SENTINEL);
   });
 
   it("lets Google provider hooks prepend a bootstrap turn and persist a marker", async () => {
