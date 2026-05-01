@@ -493,16 +493,7 @@ export function createMusicGenerateTool(options?: {
   sandbox?: MusicGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MusicGenerateBackgroundScheduler;
-}): AnyAgentTool | null {
-  const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
-  const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
-    cfg,
-    agentDir: options?.agentDir,
-  });
-  if (!musicGenerationModelConfig) {
-    return null;
-  }
-
+}): AnyAgentTool {
   const sandboxConfig = options?.sandbox
     ? {
         root: options.sandbox.root,
@@ -523,16 +514,25 @@ export function createMusicGenerateTool(options?: {
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
       const action = resolveAction(args);
-      const effectiveCfg =
-        applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
+      const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
 
       if (action === "list") {
-        return createMusicGenerateListActionResult(effectiveCfg);
+        return createMusicGenerateListActionResult(cfg);
       }
 
       if (action === "status") {
         return createMusicGenerateStatusActionResult(options?.agentSessionKey);
       }
+
+      const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
+        cfg,
+        agentDir: options?.agentDir,
+      });
+      if (!musicGenerationModelConfig) {
+        throw new ToolInputError("No music-generation model configured.");
+      }
+      const effectiveCfg =
+        applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
 
       const duplicateGuardResult = createMusicGenerateDuplicateGuardResult(
         options?.agentSessionKey,

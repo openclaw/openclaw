@@ -230,9 +230,12 @@ describe("createImageGenerateTool", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns null when no image-generation model can be inferred", () => {
+  it("defers image-generation model resolution until execution", async () => {
     stubImageGenerationProviders();
-    expect(createImageGenerateTool({ config: {} })).toBeNull();
+    const tool = requireImageGenerateTool(createImageGenerateTool({ config: {} }));
+    await expect(tool.execute("tool-call-1", { prompt: "draw a chart" })).rejects.toThrow(
+      "No image-generation model configured.",
+    );
   });
 
   it("tells agents how to request transparent OpenAI backgrounds", () => {

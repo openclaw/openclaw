@@ -257,11 +257,6 @@ export function createPdfTool(options?: {
     return null;
   }
 
-  const pdfModelConfig = resolvePdfModelConfigForTool({ cfg: options?.config, agentDir });
-  if (!pdfModelConfig) {
-    return null;
-  }
-
   const maxBytesMbDefault = (
     options?.config?.agents?.defaults as Record<string, unknown> | undefined
   )?.pdfMaxBytesMb;
@@ -308,6 +303,10 @@ export function createPdfTool(options?: {
         record,
         DEFAULT_PROMPT,
       );
+      const pdfModelConfig = resolvePdfModelConfigForTool({ cfg: options?.config, agentDir });
+      if (!pdfModelConfig) {
+        throw new Error("No PDF model configured.");
+      }
       const maxBytesMbRaw = typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytesMb =
         typeof maxBytesMbRaw === "number" && Number.isFinite(maxBytesMbRaw) && maxBytesMbRaw > 0
