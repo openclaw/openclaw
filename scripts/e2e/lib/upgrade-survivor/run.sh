@@ -342,6 +342,15 @@ seed_legacy_plugin_dependency_debris() {
 assert_legacy_plugin_dependency_debris_present() {
   plugin_deps_cleanup_enabled || return 0
 
+  local found
+  found="$(legacy_plugin_dependency_debris_count)"
+  if [ "$found" -eq 0 ]; then
+    echo "plugin-deps-cleanup scenario did not create legacy plugin dependency debris" >&2
+    return 1
+  fi
+}
+
+legacy_plugin_dependency_debris_count() {
   local found=0
   local plugin
   for plugin in $(plugin_deps_cleanup_plugins); do
@@ -352,9 +361,18 @@ assert_legacy_plugin_dependency_debris_present() {
       fi
     done < <(legacy_plugin_dependency_probe_paths "$plugin")
   done
-  if [ "$found" -ne 1 ]; then
-    echo "plugin-deps-cleanup scenario did not create legacy plugin dependency debris" >&2
-    return 1
+  printf '%s\n' "$found"
+}
+
+assert_legacy_plugin_dependency_debris_before_doctor() {
+  plugin_deps_cleanup_enabled || return 0
+
+  local found
+  found="$(legacy_plugin_dependency_debris_count)"
+  if [ "$found" -eq 0 ]; then
+    echo "Legacy plugin dependency debris was already removed before doctor; post-doctor cleanup assertion will verify it stays gone."
+  else
+    echo "Legacy plugin dependency debris survived update and will be cleaned by doctor."
   fi
 }
 
@@ -657,7 +675,7 @@ phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase update-candidate update_candidate
-phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_present
+phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
 phase doctor run_doctor
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
 phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired

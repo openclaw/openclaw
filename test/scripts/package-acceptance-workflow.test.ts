@@ -214,6 +214,12 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
     expect(publishedUpgradeSurvivor).toContain("openclaw@(beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
+    expect(publishedUpgradeSurvivor).toContain(
+      "assert_legacy_plugin_dependency_debris_before_doctor",
+    );
+    expect(publishedUpgradeSurvivor).toContain(
+      "Legacy plugin dependency debris was already removed before doctor",
+    );
     expect(
       publishedUpgradeSurvivor.indexOf('validate_baseline_package_spec "$baseline_spec"'),
     ).toBeLessThan(
