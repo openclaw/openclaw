@@ -1,23 +1,31 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   isJavaScriptModulePath,
+  loadChannelPluginModule,
   resolveCompiledBundledModulePath,
   resolveExistingPluginModulePath,
   resolvePluginModuleCandidates,
+  resetChannelPluginModuleLoaderStateForTest,
+  setChannelPluginModuleLoaderJitiFactoryForTest,
 } from "./module-loader.js";
 
 const tempDirs: string[] = [];
+type ChannelModuleLoaderJitiFactory = NonNullable<
+  Parameters<typeof setChannelPluginModuleLoaderJitiFactoryForTest>[0]
+>;
 
 afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
   vi.resetModules();
+  vi.restoreAllMocks();
   vi.doUnmock("jiti");
+  resetChannelPluginModuleLoaderStateForTest();
+  setChannelPluginModuleLoaderJitiFactoryForTest(undefined);
 });
 
 function createTempDir(): string {
@@ -68,15 +76,13 @@ describe("channel plugin module loader helpers", () => {
     expect(isJavaScriptModulePath("/tmp/entry.ts")).toBe(false);
   });
 
-  it("uses native require for eligible JavaScript modules before falling back to Jiti", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ ok: false })));
-    vi.resetModules();
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
-    const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
-      import.meta.url,
-      "./module-loader.js?scope=native-require",
+  it("uses native require for eligible JavaScript modules before falling back to Jiti", () => {
+    const createJiti = vi.fn(
+      () => vi.fn(() => ({ ok: false })) as unknown as ReturnType<ChannelModuleLoaderJitiFactory>,
+    );
+    resetChannelPluginModuleLoaderStateForTest();
+    setChannelPluginModuleLoaderJitiFactoryForTest(
+      createJiti as unknown as ChannelModuleLoaderJitiFactory,
     );
     const rootDir = createTempDir();
     const modulePath = path.join(rootDir, "dist", "extensions", "demo", "index.cjs");
@@ -84,7 +90,7 @@ describe("channel plugin module loader helpers", () => {
     fs.writeFileSync(modulePath, "module.exports = { ok: true };\n", "utf8");
 
     expect(
-      loaderModule.loadChannelPluginModule({
+      loadChannelPluginModule({
         modulePath,
         rootDir,
         shouldTryNativeRequire: () => true,
@@ -93,25 +99,23 @@ describe("channel plugin module loader helpers", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("creates the runtime-supported Jiti boundary for Windows dist loads", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
-    vi.resetModules();
-    vi.doMock("jiti", () => ({
-      createJiti,
-    }));
+  it("creates the runtime-supported Jiti boundary for Windows dist loads", () => {
+    const createJiti = vi.fn(
+      () => vi.fn(() => ({ ok: true })) as unknown as ReturnType<ChannelModuleLoaderJitiFactory>,
+    );
+    resetChannelPluginModuleLoaderStateForTest();
+    setChannelPluginModuleLoaderJitiFactoryForTest(
+      createJiti as unknown as ChannelModuleLoaderJitiFactory,
+    );
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     try {
-      const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
-        import.meta.url,
-        "./module-loader.js?scope=windows-dist-jiti",
-      );
       const rootDir = createTempDir();
       const modulePath = path.join(rootDir, "dist", "extensions", "demo", "index.js");
       fs.mkdirSync(path.dirname(modulePath), { recursive: true });
       fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
 
-      const loaded = loaderModule.loadChannelPluginModule({
+      const loaded = loadChannelPluginModule({
         modulePath,
         rootDir,
         shouldTryNativeRequire: () => false,
