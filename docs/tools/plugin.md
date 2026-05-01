@@ -218,6 +218,12 @@ Looking for third-party plugins? See [Community Plugins](/plugins/community).
 | `slots`          | Exclusive slot selectors (e.g. `memory`, `contextEngine`) |
 | `entries.\<id\>` | Per-plugin toggles + config                               |
 
+`plugins.allow` is exclusive. When it is non-empty, only listed plugins can load
+or expose tools, even if `tools.allow` contains `"*"` or a specific plugin-owned
+tool name. If a tool allowlist references plugin tools, add the owning plugin ids
+to `plugins.allow` or remove `plugins.allow`; `openclaw doctor` warns about this
+shape.
+
 Config changes **require a gateway restart**. If the Gateway is running with config
 watch + in-process restart enabled (the default `openclaw gateway` path), that
 restart is usually performed automatically a moment after the config write lands.

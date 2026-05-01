@@ -83,6 +83,7 @@ cat ~/.openclaw/openclaw.json
     - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
     - Codex OAuth shadowing warnings (`models.providers.openai-codex`).
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
+    - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
     - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
@@ -163,6 +164,11 @@ That stages grounded durable candidates into the short-term dreaming store while
     If the config contains legacy value shapes (for example `messages.ackReaction` without a channel-specific override), doctor normalizes them into the current schema.
 
     That includes legacy Talk flat fields. Current public Talk config is `talk.provider` + `talk.providers.<provider>`. Doctor rewrites old `talk.voiceId` / `talk.voiceAliases` / `talk.modelId` / `talk.outputFormat` / `talk.apiKey` shapes into the provider map.
+
+    Doctor also warns when `plugins.allow` is non-empty and tool policy uses
+    wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools
+    from plugins that actually load; it does not bypass the exclusive plugin
+    allowlist.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
