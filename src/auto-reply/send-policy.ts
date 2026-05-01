@@ -2,7 +2,7 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { normalizeCommandBody } from "./commands-registry.js";
 import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 
-export type SendPolicyOverride = "allow" | "deny";
+type SendPolicyOverride = "allow" | "deny";
 
 function normalizeSendPolicyOverride(raw?: string | null): SendPolicyOverride | undefined {
   const value = normalizeOptionalLowercaseString(raw);
