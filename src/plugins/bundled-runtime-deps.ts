@@ -205,6 +205,17 @@ function createBundledRuntimeDepsPlan(params: {
   };
 }
 
+function arePackageLevelRuntimeDepsAlreadyMaterialized(params: {
+  installRoot: string;
+  packageRoot: string;
+  pluginDeps: readonly RuntimeDepEntry[];
+}): boolean {
+  const installSpecs = createBundledRuntimeDepsInstallSpecs({
+    deps: [...params.pluginDeps, ...collectMirroredPackageRuntimeDeps(params.packageRoot)],
+  });
+  return installSpecs.length > 0 && isRuntimeDepsPlanMaterialized(params.installRoot, installSpecs);
+}
+
 export function scanBundledPluginRuntimeDeps(params: {
   packageRoot: string;
   config?: OpenClawConfig;
@@ -342,6 +353,16 @@ export function ensureBundledPluginRuntimeDeps(params: {
     packageRoot && path.resolve(installRoot) !== path.resolve(params.pluginRoot);
   let deps = pluginDepEntries;
   if (usePackageLevelPlan && packageRoot) {
+    if (
+      arePackageLevelRuntimeDepsAlreadyMaterialized({
+        installRoot,
+        packageRoot,
+        pluginDeps: pluginDepEntries,
+      })
+    ) {
+      removeLegacyRuntimeDepsManifest(installRoot);
+      return createBundledRuntimeDepsEnsureResult([]);
+    }
     const packagePlan = collectBundledPluginRuntimeDeps({
       extensionsDir,
       ...(params.config ? { config: params.config } : {}),
