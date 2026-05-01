@@ -64,7 +64,7 @@ export async function startGatewaySidecars(params: {
   }
 
   try {
-    const archiveResult = await sweepSessionArchiveFiles({ stateDir });
+    const archiveResult = await sweepSessionArchiveFiles({ stateDir, cfg: params.cfg });
     if (archiveResult.removed > 0) {
       params.log.warn(
         `session archive cleanup: removed ${archiveResult.removed} stale files across ${archiveResult.directories} directories`,

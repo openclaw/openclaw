@@ -1,4 +1,5 @@
 import type { HealthSummary } from "../commands/health.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -41,6 +42,7 @@ export function startGatewayMaintenanceTimers(params: {
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   mediaCleanupTtlMs?: number;
   sessionArchiveCleanupStateDir?: string;
+  sessionArchiveCleanupCfg?: OpenClawConfig;
   sessionArchiveCleanupLog?: { warn: (msg: string) => void };
 }): {
   tickInterval: ReturnType<typeof setInterval>;
@@ -140,13 +142,14 @@ export function startGatewayMaintenanceTimers(params: {
   let sessionArchiveCleanup: ReturnType<typeof setInterval> | null = null;
   if (params.sessionArchiveCleanupStateDir) {
     const stateDir = params.sessionArchiveCleanupStateDir;
+    const archiveCfg = params.sessionArchiveCleanupCfg;
     const archiveLog = params.sessionArchiveCleanupLog;
     let sessionArchiveCleanupInFlight: Promise<void> | null = null;
     const runSessionArchiveCleanup = () => {
       if (sessionArchiveCleanupInFlight) {
         return sessionArchiveCleanupInFlight;
       }
-      sessionArchiveCleanupInFlight = sweepSessionArchiveFiles({ stateDir })
+      sessionArchiveCleanupInFlight = sweepSessionArchiveFiles({ stateDir, cfg: archiveCfg })
         .then((result) => {
           if (result.removed > 0) {
             archiveLog?.warn(`session archive cleanup: removed ${result.removed} stale files`);

@@ -782,6 +782,7 @@ export async function startGatewayServer(
           ? { mediaCleanupTtlMs: resolveMediaCleanupTtlMs(cfgAtStart.media.ttlHours) }
           : {}),
         sessionArchiveCleanupStateDir: resolveStateDir(process.env),
+        sessionArchiveCleanupCfg: cfgAtStart,
         sessionArchiveCleanupLog: { warn: (msg: string) => log.warn(msg) },
       }));
   }

@@ -6,21 +6,55 @@ import {
   parseSessionArchiveTimestamp,
 } from "../config/sessions/artifacts.js";
 import { resolveMaintenanceConfig } from "../config/sessions/store-maintenance.js";
+import { resolveAllAgentSessionStoreTargets } from "../config/sessions/targets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { cleanupArchivedSessionTranscripts } from "./session-utils.fs.js";
 
 const ORPHAN_TMP_MAX_AGE_MS = 60 * 60_000; // 1 hour
 const MAX_BAK_FILES_PER_DIR = 3;
+
+async function resolveSweepDirectories(params: {
+  stateDir: string;
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<string[]> {
+  // When a config is supplied, use the gateway-wide target discovery that
+  // covers both default `<stateDir>/agents/*/sessions` roots and any
+  // configured/templated `session.store` roots. Fall back to the default
+  // state-dir scan if no config is available (tests, legacy callers).
+  if (params.cfg) {
+    const targets = await resolveAllAgentSessionStoreTargets(params.cfg, { env: params.env });
+    const dirs = new Set<string>();
+    for (const target of targets) {
+      dirs.add(path.dirname(target.storePath));
+    }
+    if (dirs.size > 0) {
+      return [...dirs];
+    }
+  }
+  return await resolveAgentSessionDirs(params.stateDir);
+}
 
 /**
  * Proactive sweep of stale session archive files across all agent session
  * directories. Handles `.deleted.*`, `.reset.*`, `.bak.*` archives via the
  * existing retention logic and also cleans up orphaned `.tmp` files left by
  * interrupted atomic writes.
+ *
+ * When `cfg` is supplied the sweep covers both default and configured
+ * `session.store` roots; otherwise it falls back to scanning agent sessions
+ * under `<stateDir>/agents/*`.
  */
 export async function sweepSessionArchiveFiles(params: {
   stateDir: string;
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
 }): Promise<{ removed: number; directories: number }> {
-  const sessionDirs = await resolveAgentSessionDirs(params.stateDir);
+  const sessionDirs = await resolveSweepDirectories({
+    stateDir: params.stateDir,
+    cfg: params.cfg,
+    env: params.env,
+  });
   if (sessionDirs.length === 0) {
     return { removed: 0, directories: 0 };
   }
