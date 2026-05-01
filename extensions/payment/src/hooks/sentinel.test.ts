@@ -46,6 +46,22 @@ describe("isFillSentinel — field constraints", () => {
     expect(isFillSentinel({ $paymentHandle: "handle-abc" })).toBe(false);
   });
 
+  it("returns true for field 'exp_mm_yy'", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mm_yy" })).toBe(true);
+  });
+
+  it("returns true for field 'exp_mm_yyyy'", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mm_yyyy" })).toBe(true);
+  });
+
+  it("returns false for field value 'exp_mmyy' (no slash — wrong variant)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mmyy" })).toBe(false);
+  });
+
+  it("returns false for field value 'exp_mm_y' (truncated variant)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mm_y" })).toBe(false);
+  });
+
   it("returns false for field value 'foo'", () => {
     expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "foo" })).toBe(false);
   });
@@ -140,14 +156,14 @@ describe("findSentinelsInFields", () => {
     expect(result[1]!.sentinel).toBe(sentinelB);
   });
 
-  it("returns all 5 sentinels when all fields are sentinels", () => {
+  it("returns all 7 sentinels when all fields are sentinels", () => {
     const fields = FILL_SENTINEL_FIELDS.map((field) => ({
       ref: field,
       type: "text",
       value: { $paymentHandle: "h-multi", field },
     }));
     const result = findSentinelsInFields(fields);
-    expect(result).toHaveLength(5);
+    expect(result).toHaveLength(7);
     result.forEach((r, i) => {
       expect(r.index).toBe(i);
     });

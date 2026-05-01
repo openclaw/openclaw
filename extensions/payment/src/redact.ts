@@ -41,6 +41,8 @@ export function redactHandle(handle: CredentialHandle): /* RedactedHandle */ unk
             cvv: handle.fillSentinels.cvv,
             exp_month: handle.fillSentinels.exp_month,
             exp_year: handle.fillSentinels.exp_year,
+            exp_mm_yy: handle.fillSentinels.exp_mm_yy,
+            exp_mm_yyyy: handle.fillSentinels.exp_mm_yyyy,
             holder_name: handle.fillSentinels.holder_name,
           }
         : undefined,

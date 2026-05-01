@@ -89,7 +89,7 @@ describe("mockPaymentAdapter.issueVirtualCard", () => {
     expect(handle.display?.expYear).toBe("2030");
   });
 
-  it("populates all 5 fillSentinels referencing the handle id", async () => {
+  it("populates all 7 fillSentinels referencing the handle id", async () => {
     const handle = await mockPaymentAdapter.issueVirtualCard({
       fundingSourceId: "mock-fs-card-001",
       amount: BASE_AMOUNT,
@@ -103,6 +103,8 @@ describe("mockPaymentAdapter.issueVirtualCard", () => {
     expect(sentinels.cvv).toEqual({ $paymentHandle: handle.id, field: "cvv" });
     expect(sentinels.exp_month).toEqual({ $paymentHandle: handle.id, field: "exp_month" });
     expect(sentinels.exp_year).toEqual({ $paymentHandle: handle.id, field: "exp_year" });
+    expect(sentinels.exp_mm_yy).toEqual({ $paymentHandle: handle.id, field: "exp_mm_yy" });
+    expect(sentinels.exp_mm_yyyy).toEqual({ $paymentHandle: handle.id, field: "exp_mm_yyyy" });
     expect(sentinels.holder_name).toEqual({ $paymentHandle: handle.id, field: "holder_name" });
   });
 
@@ -226,6 +228,8 @@ describe("mockPaymentAdapter.retrieveCardSecrets", () => {
     expect(secrets.cvv).toBe("123");
     expect(secrets.expMonth).toBe("12");
     expect(secrets.expYear).toBe("2030");
+    expect(secrets.expMmYy).toBe("12/30");
+    expect(secrets.expMmYyyy).toBe("12/2030");
     expect(secrets.holderName).toBe("Mock Holder");
   });
 

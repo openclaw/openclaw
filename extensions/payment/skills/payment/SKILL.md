@@ -56,7 +56,9 @@ On success, the result contains:
 - `handle.id` — record this; you need it for fill and status checks.
 - `handle.validUntil` — the card expires at this timestamp.
 - `handle.display` — non-secret display info (`brand`, `last4`, `expMonth`, `expYear`).
-- `fillSentinels` — a map with keys `pan`, `cvv`, `exp_month`, `exp_year`, `holder_name`. Each value is a sentinel object `{ "$paymentHandle": "<id>", "field": "<name>" }`.
+- `fillSentinels` — a map with keys `pan`, `cvv`, `exp_month`, `exp_year`, `exp_mm_yy`, `exp_mm_yyyy`, `holder_name`. Each value is a sentinel object `{ "$paymentHandle": "<id>", "field": "<name>" }`.
+
+> **Test-mode note:** In test mode, Stripe Link always returns "Jane Doe" as the holder name regardless of the buyer's actual name. This is expected; production cards will use the buyer's real name from their Link account.
 
 If `handle.status` is `denied`, tell the user their approval was denied and stop. Do not retry `issue_virtual_card` without user instruction.
 
@@ -76,44 +78,96 @@ Use the `browser` tool to navigate to the merchant's checkout or payment page. T
 
 Pass the sentinel objects as field values in a `browser.act fill` call. Do not look up or substitute the real card values yourself — the payment plugin's hook handles substitution automatically.
 
+This call triggers a **critical-severity approval** for the sentinel substitution. On approval, the payment plugin substitutes real card values inside the runtime — those values are typed into the browser form but never appear in your transcript or the agent's view of the parameters.
+
+## Browser-fill examples
+
+Each `BrowserFormField` entry **must** use the `{ "ref", "type", "value" }` shape. The `ref` is a CSS selector or element ref; `type` is `"text"` for card fields.
+
+### For split MM / YY forms (older / non-Stripe Elements forms)
+
+Use `exp_month` and `exp_year` sentinels when the form has two separate expiry fields:
+
 ```json
 {
   "action": "act",
   "request": {
     "kind": "fill",
-    "targetId": "checkout",
     "fields": [
       {
-        "ref": "<pan field ref>",
+        "ref": "input[name='cardnumber']",
         "type": "text",
-        "value": { "$paymentHandle": "<handle.id>", "field": "pan" }
+        "value": { "$paymentHandle": "<handle-id>", "field": "pan" }
       },
       {
-        "ref": "<cvv field ref>",
+        "ref": "input[name='exp-month']",
         "type": "text",
-        "value": { "$paymentHandle": "<handle.id>", "field": "cvv" }
+        "value": { "$paymentHandle": "<handle-id>", "field": "exp_month" }
       },
       {
-        "ref": "<exp_month field ref>",
+        "ref": "input[name='exp-year']",
         "type": "text",
-        "value": { "$paymentHandle": "<handle.id>", "field": "exp_month" }
+        "value": { "$paymentHandle": "<handle-id>", "field": "exp_year" }
       },
       {
-        "ref": "<exp_year field ref>",
+        "ref": "input[name='cvc']",
         "type": "text",
-        "value": { "$paymentHandle": "<handle.id>", "field": "exp_year" }
+        "value": { "$paymentHandle": "<handle-id>", "field": "cvv" }
       },
       {
-        "ref": "<holder_name field ref>",
+        "ref": "input[name='cardholder']",
         "type": "text",
-        "value": { "$paymentHandle": "<handle.id>", "field": "holder_name" }
+        "value": { "$paymentHandle": "<handle-id>", "field": "holder_name" }
       }
     ]
   }
 }
 ```
 
-This call triggers a **critical-severity approval** for the sentinel substitution. On approval, the payment plugin substitutes real card values inside the runtime — those values are typed into the browser form but never appear in your transcript or the agent's view of the parameters.
+### For combined MM/YY forms (Stripe Elements, modern checkouts)
+
+Use `exp_mm_yy` when the form has a **single combined expiry field** (e.g. `input[name='exp-date']`). The value is formatted as `MM/YY` (e.g. `"12/30"`). Use `exp_mm_yyyy` for `MM/YYYY` format (e.g. `"12/2030"`).
+
+```json
+{
+  "action": "act",
+  "request": {
+    "kind": "fill",
+    "fields": [
+      {
+        "ref": "input[name='cardnumber']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "pan" }
+      },
+      {
+        "ref": "input[name='exp-date']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "exp_mm_yy" }
+      },
+      {
+        "ref": "input[name='cvc']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "cvv" }
+      },
+      {
+        "ref": "input[name='name']",
+        "type": "text",
+        "value": { "$paymentHandle": "<handle-id>", "field": "holder_name" }
+      }
+    ]
+  }
+}
+```
+
+When the form has a single MM/YY field, use `field: "exp_mm_yy"` (year as 2 digits, slash-separated) or `field: "exp_mm_yyyy"` (year as 4 digits, slash-separated). Both are pre-formatted with a `/` separator so you do not need to combine the separate month and year values yourself.
+
+### Common mistakes
+
+- **Wrong:** `{ "selector": "...", "text": ... }` — this is NOT the BrowserFormField shape.
+- **Wrong:** `{ "name": "...", "value": ... }` — also NOT the correct shape.
+- **Right:** `{ "ref": "<css-selector or ref>", "type": "text", "value": <sentinel> }`
+
+Do not attempt to pass the sentinel object under any key other than `value`. Do not stringify the sentinel — pass it as a plain object.
 
 ### Submit the form
 

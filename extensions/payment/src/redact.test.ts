@@ -50,6 +50,8 @@ describe("redactHandle", () => {
         cvv: { $paymentHandle: "h2", field: "cvv" as const },
         exp_month: { $paymentHandle: "h2", field: "exp_month" as const },
         exp_year: { $paymentHandle: "h2", field: "exp_year" as const },
+        exp_mm_yy: { $paymentHandle: "h2", field: "exp_mm_yy" as const },
+        exp_mm_yyyy: { $paymentHandle: "h2", field: "exp_mm_yyyy" as const },
         holder_name: { $paymentHandle: "h2", field: "holder_name" as const },
         // @ts-expect-error — smuggled extra field
         secretRoutingNumber: "111000025",
@@ -58,11 +60,13 @@ describe("redactHandle", () => {
     const redacted = JSON.stringify(redactHandle(handle as never));
     expect(redacted).not.toContain("secretRoutingNumber");
     expect(redacted).not.toContain("111000025");
-    // The five known sentinel keys should still be present
+    // All seven known sentinel keys should still be present
     expect(redacted).toContain('"pan"');
     expect(redacted).toContain('"cvv"');
     expect(redacted).toContain('"exp_month"');
     expect(redacted).toContain('"exp_year"');
+    expect(redacted).toContain('"exp_mm_yy"');
+    expect(redacted).toContain('"exp_mm_yyyy"');
     expect(redacted).toContain('"holder_name"');
   });
 

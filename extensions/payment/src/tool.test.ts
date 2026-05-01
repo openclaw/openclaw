@@ -49,6 +49,8 @@ const MOCK_HANDLE: CredentialHandle = {
     cvv: { $paymentHandle: "handle-001", field: "cvv" },
     exp_month: { $paymentHandle: "handle-001", field: "exp_month" },
     exp_year: { $paymentHandle: "handle-001", field: "exp_year" },
+    exp_mm_yy: { $paymentHandle: "handle-001", field: "exp_mm_yy" },
+    exp_mm_yyyy: { $paymentHandle: "handle-001", field: "exp_mm_yyyy" },
     holder_name: { $paymentHandle: "handle-001", field: "holder_name" },
   },
 };
@@ -368,7 +370,7 @@ describe("issue_virtual_card result shape", () => {
     tool = extractTool(manager);
   });
 
-  it("returns fillSentinels with all 5 keys", async () => {
+  it("returns fillSentinels with all 7 keys", async () => {
     const result = (await tool.execute("tc-1", {
       action: "issue_virtual_card",
       providerId: "mock",
@@ -384,6 +386,8 @@ describe("issue_virtual_card result shape", () => {
     expect(fillSentinels).toHaveProperty("cvv");
     expect(fillSentinels).toHaveProperty("exp_month");
     expect(fillSentinels).toHaveProperty("exp_year");
+    expect(fillSentinels).toHaveProperty("exp_mm_yy");
+    expect(fillSentinels).toHaveProperty("exp_mm_yyyy");
     expect(fillSentinels).toHaveProperty("holder_name");
   });
 

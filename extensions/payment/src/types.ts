@@ -30,7 +30,7 @@ export type FundingSource = {
 
 export type FillSentinel = {
   $paymentHandle: string;
-  field: "pan" | "cvv" | "exp_month" | "exp_year" | "holder_name";
+  field: "pan" | "cvv" | "exp_month" | "exp_year" | "exp_mm_yy" | "exp_mm_yyyy" | "holder_name";
 };
 
 export type CredentialHandle = {
@@ -46,7 +46,10 @@ export type CredentialHandle = {
     expMonth?: string;
     expYear?: string;
   };
-  fillSentinels?: Record<"pan" | "cvv" | "exp_month" | "exp_year" | "holder_name", FillSentinel>;
+  fillSentinels?: Record<
+    "pan" | "cvv" | "exp_month" | "exp_year" | "exp_mm_yy" | "exp_mm_yyyy" | "holder_name",
+    FillSentinel
+  >;
 };
 
 export type Receipt = {

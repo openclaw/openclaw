@@ -25,6 +25,8 @@ const MOCK_SECRETS: CardSecrets = {
   cvv: "123",
   expMonth: "12",
   expYear: "2030",
+  expMmYy: "12/30",
+  expMmYyyy: "12/2030",
   holderName: "Mock Holder",
 };
 
@@ -451,6 +453,30 @@ describe("fill hook — substitution in rewritten params", () => {
     expect(fields[2]!.value).toBe(MOCK_SECRETS.holderName);
   });
 
+  it("rewritten field contains exp_mm_yy (combined 2-digit year format)", async () => {
+    const manager = makeMockManager();
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        { ref: "exp-date", type: "text", value: makeSentinel(HANDLE_ID, "exp_mm_yy") },
+      ]),
+      makeOpts(manager),
+    );
+    const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
+    expect(fields[0]!.value).toBe(MOCK_SECRETS.expMmYy); // "12/30"
+  });
+
+  it("rewritten field contains exp_mm_yyyy (combined 4-digit year format)", async () => {
+    const manager = makeMockManager();
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        { ref: "exp-date", type: "text", value: makeSentinel(HANDLE_ID, "exp_mm_yyyy") },
+      ]),
+      makeOpts(manager),
+    );
+    const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
+    expect(fields[0]!.value).toBe(MOCK_SECRETS.expMmYyyy); // "12/2030"
+  });
+
   it("non-sentinel fields pass through unchanged", async () => {
     const manager = makeMockManager();
     const result = await handleBrowserBeforeToolCall(
@@ -528,6 +554,8 @@ describe("fill hook — multiple handles", () => {
       cvv: "456",
       expMonth: "06",
       expYear: "2031",
+      expMmYy: "06/31",
+      expMmYyyy: "06/2031",
       holderName: "Second Holder",
     };
     const manager = {
@@ -633,6 +661,8 @@ describe("fill hook — secret clear on error path", () => {
       cvv: "111",
       expMonth: "12",
       expYear: "2030",
+      expMmYy: "12/30",
+      expMmYyyy: "12/2030",
       holderName: "Alice Holder",
     };
 

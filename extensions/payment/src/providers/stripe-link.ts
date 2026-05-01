@@ -492,6 +492,8 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       cvv: { $paymentHandle: handleId, field: "cvv" },
       exp_month: { $paymentHandle: handleId, field: "exp_month" },
       exp_year: { $paymentHandle: handleId, field: "exp_year" },
+      exp_mm_yy: { $paymentHandle: handleId, field: "exp_mm_yy" },
+      exp_mm_yyyy: { $paymentHandle: handleId, field: "exp_mm_yyyy" },
       holder_name: { $paymentHandle: handleId, field: "holder_name" },
     };
 
@@ -598,6 +600,13 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
         : String(expMonthRaw ?? "");
     const expYear = typeof expYearRaw === "number" ? String(expYearRaw) : String(expYearRaw ?? "");
 
+    // Derive combined expiry fields (for single-field MM/YY forms such as Stripe Elements).
+    // expYear is always the full 4-digit string (e.g. "2030"). We take the last 2 digits
+    // for expMmYy. Edge case: if expYear is somehow already 2 digits, use it verbatim.
+    const yy = expYear.length >= 2 ? expYear.slice(-2) : expYear.padStart(2, "0");
+    const expMmYy = `${expMonth}/${yy}`;
+    const expMmYyyy = `${expMonth}/${expYear}`;
+
     // Holder name from billing_address.name (link-cli 0.4.0 shape E)
     const billingAddress = card["billing_address"] as Record<string, unknown> | undefined;
     const holderName =
@@ -610,6 +619,8 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       cvv,
       expMonth,
       expYear,
+      expMmYy,
+      expMmYyyy,
       holderName,
     };
   }
@@ -868,6 +879,8 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
       cvv: { $paymentHandle: handleId, field: "cvv" },
       exp_month: { $paymentHandle: handleId, field: "exp_month" },
       exp_year: { $paymentHandle: handleId, field: "exp_year" },
+      exp_mm_yy: { $paymentHandle: handleId, field: "exp_mm_yy" },
+      exp_mm_yyyy: { $paymentHandle: handleId, field: "exp_mm_yyyy" },
       holder_name: { $paymentHandle: handleId, field: "holder_name" },
     };
 

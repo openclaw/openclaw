@@ -207,6 +207,10 @@ function pickSecretValue(secrets: CardSecrets, field: FillSentinelField): string
       return secrets.expMonth;
     case "exp_year":
       return secrets.expYear;
+    case "exp_mm_yy":
+      return secrets.expMmYy;
+    case "exp_mm_yyyy":
+      return secrets.expMmYyyy;
     case "holder_name":
       return secrets.holderName;
   }

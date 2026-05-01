@@ -412,7 +412,7 @@ describe("issueVirtualCard", () => {
     expect(meta?.providerId).toBe("stripe-link");
   });
 
-  it("populates all 5 fillSentinels referencing the handle id", async () => {
+  it("populates all 7 fillSentinels referencing the handle id", async () => {
     const { runner } = makeSequentialFixtureRunner([
       fixtureOk(spendRequestCreateApproved),
       fixtureOk(spendRequestRetrievePollApproved),
@@ -430,6 +430,8 @@ describe("issueVirtualCard", () => {
     expect(s.cvv).toEqual({ $paymentHandle: handle.id, field: "cvv" });
     expect(s.exp_month).toEqual({ $paymentHandle: handle.id, field: "exp_month" });
     expect(s.exp_year).toEqual({ $paymentHandle: handle.id, field: "exp_year" });
+    expect(s.exp_mm_yy).toEqual({ $paymentHandle: handle.id, field: "exp_mm_yy" });
+    expect(s.exp_mm_yyyy).toEqual({ $paymentHandle: handle.id, field: "exp_mm_yyyy" });
     expect(s.holder_name).toEqual({ $paymentHandle: handle.id, field: "holder_name" });
   });
 
@@ -733,6 +735,52 @@ describe("retrieveCardSecrets", () => {
     expect(secrets.expYear).toBe("2030");
     // holderName from card.billing_address.name in 0.4.0
     expect(secrets.holderName).toBe("Jane Doe");
+  });
+
+  it("derives expMmYy ('12/30') from exp_month=12 and exp_year=2030", async () => {
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
+    const adapter = makeAdapter({ runner });
+    const secrets = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
+    // Combined 2-digit-year format used by Stripe Elements single-field exp-date
+    expect(secrets.expMmYy).toBe("12/30");
+  });
+
+  it("derives expMmYyyy ('12/2030') from exp_month=12 and exp_year=2030", async () => {
+    const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
+    const adapter = makeAdapter({ runner });
+    const secrets = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
+    // Combined 4-digit-year format
+    expect(secrets.expMmYyyy).toBe("12/2030");
+  });
+
+  it("edge case: legacy 2-digit exp_year (e.g. 99) produces expMmYy='12/99' verbatim", async () => {
+    // If link-cli ever returns a 2-digit year (shouldn't happen but defensive test),
+    // the adapter uses the last 2 chars of the year string — so "99".slice(-2) === "99"
+    // and expMmYyyy = "12/99" (same as expMmYy in this edge case).
+    const twoDigitYearFixture = [
+      {
+        id: "lsrq_legacy",
+        status: "approved",
+        card: {
+          id: "ic_legacy",
+          number: "4242424242424242",
+          cvc: "123",
+          brand: "visa",
+          exp_month: 12,
+          exp_year: 99, // legacy 2-digit year
+          billing_address: { name: "Jane Doe" },
+          valid_until: "2030-12-31T23:59:59Z",
+        },
+      },
+    ];
+    const { runner } = makeFixtureRunner(fixtureOk(twoDigitYearFixture));
+    const adapter = makeAdapter({ runner });
+    const secrets = await adapter.retrieveCardSecrets("lsrq_legacy");
+    expect(secrets.expYear).toBe("99");
+    // expMmYy: last 2 chars of "99" = "99"
+    expect(secrets.expMmYy).toBe("12/99");
+    // expMmYyyy: expMonth/expYear — same as expMmYy when expYear is already 2 digits
+    expect(secrets.expMmYyyy).toBe("12/99");
   });
 
   it("DOES include --include card as TWO separate args (security invariant: ONLY here)", async () => {

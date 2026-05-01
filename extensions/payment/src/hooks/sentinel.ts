@@ -1,11 +1,19 @@
 import type { FillSentinel } from "../types.js";
 
-export const FILL_SENTINEL_FIELDS = ["pan", "cvv", "exp_month", "exp_year", "holder_name"] as const;
+export const FILL_SENTINEL_FIELDS = [
+  "pan",
+  "cvv",
+  "exp_month",
+  "exp_year",
+  "exp_mm_yy",
+  "exp_mm_yyyy",
+  "holder_name",
+] as const;
 export type FillSentinelField = (typeof FILL_SENTINEL_FIELDS)[number];
 
 /**
  * Detects whether a value is a FillSentinel: an object with `$paymentHandle: string`
- * and `field: "pan"|"cvv"|"exp_month"|"exp_year"|"holder_name"`. Defensive: returns
+ * and `field` matching one of the known FILL_SENTINEL_FIELDS values. Defensive: returns
  * false for any malformed shape, including partial sentinels.
  */
 export function isFillSentinel(value: unknown): value is FillSentinel {

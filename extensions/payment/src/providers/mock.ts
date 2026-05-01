@@ -108,6 +108,8 @@ export const mockPaymentAdapter: PaymentProviderAdapter = {
         cvv: { $paymentHandle: handleId, field: "cvv" },
         exp_month: { $paymentHandle: handleId, field: "exp_month" },
         exp_year: { $paymentHandle: handleId, field: "exp_year" },
+        exp_mm_yy: { $paymentHandle: handleId, field: "exp_mm_yy" },
+        exp_mm_yyyy: { $paymentHandle: handleId, field: "exp_mm_yyyy" },
         holder_name: { $paymentHandle: handleId, field: "holder_name" },
       },
     };
@@ -142,6 +144,8 @@ export const mockPaymentAdapter: PaymentProviderAdapter = {
       cvv: "123",
       expMonth: "12",
       expYear: "2030",
+      expMmYy: "12/30",
+      expMmYyyy: "12/2030",
       holderName: "Mock Holder",
     };
   },

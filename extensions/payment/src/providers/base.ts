@@ -76,8 +76,10 @@ export interface PaymentProviderAdapter {
 export type CardSecrets = {
   pan: string;
   cvv: string;
-  expMonth: string;
-  expYear: string;
+  expMonth: string; // "12"
+  expYear: string; // "2030"
+  expMmYy: string; // "12/30"
+  expMmYyyy: string; // "12/2030"
   holderName: string;
 };
 
