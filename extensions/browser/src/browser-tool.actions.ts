@@ -15,7 +15,10 @@ import {
   resolveProfile,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
-import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./browser/constants.js";
+import {
+  DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
+  DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
+} from "./browser/constants.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -364,7 +367,8 @@ export async function executeSnapshotAction(params: {
       : hasMaxChars
         ? maxChars
         : undefined;
-  const snapshotTimeoutMs = normalizePositiveTimeoutMs(input.timeoutMs);
+  const snapshotTimeoutMs =
+    normalizePositiveTimeoutMs(input.timeoutMs) ?? DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   const snapshotQuery = {
     ...(format ? { format } : {}),
     targetId,
@@ -379,7 +383,7 @@ export async function executeSnapshotAction(params: {
     labels,
     urls,
     mode,
-    ...(snapshotTimeoutMs !== undefined ? { timeoutMs: snapshotTimeoutMs } : {}),
+    timeoutMs: snapshotTimeoutMs,
   };
   let refsFallback: "role" | undefined;
   const readSnapshot = async (query: typeof snapshotQuery) =>
@@ -389,7 +393,7 @@ export async function executeSnapshotAction(params: {
           path: "/snapshot",
           profile,
           query,
-          ...(snapshotTimeoutMs !== undefined ? { timeoutMs: snapshotTimeoutMs } : {}),
+          timeoutMs: snapshotTimeoutMs,
         })) as Awaited<ReturnType<typeof browserSnapshot>>)
       : await browserToolActionDeps.browserSnapshot(baseUrl, {
           ...query,

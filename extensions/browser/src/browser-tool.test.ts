@@ -476,6 +476,24 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("falls back to the default snapshot timeout in the direct browser snapshot call", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "snapshot",
+      target: "host",
+      snapshotFormat: "ai",
+    });
+
+    expect(browserClientMocks.browserSnapshot).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({
+        format: "ai",
+        // DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS = 20_000.
+        timeoutMs: 20_000,
+      }),
+    );
+  });
+
   it("propagates input.timeoutMs into the proxied browser snapshot request", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({
@@ -505,7 +523,8 @@ describe("browser tool snapshot maxChars", () => {
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
-      expect.objectContaining({ timeoutMs: expect.any(Number) }),
+      // proxy adds a 5_000 ms slack on top of the per-request timeout.
+      expect.objectContaining({ timeoutMs: 7777 + 5_000 }),
       expect.objectContaining({
         command: "browser.proxy",
         params: expect.objectContaining({
