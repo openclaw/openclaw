@@ -77,28 +77,40 @@ export function loadMergedBundleMcpConfig(params: {
 }
 
 /**
- * Server names from owner-managed `cfg.mcp.servers` that opted in to OpenClaw
- * caller-context header injection. Plugin-supplied bundle MCP layers are
- * intentionally NOT scanned here: granting an enabled plugin permission to
- * receive `x-session-key` and caller identifiers must remain an explicit owner
- * decision, made by listing the server in `mcp.servers` with
- * `injectCallerContext: true`.
+ * Map of server name -> owner-declared remote URL for entries in
+ * owner-managed `cfg.mcp.servers` that opted in to OpenClaw caller-context
+ * header injection. Trust requires BOTH `injectCallerContext: true` AND a
+ * non-empty `url` string to live in the same owner-managed entry — this binds
+ * the opt-in to a concrete URL the owner controls, so an unrelated earlier
+ * merge layer (e.g. an existing `--mcp-config` file) cannot supply a URL for
+ * the same name and inherit caller headers. Plugin-supplied bundle MCP layers
+ * are intentionally NOT scanned here: granting an enabled plugin permission
+ * to receive `x-session-key` and caller identifiers must remain an explicit
+ * owner decision.
  */
-export function ownerCallerContextOptInServerNames(cfg?: OpenClawConfig): Set<string> {
-  const names = new Set<string>();
+export function ownerCallerContextTrustedServers(cfg?: OpenClawConfig): Map<string, string> {
+  const trusted = new Map<string, string>();
   const servers = cfg?.mcp?.servers;
   if (!servers) {
-    return names;
+    return trusted;
   }
   for (const [name, server] of Object.entries(servers)) {
-    if (isRecord(server) && server.injectCallerContext === true) {
-      names.add(name);
+    if (!isRecord(server)) {
+      continue;
     }
+    if (server.injectCallerContext !== true) {
+      continue;
+    }
+    const url = server.url;
+    if (typeof url !== "string" || url.trim().length === 0) {
+      continue;
+    }
+    trusted.set(name, url);
   }
-  return names;
+  return trusted;
 }
 
-/** True if any server in owner-managed `cfg.mcp.servers` opts in to caller-context injection. */
+/** True if any server in owner-managed `cfg.mcp.servers` opts in to caller-context injection (with a URL). */
 export function ownerWantsBundleMcpCallerContextInjection(cfg?: OpenClawConfig): boolean {
-  return ownerCallerContextOptInServerNames(cfg).size > 0;
+  return ownerCallerContextTrustedServers(cfg).size > 0;
 }

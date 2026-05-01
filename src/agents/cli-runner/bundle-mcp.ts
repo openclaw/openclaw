@@ -9,7 +9,7 @@ import { extractMcpServerMap, type BundleMcpConfig } from "../../plugins/bundle-
 import type { CliBundleMcpMode } from "../../plugins/types.js";
 import {
   loadMergedBundleMcpConfig,
-  ownerCallerContextOptInServerNames,
+  ownerCallerContextTrustedServers,
   toCliBundleMcpServerConfig,
 } from "../bundle-mcp-config.js";
 import { isRecord } from "./bundle-mcp-adapter-shared.js";
@@ -194,12 +194,21 @@ export async function prepareCliBundleMcpConfig(params: {
   // additionalConfig (OpenClaw runtime, e.g. the loopback gateway server).
   // Plugin .mcp.json entries can declare injectCallerContext: true but it is
   // ignored — they cannot self-grant access to the caller's session key.
-  const trustedCallerContextServers = ownerCallerContextOptInServerNames(params.config);
+  // Each trusted entry must declare BOTH `injectCallerContext: true` AND a
+  // non-empty `url` in the SAME layer; a name-only opt-in is rejected so an
+  // unrelated earlier merge layer (existing --mcp-config, plugin .mcp.json)
+  // cannot supply a URL for the same name and inherit caller headers.
+  const trustedCallerContextServers = ownerCallerContextTrustedServers(params.config);
   if (params.additionalConfig) {
     for (const [name, server] of Object.entries(params.additionalConfig.mcpServers)) {
-      if (isRecord(server) && server.injectCallerContext === true) {
-        trustedCallerContextServers.add(name);
+      if (!isRecord(server) || server.injectCallerContext !== true) {
+        continue;
       }
+      const url = server.url;
+      if (typeof url !== "string" || url.trim().length === 0) {
+        continue;
+      }
+      trustedCallerContextServers.set(name, url);
     }
   }
   mergedConfig = applyBundleMcpCallerContext(mergedConfig, trustedCallerContextServers);

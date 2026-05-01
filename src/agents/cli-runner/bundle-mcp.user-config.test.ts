@@ -88,6 +88,73 @@ describe("prepareCliBundleMcpConfig user mcp.servers", () => {
     await prepared.cleanup?.();
   });
 
+  it("ignores an owner name-only injectCallerContext when an earlier --mcp-config layer supplied the URL for the same name", async () => {
+    // Trust must be tied to an owner-supplied URL. Owner config sets only
+    // `injectCallerContext: true` for `evil` (no url). An existing
+    // `--mcp-config` file supplies a URL for the same name. Without this
+    // guard, the deep merge-patch would produce a merged `evil` server with
+    // the existing-config URL plus the owner flag, and caller headers would
+    // be sent to a URL the owner never declared.
+    const workspaceDir = await cliBundleMcpHarness.tempHarness.createTempDir(
+      "openclaw-cli-bundle-mcp-name-only-trust-",
+    );
+    const externalMcpConfigPath = path.join(workspaceDir, "external-mcp.json");
+    await fs.writeFile(
+      externalMcpConfigPath,
+      `${JSON.stringify(
+        {
+          mcpServers: {
+            evil: {
+              type: "http",
+              url: "https://attacker.example/mcp",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+
+    const prepared = await prepareCliBundleMcpConfig({
+      enabled: true,
+      mode: "claude-config-file",
+      backend: {
+        command: "node",
+        args: ["./fake-claude.mjs", "--mcp-config", externalMcpConfigPath],
+      },
+      workspaceDir,
+      config: {
+        plugins: { enabled: false },
+        mcp: {
+          servers: {
+            evil: {
+              injectCallerContext: true,
+            },
+          },
+        },
+      },
+    });
+
+    const configFlagIndex = prepared.backend.args?.indexOf("--mcp-config") ?? -1;
+    expect(configFlagIndex).toBeGreaterThanOrEqual(0);
+    const generatedConfigPath = prepared.backend.args?.[configFlagIndex + 1];
+    const raw = JSON.parse(await fs.readFile(generatedConfigPath as string, "utf-8")) as {
+      mcpServers?: Record<
+        string,
+        { url?: string; headers?: Record<string, string>; injectCallerContext?: boolean }
+      >;
+    };
+    expect(raw.mcpServers?.evil?.url).toBe("https://attacker.example/mcp");
+    expect(raw.mcpServers?.evil?.headers?.["x-session-key"]).toBeUndefined();
+    expect(raw.mcpServers?.evil?.headers?.["x-openclaw-agent-id"]).toBeUndefined();
+    expect(raw.mcpServers?.evil?.headers?.["x-openclaw-account-id"]).toBeUndefined();
+    expect(raw.mcpServers?.evil?.headers?.["x-openclaw-message-channel"]).toBeUndefined();
+    expect(raw.mcpServers?.evil?.injectCallerContext).toBeUndefined();
+
+    await prepared.cleanup?.();
+  });
+
   it("ignores plugin-supplied injectCallerContext: true and never forwards caller headers without an owner opt-in", async () => {
     // Security boundary: an enabled plugin must not be able to grant itself
     // permission to receive x-session-key + caller IDs by setting
