@@ -42,6 +42,11 @@ describe("package acceptance workflow", () => {
 
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
+    expect(workflow).toContain("published_upgrade_survivor_baselines:");
+    expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mjs");
+    expect(workflow).toContain("--history-count 6");
+    expect(workflow).toContain("--include-version 2026.4.23");
+    expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
     expect(workflow).toContain("update-channel-switch upgrade-survivor");
@@ -68,7 +73,11 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "published_upgrade_survivor_baseline: ${{ inputs.published_upgrade_survivor_baseline }}",
     );
+    expect(workflow).toContain(
+      "published_upgrade_survivor_baselines: ${{ needs.resolve_package.outputs.published_upgrade_survivor_baselines }}",
+    );
     expect(workflow).toContain("Published upgrade survivor baseline:");
+    expect(workflow).toContain("Published upgrade survivor baselines:");
   });
 });
 
@@ -82,11 +91,15 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("package_artifact_name:");
     expect(workflow).toContain("package_artifact_run_id:");
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
+    expect(workflow).toContain("published_upgrade_survivor_baselines:");
     expect(workflow).toContain("docker_e2e_bare_image:");
     expect(workflow).toContain("docker_e2e_functional_image:");
     expect(workflow).toContain("OPENCLAW_DOCKER_E2E_SELECTED_SHA:");
     expect(workflow).toContain(
       "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}",
+    );
+    expect(workflow).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}",
     );
     expect(workflow).toContain("Download current-run OpenClaw Docker E2E package");
     expect(workflow).toContain("Download previous-run OpenClaw Docker E2E package");
@@ -114,8 +127,12 @@ describe("package artifact reuse", () => {
       "published_upgrade_survivor_baseline=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC)}",
     );
     expect(scheduler).toContain(
+      "published_upgrade_survivor_baselines=${shellQuote(process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS)}",
+    );
+    expect(scheduler).toContain(
       '["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC", baseEnv.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC]',
     );
+    expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",');
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
     expect(publishedUpgradeSurvivor).toContain("openclaw@(beta|latest|");

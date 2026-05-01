@@ -351,6 +351,39 @@ describe("scripts/lib/docker-e2e-plan", () => {
     );
   });
 
+  it("expands the published upgrade survivor lane across deduped baselines", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines:
+        "openclaw@2026.4.29 2026.4.23 openclaw@2026.4.23 openclaw@2026.3.13-1",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.23",
+      "published-upgrade-survivor-2026.3.13-1",
+    ]);
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        command: expect.stringContaining(
+          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.4.29'",
+        ),
+        imageKind: "bare",
+        stateScenario: "upgrade-survivor",
+      }),
+      expect.objectContaining({
+        command: expect.stringContaining(
+          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.4.23'",
+        ),
+      }),
+      expect.objectContaining({
+        command: expect.stringContaining(
+          "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='openclaw@2026.3.13-1'",
+        ),
+      }),
+    ]);
+  });
+
   it("plans a live-only selected lane without package e2e images", () => {
     const plan = planFor({ selectedLaneNames: ["live-models"] });
 
