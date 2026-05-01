@@ -419,6 +419,17 @@ The sanity check fails fast when required root files such as `pnpm-lock.yaml` di
 
 `pnpm testbox:run` also terminates a local Blacksmith CLI invocation that stays in the sync phase for more than five minutes without post-sync output. Set `OPENCLAW_TESTBOX_SYNC_TIMEOUT_MS=0` to disable that guard, or use a larger millisecond value for unusually large local diffs.
 
+Crabbox is the repo-owned second remote-box path for Linux proof when Blacksmith is unavailable or when owned cloud capacity is preferable. Warm a box, hydrate it through the project workflow, then run commands through the Crabbox CLI:
+
+```bash
+pnpm crabbox:warmup -- --idle-timeout 90m
+pnpm crabbox:hydrate -- --id <cbx_id>
+pnpm crabbox:run -- --id <cbx_id> --shell "OPENCLAW_TESTBOX=1 pnpm check:changed"
+pnpm crabbox:stop -- <cbx_id>
+```
+
+`.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. It excludes local `.git` so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and it excludes local runtime/build artifacts that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff that later `crabbox run --id <cbx_id>` commands source.
+
 ## Related
 
 - [Install overview](/install)
