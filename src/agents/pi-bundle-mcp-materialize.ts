@@ -22,7 +22,9 @@ function normalizeMcpContent(
 ): AgentToolResult<unknown>["content"] {
   const out: AgentToolResult<unknown>["content"] = [];
   for (const part of content) {
-    if (!part || typeof part !== "object") continue;
+    if (!part || typeof part !== "object") {
+      continue;
+    }
     const block = part as Record<string, unknown>;
     if (block.type === "resource" && block.resource && typeof block.resource === "object") {
       const resource = block.resource as Record<string, unknown>;
