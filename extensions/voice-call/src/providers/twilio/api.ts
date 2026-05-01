@@ -1,3 +1,40 @@
+type ParsedTwilioApiError = {
+  code?: number;
+  message?: string;
+};
+
+function parseTwilioApiError(text: string): ParsedTwilioApiError {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (!parsed || typeof parsed !== "object") {
+      return {};
+    }
+    const record = parsed as Record<string, unknown>;
+    return {
+      code: typeof record.code === "number" ? record.code : undefined,
+      message: typeof record.message === "string" ? record.message : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
+export class TwilioApiError extends Error {
+  readonly httpStatus: number;
+  readonly responseText: string;
+  readonly twilioCode?: number;
+
+  constructor(httpStatus: number, responseText: string) {
+    const parsed = parseTwilioApiError(responseText);
+    const detail = parsed.message ?? responseText;
+    super(`Twilio API error: ${httpStatus} ${detail}`);
+    this.name = "TwilioApiError";
+    this.httpStatus = httpStatus;
+    this.responseText = responseText;
+    this.twilioCode = parsed.code;
+  }
+}
+
 export async function twilioApiRequest<T = unknown>(params: {
   baseUrl: string;
   accountSid: string;
@@ -34,7 +71,7 @@ export async function twilioApiRequest<T = unknown>(params: {
       return undefined as T;
     }
     const errorText = await response.text();
-    throw new Error(`Twilio API error: ${response.status} ${errorText}`);
+    throw new TwilioApiError(response.status, errorText);
   }
 
   const text = await response.text();

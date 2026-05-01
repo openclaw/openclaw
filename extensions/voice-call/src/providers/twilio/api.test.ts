@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { twilioApiRequest } from "./api.js";
+import { TwilioApiError, twilioApiRequest } from "./api.js";
 
 const originalFetch = globalThis.fetch;
 
@@ -89,5 +89,33 @@ describe("twilioApiRequest", () => {
         body: {},
       }),
     ).rejects.toThrow("Twilio API error: 400 bad request");
+  });
+
+  it("exposes structured Twilio error codes from json error bodies", async () => {
+    globalThis.fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            code: 21220,
+            message: "Call is not in-progress. Cannot redirect.",
+          }),
+          { status: 400 },
+        ),
+    ) as unknown as typeof fetch;
+
+    await expect(
+      twilioApiRequest({
+        baseUrl: "https://api.twilio.com",
+        accountSid: "AC123",
+        authToken: "secret",
+        endpoint: "/Calls/CA123.json",
+        body: {},
+      }),
+    ).rejects.toMatchObject({
+      name: "TwilioApiError",
+      httpStatus: 400,
+      twilioCode: 21220,
+      message: "Twilio API error: 400 Call is not in-progress. Cannot redirect.",
+    } satisfies Partial<TwilioApiError>);
   });
 });

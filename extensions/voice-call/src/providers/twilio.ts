@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { TwilioConfig } from "../config.js";
@@ -31,10 +32,17 @@ import {
 } from "./shared/call-status.js";
 import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 import type { TwilioProviderOptions } from "./twilio.types.js";
-import { twilioApiRequest } from "./twilio/api.js";
+import { TwilioApiError, twilioApiRequest } from "./twilio/api.js";
 import { decideTwimlResponse, readTwimlRequestView } from "./twilio/twiml-policy.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 export type { TwilioProviderOptions } from "./twilio.types.js";
+
+const TWILIO_CALL_NOT_IN_PROGRESS_CODE = 21220;
+const TWILIO_CALL_UPDATE_RETRY_DELAYS_MS = [250, 750] as const;
+
+function isTwilioCallNotInProgressError(err: unknown): boolean {
+  return err instanceof TwilioApiError && err.twilioCode === TWILIO_CALL_NOT_IN_PROGRESS_CODE;
+}
 
 function createTwilioRequestDedupeKey(ctx: WebhookContext, verifiedRequestKey?: string): string {
   if (verifiedRequestKey) {
@@ -218,6 +226,30 @@ export class TwilioProvider implements VoiceCallProvider {
       body: params,
       allowNotFound: options?.allowNotFound,
     });
+  }
+
+  private async updateLiveCallTwiml(
+    providerCallId: string,
+    twiml: string,
+    operation: string,
+  ): Promise<void> {
+    let retryIndex = 0;
+    while (true) {
+      try {
+        await this.apiRequest(`/Calls/${providerCallId}.json`, { Twiml: twiml });
+        return;
+      } catch (err) {
+        const retryDelayMs = TWILIO_CALL_UPDATE_RETRY_DELAYS_MS[retryIndex];
+        if (retryDelayMs === undefined || !isTwilioCallNotInProgressError(err)) {
+          throw err;
+        }
+        retryIndex += 1;
+        console.warn(
+          `[voice-call] Twilio ${operation} update hit call state race (21220); retrying in ${retryDelayMs}ms`,
+        );
+        await sleep(retryDelayMs);
+      }
+    }
   }
 
   /**
@@ -589,9 +621,7 @@ export class TwilioProvider implements VoiceCallProvider {
   </Gather>
 </Response>`;
 
-    await this.apiRequest(`/Calls/${input.providerCallId}.json`, {
-      Twiml: twiml,
-    });
+    await this.updateLiveCallTwiml(input.providerCallId, twiml, "playTts");
   }
 
   async sendDtmf(input: SendDtmfInput): Promise<void> {
@@ -606,9 +636,7 @@ export class TwilioProvider implements VoiceCallProvider {
   <Redirect method="POST">${escapeXml(webhookUrl)}</Redirect>
 </Response>`;
 
-    await this.apiRequest(`/Calls/${input.providerCallId}.json`, {
-      Twiml: twiml,
-    });
+    await this.updateLiveCallTwiml(input.providerCallId, twiml, "sendDtmf");
   }
 
   /**
@@ -754,9 +782,7 @@ export class TwilioProvider implements VoiceCallProvider {
   </Gather>
 </Response>`;
 
-    await this.apiRequest(`/Calls/${input.providerCallId}.json`, {
-      Twiml: twiml,
-    });
+    await this.updateLiveCallTwiml(input.providerCallId, twiml, "startListening");
   }
 
   /**
