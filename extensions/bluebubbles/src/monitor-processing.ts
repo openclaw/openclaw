@@ -684,7 +684,7 @@ export async function processMessage(
 
   // Drop BlueBubbles MessagePoller replays after server restart (#19176, #12053).
   const claim = await claimBlueBubblesInboundMessage({
-    guid: dedupeKey,
+    message,
     accountId: account.accountId,
     onDiskError: (error) =>
       logVerbose(core, runtime, `inbound-dedupe disk error: ${sanitizeForLog(error)}`),
