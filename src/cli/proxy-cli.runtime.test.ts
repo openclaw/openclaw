@@ -254,7 +254,7 @@ describe("proxy cli runtime", () => {
         enabled: true,
         proxyUrl: "http://user:secret@",
         source: "env",
-        errors: ["proxy URL must use http://"],
+        errors: ["proxyUrl must use http://"],
       },
       checks: [],
     });
@@ -268,7 +268,7 @@ describe("proxy cli runtime", () => {
         "  Source: env\n" +
         "  URL:    <invalid proxy URL>\n\n" +
         "Problems\n" +
-        "  - proxy URL must use http://\n\n" +
+        "  - proxyUrl must use http://\n\n" +
         "Next steps\n" +
         "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// proxy.\n",
     );
@@ -281,7 +281,7 @@ describe("proxy cli runtime", () => {
         enabled: true,
         proxyUrl: "http://user:secret@",
         source: "override",
-        errors: ["proxy URL must use http://"],
+        errors: ["proxyUrl must use http://"],
       },
       checks: [],
     });
@@ -297,7 +297,7 @@ describe("proxy cli runtime", () => {
             enabled: true,
             proxyUrl: "<invalid proxy URL>",
             source: "override",
-            errors: ["proxy URL must use http://"],
+            errors: ["proxyUrl must use http://"],
           },
           checks: [],
         },
@@ -357,7 +357,7 @@ describe("proxy cli runtime", () => {
       config: {
         enabled: true,
         source: "missing",
-        errors: ["proxy validation requires proxy.proxyUrl or OPENCLAW_PROXY_URL"],
+        errors: ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"],
       },
       checks: [],
     });
@@ -372,7 +372,9 @@ describe("proxy cli runtime", () => {
           config: {
             enabled: true,
             source: "missing",
-            errors: ["proxy validation requires proxy.proxyUrl or OPENCLAW_PROXY_URL"],
+            errors: [
+              "proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL",
+            ],
           },
           checks: [],
         },

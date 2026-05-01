@@ -198,6 +198,15 @@ async function runAllowedCheck(params: {
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
+  if (!isValidHttpTargetUrl(params.url)) {
+    return {
+      kind: "allowed",
+      url: params.url,
+      ok: false,
+      error: "Invalid allowed destination URL",
+    };
+  }
+
   try {
     const result = await params.fetchCheck({
       proxyUrl: params.proxyUrl,

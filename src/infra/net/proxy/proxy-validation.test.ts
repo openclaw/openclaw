@@ -143,7 +143,7 @@ describe("proxy validation", () => {
     expect(result.proxyUrl).toBeUndefined();
     expect(result.source).toBe("missing");
     expect(result.errors).toEqual([
-      "proxy validation requires proxy.proxyUrl or OPENCLAW_PROXY_URL",
+      "proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL",
     ]);
   });
 
@@ -179,7 +179,7 @@ describe("proxy validation", () => {
       env: {},
     });
 
-    expect(result.errors).toEqual(["proxy URL must use http://"]);
+    expect(result.errors).toEqual(["proxyUrl must use http://"]);
   });
 
   it("checks default allowed and denied destinations through the proxy", async () => {
@@ -281,6 +281,32 @@ describe("proxy validation", () => {
         url: "not a url",
         ok: false,
         error: "Invalid denied destination URL",
+      },
+    ]);
+  });
+
+  it("fails invalid custom allowed URLs before probing", async () => {
+    const fetchCheck = vi.fn();
+
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: ["not a url"],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        kind: "allowed",
+        url: "not a url",
+        ok: false,
+        error: "Invalid allowed destination URL",
       },
     ]);
   });
