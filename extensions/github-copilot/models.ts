@@ -79,5 +79,6 @@ export function resolveCopilotForwardCompatModel(
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MAX_TOKENS,
+    compat: { supportsEagerToolInputStreaming: false },
   } as ProviderRuntimeModel);
 }
