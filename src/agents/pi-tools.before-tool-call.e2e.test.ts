@@ -8,6 +8,8 @@ import {
 } from "../infra/diagnostic-events.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -639,6 +641,7 @@ describe("before_tool_call requireApproval handling", () => {
     }
     hookRunnerGlobalState[hookRunnerGlobalStateKey].hookRunner = hookRunner;
     mockCallGateway.mockReset();
+    setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
   async function runAbortDuringApprovalWait(options?: { onResolution?: ReturnType<typeof vi.fn> }) {
@@ -732,6 +735,104 @@ describe("before_tool_call requireApproval handling", () => {
     });
     expect(toolContext?.trace).not.toBe(trace);
     expect(Object.isFrozen(toolContext?.trace)).toBe(true);
+  });
+
+  it("passes host-derived apply_patch paths to before_tool_call hooks", async () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: src/new.ts",
+      "+x",
+      "*** Update File: src/old.ts",
+      "*** Move to: src/renamed.ts",
+      "@@",
+      "+y",
+      "*** Delete File: src/dead.ts",
+      "*** End Patch",
+    ].join("\n");
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "apply_patch",
+      params: { input: patch },
+      toolCallId: "patch-1",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-patch" },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        runId: "run-patch",
+        toolCallId: "patch-1",
+        derivedPaths: ["src/new.ts", "src/old.ts", "src/renamed.ts", "src/dead.ts"],
+      }),
+      expect.objectContaining({
+        toolName: "apply_patch",
+        runId: "run-patch",
+        toolCallId: "patch-1",
+      }),
+    );
+  });
+
+  it("recomputes host-derived paths after trusted policy param rewrites", async () => {
+    const originalPatch = [
+      "*** Begin Patch",
+      "*** Add File: src/old.ts",
+      "+x",
+      "*** End Patch",
+    ].join("\n");
+    const rewrittenPatch = [
+      "*** Begin Patch",
+      "*** Add File: src/new.ts",
+      "+x",
+      "*** End Patch",
+    ].join("\n");
+    const seenByLaterPolicy: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-rewriter",
+        pluginName: "Trusted Rewriter",
+        source: "test",
+        policy: {
+          id: "rewrite",
+          description: "rewrite",
+          evaluate: () => ({ params: { input: rewrittenPatch } }),
+        },
+      },
+      {
+        pluginId: "trusted-inspector",
+        pluginName: "Trusted Inspector",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenByLaterPolicy.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "apply_patch",
+      params: { input: originalPatch },
+      toolCallId: "patch-rewrite",
+      ctx: { agentId: "main", sessionKey: "main", runId: "run-patch" },
+    });
+
+    expect(result).toEqual({ blocked: false, params: { input: rewrittenPatch } });
+    expect(seenByLaterPolicy).toEqual([["src/new.ts"]]);
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: { input: rewrittenPatch },
+        derivedPaths: ["src/new.ts"],
+      }),
+      expect.anything(),
+    );
   });
 
   it("calls gateway RPC and unblocks on allow-once", async () => {

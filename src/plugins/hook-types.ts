@@ -415,6 +415,13 @@ export type PluginHookBeforeToolCallEvent = {
   params: Record<string, unknown>;
   runId?: string;
   toolCallId?: string;
+  /**
+   * Optional destination paths the host derived from `params` for well-known
+   * tool envelopes (e.g. `apply_patch`). When present, plugins can rely on
+   * this list rather than re-parsing the envelope. Absent for tools the host
+   * does not know how to derive paths for.
+   */
+  derivedPaths?: readonly string[];
 };
 
 export const PluginApprovalResolutions = {

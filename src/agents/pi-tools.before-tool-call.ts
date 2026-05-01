@@ -16,6 +16,7 @@ import {
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import {
@@ -476,6 +477,11 @@ export async function runBeforeToolCallHook(args: {
   const hookRunner = getGlobalHookRunner();
   try {
     const normalizedParams = isPlainObject(params) ? params : {};
+    const derivedToolParams = deriveToolParams(toolName, normalizedParams);
+    const deriveToolEventParams = (candidateParams: Record<string, unknown>) => {
+      const derived = deriveToolParams(toolName, candidateParams);
+      return derived.derivedPaths ? { derivedPaths: derived.derivedPaths } : {};
+    };
     const toolContext = {
       toolName,
       ...(args.ctx?.agentId && { agentId: args.ctx.agentId }),
@@ -491,9 +497,13 @@ export async function runBeforeToolCallHook(args: {
         params: normalizedParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(derivedToolParams.derivedPaths ? { derivedPaths: derivedToolParams.derivedPaths } : {}),
       },
       toolContext,
-      args.ctx?.config ? { config: args.ctx.config } : undefined,
+      {
+        ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+        deriveEvent: deriveToolEventParams,
+      },
     );
     if (trustedPolicyResult?.block) {
       return {
@@ -528,6 +538,9 @@ export async function runBeforeToolCallHook(args: {
       });
     }
     const policyAdjustedParams = trustedPolicyResult?.params ?? params;
+    const policyAdjustedDerivedToolParams = isPlainObject(policyAdjustedParams)
+      ? deriveToolParams(toolName, policyAdjustedParams)
+      : {};
     if (!hookRunner?.hasHooks("before_tool_call")) {
       return { blocked: false, params: policyAdjustedParams };
     }
@@ -538,6 +551,9 @@ export async function runBeforeToolCallHook(args: {
         params: hookEventParams,
         ...(args.ctx?.runId && { runId: args.ctx.runId }),
         ...(args.toolCallId && { toolCallId: args.toolCallId }),
+        ...(policyAdjustedDerivedToolParams.derivedPaths
+          ? { derivedPaths: policyAdjustedDerivedToolParams.derivedPaths }
+          : {}),
       },
       toolContext,
     );

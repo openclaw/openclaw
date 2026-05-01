@@ -153,6 +153,9 @@ observation-only.
 
 - `event.toolName`
 - `event.params`
+- optional `event.derivedPaths`, containing host-derived target paths for
+  well-known tool envelopes such as `apply_patch`; absent when the host cannot
+  derive authoritative paths for the current params
 - optional `event.runId`
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
