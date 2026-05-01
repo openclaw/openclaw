@@ -36,6 +36,15 @@ type AuthChoiceModule = typeof import("../commands/auth-choice.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
 type ModelPickerModule = typeof import("../commands/model-picker.js");
 
+const ONBOARDING_TIMELINE_NOTE = [
+  "Setup can take a while on a fresh machine — plan for up to ~40 minutes if OpenClaw needs to install dependencies, build UI assets, or configure channel runtimes.",
+  "Typical timeline:",
+  "1. Choose setup mode and accept the security note (1-2 min)",
+  "2. Configure gateway, auth, model, skills, and channels (5-15 min)",
+  "3. Install or verify local runtime dependencies (10-25 min)",
+  "4. Run health checks and launch the dashboard/TUI (2-5 min)",
+].join("\n");
+
 let authChoiceModulePromise: Promise<AuthChoiceModule> | undefined;
 let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
 let modelPickerModulePromise: Promise<ModelPickerModule> | undefined;
@@ -185,6 +194,7 @@ export async function runSetupWizard(
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
   await prompter.intro("OpenClaw setup");
+  await prompter.note(ONBOARDING_TIMELINE_NOTE, "Setup timeline");
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readSetupConfigFileSnapshot();
