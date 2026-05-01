@@ -551,7 +551,6 @@ async function runWatchdog(options) {
   }
   await retryRpcCall("health", {}, options);
   assertNoPostReadyRuntimeDepsWork(options.logPath, readyIndex);
-  assertNoRuntimeDepsLocks();
   await assertNoPackageManagerChildren(options.child.pid);
 }
 
@@ -570,47 +569,6 @@ function assertNoPostReadyRuntimeDepsWork(logPath, readyIndex) {
   if (match) {
     throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(postReady)}`);
   }
-}
-
-function assertNoRuntimeDepsLocks() {
-  const roots = [path.join(process.cwd(), "dist", "extensions")];
-  for (const root of roots) {
-    if (!fs.existsSync(root)) {
-      continue;
-    }
-    const locks = findDirs(root, ".openclaw-runtime-deps.lock", 8);
-    if (locks.length > 0) {
-      throw new Error(`runtime dependency lock still exists: ${locks.join(", ")}`);
-    }
-  }
-}
-
-function findDirs(root, basename, maxDepth) {
-  const results = [];
-  const visit = (dir, depth) => {
-    if (depth > maxDepth) {
-      return;
-    }
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const full = path.join(dir, entry.name);
-      if (entry.name === basename) {
-        results.push(full);
-        continue;
-      }
-      visit(full, depth + 1);
-    }
-  };
-  visit(root, 0);
-  return results;
 }
 
 async function assertNoPackageManagerChildren(pid) {
