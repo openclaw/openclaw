@@ -5,7 +5,6 @@ import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
-import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
@@ -60,7 +59,6 @@ function resolveChannelPackageStateChecker(params: {
     const moduleExport = loadChannelPluginModule({
       modulePath: resolveExistingPluginModulePath(params.entry.rootDir, metadata.specifier!),
       rootDir: params.entry.rootDir,
-      shouldTryNativeRequire: isJavaScriptModulePath,
     }) as Record<string, unknown>;
     const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
     if (typeof checker !== "function") {

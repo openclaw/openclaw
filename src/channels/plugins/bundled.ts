@@ -15,7 +15,6 @@ import {
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
-import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
@@ -209,8 +208,6 @@ function loadGeneratedBundledChannelModule(params: {
     modulePath,
     rootDir: boundaryRoot,
     boundaryRootDir: boundaryRoot,
-    shouldTryNativeRequire: (safePath) =>
-      safePath.includes(`${path.sep}dist${path.sep}`) && isJavaScriptModulePath(safePath),
   });
 }
 

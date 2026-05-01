@@ -105,6 +105,8 @@ function listSourceBundledPluginRoots(): string[] {
 }
 
 afterEach(() => {
+  delete (globalThis as { __openclawBundledChannelReenter?: () => void })
+    .__openclawBundledChannelReenter;
   vi.resetModules();
   vi.doUnmock("../../plugins/bundled-channel-runtime.js");
   vi.doUnmock("../../plugins/bundled-plugin-metadata.js");
@@ -835,21 +837,48 @@ describe("bundled channel entry shape guards", () => {
 
   it("breaks reentrant bundled channel discovery cycles with an empty fallback", async () => {
     const pluginDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-reentrant-"));
-    const modulePath = path.join(pluginDir, "index.js");
-    fs.writeFileSync(modulePath, "export {};\n", "utf8");
+    const modulePath = path.join(pluginDir, "index.cjs");
+    fs.writeFileSync(
+      modulePath,
+      `
+const reenter = globalThis.__openclawBundledChannelReenter;
+if (typeof reenter === "function") {
+  reenter();
+}
+module.exports = {
+  default: {
+    kind: "bundled-channel-entry",
+    id: "alpha",
+    name: "Alpha",
+    description: "Alpha",
+    configSchema: {},
+    register() {},
+    loadChannelPlugin() {
+      return {
+        id: "alpha",
+        meta: {},
+        capabilities: {},
+        config: {},
+      };
+    },
+  },
+};
+`,
+      "utf8",
+    );
 
-    vi.doMock("../../plugins/bundled-plugin-metadata.js", async (importOriginal) => {
+    vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {
       const actual =
-        await importOriginal<typeof import("../../plugins/bundled-plugin-metadata.js")>();
+        await importOriginal<typeof import("../../plugins/bundled-channel-runtime.js")>();
       return {
         ...actual,
-        listBundledPluginMetadata: () => [
+        listBundledChannelPluginMetadata: () => [
           {
             dirName: "alpha",
             idHint: "alpha",
             source: {
-              source: "./index.js",
-              built: "./index.js",
+              source: "./index.cjs",
+              built: "./index.cjs",
             },
             manifest: {
               id: "alpha",
@@ -857,7 +886,7 @@ describe("bundled channel entry shape guards", () => {
             },
           },
         ],
-        resolveBundledPluginGeneratedPath: () => modulePath,
+        resolveBundledChannelGeneratedPath: () => modulePath,
       };
     });
     vi.doMock("../../infra/boundary-file-read.js", () => ({
@@ -870,44 +899,16 @@ describe("bundled channel entry shape guards", () => {
     vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
       listChannelCatalogEntries: () => [],
     }));
-    // jiti-loader-cache prefers native require() for compiled .js before
-    // falling back to jiti. This test drives plugin loading via the jiti
-    // mock — disable the native-require fast path so the mocked jiti loader
-    // is exercised instead of loading the on-disk fixture directly.
-    vi.doMock("../../plugins/native-module-require.js", () => ({
-      isJavaScriptModulePath: () => false,
-      tryNativeRequireJavaScriptModule: () => ({ ok: false }),
-    }));
 
     let reentered = false;
-    vi.doMock("jiti", () => ({
-      createJiti: () => {
-        return () => {
-          if (!reentered) {
-            reentered = true;
-            expect(bundled.listBundledChannelPlugins()).toEqual([]);
-          }
-          return {
-            default: {
-              kind: "bundled-channel-entry",
-              id: "alpha",
-              name: "Alpha",
-              description: "Alpha",
-              configSchema: {},
-              register() {},
-              loadChannelPlugin() {
-                return {
-                  id: "alpha",
-                  meta: {},
-                  capabilities: {},
-                  config: {},
-                };
-              },
-            },
-          };
-        };
-      },
-    }));
+    (
+      globalThis as { __openclawBundledChannelReenter?: () => void }
+    ).__openclawBundledChannelReenter = () => {
+      if (!reentered) {
+        reentered = true;
+        expect(bundled.listBundledChannelPlugins()).toEqual([]);
+      }
+    };
 
     const bundled = await importFreshModule<typeof import("./bundled.js")>(
       import.meta.url,

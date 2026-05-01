@@ -13,7 +13,6 @@ afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
   vi.resetModules();
-  vi.doUnmock("jiti");
 });
 
 function createTempDir(): string {
@@ -38,7 +37,7 @@ describe("channel plugin module loader helpers", () => {
     expect(isJavaScriptModulePath("/tmp/entry.ts")).toBe(false);
   });
 
-  it("uses native require for eligible JavaScript modules before falling back to Jiti", async () => {
+  it("uses native require for eligible JavaScript modules without creating Jiti", async () => {
     const createJiti = vi.fn(() => vi.fn(() => ({ ok: false })));
     vi.resetModules();
     vi.doMock("jiti", () => ({
@@ -57,45 +56,34 @@ describe("channel plugin module loader helpers", () => {
       loaderModule.loadChannelPluginModule({
         modulePath,
         rootDir,
-        shouldTryNativeRequire: () => true,
       }),
     ).toEqual({ ok: true });
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("creates the runtime-supported Jiti boundary for Windows dist loads", async () => {
-    const createJiti = vi.fn(() => vi.fn(() => ({ ok: true })));
+  it("rejects TypeScript modules without creating Jiti", async () => {
+    const createJiti = vi.fn(() => {
+      throw new Error("channel module loader must not create jiti");
+    });
     vi.resetModules();
     vi.doMock("jiti", () => ({
       createJiti,
     }));
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
+      import.meta.url,
+      "./module-loader.js?scope=source-ts-native-hook",
+    );
+    const rootDir = createTempDir();
+    const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
+    fs.mkdirSync(path.dirname(modulePath), { recursive: true });
+    fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
 
-    try {
-      const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
-        import.meta.url,
-        "./module-loader.js?scope=windows-dist-jiti",
-      );
-      const rootDir = createTempDir();
-      const modulePath = path.join(rootDir, "dist", "extensions", "demo", "index.js");
-      fs.mkdirSync(path.dirname(modulePath), { recursive: true });
-      fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
-
-      const loaded = loaderModule.loadChannelPluginModule({
+    expect(() =>
+      loaderModule.loadChannelPluginModule({
         modulePath,
         rootDir,
-        shouldTryNativeRequire: () => false,
-      });
-
-      expect(loaded).toMatchObject({ ok: true });
-      expect(createJiti).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          tryNative: false,
-        }),
-      );
-    } finally {
-      platformSpy.mockRestore();
-    }
+      }),
+    ).toThrow(/must be built JavaScript/u);
+    expect(createJiti).not.toHaveBeenCalled();
   });
 });
