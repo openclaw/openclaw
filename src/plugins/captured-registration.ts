@@ -110,6 +110,7 @@ export function createCapturedPluginRegistration(params?: {
   const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
+  let capturedSessionTurnCount = 0;
   const tools: AnyAgentTool[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
@@ -280,8 +281,9 @@ export function createCapturedPluginRegistration(params?: {
           };
         },
         scheduleSessionTurn: async (schedule) => {
+          capturedSessionTurnCount += 1;
           return {
-            id: schedule.name ?? "captured-session-turn",
+            id: `captured-session-turn-${capturedSessionTurnCount}`,
             pluginId: "captured-plugin-registration",
             sessionKey: schedule.sessionKey,
             kind: "session-turn",
