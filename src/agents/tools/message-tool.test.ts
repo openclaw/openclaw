@@ -280,6 +280,51 @@ describe("message tool secret scoping", () => {
       new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
     );
   });
+
+  it("resolves scoped channel SecretRefs even when constructed with a config snapshot", async () => {
+    mockSendResult({ channel: "discord", to: "channel:123" });
+    const rawConfig = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    };
+    const resolvedConfig = {
+      channels: {
+        discord: {
+          token: "resolved-discord-token",
+        },
+      },
+    };
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+      resolvedConfig,
+      diagnostics: [],
+    });
+
+    const tool = createMessageTool({
+      config: rawConfig as never,
+      currentChannelProvider: "discord",
+      currentChannelId: "channel:123",
+      resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      message: "hi",
+    });
+
+    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls.at(-1)?.[0] as {
+      config?: unknown;
+      targetIds?: Set<string>;
+      allowedPaths?: Set<string>;
+    };
+    expect(secretResolveCall.config).toBe(rawConfig);
+    expect(secretResolveCall.targetIds).toEqual(new Set(["channels.discord.token"]));
+    expect(secretResolveCall.allowedPaths).toEqual(new Set(["channels.discord.token"]));
+    expect(mocks.runMessageAction.mock.calls[0]?.[0]?.cfg).toBe(resolvedConfig);
+  });
 });
 
 describe("message tool agent routing", () => {
