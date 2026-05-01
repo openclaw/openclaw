@@ -247,16 +247,18 @@ process action:log sessionId:XXX
 
 ## Claude Code
 
-```bash
-# Foreground one-shot (short tasks): --print is fine.
-bash workdir:~/project command:"claude --permission-mode bypassPermissions --print 'Your task'"
+This skill is background-first (see "Mandatory Pattern" above), so the
+example is the long-running variant. For a short task that genuinely
+finishes inside the watchdog window (~180 s), the same flags work
+unchanged — `--output-format stream-json` is harmless on a fast run.
 
-# Background long-running (the default for this skill): prefer --output-format stream-json.
-# `--print` buffers all output until the agent completes. For tasks that exceed the
-# harness watchdog window (typically 180s), the watchdog can fire mid-task and
-# report the spawn "terminated" while the underlying process is still running.
-# stream-json emits events continuously, so the watchdog sees liveness.
-bash workdir:~/project background:true command:"claude --permission-mode bypassPermissions --output-format stream-json 'Your task'"
+```bash
+# Always backgrounded. `--print` is required for non-interactive mode;
+# `--output-format stream-json` makes Claude Code emit events
+# continuously so the harness watchdog sees liveness instead of
+# silently ticking down on `--print`'s default buffered output and
+# firing a spurious "terminated" message mid-task.
+bash workdir:~/project background:true command:"claude --permission-mode bypassPermissions --print --output-format stream-json 'Your task'"
 ```
 
 ---
@@ -413,7 +415,7 @@ test runners, lint:fix, or git internals as suspects.
 10. **Never start Codex in `~/.openclaw/`.**
 11. **Never checkout branches in `~/Projects/openclaw/`.**
 12. **Worktree-isolate any long-running spawn that would otherwise share a working tree with the parent agent.** Use `git worktree add` to pre-create a dedicated worktree + branch, then point the worker at it via `workdir`. Even a runaway worker that the harness mistakenly reports as terminated can only thrash its own dir. See "Verifying a spawn is actually dead" above for the failure mode this prevents.
-13. **Watchdog "terminated" messages are advisory, not authoritative.** Before treating a spawn slot as free, run `ps -p <PID>` or `pgrep` for the agent binary. If `--print`-mode Claude Code spawns repeatedly trip the watchdog, switch to `--output-format stream-json` so the harness sees continuous liveness.
+13. **Watchdog "terminated" messages are advisory, not authoritative.** Before treating a spawn slot as free, run `ps -p <PID>` or `pgrep` for the agent binary. If long-running Claude Code spawns repeatedly trip the watchdog, add `--output-format stream-json` to the spawn flags (alongside the required `--print`) so the harness sees continuous liveness instead of `--print`'s default buffered output.
 
 ---
 
