@@ -32,9 +32,6 @@ const OMITTED_PRIVATE_QA_PLUGIN_SDK_FILES = new Set([
 ]);
 const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_DIST_SUBTREE_PATTERNS = [
-  /^dist\/extensions\/node_modules(?:\/|$)/u,
-  /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
-  /^dist\/extensions\/[^/]+\/\.openclaw-runtime-deps-[^/]+(?:\/|$)/u,
   /^dist\/extensions\/qa-matrix(?:\/|$)/u,
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
@@ -70,9 +67,6 @@ function isPackagedDistPath(relativePath: string): boolean {
   if (isLocalBuildMetadataDistPath(relativePath)) {
     return false;
   }
-  if (relativePath.endsWith("/.openclaw-runtime-deps-stamp.json")) {
-    return false;
-  }
   if (relativePath.endsWith(".map")) {
     return false;
   }
@@ -93,10 +87,7 @@ function isPackagedDistPath(relativePath: string): boolean {
 }
 
 function isOmittedDistSubtree(relativePath: string): boolean {
-  return (
-    isLegacyPluginDependencyInstallStagePath(relativePath) ||
-    OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
-  );
+  return OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath));
 }
 
 async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<string[]> {

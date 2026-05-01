@@ -86,64 +86,15 @@ describe("package dist inventory", () => {
         "cli.d.ts",
       );
       const omittedQaRuntimeChunk = path.join(packageRoot, "dist", "qa-runtime-B9LDtssJ.js");
-      const omittedRuntimeDepsStamp = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "discord",
-        ".openclaw-runtime-deps-stamp.json",
-      );
       const [omittedBuildStamp, omittedRuntimePostBuildStamp] = LOCAL_BUILD_METADATA_DIST_PATHS.map(
         (relativePath) => path.join(packageRoot, relativePath),
-      );
-      const omittedRuntimeDepsTempFile = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "discord",
-        ".openclaw-runtime-deps-backup-node_modules-old",
-        "left-pad",
-        "index.js",
-      );
-      const omittedRuntimeDepsTempSymlink = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "amazon-bedrock",
-        ".openclaw-runtime-deps-copy-KZmXaz",
-        "node_modules",
-        ".bin",
-        "fxparser",
-      );
-      const omittedExtensionNodeModuleSymlink = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "discord",
-        "node_modules",
-        ".bin",
-        "color-support",
-      );
-      const omittedExtensionRootAliasSymlink = path.join(
-        packageRoot,
-        "dist",
-        "extensions",
-        "node_modules",
-        "openclaw",
-        "plugin-sdk",
       );
       const omittedMap = path.join(packageRoot, "dist", "feature.runtime.js.map");
       await fs.mkdir(path.dirname(packagedQaChannelRuntime), { recursive: true });
       await fs.mkdir(path.dirname(packagedQaLabRuntime), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaMatrixChunk), { recursive: true });
       await fs.mkdir(path.dirname(omittedQaLabTypes), { recursive: true });
-      await fs.mkdir(path.dirname(omittedRuntimeDepsStamp), { recursive: true });
-      await fs.mkdir(path.dirname(omittedRuntimeDepsTempFile), { recursive: true });
-      await fs.mkdir(path.dirname(omittedRuntimeDepsTempSymlink), { recursive: true });
-      await fs.mkdir(path.dirname(omittedExtensionNodeModuleSymlink), { recursive: true });
-      await fs.mkdir(path.dirname(omittedExtensionRootAliasSymlink), { recursive: true });
       await fs.mkdir(path.join(packageRoot, "dist", "plugin-sdk"), { recursive: true });
-      await fs.writeFile(path.join(packageRoot, "color-support.js"), "export {};\n", "utf8");
       await fs.writeFile(packagedQaChannelRuntime, "export {};\n", "utf8");
       await fs.writeFile(packagedQaLabRuntime, "export {};\n", "utf8");
       await fs.writeFile(omittedQaChunk, "export {};\n", "utf8");
@@ -154,26 +105,15 @@ describe("package dist inventory", () => {
       await fs.writeFile(omittedQaChannelProtocolPluginSdk, "export {};\n", "utf8");
       await fs.writeFile(omittedQaLabTypes, "export {};\n", "utf8");
       await fs.writeFile(omittedQaRuntimeChunk, "export {};\n", "utf8");
-      await fs.writeFile(omittedRuntimeDepsStamp, "{}\n", "utf8");
       await fs.writeFile(omittedBuildStamp, "{}\n", "utf8");
       await fs.writeFile(omittedRuntimePostBuildStamp, "{}\n", "utf8");
-      await fs.writeFile(omittedRuntimeDepsTempFile, "module.exports = 1;\n", "utf8");
-      await fs.symlink(path.join(packageRoot, "color-support.js"), omittedRuntimeDepsTempSymlink);
-      await fs.symlink(
-        path.join(packageRoot, "color-support.js"),
-        omittedExtensionNodeModuleSymlink,
-      );
-      await fs.symlink(
-        path.join(packageRoot, "dist", "plugin-sdk"),
-        omittedExtensionRootAliasSymlink,
-      );
       await fs.writeFile(omittedMap, "{}", "utf8");
 
       await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([]);
     });
   });
 
-  it("ignores runtime-created install staging dirs during installed dist verification", async () => {
+  it("reports runtime-created install staging dirs during installed dist verification", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
       const realFile = path.join(packageRoot, "dist", "real-AbC123.js");
       await fs.mkdir(path.dirname(realFile), { recursive: true });
@@ -207,7 +147,10 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(suffixedStageFile), { recursive: true });
       await fs.writeFile(suffixedStageFile, "{}", "utf8");
 
-      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([]);
+      await expect(collectPackageDistInventoryErrors(packageRoot)).resolves.toEqual([
+        "unexpected packaged dist file dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/build/compile/code.mjs",
+        "unexpected packaged dist file dist/extensions/browser/.openclaw-install-stage-AbC123/node_modules/playwright-core/package.json",
+      ]);
     });
   });
 
