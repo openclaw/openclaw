@@ -368,23 +368,6 @@ function estimatePromptTokensFromSessionTranscript(params: {
   }
 }
 
-export async function readPromptTokensFromSessionLog(
-  sessionId?: string,
-  sessionEntry?: SessionEntry,
-  sessionKey?: string,
-  opts?: { storePath?: string },
-): Promise<SessionTranscriptUsageSnapshot | undefined> {
-  const snapshot = await readSessionLogSnapshot({
-    sessionId,
-    sessionEntry,
-    sessionKey,
-    opts,
-    includeByteSize: false,
-    includeUsage: true,
-  });
-  return snapshot.usage;
-}
-
 export async function runPreflightCompactionIfNeeded(params: {
   cfg: OpenClawConfig;
   followupRun: FollowupRun;

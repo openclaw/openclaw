@@ -317,7 +317,9 @@ describe("gateway run option collisions", () => {
     });
     startGatewayServer.mockRejectedValueOnce(err);
 
-    await runGatewayCli(["gateway", "run", "--allow-unconfigured"]);
+    await expect(runGatewayCli(["gateway", "run", "--allow-unconfigured"])).rejects.toThrow(
+      "__exit__:0",
+    );
 
     expect(writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
   });

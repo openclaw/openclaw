@@ -353,7 +353,6 @@ export {
   shouldInjectHeartbeatPrompt,
 } from "./attempt.prompt-helpers.js";
 export {
-  buildSessionsYieldContextMessage,
   persistSessionsYieldContextMessage,
   queueSessionsYieldInterruptMessage,
   stripSessionsYieldArtifacts,

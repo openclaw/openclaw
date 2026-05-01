@@ -1,4 +1,3 @@
-import type { KilocodeModelCatalogEntry } from "openclaw/plugin-sdk/provider-model-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
@@ -9,6 +8,15 @@ export const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
 export const KILOCODE_DEFAULT_MODEL_ID = "kilo/auto";
 export const KILOCODE_DEFAULT_MODEL_REF = `kilocode/${KILOCODE_DEFAULT_MODEL_ID}`;
 export const KILOCODE_DEFAULT_MODEL_NAME = "Kilo Auto";
+
+export type KilocodeModelCatalogEntry = {
+  id: string;
+  name: string;
+  reasoning: boolean;
+  input: Array<"text" | "image">;
+  contextWindow?: number;
+  maxTokens?: number;
+};
 
 export const KILOCODE_MODEL_CATALOG: KilocodeModelCatalogEntry[] = [
   {
