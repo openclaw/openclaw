@@ -62,6 +62,7 @@ import {
   buildTelegramNativeQuoteCandidate,
   type TelegramNativeQuoteCandidateByMessageId,
 } from "./bot/native-quote.js";
+import { isTrustedTelegramPolicyThreadSessionKey } from "./bot/thread-policy.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
@@ -645,6 +646,11 @@ export const dispatchTelegramMessage = async ({
     chatId: String(chatId),
     accountId: route.accountId,
     sessionKeyForInternalHooks: ctxPayload.SessionKey,
+    trustThreadSessionKey: isTrustedTelegramPolicyThreadSessionKey({
+      sessionKey: ctxPayload.SessionKey,
+      chatId,
+      thread: threadSpec,
+    }),
     mirrorIsGroup: isGroup,
     mirrorGroupId: isGroup ? String(chatId) : undefined,
     token: opts.token,
@@ -1306,11 +1312,17 @@ export const dispatchTelegramMessage = async ({
       ctxPayload.CommandSource === "native"
         ? (ctxPayload.CommandTargetSessionKey ?? ctxPayload.SessionKey)
         : ctxPayload.SessionKey;
+    const trustPolicyThreadSessionKey = isTrustedTelegramPolicyThreadSessionKey({
+      sessionKey: policySessionKey,
+      chatId,
+      thread: threadSpec,
+    });
     const silentReplyFallback = projectOutboundPayloadPlanForDelivery(
       createOutboundPayloadPlan([{ text: "NO_REPLY" }], {
         cfg,
         sessionKey: policySessionKey,
         surface: "telegram",
+        trustThreadSessionKey: trustPolicyThreadSessionKey,
       }),
     );
     if (silentReplyFallback.length > 0) {

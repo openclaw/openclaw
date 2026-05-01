@@ -51,6 +51,7 @@ import {
   sendChunkedTelegramReplyText,
   type DeliveryProgress as ReplyThreadDeliveryProgress,
 } from "./reply-threading.js";
+import { isTrustedTelegramPolicyThreadSessionKey } from "./thread-policy.js";
 
 const VOICE_FORBIDDEN_MARKER = "VOICE_MESSAGES_FORBIDDEN";
 const CAPTION_TOO_LONG_RE = /caption is too long/i;
@@ -672,6 +673,7 @@ export async function deliverReplies(params: {
   accountId?: string;
   sessionKeyForInternalHooks?: string;
   policySessionKey?: string;
+  trustThreadSessionKey?: boolean;
   mirrorIsGroup?: boolean;
   mirrorGroupId?: string;
   token: string;
@@ -729,6 +731,13 @@ export async function deliverReplies(params: {
       cfg: params.cfg,
       sessionKey: params.policySessionKey ?? params.sessionKeyForInternalHooks,
       surface: "telegram",
+      trustThreadSessionKey:
+        params.trustThreadSessionKey ??
+        isTrustedTelegramPolicyThreadSessionKey({
+          sessionKey: params.policySessionKey ?? params.sessionKeyForInternalHooks,
+          chatId: params.chatId,
+          thread: params.thread,
+        }),
     }),
   );
   const originalExactSilentCount = candidateReplies.filter(

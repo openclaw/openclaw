@@ -376,6 +376,57 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
   });
 
+  it("suppresses exact NO_REPLY for trusted direct Telegram thread sessions", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 122, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:direct:123:thread:123:42",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "dm" },
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("uses policy session key thread trust for exact NO_REPLY policy", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 123, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:slash:123",
+      policySessionKey: "agent:test:telegram:direct:123:thread:123:42",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "dm" },
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps mismatched direct Telegram thread suffixes on direct NO_REPLY policy", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 124, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      sessionKeyForInternalHooks: "agent:test:telegram:direct:123:thread:123:99",
+      replies: [{ text: "NO_REPLY" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "dm" },
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
+  });
+
   it("suppresses exact NO_REPLY for group Telegram sessions", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 13, chat: { id: "123" } });
