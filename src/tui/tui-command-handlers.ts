@@ -302,7 +302,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             : "opening auth flow; TUI will resume when it exits",
         );
         tui.requestRender();
-        setActivityStatus("auth");
+        setActivityStatus("认证中");
         try {
           const result = await runAuthFlow({ provider });
           await refreshSessionInfo();
@@ -310,7 +310,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
             chatLog.addSystem(
               provider ? `auth flow finished for ${provider}` : "auth flow finished",
             );
-            setActivityStatus("idle");
+            setActivityStatus("空闲");
           } else {
             const failureSuffix = result.signal
               ? ` (signal ${result.signal})`
@@ -318,11 +318,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
                 ? ` (exit ${String(result.exitCode)})`
                 : "";
             chatLog.addSystem(`auth flow failed${failureSuffix}`);
-            setActivityStatus("error");
+            setActivityStatus("错误");
           }
         } catch (err) {
           chatLog.addSystem(`auth flow failed: ${sanitizeRenderableText(String(err))}`);
-          setActivityStatus("error");
+          setActivityStatus("错误");
         }
         break;
       }
@@ -617,7 +617,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           ? "local runtime not ready — message not sent"
           : "not connected to gateway — message not sent",
       );
-      setActivityStatus("disconnected");
+      setActivityStatus("已断开");
       tui.requestRender();
       return;
     }
@@ -627,7 +627,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       if (!isBtw) {
         chatLog.addUser(text);
         state.pendingOptimisticUserMessage = true;
-        setActivityStatus("sending");
+        setActivityStatus("发送中");
       } else {
         noteLocalBtwRunId?.(runId);
       }
@@ -641,7 +641,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
-        setActivityStatus("waiting");
+        setActivityStatus("等待中");
         tui.requestRender();
       }
     } catch (err) {
@@ -657,7 +657,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       }
       chatLog.addSystem(`${isBtw ? "btw failed" : "send failed"}: ${String(err)}`);
       if (!isBtw) {
-        setActivityStatus("error");
+        setActivityStatus("错误");
       }
       tui.requestRender();
     }

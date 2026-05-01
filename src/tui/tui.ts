@@ -191,15 +191,15 @@ export function resolveGatewayDisconnectState(reason?: string): {
   const reasonLabel = reason?.trim() ? reason.trim() : "closed";
   if (/pairing required/i.test(reasonLabel)) {
     return {
-      connectionStatus: `gateway disconnected: ${reasonLabel}`,
-      activityStatus: "pairing required: run openclaw devices list",
+      connectionStatus: `网关已断开: ${reasonLabel}`,
+      activityStatus: "需要配对: 执行 openclaw devices list",
       pairingHint:
-        "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
+        "需要配对。执行 `openclaw devices list`，批准你的请求 ID，然后重新连接。",
     };
   }
   return {
-    connectionStatus: `gateway disconnected: ${reasonLabel}`,
-    activityStatus: "idle",
+    connectionStatus: `网关已断开: ${reasonLabel}`,
+    activityStatus: "空闲",
   };
 }
 
@@ -326,8 +326,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   let lastCtrlCAt = 0;
   let exitRequested = false;
   let exitResult: TuiResult = { exitReason: "exit" };
-  let activityStatus = "idle";
-  let connectionStatus = isLocalMode ? "starting local runtime" : "connecting";
+  let activityStatus = "空闲";
+  let connectionStatus = isLocalMode ? "正在启动本地运行环境" : "正在连接";
   let statusTimeout: NodeJS.Timeout | null = null;
   let statusTimer: NodeJS.Timeout | null = null;
   let statusStartedAt: number | null = null;
@@ -594,7 +594,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     );
   };
 
-  const busyStates = new Set(["sending", "waiting", "streaming", "running"]);
+  const busyStates = new Set(["发送中", "等待中", "流式输出中", "运行中"]);
   let statusText: Text | null = null;
   let statusLoader: Loader | null = null;
 
@@ -749,11 +749,11 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       statusTimeout = setTimeout(() => {
         connectionStatus = isConnected
           ? isLocalMode
-            ? "local ready"
-            : "connected"
+            ? "本地就绪"
+            : "已连接"
           : isLocalMode
-            ? "local stopped"
-            : "disconnected";
+            ? "本地已停止"
+            : "已断开";
         renderStatus();
       }, ttlMs);
     }
@@ -1006,7 +1006,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     lastCtrlCAt = decision.nextLastCtrlCAt;
     if (decision.action === "clear") {
       editor.setText("");
-      setActivityStatus("cleared input; press ctrl+c again to exit");
+      setActivityStatus("已清除输入; 再次按 ctrl+c 退出");
       tui.requestRender();
       return;
     }
@@ -1014,7 +1014,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       requestExit();
       return;
     }
-    setActivityStatus("press ctrl+c again to exit");
+    setActivityStatus("再次按 ctrl+c 退出");
     tui.requestRender();
   };
   editor.onCtrlC = () => {
@@ -1026,7 +1026,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   editor.onCtrlO = () => {
     toolsExpanded = !toolsExpanded;
     chatLog.setToolsExpanded(toolsExpanded);
-    setActivityStatus(toolsExpanded ? "tools expanded" : "tools collapsed");
+    setActivityStatus(toolsExpanded ? "工具已展开" : "工具已收起");
     tui.requestRender();
   };
   editor.onCtrlL = () => {
@@ -1078,13 +1078,13 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     if (reconnected) {
       reconnectStreamingWatchdog();
     }
-    setConnectionStatus(isLocalMode ? "local ready" : "connected");
+    setConnectionStatus(isLocalMode ? "本地就绪" : "已连接");
     void (async () => {
       await refreshAgents();
       updateHeader();
       await loadHistory();
       setConnectionStatus(
-        isLocalMode ? "local ready" : reconnected ? "gateway reconnected" : "gateway connected",
+        isLocalMode ? "本地就绪" : reconnected ? "网关已重新连接" : "网关已连接",
         4000,
       );
       tui.requestRender();
@@ -1104,8 +1104,8 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     pauseStreamingWatchdog();
     const disconnectState = isLocalMode
       ? {
-          connectionStatus: `local runtime stopped${reason ? `: ${reason}` : ""}`,
-          activityStatus: "idle",
+          connectionStatus: `本地运行环境已停止${reason ? `: ${reason}` : ""}`,
+          activityStatus: "空闲",
           pairingHint: undefined,
         }
       : resolveGatewayDisconnectState(reason);
@@ -1120,12 +1120,12 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   client.onGap = (info) => {
-    setConnectionStatus(`event gap: expected ${info.expected}, got ${info.received}`, 5000);
+    setConnectionStatus(`事件间隙: 期望 ${info.expected}, 实际 ${info.received}`, 5000);
     tui.requestRender();
   };
 
   updateHeader();
-  setConnectionStatus(isLocalMode ? "starting local runtime" : "connecting");
+  setConnectionStatus(isLocalMode ? "正在启动本地运行环境" : "正在连接");
   updateFooter();
   const sigintHandler = () => {
     handleCtrlC();

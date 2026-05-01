@@ -120,7 +120,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       streamingWatchdogRunId = null;
       state.activeChatRunId = null;
       state.activityStatus = "idle";
-      setActivityStatus("idle");
+      setActivityStatus("空闲");
       if (reconnectPendingRunId === runId) {
         reconnectPendingRunId = null;
         pendingHistoryRefresh = false;
@@ -219,7 +219,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     state.activeChatRunId = null;
     state.activityStatus = "idle";
-    setActivityStatus("idle");
+    setActivityStatus("空闲");
     clearStreamingWatchdog();
     flushPendingHistoryRefreshIfIdle();
   };
@@ -236,12 +236,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       reconnectPendingRunId = null;
       state.activeChatRunId = null;
       state.activityStatus = "idle";
-      setActivityStatus("idle");
+      setActivityStatus("空闲");
       flushPendingHistoryRefreshIfIdle();
       return;
     }
     reconnectPendingRunId = activeRunId;
-    setActivityStatus("streaming");
+    setActivityStatus("流式输出中");
     armStreamingWatchdog(activeRunId);
   };
 
@@ -374,7 +374,7 @@ export function createEventHandlers(context: EventHandlerContext) {
       // Arm watchdog and mark streaming on every delta, even when the visible
       // text hasn't changed yet (e.g. first commentary-only or tool-call delta).
       // Without this, the watchdog never fires and the status bar stays stale.
-      setActivityStatus("streaming");
+      setActivityStatus("流式输出中");
       if (state.activeChatRunId === evt.runId) {
         armStreamingWatchdog(evt.runId);
       }
@@ -520,13 +520,13 @@ export function createEventHandlers(context: EventHandlerContext) {
         armStreamingWatchdog(evt.runId);
       }
       if (phase === "start") {
-        setActivityStatus("running");
+        setActivityStatus("运行中");
       }
       if (phase === "end") {
-        setActivityStatus("idle");
+        setActivityStatus("空闲");
       }
       if (phase === "error") {
-        setActivityStatus("error");
+        setActivityStatus("错误");
       }
       tui.requestRender();
     }
