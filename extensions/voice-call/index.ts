@@ -20,6 +20,7 @@ import {
   type VoiceCallConfig,
 } from "./src/config.js";
 import type { CoreConfig } from "./src/core-bridge.js";
+import { createVoiceCallContinueOperationStore } from "./src/gateway-continue-operation.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
@@ -204,6 +205,10 @@ export default definePluginEntry({
     }
 
     const runtimeState = getVoiceCallRuntimeGlobalState();
+    const continueOperationStore = createVoiceCallContinueOperationStore({
+      config,
+      coreConfig: api.config as CoreConfig,
+    });
 
     const ensureRuntime = async (): Promise<VoiceCallRuntime> => {
       if (!config.enabled) {
@@ -280,6 +285,7 @@ export default definePluginEntry({
       const rt = await ensureRuntime();
       return { rt, callId, message } as const;
     };
+
     const initiateCallAndRespond = async (params: {
       rt: VoiceCallRuntime;
       respond: GatewayRequestHandlerOptions["respond"];
@@ -376,6 +382,47 @@ export default definePluginEntry({
             failure: "continue failed",
             includeTranscript: true,
           });
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "voicecall.continue.start",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const request = await resolveCallMessageRequest(params);
+          if ("error" in request) {
+            respondError(
+              respond,
+              request.error ?? "callId and message required",
+              ErrorCodes.INVALID_REQUEST,
+            );
+            return;
+          }
+          respond(true, continueOperationStore.start(request));
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
+      "voicecall.continue.result",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const operationId = normalizeOptionalString(params?.operationId) ?? "";
+          if (!operationId) {
+            respondError(respond, "operationId required", ErrorCodes.INVALID_REQUEST);
+            return;
+          }
+          const operation = continueOperationStore.read(operationId);
+          if (!operation.ok) {
+            respondError(respond, operation.error, ErrorCodes.INVALID_REQUEST);
+            return;
+          }
+          respond(true, operation.payload);
         } catch (err) {
           sendError(respond, err);
         }
