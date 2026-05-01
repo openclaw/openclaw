@@ -10,13 +10,13 @@ function cloneRecord<T extends JsonRecord | undefined>(value: T): T {
   return { ...value } as T;
 }
 
-export function resolveLegacyXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
+function resolveLegacyXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
   const web = config?.tools?.web as Record<string, unknown> | undefined;
   const xSearch = web?.x_search;
   return isRecord(xSearch) ? cloneRecord(xSearch) : undefined;
 }
 
-export function resolvePluginXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
+function resolvePluginXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
   const pluginConfig = config?.plugins?.entries?.xai?.config;
   if (!isRecord(pluginConfig?.xSearch)) {
     return undefined;

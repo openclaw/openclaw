@@ -31,7 +31,7 @@ import {
   trimToUndefined,
 } from "./realtime-provider-shared.js";
 
-export type OpenAIRealtimeVoice =
+type OpenAIRealtimeVoice =
   | "alloy"
   | "ash"
   | "ballad"
@@ -776,5 +776,3 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
     createBrowserSession: createOpenAIRealtimeBrowserSession,
   };
 }
-
-export type { OpenAIRealtimeVoiceProviderConfig };

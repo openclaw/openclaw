@@ -11,15 +11,15 @@ import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
-export const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
-export const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
+const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
+const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
 
 type XaiWebSearchConfig = Record<string, unknown> & {
   model?: unknown;
   inlineCitations?: unknown;
 };
 
-export type XaiWebSearchResult = {
+type XaiWebSearchResult = {
   content: string;
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
@@ -51,7 +51,7 @@ export function buildXaiWebSearchPayload(params: {
   };
 }
 
-export function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): XaiWebSearchConfig {
+function resolveXaiSearchConfig(searchConfig?: Record<string, unknown>): XaiWebSearchConfig {
   return (
     (isRecord(searchConfig?.grok) ? (searchConfig.grok as XaiWebSearchConfig) : undefined) ?? {}
   );
