@@ -986,6 +986,7 @@ export const OpenClawSchema = z
     skills: z
       .object({
         allowBundled: z.array(z.string()).optional(),
+        promptMode: z.enum(["legacy", "compact", "view", "search"]).optional(),
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),

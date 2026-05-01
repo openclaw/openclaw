@@ -1,5 +1,7 @@
 import type { SecretInput } from "./types.secrets.js";
 
+export type SkillsPromptDisclosureMode = "legacy" | "compact" | "view" | "search";
+
 export type SkillConfig = {
   enabled?: boolean;
   apiKey?: SecretInput;
@@ -40,6 +42,8 @@ export type SkillsLimitsConfig = {
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
+  /** Model-facing skills prompt disclosure mode. Defaults to legacy existing behavior. */
+  promptMode?: SkillsPromptDisclosureMode;
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;

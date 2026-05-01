@@ -40,12 +40,17 @@ function makeEntry(skill: Skill): SkillEntry {
 
 function buildPrompt(
   skills: Skill[],
-  limits: { maxChars?: number; maxCount?: number } = {},
+  limits: {
+    maxChars?: number;
+    maxCount?: number;
+    promptMode?: "legacy" | "compact" | "view" | "search";
+  } = {},
 ): string {
   return buildWorkspaceSkillsPrompt("/fake", {
     entries: skills.map(makeEntry),
     config: {
       skills: {
+        ...(limits.promptMode !== undefined && { promptMode: limits.promptMode }),
         limits: {
           ...(limits.maxChars !== undefined && { maxSkillsPromptChars: limits.maxChars }),
           ...(limits.maxCount !== undefined && { maxSkillsInPrompt: limits.maxCount }),
@@ -283,6 +288,58 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     });
     const nameMatches = [...prompt.matchAll(/<name>(\w+)<\/name>/g)].map((m) => m[1]);
     expect(nameMatches).toEqual(["apple", "banana", "mango", "zoo"]);
+  });
+
+  it("defaults to legacy prompt behavior when no progressive mode is configured", () => {
+    const prompt = buildPrompt([makeSkill("weather", "Get weather data")], { maxChars: 50_000 });
+    expect(prompt).toContain(
+      "Use the read tool to load a skill's file when the task matches its description.",
+    );
+    expect(prompt).not.toContain("prefer skill_view");
+  });
+
+  it("progressive compact mode renders a name and description index with read-only guidance", () => {
+    const prompt = buildPrompt([makeSkill("weather", "Get weather data")], {
+      maxChars: 50_000,
+      promptMode: "compact",
+    });
+    expect(prompt).toContain("<name>weather</name>");
+    expect(prompt).toContain("<description>Get weather data</description>");
+    expect(prompt).toContain(
+      "Use the read tool to load a listed skill's file from its location when the skill clearly applies.",
+    );
+    expect(prompt).not.toContain("skill_view");
+    expect(prompt).not.toContain("skill_search");
+  });
+
+  it("progressive view mode mentions skill_view but not skill_search", () => {
+    const prompt = buildPrompt([makeSkill("weather", "Get weather data")], {
+      maxChars: 50_000,
+      promptMode: "view",
+    });
+    expect(prompt).toContain("prefer skill_view when available; fall back to read");
+    expect(prompt).not.toContain("skill_search");
+  });
+
+  it("progressive search mode emphasizes skill_search for missing or uncertain matches", () => {
+    const prompt = buildPrompt([makeSkill("weather", "Get weather data")], {
+      maxChars: 50_000,
+      promptMode: "search",
+    });
+    expect(prompt).toContain("prefer skill_view when available; fall back to read");
+    expect(prompt).toContain(
+      "Use skill_search when you need a relevant skill that is not listed or you are unsure which skill matches.",
+    );
+  });
+
+  it("progressive modes preserve count and char truncation limits", () => {
+    const skills = Array.from({ length: 30 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));
+    const prompt = buildPrompt(skills, { maxChars: 2_000, maxCount: 20, promptMode: "view" });
+    const match = prompt.match(/included (\d+) of (\d+)/);
+    expect(match).toBeTruthy();
+    expect(Number(match![1])).toBeLessThanOrEqual(20);
+    expect(Number(match![2])).toBe(30);
+    expect(prompt).toContain("progressive view mode");
   });
 
   it("resolvedSkills in snapshot keeps canonical paths, not compacted", () => {

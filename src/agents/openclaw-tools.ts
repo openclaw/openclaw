@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillsPromptDisclosureMode } from "../config/types.skills.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
@@ -12,6 +13,7 @@ import {
   isUpdatePlanToolEnabledForOpenClawTools,
 } from "./openclaw-tools.registration.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import type { SkillSnapshot } from "./skills/types.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
@@ -33,6 +35,8 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
+import { createSkillSearchTool } from "./tools/skill-search-tool.js";
+import { createSkillViewTool } from "./tools/skill-view-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
 import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
@@ -50,6 +54,11 @@ const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
 };
 
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
+
+function resolveSkillsPromptMode(config?: OpenClawConfig): SkillsPromptDisclosureMode {
+  const mode = config?.skills?.promptMode;
+  return mode === "compact" || mode === "view" || mode === "search" ? mode : "legacy";
+}
 
 export function createOpenClawTools(
   options?: {
@@ -117,6 +126,8 @@ export function createOpenClawTools(
     onYield?: (message: string) => Promise<void> | void;
     /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
     allowGatewaySubagentBinding?: boolean;
+    /** Already-resolved prompt-visible skill snapshot for progressive disclosure tools. */
+    skillsSnapshot?: SkillSnapshot;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
@@ -239,6 +250,18 @@ export function createOpenClawTools(
   const effectiveCallGateway = embedded
     ? createEmbeddedCallGateway()
     : openClawToolsDeps.callGateway;
+  const skillsPromptMode = resolveSkillsPromptMode(resolvedConfig);
+  const promptVisibleResolvedSkills = Array.isArray(options?.skillsSnapshot?.resolvedSkills)
+    ? options.skillsSnapshot.resolvedSkills
+    : undefined;
+  const skillViewTool =
+    promptVisibleResolvedSkills && (skillsPromptMode === "view" || skillsPromptMode === "search")
+      ? createSkillViewTool({ resolvedSkills: promptVisibleResolvedSkills })
+      : null;
+  const skillSearchTool =
+    promptVisibleResolvedSkills && skillsPromptMode === "search"
+      ? createSkillSearchTool({ resolvedSkills: promptVisibleResolvedSkills })
+      : null;
   const tools: AnyAgentTool[] = [
     ...(embedded
       ? []
@@ -338,6 +361,7 @@ export function createOpenClawTools(
       config: resolvedConfig,
       sandboxed: options?.sandboxed,
     }),
+    ...collectPresentOpenClawTools([skillViewTool, skillSearchTool]),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
 

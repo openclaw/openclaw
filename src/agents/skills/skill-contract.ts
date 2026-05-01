@@ -62,3 +62,38 @@ export function formatSkillsForPrompt(skills: Skill[]): string {
   lines.push("</available_skills>");
   return lines.join("\n");
 }
+
+export function formatSkillsProgressiveIndex(
+  skills: Skill[],
+  mode: "compact" | "view" | "search",
+): string {
+  if (skills.length === 0) {
+    return "";
+  }
+  const accessGuidance =
+    mode === "compact"
+      ? "Use the read tool to load a listed skill's file from its location when the skill clearly applies."
+      : "Before using a listed skill, prefer skill_view when available; fall back to read on the skill location.";
+  const lines = [
+    "\n\nThe following skills provide specialized instructions for specific tasks.",
+    "This is a compact skill index; do not load a skill unless it clearly applies.",
+    accessGuidance,
+    ...(mode === "search"
+      ? [
+          "Use skill_search when you need a relevant skill that is not listed or you are unsure which skill matches.",
+        ]
+      : []),
+    "When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.",
+    "",
+    "<available_skills>",
+  ];
+  for (const skill of skills) {
+    lines.push("  <skill>");
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
+    lines.push(`    <description>${escapeXml(skill.description)}</description>`);
+    lines.push(`    <location>${escapeXml(skill.filePath)}</location>`);
+    lines.push("  </skill>");
+  }
+  lines.push("</available_skills>");
+  return lines.join("\n");
+}

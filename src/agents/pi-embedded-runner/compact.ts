@@ -677,6 +677,7 @@ async function compactEmbeddedPiSessionDirectOnce(
       modelProvider: model.provider,
       modelId,
       modelCompat: extractModelCompat(effectiveModel),
+      skillsSnapshot: params.skillsSnapshot,
       modelApi: model.api,
       modelContextWindowTokens: ctxInfo.tokens,
       modelAuthMode: resolveModelAuthMode(model.provider, params.config, undefined, {

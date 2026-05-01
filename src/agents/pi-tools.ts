@@ -50,6 +50,7 @@ import {
 import { cleanToolSchemaForGemini, normalizeToolParameters } from "./pi-tools.schema.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
+import type { SkillSnapshot } from "./skills/types.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -361,6 +362,8 @@ export function createOpenClawCodingTools(options?: {
   ownerOnlyToolAllowlist?: string[];
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
+  /** Already-resolved prompt-visible skill snapshot for progressive disclosure tools. */
+  skillsSnapshot?: SkillSnapshot;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -668,6 +671,7 @@ export function createOpenClawCodingTools(options?: {
       sessionId: options?.sessionId,
       onYield: options?.onYield,
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+      skillsSnapshot: options?.skillsSnapshot,
     }),
   ];
   const toolsForMemoryFlush =
