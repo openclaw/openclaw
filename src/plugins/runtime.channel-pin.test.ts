@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { loadChannelOutboundAdapter } from "../channels/plugins/outbound/load.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import {
   getActivePluginChannelRegistryVersion,
   getActivePluginRegistryVersion,
@@ -102,6 +103,23 @@ describe("channel registry pinning", () => {
     const replacement = createEmptyPluginRegistry();
     expectPinnedChannelRegistry(startup, replacement);
     expect(getActivePluginChannelRegistry()!.channels).toHaveLength(1);
+  });
+
+  it("keeps pinned channel registries live until they are released", () => {
+    const { registry: startup } = createRegistryWithChannel();
+    const replacement = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+    setActivePluginRegistry(replacement);
+
+    expect(getActivePluginChannelRegistry()).toBe(startup);
+    expect(isPluginRegistryRetired(startup)).toBe(false);
+
+    releasePinnedPluginChannelRegistry(startup);
+
+    expect(getActivePluginChannelRegistry()).toBe(replacement);
+    expect(isPluginRegistryRetired(startup)).toBe(true);
   });
 
   it("re-pin invalidates cached channel lookups", () => {
