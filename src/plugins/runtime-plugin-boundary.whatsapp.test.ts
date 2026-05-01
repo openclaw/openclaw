@@ -89,6 +89,38 @@ function createBundledWhatsAppRuntimeFixture() {
   return path.join(rootDir, "dist-runtime", "extensions", "whatsapp");
 }
 
+function createExternalTypeScriptRuntimePackageFixture() {
+  const rootDir = makeTrackedTempDir("openclaw-external-boundary-ts", tempDirs);
+  writeRuntimeFixtureText(
+    rootDir,
+    "package.json",
+    JSON.stringify(
+      {
+        name: "openclaw-external-ts-runtime",
+        type: "module",
+      },
+      null,
+      2,
+    ),
+  );
+  writeRuntimeFixtureText(
+    rootDir,
+    "runtime-api.ts",
+    [
+      'import { marker } from "./runtime-helper.js";',
+      "export const ok = true;",
+      "export const loadedVia = marker;",
+      "",
+    ].join("\n"),
+  );
+  writeRuntimeFixtureText(
+    rootDir,
+    "runtime-helper.ts",
+    'export const marker = "jiti-source-package";\n',
+  );
+  return path.join(rootDir, "runtime-api.ts");
+}
+
 function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
   const loaders: PluginJitiLoaderCache = new Map();
   return {
@@ -141,15 +173,15 @@ describe("runtime plugin boundary whatsapp seam", () => {
     expect(loaders.size).toBe(0);
   });
 
-  it("keeps TypeScript source fallback available for non-bundled plugins", () => {
-    const rootDir = makeTrackedTempDir("openclaw-external-boundary-ts", tempDirs);
-    const modulePath = path.join(rootDir, "runtime-api.ts");
-    writeRuntimeFixtureText(rootDir, "runtime-api.ts", "export const ok = true;\n");
+  it("keeps the Jiti TypeScript package fallback available for non-bundled plugins", () => {
+    const modulePath = createExternalTypeScriptRuntimePackageFixture();
     const loaders: PluginJitiLoaderCache = new Map();
 
     expect(
-      loadPluginBoundaryModule<{ ok: boolean }>(modulePath, loaders, { origin: "workspace" }),
-    ).toMatchObject({ ok: true });
+      loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, loaders, {
+        origin: "workspace",
+      }),
+    ).toMatchObject({ ok: true, loadedVia: "jiti-source-package" });
     expect(loaders.size).toBe(1);
   });
 });
