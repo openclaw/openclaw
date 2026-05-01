@@ -250,8 +250,8 @@ export function collectPublishablePluginPackages(
   const validationErrors: string[] = [];
   const selectedExtensionIds = new Set(filters.extensionIds ?? []);
   const selectedPackageNames = new Set(filters.packageNames ?? []);
-  const hasSelectedExtensionIds = selectedExtensionIds.size > 0;
-  const hasSelectedPackageNames = selectedPackageNames.size > 0;
+  const hasSelectedExtensionIds = Array.isArray(filters.extensionIds);
+  const hasSelectedPackageNames = Array.isArray(filters.packageNames);
 
   for (const candidate of collectExtensionPackageJsonCandidates(rootDir)) {
     const { extensionId, packageDir, packageJson } = candidate;
@@ -467,8 +467,11 @@ export function collectPluginReleasePlan(params?: {
       })
     : [];
   const allPublishable = collectPublishablePluginPackages(params?.rootDir, {
-    extensionIds: params?.selectionMode === "all-publishable" ? [] : changedExtensionIds,
-    packageNames: params?.selection,
+    extensionIds:
+      params?.selectionMode === "all-publishable" || !params?.gitRange
+        ? undefined
+        : changedExtensionIds,
+    packageNames: params?.selection && params.selection.length > 0 ? params.selection : undefined,
   });
   const selectedPublishable =
     params?.selectionMode === "all-publishable"

@@ -18,8 +18,11 @@ export function runPluginNpmReleaseCheck(argv: string[]) {
         })
       : [];
   const publishable = collectPublishablePluginPackages(".", {
-    extensionIds: selectionMode === "all-publishable" ? [] : changedExtensionIds,
-    packageNames: selection,
+    extensionIds:
+      selectionMode === "all-publishable" || !(baseRef && headRef)
+        ? undefined
+        : changedExtensionIds,
+    packageNames: selection.length > 0 ? selection : undefined,
   });
   const selected =
     selectionMode === "all-publishable"

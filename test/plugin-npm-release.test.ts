@@ -196,6 +196,28 @@ describe("collectPublishablePluginPackages", () => {
       }),
     ]);
   });
+
+  it("treats an explicit empty extension filter as no candidates", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "private-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "private-plugin", "package.json"), {
+      name: "@openclaw/private-plugin",
+      version: "2026.4.10-beta.1",
+      private: true,
+      openclaw: {
+        extensions: ["./index.ts"],
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(
+      collectPublishablePluginPackages(repoDir, {
+        extensionIds: [],
+      }),
+    ).toEqual([]);
+  });
 });
 
 describe("resolveSelectedPublishablePluginPackages", () => {
