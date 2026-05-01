@@ -4325,6 +4325,14 @@
         "message": {
           "type": "string"
         },
+        "format": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "plain"
+            }
+          ]
+        },
         "options": {
           "type": "array",
           "items": {
@@ -4425,6 +4433,14 @@
             },
             "message": {
               "type": "string"
+            },
+            "format": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "plain"
+                }
+              ]
             },
             "options": {
               "type": "array",
@@ -4557,6 +4573,14 @@
             },
             "message": {
               "type": "string"
+            },
+            "format": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "const": "plain"
+                }
+              ]
             },
             "options": {
               "type": "array",
@@ -5650,6 +5674,22 @@
       "additionalProperties": false
     },
     "ChannelsStartParams": {
+      "type": "object",
+      "required": [
+        "channel"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accountId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "ChannelsStopParams": {
       "type": "object",
       "required": [
         "channel"
