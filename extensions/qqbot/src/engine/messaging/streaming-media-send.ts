@@ -363,47 +363,6 @@ export function splitByMediaTags(
   };
 }
 
-/**
- * 从文本中解析出完整的发送队列（含标签前后的纯文本）
- *
- * 与 splitByMediaTags 的区别：
- * - splitByMediaTags 分为 before / queue / after 三段（供流式模式的中断-恢复）
- * - parseMediaTagsToSendQueue 返回一个扁平的完整队列（供普通模式按顺序发送）
- *
- * 适用于 gateway.ts deliver 回调和 outbound.ts sendText。
- */
-export function parseMediaTagsToSendQueue(
-  text: string,
-  log?: {
-    info?: (msg: string) => void;
-    debug?: (msg: string) => void;
-    error?: (msg: string) => void;
-  },
-): { hasMediaTags: boolean; sendQueue: SendQueueItem[] } {
-  const split = splitByMediaTags(text, log);
-
-  if (!split.hasMediaTags) {
-    return { hasMediaTags: false, sendQueue: [] };
-  }
-
-  const sendQueue: SendQueueItem[] = [];
-
-  // 标签前的文本
-  if (split.textBeforeFirstTag) {
-    sendQueue.push({ type: "text", content: split.textBeforeFirstTag });
-  }
-
-  // 媒体队列（含标签间文本）
-  sendQueue.push(...split.mediaQueue);
-
-  // 标签后的文本
-  if (split.textAfterLastTag) {
-    sendQueue.push({ type: "text", content: split.textAfterLastTag });
-  }
-
-  return { hasMediaTags: true, sendQueue };
-}
-
 // ============ 发送队列执行 ============
 
 /**
@@ -525,17 +484,6 @@ export async function executeSendQueue(
       await sendFallbackText(DEFAULT_MEDIA_SEND_ERROR);
     }
   }
-}
-
-/**
- * 从文本中剥离所有媒体标签（用于最终显示）
- */
-export function stripMediaTags(text: string): string {
-  const regex = createMediaTagRegex();
-  return text
-    .replace(regex, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
 }
 
 /**
