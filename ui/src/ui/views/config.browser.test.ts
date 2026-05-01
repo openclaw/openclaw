@@ -342,14 +342,17 @@ describe("config view", () => {
     expect(revealButton).toBeTruthy();
     revealButton?.click();
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).not.toBeNull();
-    expect(textarea?.value).toContain("supersecret");
-    if (!textarea) {
+    const configEditor = container.querySelector<HTMLElement & { value: string }>("config-editor");
+    expect(configEditor).not.toBeNull();
+    expect(configEditor?.value).toContain("supersecret");
+    if (!configEditor) {
       return;
     }
-    textarea.value = textarea.value.replace("supersecret", "updatedsecret");
-    textarea.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(onRawChange).toHaveBeenCalledWith(textarea.value);
+    const newValue = configEditor.value.replace("supersecret", "updatedsecret");
+    configEditor.value = newValue;
+    configEditor.dispatchEvent(
+      new CustomEvent("change", { detail: { value: newValue }, bubbles: true, composed: true }),
+    );
+    expect(onRawChange).toHaveBeenCalledWith(newValue);
   });
 });
