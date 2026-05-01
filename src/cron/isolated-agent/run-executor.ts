@@ -1,4 +1,5 @@
 import type { SkillSnapshot } from "../../agents/skills.js";
+import { normalizeToolList } from "../../agents/tool-policy.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,6 +17,7 @@ import {
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
+  resolveCronAgentLane,
   resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
@@ -45,6 +47,13 @@ async function loadCronEmbeddedRuntime() {
 async function loadCronSubagentRegistryRuntime() {
   cronSubagentRegistryRuntimePromise ??= import("./run-subagent-registry.runtime.js");
   return await cronSubagentRegistryRuntimePromise;
+}
+
+function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): string[] | undefined {
+  if (!normalizeToolList(toolsAllow).includes("cron")) {
+    return undefined;
+  }
+  return ["cron"];
 }
 
 export type CronExecutionResult = {
@@ -115,6 +124,8 @@ export function createCronPromptExecutor(params: {
       provider: params.liveSelection.provider,
       model: params.liveSelection.model,
       runId: params.cronSession.sessionEntry.sessionId,
+      sessionId: params.cronSession.sessionEntry.sessionId,
+      lane: resolveCronAgentLane(params.lane),
       agentDir: params.agentDir,
       fallbacksOverride: cronFallbacksOverride,
       run: async (providerOverride, modelOverride, runOptions) => {
@@ -142,6 +153,7 @@ export function createCronPromptExecutor(params: {
             thinkLevel: params.thinkLevel,
             timeoutMs: params.timeoutMs,
             runId: params.cronSession.sessionEntry.sessionId,
+            lane: resolveCronAgentLane(params.lane),
             cliSessionId,
             skillsSnapshot: params.skillsSnapshot,
             messageChannel: params.messageChannel,
@@ -156,8 +168,7 @@ export function createCronPromptExecutor(params: {
           );
           return result;
         }
-        const { resolveCronAgentLane, resolveFastModeState, runEmbeddedPiAgent } =
-          await loadCronEmbeddedRuntime();
+        const { resolveFastModeState, runEmbeddedPiAgent } = await loadCronEmbeddedRuntime();
         const currentChannelId = await resolveCurrentChannelTarget({
           channel: params.messageChannel,
           to: params.resolvedDelivery.to,
@@ -172,6 +183,9 @@ export function createCronPromptExecutor(params: {
           cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
           senderIsOwner: false,
+          ownerOnlyToolAllowlist: resolveCronOwnerOnlyToolAllowlist(
+            params.agentPayload?.toolsAllow,
+          ),
           messageChannel: params.messageChannel,
           agentAccountId: params.resolvedDelivery.accountId,
           messageTo: params.resolvedDelivery.to,

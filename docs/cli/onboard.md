@@ -119,6 +119,8 @@ Gateway token options in non-interactive mode:
 - With `--install-daemon`, if token mode requires a token and the configured token SecretRef is unresolved, onboarding fails closed with remediation guidance.
 - With `--install-daemon`, if both `gateway.auth.token` and `gateway.auth.password` are configured and `gateway.auth.mode` is unset, onboarding blocks install until mode is set explicitly.
 - Local onboarding writes `gateway.mode="local"` into the config. If a later config file is missing `gateway.mode`, treat that as config damage or an incomplete manual edit, not as a valid local-mode shortcut.
+- Local onboarding materializes newly required bundled plugin runtime dependencies after writing config, before workspace/bootstrap, daemon install, or health checks continue. This is a narrow package-manager repair step, not a full `openclaw doctor` run.
+- Remote onboarding only writes connection info for the remote Gateway and does not install local bundled plugin dependencies.
 - `--allow-unconfigured` is a separate gateway runtime escape hatch. It does not mean onboarding may omit `gateway.mode`.
 
 Example:
@@ -183,6 +185,7 @@ openclaw onboard --non-interactive \
     - `quickstart`: minimal prompts, auto-generates a gateway token.
     - `manual`: full prompts for port, bind, and auth (alias of `advanced`).
     - `import`: runs a detected migration provider, previews the plan, then applies after confirmation.
+
   </Accordion>
   <Accordion title="Provider prefiltering">
     When an auth choice implies a preferred provider, onboarding prefilters the default-model and allowlist pickers to that provider. For Volcengine and BytePlus, this also matches the coding-plan variants (`volcengine-plan/*`, `byteplus-plan/*`).
@@ -202,6 +205,7 @@ openclaw onboard --non-interactive \
     - Fastest first chat: `openclaw dashboard` (Control UI, no channel setup).
     - Custom provider: connect any OpenAI or Anthropic compatible endpoint, including hosted providers not listed. Use Unknown to auto-detect.
     - If Hermes state is detected, onboarding offers a migration flow. Use [Migrate](/cli/migrate) for dry-run plans, overwrite mode, reports, and exact mappings.
+
   </Accordion>
 </AccordionGroup>
 

@@ -10,6 +10,7 @@ export type CodexAppServerApprovalPolicy = "never" | "on-request" | "on-failure"
 export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "danger-full-access";
 export type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 export type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
+export type CodexDynamicToolsProfile = "native-first" | "openclaw-compat";
 
 export type CodexComputerUseConfig = {
   enabled?: boolean;
@@ -55,6 +56,8 @@ export type CodexAppServerRuntimeOptions = {
 };
 
 export type CodexPluginConfig = {
+  codexDynamicToolsProfile?: CodexDynamicToolsProfile;
+  codexDynamicToolsExclude?: string[];
   discovery?: {
     enabled?: boolean;
     timeoutMs?: number;
@@ -120,13 +123,18 @@ const codexAppServerApprovalPolicySchema = z.enum([
 ]);
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
-const codexAppServerServiceTierSchema = z.preprocess(
-  (value) => (value === null ? null : resolveServiceTier(value)),
-  z.enum(["fast", "flex"]).nullable().optional(),
-);
+const codexDynamicToolsProfileSchema = z.enum(["native-first", "openclaw-compat"]);
+const codexAppServerServiceTierSchema = z
+  .preprocess(
+    (value) => (value === null ? null : resolveServiceTier(value)),
+    z.enum(["fast", "flex"]).nullable().optional(),
+  )
+  .optional();
 
 const codexPluginConfigSchema = z
   .object({
+    codexDynamicToolsProfile: codexDynamicToolsProfileSchema.optional(),
+    codexDynamicToolsExclude: z.array(z.string()).optional(),
     discovery: z
       .object({
         enabled: z.boolean().optional(),
@@ -294,7 +302,7 @@ export function resolveCodexComputerUseConfig(
 
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
-  params: { authProfileId?: string } = {},
+  params: { authProfileId?: string; agentDir?: string } = {},
 ): string {
   return JSON.stringify({
     transport: options.transport,
@@ -311,6 +319,7 @@ export function codexAppServerStartOptionsKey(
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
+    agentDir: params.agentDir ?? null,
   });
 }
 

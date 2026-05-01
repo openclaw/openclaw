@@ -200,6 +200,8 @@ final class NodeAppModel {
     private(set) var activeGatewayConnectConfig: GatewayConnectConfig?
 
     private static let watchExecApprovalBridgeStateKey = "watch.execApproval.bridge.state.v1"
+    private static let backgroundAliveLastSuccessAtMsKey = "gateway.backgroundAlive.lastSuccessAtMs"
+    private static let backgroundAliveLastTriggerKey = "gateway.backgroundAlive.lastTrigger"
 
     var cameraHUDText: String?
     var cameraHUDKind: CameraHUDKind?
@@ -3142,32 +3144,39 @@ extension NodeAppModel {
             return handled
         }
 
-        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        let result = await self.performBackgroundAliveBeaconIfNeeded(
+            wakeId: wakeId,
+            trigger: .silentPush)
         let outcomeMessage =
             "Silent push outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
+                + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
                 + "durationMs=\(result.durationMs)"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
-        return result.applied
+        return result.handled
     }
 
     func handleBackgroundRefreshWake(trigger: String = "bg_app_refresh") async -> Bool {
         let wakeId = Self.makePushWakeAttemptID()
+        let normalizedTrigger = BackgroundAliveBeacon.normalizeTrigger(trigger)
         let receivedMessage =
             "Background refresh wake received wakeId=\(wakeId) "
-                + "trigger=\(trigger) "
+                + "trigger=\(normalizedTrigger.rawValue) "
                 + "backgrounded=\(self.isBackgrounded) "
                 + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
         self.pushWakeLogger.info("\(receivedMessage, privacy: .public)")
-        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        let result = await self.performBackgroundAliveBeaconIfNeeded(
+            wakeId: wakeId,
+            trigger: normalizedTrigger)
         let outcomeMessage =
             "Background refresh wake outcome wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
+                + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
                 + "durationMs=\(result.durationMs)"
         self.pushWakeLogger.info("\(outcomeMessage, privacy: .public)")
-        return result.applied
+        return result.handled
     }
 
     func handleSignificantLocationWakeIfNeeded() async {
@@ -3196,10 +3205,13 @@ extension NodeAppModel {
                 + "backgrounded=\(self.isBackgrounded) "
                 + "autoReconnect=\(self.gatewayAutoReconnectEnabled)"
         self.locationWakeLogger.info("\(beginMessage, privacy: .public)")
-        let result = await self.reconnectGatewaySessionsForSilentPushIfNeeded(wakeId: wakeId)
+        let result = await self.performBackgroundAliveBeaconIfNeeded(
+            wakeId: wakeId,
+            trigger: .significantLocation)
         let triggerMessage =
             "Location wake trigger wakeId=\(wakeId) "
                 + "applied=\(result.applied) "
+                + "handled=\(result.handled) "
                 + "reason=\(result.reason) "
                 + "durationMs=\(result.durationMs)"
         self.locationWakeLogger.info("\(triggerMessage, privacy: .public)")
@@ -3621,8 +3633,9 @@ extension NodeAppModel {
         return gatewayError.message.lowercased().contains("allow-always is unavailable")
     }
 
-    private struct SilentPushWakeAttemptResult {
+    private struct BackgroundAliveWakeAttemptResult {
         var applied: Bool
+        var handled: Bool
         var reason: String
         var durationMs: Int
     }
@@ -3797,43 +3810,100 @@ extension NodeAppModel {
         return await self.waitForOperatorConnection(timeoutMs: timeoutMs, pollMs: 250)
     }
 
-    private func reconnectGatewaySessionsForSilentPushIfNeeded(
-        wakeId: String) async -> SilentPushWakeAttemptResult
+    private func performBackgroundAliveBeaconIfNeeded(
+        wakeId: String,
+        trigger: BackgroundAliveBeacon.Trigger) async -> BackgroundAliveWakeAttemptResult
     {
         let startedAt = Date()
-        let makeResult: (Bool, String) -> SilentPushWakeAttemptResult = { applied, reason in
+        let makeResult: (Bool, Bool, String) -> BackgroundAliveWakeAttemptResult = { applied, handled, reason in
             let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
-            return SilentPushWakeAttemptResult(
+            return BackgroundAliveWakeAttemptResult(
                 applied: applied,
+                handled: handled,
                 reason: reason,
                 durationMs: max(0, durationMs))
         }
 
         guard self.isBackgrounded else {
             self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): app not backgrounded")
-            return makeResult(false, "not_backgrounded")
+            return makeResult(false, false, "not_backgrounded")
         }
         guard self.gatewayAutoReconnectEnabled else {
             self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): auto reconnect disabled")
-            return makeResult(false, "auto_reconnect_disabled")
+            return makeResult(false, false, "auto_reconnect_disabled")
         }
-        guard let cfg = self.activeGatewayConnectConfig else {
-            self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): no active gateway config")
-            return makeResult(false, "no_active_gateway_config")
+        let now = Date()
+        let gatewayConnected = await self.isGatewayConnected()
+
+        var appliedReconnect = false
+        if !gatewayConnected {
+            guard let cfg = self.activeGatewayConnectConfig else {
+                self.pushWakeLogger.info("Wake no-op wakeId=\(wakeId, privacy: .public): no active gateway config")
+                return makeResult(false, false, "no_active_gateway_config")
+            }
+            self.pushWakeLogger.info(
+                "Wake reconnect begin wakeId=\(wakeId, privacy: .public) stableID=\(cfg.stableID, privacy: .public)")
+            self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
+            await self.operatorGateway.disconnect()
+            await self.nodeGateway.disconnect()
+            self.operatorConnected = false
+            self.gatewayConnected = false
+            self.gatewayStatusText = "Reconnecting…"
+            self.talkMode.updateGatewayConnected(false)
+            self.applyGatewayConnectConfig(cfg)
+            appliedReconnect = true
+            self.pushWakeLogger.info("Wake reconnect trigger applied wakeId=\(wakeId, privacy: .public)")
+
+            let connected = await self.waitForGatewayConnection(timeoutMs: 12000, pollMs: 250)
+            guard connected else {
+                return makeResult(appliedReconnect, false, "connect_timeout")
+            }
+        } else if BackgroundAliveBeacon.shouldSkipRecentSuccess(
+            isGatewayConnected: true,
+            now: now,
+            lastSuccessAtMs: UserDefaults.standard.object(forKey: Self.backgroundAliveLastSuccessAtMsKey) as? Double)
+        {
+            return makeResult(false, true, "recent_success")
         }
 
-        self.pushWakeLogger.info(
-            "Wake reconnect begin wakeId=\(wakeId, privacy: .public) stableID=\(cfg.stableID, privacy: .public)")
-        self.grantBackgroundReconnectLease(seconds: 30, reason: "wake_\(wakeId)")
-        await self.operatorGateway.disconnect()
-        await self.nodeGateway.disconnect()
-        self.operatorConnected = false
-        self.gatewayConnected = false
-        self.gatewayStatusText = "Reconnecting…"
-        self.talkMode.updateGatewayConnected(false)
-        self.applyGatewayConnectConfig(cfg)
-        self.pushWakeLogger.info("Wake reconnect trigger applied wakeId=\(wakeId, privacy: .public)")
-        return makeResult(true, "reconnect_triggered")
+        let beacon = await self.publishBackgroundAliveBeacon(trigger: trigger)
+        if beacon.handled {
+            let successAtMs = Date().timeIntervalSince1970 * 1000
+            UserDefaults.standard.set(successAtMs, forKey: Self.backgroundAliveLastSuccessAtMsKey)
+            UserDefaults.standard.set(trigger.rawValue, forKey: Self.backgroundAliveLastTriggerKey)
+            return makeResult(appliedReconnect, true, beacon.reason)
+        }
+        return makeResult(appliedReconnect, false, beacon.reason)
+    }
+
+    private func publishBackgroundAliveBeacon(
+        trigger: BackgroundAliveBeacon.Trigger) async -> (handled: Bool, reason: String)
+    {
+        do {
+            let pushTransport = await self.pushRegistrationManager.usesRelayTransport ? "relay" : "direct"
+            let displayName = NodeDisplayName.resolve(
+                existing: UserDefaults.standard.string(forKey: "node.displayName"),
+                deviceName: UIDevice.current.name,
+                interfaceIdiom: UIDevice.current.userInterfaceIdiom)
+            let payload = BackgroundAliveBeacon.makePayload(
+                trigger: trigger,
+                displayName: displayName,
+                pushTransport: pushTransport)
+            let paramsJSON = try BackgroundAliveBeacon.makeNodeEventRequestPayloadJSON(payload: payload)
+            let response = try await self.nodeGateway.request(
+                method: "node.event",
+                paramsJSON: paramsJSON,
+                timeoutSeconds: 8)
+            guard let decoded = BackgroundAliveBeacon.decodeResponse(response) else {
+                return (false, "invalid_response")
+            }
+            if decoded.handled == true {
+                return (true, decoded.reason ?? "beacon_persisted")
+            }
+            return (false, decoded.reason ?? "unsupported")
+        } catch {
+            return (false, "beacon_failed")
+        }
     }
 }
 

@@ -191,15 +191,16 @@ async function tryRunGatewayRunFastPath(
 }
 
 async function closeCliMemoryManagers(): Promise<void> {
-  const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
-  if (!hasMemoryRuntime()) {
-    return;
-  }
   try {
+    const { hasMemoryRuntime } = await import("../plugins/memory-state.js");
+    if (!hasMemoryRuntime()) {
+      return;
+    }
     const { closeActiveMemorySearchManagers } = await import("../plugins/memory-runtime.js");
     await closeActiveMemorySearchManagers();
   } catch {
-    // Best-effort teardown for short-lived CLI processes.
+    // Best-effort teardown for short-lived CLI processes. Package updates can
+    // replace hashed chunks before this finalizer runs.
   }
 }
 
@@ -341,11 +342,11 @@ export async function runCli(argv: string[] = process.argv) {
     handle?.kill("SIGTERM");
   };
   if (shouldStartProxyForCli(normalizedArgv)) {
-    const [{ getRuntimeConfig }, { startProxy }] = await Promise.all([
+    const [{ readBestEffortConfig }, { startProxy }] = await Promise.all([
       import("../config/io.js"),
       import("../infra/net/proxy/proxy-lifecycle.js"),
     ]);
-    const config = getRuntimeConfig();
+    const config = await readBestEffortConfig();
     proxyHandle = await startProxy(config?.proxy ?? undefined);
   }
 

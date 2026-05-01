@@ -24,6 +24,7 @@ export type DoctorHealthFlowContext = {
   cfgForPersistence: OpenClawConfig;
   sourceConfigValid: boolean;
   configPath: string;
+  env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
@@ -37,6 +38,29 @@ export type DoctorHealthContribution = FlowContribution & {
 
 export function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
+}
+
+const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
+
+function isTruthyEnvValue(value: string | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+export function shouldSkipLegacyUpdateDoctorConfigWrite(params: {
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  if (!isTruthyEnvValue(params.env.OPENCLAW_UPDATE_IN_PROGRESS)) {
+    return false;
+  }
+  if (isTruthyEnvValue(params.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV])) {
+    return false;
+  }
+  return true;
 }
 
 function createDoctorHealthContribution(params: {
@@ -184,6 +208,11 @@ async function runGatewayAuthHealth(ctx: DoctorHealthFlowContext): Promise<void>
   note("Gateway token configured.", "Gateway auth");
 }
 
+async function runCommandOwnerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteCommandOwnerHealth } = await import("../commands/doctor-command-owner.js");
+  noteCommandOwnerHealth(ctx.cfg);
+}
+
 async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
   noteClaudeCliHealth(ctx.cfg);
@@ -223,6 +252,7 @@ async function runLegacyPluginManifestHealth(ctx: DoctorHealthFlowContext): Prom
   const { maybeRepairLegacyPluginManifestContracts } =
     await import("../commands/doctor-plugin-manifests.js");
   await maybeRepairLegacyPluginManifestContracts({
+    config: ctx.cfg,
     env: process.env,
     runtime: ctx.runtime,
     prompter: ctx.prompter,
@@ -435,7 +465,7 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
-    : { checked: false, ready: false };
+    : { checked: false, ready: false, skipped: false };
 }
 
 async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -448,7 +478,7 @@ async function runMemorySearchHealthContribution(ctx: DoctorHealthFlowContext): 
     });
   }
   await noteMemorySearchHealth(ctx.cfg, {
-    gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false },
+    gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false, skipped: false },
   });
   if (ctx.options.deep === true) {
     await noteMemoryRecallHealth(ctx.cfg);
@@ -489,9 +519,16 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       command: "doctor",
       mode: resolveDoctorMode(ctx.cfg),
     });
+    if (shouldSkipLegacyUpdateDoctorConfigWrite({ env: ctx.env ?? process.env })) {
+      ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
+      return;
+    }
     await replaceConfigFile({
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
+      writeOptions: {
+        allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true,
+      },
     });
     logConfigUpdated(ctx.runtime);
     const backupPath = `${CONFIG_PATH}.bak`;
@@ -560,6 +597,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-auth",
       label: "Gateway auth",
       run: runGatewayAuthHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:command-owner",
+      label: "Command owner",
+      run: runCommandOwnerHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:legacy-state",

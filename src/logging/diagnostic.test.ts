@@ -6,6 +6,7 @@ import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   setDiagnosticsEnabledForProcess,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import {
   diagnosticSessionStates,
@@ -124,24 +125,39 @@ describe("stuck session diagnostics threshold", () => {
   });
 
   it("uses the configured diagnostics.stuckSessionWarnMs threshold", () => {
-    const events: Array<{ type: string }> = [];
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
     const unsubscribe = onDiagnosticEvent((event) => {
-      events.push({ type: event.type });
+      events.push(event);
     });
     try {
-      startDiagnosticHeartbeat({
-        diagnostics: {
-          enabled: true,
-          stuckSessionWarnMs: 30_000,
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
         },
-      });
+        { recoverStuckSession },
+      );
       logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
       vi.advanceTimersByTime(61_000);
     } finally {
       unsubscribe();
     }
 
-    expect(events.filter((event) => event.type === "session.stuck")).toHaveLength(1);
+    const stuckEvents = events.filter((event) => event.type === "session.stuck");
+    expect(stuckEvents).toHaveLength(1);
+    expect(stuckEvents[0]).toMatchObject({
+      reason: "processing_without_queue",
+      queueDepth: 0,
+    });
+    expect(recoverStuckSession).toHaveBeenCalledWith({
+      sessionId: "s1",
+      sessionKey: "main",
+      ageMs: expect.any(Number),
+      queueDepth: 0,
+    });
   });
 
   it("starts and stops the stability recorder with the heartbeat lifecycle", () => {

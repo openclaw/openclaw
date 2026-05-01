@@ -105,12 +105,12 @@ describe("GatewayClient", () => {
     expect(last?.opts.agent).toBeDefined();
   });
 
-  test("does not use the direct control-plane bypass for localhost hostnames", () => {
+  test("uses the direct control-plane bypass for localhost hostnames", () => {
     const client = new GatewayClient({ url: "ws://localhost:1" });
     client.start();
     const last = wsMockState.last as { opts: { agent?: unknown } } | null;
 
-    expect(last?.opts.agent).toBeUndefined();
+    expect(last?.opts.agent).toBeDefined();
   });
 
   test("does not force a direct agent for remote Gateway WebSocket connections", () => {
@@ -716,6 +716,31 @@ describe("resolveNodeCommandAllowlist", () => {
     expect(DEFAULT_DANGEROUS_NODE_COMMANDS).toContain("screen.record");
     expect(allow.has("screen.snapshot")).toBe(true);
     expect(allow.has("screen.record")).toBe(false);
+  });
+
+  it("allows safe Windows companion commands by default but keeps dangerous media gated", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "Windows_NT",
+        deviceFamily: "Windows",
+      },
+    );
+
+    expect(allow.has("canvas.present")).toBe(true);
+    expect(allow.has("canvas.a2ui.pushJSONL")).toBe(true);
+    expect(allow.has("camera.list")).toBe(true);
+    expect(allow.has("location.get")).toBe(true);
+    expect(allow.has("device.info")).toBe(true);
+    expect(allow.has("device.status")).toBe(true);
+    expect(allow.has("screen.snapshot")).toBe(true);
+    expect(allow.has("system.run")).toBe(true);
+    expect(allow.has("system.which")).toBe(true);
+    expect(allow.has("system.notify")).toBe(true);
+
+    for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
+      expect(allow.has(cmd)).toBe(false);
+    }
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {

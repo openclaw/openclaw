@@ -7,7 +7,7 @@ const CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
 const CODEX_ACP_PACKAGE_RANGE = "^0.12.0";
 const CODEX_ACP_BIN = "codex-acp";
 const CLAUDE_ACP_PACKAGE = "@agentclientprotocol/claude-agent-acp";
-const CLAUDE_ACP_PACKAGE_VERSION = "0.31.0";
+const CLAUDE_ACP_PACKAGE_VERSION = "0.31.1";
 const CLAUDE_ACP_BIN = "claude-agent-acp";
 const RUN_CONFIGURED_COMMAND_SENTINEL = "--openclaw-run-configured";
 const requireFromHere = createRequire(import.meta.url);
@@ -240,13 +240,21 @@ async function prepareIsolatedCodexHome(baseDir: string): Promise<string> {
   return codexHome;
 }
 
+async function makeGeneratedWrapperExecutableIfPossible(wrapperPath: string): Promise<void> {
+  try {
+    await fs.chmod(wrapperPath, 0o755);
+  } catch {
+    // The wrapper is invoked via `node wrapper.mjs`; executable mode is only a convenience.
+  }
+}
+
 async function writeCodexAcpWrapper(baseDir: string, installedBinPath?: string): Promise<string> {
   await fs.mkdir(baseDir, { recursive: true });
   const wrapperPath = path.join(baseDir, "codex-acp-wrapper.mjs");
   await fs.writeFile(wrapperPath, buildCodexAcpWrapperScript(installedBinPath), {
     encoding: "utf8",
   });
-  await fs.chmod(wrapperPath, 0o755);
+  await makeGeneratedWrapperExecutableIfPossible(wrapperPath);
   return wrapperPath;
 }
 
@@ -256,7 +264,7 @@ async function writeClaudeAcpWrapper(baseDir: string, installedBinPath?: string)
   await fs.writeFile(wrapperPath, buildClaudeAcpWrapperScript(installedBinPath), {
     encoding: "utf8",
   });
-  await fs.chmod(wrapperPath, 0o755);
+  await makeGeneratedWrapperExecutableIfPossible(wrapperPath);
   return wrapperPath;
 }
 

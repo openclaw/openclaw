@@ -25,6 +25,7 @@ This is not a perfect security boundary, but it materially limits filesystem and
     - noVNC observer access is password-protected by default; OpenClaw emits a short-lived token URL that serves a local bootstrap page and opens noVNC with password in URL fragment (not query/header logs).
     - `agents.defaults.sandbox.browser.allowHostControl` lets sandboxed sessions target the host browser explicitly.
     - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -88,6 +89,8 @@ SSH-specific config lives under `agents.defaults.sandbox.ssh`. OpenShell-specifi
 
 Sandboxing is off by default. If you enable sandboxing and do not choose a backend, OpenClaw uses the Docker backend. It executes tools and sandbox browsers locally via the Docker daemon socket (`/var/run/docker.sock`). Sandbox container isolation is determined by Docker namespaces.
 
+To expose host GPUs to Docker sandboxes, set `agents.defaults.sandbox.docker.gpus` or the per-agent `agents.list[].sandbox.docker.gpus` override. The value is passed to Docker's `--gpus` flag as a separate argument, for example `"all"` or `"device=GPU-uuid"`, and requires a compatible host runtime such as NVIDIA Container Toolkit.
+
 <Warning>
 **Docker-out-of-Docker (DooD) constraints**
 
@@ -137,11 +140,13 @@ Use `backend: "ssh"` when you want OpenClaw to sandbox `exec`, file tools, and m
     - On first use after create or recreate, OpenClaw seeds that remote workspace from the local workspace once.
     - After that, `exec`, `read`, `write`, `edit`, `apply_patch`, prompt media reads, and inbound media staging run directly against the remote workspace over SSH.
     - OpenClaw does not sync remote changes back to the local workspace automatically.
+
   </Accordion>
   <Accordion title="Authentication material">
     - `identityFile`, `certificateFile`, `knownHostsFile`: use existing local files and pass them through OpenSSH config.
     - `identityData`, `certificateData`, `knownHostsData`: use inline strings or SecretRefs. OpenClaw resolves them through the normal secrets runtime snapshot, writes them to temp files with `0600`, and deletes them when the SSH session ends.
     - If both `*File` and `*Data` are set for the same item, `*Data` wins for that SSH session.
+
   </Accordion>
   <Accordion title="Remote-canonical consequences">
     This is a **remote-canonical** model. The remote SSH workspace becomes the real sandbox state after the initial seed.
@@ -198,11 +203,13 @@ OpenShell modes:
     - OpenClaw asks OpenShell for sandbox-specific SSH config via `openshell sandbox ssh-config <name>`.
     - Core writes that SSH config to a temp file, opens the SSH session, and reuses the same remote filesystem bridge used by `backend: "ssh"`.
     - In `mirror` mode only the lifecycle differs: sync local to remote before exec, then sync back after exec.
+
   </Accordion>
   <Accordion title="Current OpenShell limitations">
     - sandbox browser is not supported yet
     - `sandbox.docker.binds` is not supported on the OpenShell backend
     - Docker-specific runtime knobs under `sandbox.docker.*` still apply only to the Docker backend
+
   </Accordion>
 </AccordionGroup>
 
@@ -349,35 +356,73 @@ Example (read-only source + an extra data directory):
 - Sensitive mounts (secrets, SSH keys, service credentials) should be `:ro` unless absolutely required.
 - Combine with `workspaceAccess: "ro"` if you only need read access to the workspace; bind modes stay independent.
 - See [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how binds interact with tool policy and elevated exec.
-  </Warning>
+
+</Warning>
 
 ## Images and setup
 
 Default Docker image: `openclaw-sandbox:bookworm-slim`
 
+<Note>
+**Source checkout vs npm install**
+
+The `scripts/sandbox-setup.sh`, `scripts/sandbox-common-setup.sh`, and `scripts/sandbox-browser-setup.sh` helper scripts are only available when running from a [source checkout](https://github.com/openclaw/openclaw). They are not included in the npm package.
+
+If you installed OpenClaw via `npm install -g openclaw`, use the inline `docker build` commands shown below instead.
+</Note>
+
 <Steps>
   <Step title="Build the default image">
+    From a source checkout:
+
     ```bash
     scripts/sandbox-setup.sh
     ```
 
+    From an npm install (no source checkout needed):
+
+    ```bash
+    docker build -t openclaw-sandbox:bookworm-slim - <<'DOCKERFILE'
+    FROM debian:bookworm-slim
+    ENV DEBIAN_FRONTEND=noninteractive
+    RUN apt-get update && apt-get install -y --no-install-recommends \
+      bash ca-certificates curl git jq python3 ripgrep \
+      && rm -rf /var/lib/apt/lists/*
+    RUN useradd --create-home --shell /bin/bash sandbox
+    USER sandbox
+    WORKDIR /home/sandbox
+    CMD ["sleep", "infinity"]
+    DOCKERFILE
+    ```
+
     The default image does **not** include Node. If a skill needs Node (or other runtimes), either bake a custom image or install via `sandbox.docker.setupCommand` (requires network egress + writable root + root user).
+
+    OpenClaw does not silently substitute plain `debian:bookworm-slim` when `openclaw-sandbox:bookworm-slim` is missing. Sandbox runs that target the default image fail fast with a build instruction until you build it, because the bundled image carries `python3` for sandbox write/edit helpers.
 
   </Step>
   <Step title="Optional: build the common image">
     For a more functional sandbox image with common tooling (for example `curl`, `jq`, `nodejs`, `python3`, `git`):
 
+    From a source checkout:
+
     ```bash
     scripts/sandbox-common-setup.sh
     ```
+
+    From an npm install, build the default image first (see above), then build the common image on top using the [`Dockerfile.sandbox-common`](https://github.com/openclaw/openclaw/blob/main/Dockerfile.sandbox-common) from the repository.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
 
   </Step>
   <Step title="Optional: build the sandbox browser image">
+    From a source checkout:
+
     ```bash
     scripts/sandbox-browser-setup.sh
     ```
+
+    From an npm install, build using the [`Dockerfile.sandbox-browser`](https://github.com/openclaw/openclaw/blob/main/Dockerfile.sandbox-browser) from the repository.
+
   </Step>
 </Steps>
 
@@ -416,6 +461,7 @@ By default, Docker sandbox containers run with **no network**. Override with `ag
     - `network: "host"` is blocked.
     - `network: "container:<id>"` is blocked by default (namespace join bypass risk).
     - Break-glass override: `agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true`.
+
   </Accordion>
 </AccordionGroup>
 
@@ -439,6 +485,7 @@ Paths:
     - `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
     - `user` must be root for package installs (omit `user` or set `user: "0:0"`).
     - Sandbox exec does **not** inherit host `process.env`. Use `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
+
   </Accordion>
 </AccordionGroup>
 

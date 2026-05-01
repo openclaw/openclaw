@@ -103,12 +103,6 @@ export type DiagnosticStabilitySnapshot = {
   };
 };
 
-export type DiagnosticStabilityQuery = {
-  limit?: number;
-  type?: string;
-  sinceSeq?: number;
-};
-
 export type DiagnosticStabilityQueryInput = {
   limit?: unknown;
   type?: unknown;
@@ -239,6 +233,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "session.stuck":
       record.outcome = event.state;
+      assignReasonCode(record, event.reason);
       record.ageMs = event.ageMs;
       record.queueDepth = event.queueDepth;
       break;

@@ -1,5 +1,4 @@
 import { mergeMissing } from "../../../config/legacy.shared.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   loadPluginManifestRegistryForPluginRegistry,
   resolveManifestContractOwnerPluginId,
@@ -18,23 +17,19 @@ const MODERN_SCOPED_WEB_SEARCH_KEYS = new Set(["openaiCodex"]);
 // `tools.web.search.tavily.*` shape to migrate.
 const NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS = new Set(["tavily"]);
 const LEGACY_GLOBAL_WEB_SEARCH_PROVIDER_ID = "brave";
-let legacyWebSearchProviderIdsCache: string[] | undefined;
-let legacyWebSearchProviderIdSetCache: Set<string> | undefined;
 
 function getLegacyWebSearchProviderIds(): string[] {
-  legacyWebSearchProviderIdsCache ??= loadPluginManifestRegistryForPluginRegistry({
+  return loadPluginManifestRegistryForPluginRegistry({
     includeDisabled: true,
   })
     .plugins.filter((plugin) => plugin.origin === "bundled")
     .flatMap((plugin) => plugin.contracts?.webSearchProviders ?? [])
     .filter((providerId) => !NON_MIGRATED_LEGACY_WEB_SEARCH_PROVIDER_IDS.has(providerId))
     .toSorted((left, right) => left.localeCompare(right));
-  return legacyWebSearchProviderIdsCache;
 }
 
 function getLegacyWebSearchProviderIdSet(): Set<string> {
-  legacyWebSearchProviderIdSetCache ??= new Set(getLegacyWebSearchProviderIds());
-  return legacyWebSearchProviderIdSetCache;
+  return new Set(getLegacyWebSearchProviderIds());
 }
 
 function resolveLegacySearchConfig(raw: unknown): JsonRecord | undefined {
@@ -159,19 +154,6 @@ export function listLegacyWebSearchConfigPaths(raw: unknown): string[] {
   return paths;
 }
 
-export function normalizeLegacyWebSearchConfig<T>(raw: T): T {
-  if (!isRecord(raw)) {
-    return raw;
-  }
-
-  const search = resolveLegacySearchConfig(raw);
-  if (!search) {
-    return raw;
-  }
-
-  return normalizeLegacyWebSearchConfigRecord(raw).config;
-}
-
 export function migrateLegacyWebSearchConfig<T>(raw: T): { config: T; changes: string[] } {
   if (!isRecord(raw)) {
     return { config: raw, changes: [] };
@@ -252,16 +234,4 @@ function normalizeLegacyWebSearchConfigRecord<T extends JsonRecord>(
   }
 
   return { config: nextRoot, changes };
-}
-
-export function resolvePluginWebSearchConfig(
-  config: OpenClawConfig | undefined,
-  pluginId: string,
-): Record<string, unknown> | undefined {
-  const pluginConfig = config?.plugins?.entries?.[pluginId]?.config;
-  if (!isRecord(pluginConfig)) {
-    return undefined;
-  }
-  const webSearch = pluginConfig.webSearch;
-  return isRecord(webSearch) ? webSearch : undefined;
 }

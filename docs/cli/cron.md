@@ -24,6 +24,7 @@ Run `openclaw cron --help` for the full command surface. See [Cron jobs](/automa
     - `isolated` creates a fresh transcript and session id for each run.
     - `current` binds to the active session at creation time.
     - `session:<id>` pins to an explicit persistent session key.
+
   </Accordion>
   <Accordion title="Isolated session semantics">
     Isolated runs reset ambient conversation context. Channel and group routing, send/queue policy, elevation, origin, and ACP runtime binding are reset for the new run. Safe preferences and explicit user-selected model or auth overrides can carry across runs.
@@ -182,6 +183,12 @@ Announce to a specific channel:
 openclaw cron edit <job-id> --announce --channel slack --to "channel:C1234567890"
 ```
 
+Announce to a Telegram forum topic:
+
+```bash
+openclaw cron edit <job-id> --announce --channel telegram --to "-1001234567890" --thread-id 42
+```
+
 Create an isolated job with lightweight bootstrap context:
 
 ```bash
@@ -218,6 +225,8 @@ openclaw cron edit <job-id> --clear-agent
 openclaw cron edit <job-id> --session current
 openclaw cron edit <job-id> --session "session:daily-brief"
 ```
+
+`openclaw cron add` warns when `--agent` is omitted on agent-turn jobs and falls back to the default agent (`main`). Pass `--agent <id>` at create time to pin a specific agent.
 
 Delivery tweaks:
 

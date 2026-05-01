@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -7,9 +9,14 @@ import type {
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "./provider-thinking.types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
+const providerPolicyPluginIdsByProviderId = new Map<string, string | null>();
 
 export type BundledProviderPolicySurface = {
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
@@ -17,14 +24,10 @@ export type BundledProviderPolicySurface = {
     ctx: ProviderApplyConfigDefaultsContext,
   ) => OpenClawConfig | null | undefined;
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
+  resolveThinkingProfile?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => ProviderThinkingProfile | null | undefined;
 };
-
-const bundledProviderPolicySurfaceCache = new Map<string, BundledProviderPolicySurface | null>();
-
-function buildProviderPolicySurfaceCacheKey(providerId: string): string {
-  const bundledPluginsDir = resolveBundledPluginsDir();
-  return `${providerId}::${bundledPluginsDir ?? "<default>"}`;
-}
 
 function hasProviderPolicyHook(
   mod: Record<string, unknown>,
@@ -32,7 +35,8 @@ function hasProviderPolicyHook(
   return (
     typeof mod.normalizeConfig === "function" ||
     typeof mod.applyConfigDefaults === "function" ||
-    typeof mod.resolveConfigApiKey === "function"
+    typeof mod.resolveConfigApiKey === "function" ||
+    typeof mod.resolveThinkingProfile === "function"
   );
 }
 
@@ -44,6 +48,7 @@ function tryLoadBundledProviderPolicySurface(
       const mod = loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
         dirName: pluginId,
         artifactBasename,
+        installRuntimeDeps: false,
       });
       if (hasProviderPolicyHook(mod)) {
         return mod;
@@ -61,8 +66,50 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-export function clearBundledProviderPolicySurfaceCache(): void {
-  bundledProviderPolicySurfaceCache.clear();
+function resolveBundledProviderPolicyPluginId(providerId: string): string | null {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  if (!normalizedProviderId) {
+    return null;
+  }
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  const cacheKey = `${bundledPluginsDir ?? "<none>"}::${normalizedProviderId}`;
+  if (providerPolicyPluginIdsByProviderId.has(cacheKey)) {
+    return providerPolicyPluginIdsByProviderId.get(cacheKey) ?? null;
+  }
+
+  if (!bundledPluginsDir || !fs.existsSync(bundledPluginsDir)) {
+    providerPolicyPluginIdsByProviderId.set(cacheKey, null);
+    return null;
+  }
+
+  for (const entry of fs
+    .readdirSync(bundledPluginsDir, { withFileTypes: true })
+    .filter((candidate) => candidate.isDirectory())
+    .map((candidate) => candidate.name)
+    .toSorted((left, right) => left.localeCompare(right))) {
+    const manifestPath = path.join(bundledPluginsDir, entry, "openclaw.plugin.json");
+    if (!fs.existsSync(manifestPath)) {
+      continue;
+    }
+    let manifest: { providers?: unknown };
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as { providers?: unknown };
+    } catch {
+      continue;
+    }
+    const providers = Array.isArray(manifest.providers) ? manifest.providers : [];
+    const ownsProvider = providers.some(
+      (candidate) =>
+        typeof candidate === "string" && normalizeProviderId(candidate) === normalizedProviderId,
+    );
+    if (ownsProvider) {
+      providerPolicyPluginIdsByProviderId.set(cacheKey, entry);
+      return entry;
+    }
+  }
+
+  providerPolicyPluginIdsByProviderId.set(cacheKey, null);
+  return null;
 }
 
 export function resolveBundledProviderPolicySurface(
@@ -72,17 +119,10 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  const cacheKey = buildProviderPolicySurfaceCacheKey(normalizedProviderId);
-  if (bundledProviderPolicySurfaceCache.has(cacheKey)) {
-    return bundledProviderPolicySurfaceCache.get(cacheKey) ?? null;
-  }
-
-  const surface = tryLoadBundledProviderPolicySurface(normalizedProviderId);
-  if (surface) {
-    bundledProviderPolicySurfaceCache.set(cacheKey, surface);
-    return surface;
-  }
-
-  bundledProviderPolicySurfaceCache.set(cacheKey, null);
-  return null;
+  return (
+    tryLoadBundledProviderPolicySurface(normalizedProviderId) ??
+    tryLoadBundledProviderPolicySurface(
+      resolveBundledProviderPolicyPluginId(normalizedProviderId) ?? normalizedProviderId,
+    )
+  );
 }

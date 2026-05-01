@@ -297,6 +297,7 @@ describe("createImageGenerateTool", () => {
   });
 
   it("infers the canonical OpenAI image model from provider readiness without explicit config", () => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
     const isConfigured = vi.fn(({ agentDir }: { agentDir?: string }) => agentDir === "/tmp/agent");
     vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
       {
@@ -336,6 +337,55 @@ describe("createImageGenerateTool", () => {
     expect(isConfigured).toHaveBeenCalledWith({
       cfg: {},
       agentDir: "/tmp/agent",
+    });
+  });
+
+  it("prefers OpenAI image generation when the default model uses its Codex provider alias", () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      {
+        id: "fal",
+        defaultModel: "fal-ai/flux/dev",
+        models: ["fal-ai/flux/dev"],
+        isConfigured: () => true,
+        capabilities: {
+          generate: { maxCount: 4 },
+          edit: { enabled: true, maxInputImages: 1 },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+      {
+        id: "openai",
+        aliases: ["openai-codex"],
+        defaultModel: "gpt-image-2",
+        models: ["gpt-image-2"],
+        isConfigured: () => true,
+        capabilities: {
+          generate: { maxCount: 4 },
+          edit: { enabled: true, maxInputImages: 5 },
+        },
+        generateImage: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+
+    expect(
+      resolveImageGenerationModelConfigForTool({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "openai-codex/gpt-5.5",
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      primary: "openai/gpt-image-2",
+      fallbacks: ["fal/fal-ai/flux/dev"],
     });
   });
 

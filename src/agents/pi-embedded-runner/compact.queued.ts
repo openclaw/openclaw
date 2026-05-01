@@ -3,9 +3,10 @@ import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import {
-  captureCompactionCheckpointSnapshot,
+  captureCompactionCheckpointSnapshotAsync,
   cleanupCompactionCheckpointSnapshot,
   persistSessionCompactionCheckpoint,
+  readSessionLeafIdFromTranscriptAsync,
   resolveSessionCompactionCheckpointReason,
   type CapturedCompactionCheckpointSnapshot,
 } from "../../gateway/session-compaction-checkpoints.js";
@@ -51,8 +52,12 @@ export async function compactEmbeddedPiSession(
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
   ensureContextEnginesInitialized();
-  const contextEngine = await resolveContextEngine(params.config);
   const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+  const resolvedWorkspaceDir = resolveUserPath(params.workspaceDir);
+  const contextEngine = await resolveContextEngine(params.config, {
+    agentDir,
+    workspaceDir: resolvedWorkspaceDir,
+  });
   let contextTokenBudget = params.contextTokenBudget;
   if (!contextTokenBudget || !Number.isFinite(contextTokenBudget) || contextTokenBudget <= 0) {
     const resolvedCompactionTarget = resolveEmbeddedCompactionTarget({
@@ -111,8 +116,7 @@ export async function compactEmbeddedPiSession(
         // are notified regardless of which engine is active.
         const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
         checkpointSnapshot = engineOwnsCompaction
-          ? captureCompactionCheckpointSnapshot({
-              sessionManager: SessionManager.open(params.sessionFile),
+          ? await captureCompactionCheckpointSnapshotAsync({
               sessionFile: params.sessionFile,
             })
           : null;
@@ -129,7 +133,7 @@ export async function compactEmbeddedPiSession(
           sessionId: params.sessionId,
           agentId: sessionAgentId,
           sessionKey: hookSessionKey,
-          workspaceDir: resolveUserPath(params.workspaceDir),
+          workspaceDir: resolvedWorkspaceDir,
           messageProvider: resolvedMessageProvider,
         };
         const runtimeContext = contextEngineRuntimeContext;
@@ -196,7 +200,7 @@ export async function compactEmbeddedPiSession(
             try {
               const postLeafId =
                 postCompactionLeafId ??
-                SessionManager.open(postCompactionSessionFile).getLeafId() ??
+                (await readSessionLeafIdFromTranscriptAsync(postCompactionSessionFile)) ??
                 undefined;
               const storedCheckpoint = await persistSessionCompactionCheckpoint({
                 cfg: params.config,
@@ -321,6 +325,7 @@ function buildCompactionContextEngineRuntimeContext(params: {
       reasoningLevel: params.params.reasoningLevel,
       bashElevated: params.params.bashElevated,
       extraSystemPrompt: params.params.extraSystemPrompt,
+      sourceReplyDeliveryMode: params.params.sourceReplyDeliveryMode,
       ownerNumbers: params.params.ownerNumbers,
     }),
     tokenBudget: params.contextTokenBudget,

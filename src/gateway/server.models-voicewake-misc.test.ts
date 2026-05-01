@@ -10,6 +10,7 @@ import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { __resetModelCatalogCacheForTest as resetGatewayModelCatalogCacheForTest } from "./server-model-catalog.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import {
   connectOk,
@@ -88,6 +89,8 @@ type ModelCatalogRpcEntry = {
   provider: string;
   alias?: string;
   contextWindow?: number;
+  input?: string[];
+  reasoning?: boolean;
 };
 
 type PiCatalogFixtureEntry = {
@@ -147,13 +150,20 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
 
 describe("gateway server models + voicewake", () => {
   const listModels = async (params?: { view?: "default" | "configured" | "all" }) =>
-    params
-      ? rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
-      : rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
+    withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () =>
+      params
+        ? await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", params)
+        : await rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list"),
+    );
 
-  const seedPiCatalog = () => {
+  const setPiCatalog = async (entries: PiCatalogFixtureEntry[]) => {
     piSdkMock.enabled = true;
-    piSdkMock.models = buildPiCatalogFixture();
+    piSdkMock.models = entries;
+    await resetGatewayModelCatalogCacheForTest();
+  };
+
+  const seedPiCatalog = async () => {
+    await setPiCatalog(buildPiCatalogFixture());
   };
 
   const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
@@ -212,7 +222,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(options.expected);
@@ -463,11 +473,11 @@ describe("gateway server models + voicewake", () => {
     });
   });
 
-  test("models.list returns model catalog", async () => {
-    seedPiCatalog();
+  test("models.list all view returns model catalog", async () => {
+    await seedPiCatalog();
 
-    const res1 = await listModels();
-    const res2 = await listModels();
+    const res1 = await listModels({ view: "all" });
+    const res2 = await listModels({ view: "all" });
 
     expect(res1.ok).toBe(true);
     expect(res2.ok).toBe(true);
@@ -478,7 +488,7 @@ describe("gateway server models + voicewake", () => {
     expect(piSdkMock.discoverCalls).toBe(1);
   });
 
-  test("models.list keeps default view on the full catalog when no allowlist is configured", async () => {
+  test("models.list default view uses configured providers instead of the full catalog", async () => {
     await withModelsConfig(
       {
         models: {
@@ -491,10 +501,49 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await setPiCatalog([
+          { id: "remote-a", provider: "unauth-a", name: "Remote A" },
+          { id: "remote-b", provider: "unauth-b", name: "Remote B" },
+        ]);
         const res = await listModels();
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+        expect(res.payload?.models).toEqual([
+          expect.objectContaining({
+            id: "MiniMax-M2.7-highspeed",
+            name: "MiniMax M2.7 Highspeed",
+            provider: "minimax",
+          }),
+        ]);
+      },
+    );
+  });
+
+  test("models.list configured view includes auth-backed provider catalog entries", async () => {
+    await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: undefined,
+        ANTHROPIC_OAUTH_TOKEN: undefined,
+        OPENAI_API_KEY: "test-openai-key",
+      },
+      async () => {
+        await withModelsConfig({}, async () => {
+          await seedPiCatalog();
+          const res = await listModels({ view: "configured" });
+          expect(res.ok).toBe(true);
+          expect(res.payload?.models).toEqual([
+            {
+              id: "gpt-test-a",
+              name: "A-Model",
+              provider: "openai",
+              contextWindow: 8000,
+            },
+            {
+              id: "gpt-test-z",
+              name: "gpt-test-z",
+              provider: "openai",
+            },
+          ]);
+        });
       },
     );
   });
@@ -516,21 +565,24 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await setPiCatalog([
+          { id: "remote-a", provider: "unauth-a", name: "Remote A" },
+          { id: "remote-b", provider: "unauth-b", name: "Remote B" },
+        ]);
         const res = await listModels({ view: "configured" });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual([
-          {
+          expect.objectContaining({
             id: "MiniMax-M2.7-highspeed",
             name: "MiniMax M2.7 Highspeed",
             provider: "minimax",
-          },
-          {
+          }),
+          expect.objectContaining({
             id: "glm-4.5-air",
             name: "GLM 4.5 Air",
             provider: "zhipu",
             reasoning: true,
-          },
+          }),
         ]);
       },
     );
@@ -557,7 +609,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels({ view: "configured" });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual([
@@ -584,7 +636,7 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels({ view: "all" });
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual(expectedSortedCatalog());
@@ -658,17 +710,17 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual([
-          {
+          expect.objectContaining({
             id: "moonshotai/kimi-k2.5",
             name: "Kimi K2.5 (Configured)",
             alias: "Kimi K2.5 (NVIDIA)",
             provider: "nvidia",
             contextWindow: 32_000,
-          },
+          }),
         ]);
       },
     );
@@ -701,17 +753,17 @@ describe("gateway server models + voicewake", () => {
         },
       },
       async () => {
-        seedPiCatalog();
+        await seedPiCatalog();
         const res = await listModels();
         expect(res.ok).toBe(true);
         expect(res.payload?.models).toEqual([
-          {
+          expect.objectContaining({
             id: "gpt-test-z",
             name: "Configured GPT Test Z",
             alias: "GPT Test Z Alias",
             provider: "openai",
             contextWindow: 64_000,
-          },
+          }),
         ]);
       },
     );
@@ -815,11 +867,18 @@ describe("gateway server misc", () => {
       "utf-8",
     );
 
-    await withEnvAsync({ OPENCLAW_TEST_MINIMAL_GATEWAY: undefined }, async () => {
-      const autoPort = await getFreePort();
-      const autoServer = await startGatewayServer(autoPort);
-      await autoServer.close();
-    });
+    await withEnvAsync(
+      {
+        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+      },
+      async () => {
+        const autoPort = await getFreePort();
+        const autoServer = await startGatewayServer(autoPort);
+        await autoServer.close();
+      },
+    );
 
     const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
     const channels = updated.channels as Record<string, unknown> | undefined;

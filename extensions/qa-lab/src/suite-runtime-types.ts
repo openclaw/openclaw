@@ -7,6 +7,9 @@ export type QaRuntimeGatewayClient = {
   tempRoot: string;
   workspaceDir: string;
   runtimeEnv: NodeJS.ProcessEnv;
+  getProcessCpuMs?: () => number | null;
+  getProcessRssBytes?: () => number | null;
+  logs?: () => string;
   restartAfterStateMutation?: (
     mutateState: (context: {
       configPath: string;
