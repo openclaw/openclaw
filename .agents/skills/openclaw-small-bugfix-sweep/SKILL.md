@@ -9,6 +9,13 @@ Batch workflow for pasted OpenClaw issue/PR refs.
 Execute, do not summarize.
 Triage does not commit, push, create PRs, comment, close, label, land, or merge.
 
+## Peter Review Gate
+
+Peter always wants to review code before commits.
+After local fixes and proof, stop with the diff summary, touched files, and test/gate output.
+Do not commit, push, comment, close, label, land, merge, or otherwise publish until Peter explicitly says he has reviewed and approves that exact diff for that action.
+If Peter asks for a bundled action like "commit push close", first confirm the code has already been reviewed in chat; if not, stop and ask for review/approval.
+
 ## Companion Skills
 
 Use `$gitcrawl` first, `$openclaw-pr-maintainer` for live GitHub hygiene, `$github-deep-review` posture for source tracing, and `$openclaw-testing` for proof.
