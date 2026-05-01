@@ -151,6 +151,18 @@ async function removeStateDirAroundWorkspaces(
     return;
   }
 
+  // Refuse to enumerate through a symlinked state root — readdir follows symlinks,
+  // so a symlinked OPENCLAW_STATE_DIR could prune children of an unrelated directory.
+  try {
+    const stat = await fs.lstat(resolvedStateDir);
+    if (stat.isSymbolicLink()) {
+      runtime.error(`Refusing to prune symlinked state root: ${resolvedStateDir}`);
+      return;
+    }
+  } catch {
+    return;
+  }
+
   let entries: Dirent[];
   try {
     entries = await fs.readdir(resolvedStateDir, { withFileTypes: true });

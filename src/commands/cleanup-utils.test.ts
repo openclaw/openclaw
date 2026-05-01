@@ -131,6 +131,44 @@ describe("cleanup path removals", () => {
     await expect(fs.access(homeDir)).resolves.toBeUndefined();
   });
 
+  it("refuses to prune a symlinked state-dir root even when a workspace is inside it (#75052 security)", async () => {
+    // Regression: removeStateDirAroundWorkspaces must refuse when OPENCLAW_STATE_DIR is a symlink.
+    // Without this guard, fs.readdir follows the symlink and can enumerate/delete children of an
+    // unrelated target directory even though the apparent workspace-preservation path check passes.
+    const runtime = createRuntimeMock();
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-75052-symlink-"));
+    try {
+      const realStateDir = path.join(tmpDir, "real-state");
+      const symlinkStateDir = path.join(tmpDir, "link-state");
+      const workspaceInsideSymlink = path.join(symlinkStateDir, "workspace");
+      await fs.mkdir(realStateDir, { recursive: true });
+      await fs.symlink(realStateDir, symlinkStateDir);
+      await fs.mkdir(path.join(realStateDir, "workspace"), { recursive: true });
+      await fs.writeFile(path.join(realStateDir, "token.json"), "{}\n", "utf8");
+
+      await removeStateAndLinkedPaths(
+        {
+          stateDir: symlinkStateDir,
+          configPath: path.join(symlinkStateDir, "openclaw.json"),
+          oauthDir: path.join(tmpDir, "oauth"),
+          configInsideState: true,
+          oauthInsideState: false,
+        },
+        runtime,
+        { dryRun: false, workspaceDirsToPreserve: [workspaceInsideSymlink] },
+      );
+
+      const errors = runtime.error.mock.calls.map(([line]: [string]) => line);
+      expect(errors.some((e: string) => e.includes("Refusing to prune symlinked state root"))).toBe(
+        true,
+      );
+      // Real state directory contents must be untouched.
+      await expect(fs.access(path.join(realStateDir, "token.json"))).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("prunes state dir contents around a preserved workspace, keeping other state data removed", async () => {
     // Regression for openclaw/openclaw#75052: uninstalling with state scope but not workspace
     // scope must remove state data (config, credentials) while preserving the workspace subtree.
