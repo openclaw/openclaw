@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "status": "repaired_and_backed_up",
+  "updated_at_utc": "2026-05-01T17:13:21.787088+00:00",
+  "issue": "Canonical GitHub backup sync script was missing from source HEAD and backup workspace after a snapshot deleted work/scripts/backup-sync-github.sh.",
+  "root_cause": "The script had been restored only into the source working tree, but the backup script archives source HEAD, so uncommitted files were excluded from backup snapshots.",
+  "repair_actions": [
+    "Restored work/scripts/backup-sync-github.sh into /Users/openclaw/OpenClaw.",
+    "Committed restored script into source HEAD.",
+    "Ran the restored source-path backup script.",
+    "Verified backup workspace now contains work/scripts/backup-sync-github.sh.",
+    "Verified GitHub backup push succeeded."
+  ],
+  "source_commit": "8e03f30557 restore canonical GitHub backup sync script",
+  "backup_commit": "a323f98b8b813987aebe73cc6c2e169f001d657d",
+  "verified_paths": {
+    "source_script": "/Users/openclaw/OpenClaw/work/scripts/backup-sync-github.sh",
+    "backup_workspace_script": "/Users/openclaw/.openclaw-backup-workspace/work/scripts/backup-sync-github.sh",
+    "backup_launchagent_expected_target": "/Users/openclaw/OpenClaw/work/scripts/backup-sync-github.sh"
+  },
+  "operator_direction": "Use /Users/openclaw/OpenClaw/work/scripts/backup-sync-github.sh for canonical backup. If a restored file must be included in backup snapshots, ensure it is committed into source HEAD first because the backup script archives HEAD."
+}
