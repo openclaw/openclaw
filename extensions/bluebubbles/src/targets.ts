@@ -11,9 +11,9 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/text-runtime";
 
-export type BlueBubblesService = "imessage" | "sms" | "auto";
+type BlueBubblesService = "imessage" | "sms" | "auto";
 
-export type BlueBubblesTarget =
+type BlueBubblesTarget =
   | { kind: "chat_id"; chatId: number }
   | { kind: "chat_guid"; chatGuid: string }
   | { kind: "chat_identifier"; chatIdentifier: string }
