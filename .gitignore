@@ -6,6 +6,7 @@ docker-compose.extra.yml
 docker-compose.sandbox.yml
 dist
 dist-runtime/
+dist-sea/
 pnpm-lock.yaml
 bun.lock
 bun.lockb
@@ -105,6 +106,8 @@ USER.md
 !.agents/skills/blacksmith-testbox/**
 !.agents/skills/discord-clawd/
 !.agents/skills/discord-clawd/**
+!.agents/skills/crabbox/
+!.agents/skills/crabbox/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-ghsa-maintainer/
@@ -189,6 +192,8 @@ changelog/fragments/
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
+/runs/
+/data/rtt.jsonl
 extensions/qa-lab/web/dist/
 
 # Generated bundled plugin runtime dependency manifests

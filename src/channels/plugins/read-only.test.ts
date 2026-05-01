@@ -14,6 +14,14 @@ import {
   listReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
 
+const jitiLoaderParams = vi.hoisted(
+  () =>
+    [] as Array<{
+      modulePath: string;
+      tryNative?: boolean;
+    }>,
+);
+
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
   return {
@@ -98,6 +106,10 @@ vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
   return {
     ...actual,
     getCachedPluginJitiLoader: ((params) => {
+      jitiLoaderParams.push({
+        modulePath: params.modulePath,
+        tryNative: params.tryNative,
+      });
       const actualLoader = actual.getCachedPluginJitiLoader(params);
       return ((modulePath: string) => {
         if (
@@ -419,6 +431,7 @@ function expectExternalChatSetupOnlyPluginLoaded(params: {
 }
 
 afterEach(() => {
+  jitiLoaderParams.length = 0;
   resetPluginLoaderTestStateForTest();
 });
 
@@ -479,11 +492,19 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
+    expect(
+      jitiLoaderParams.some(
+        (entry) =>
+          entry.tryNative === true &&
+          (entry.modulePath.endsWith("/plugins/loader.js") ||
+            entry.modulePath.endsWith("/plugins/loader.ts")),
+      ),
+    ).toBe(true);
   });
 
   it("matches setup-only plugins by manifest-owned channel ids when plugin id differs", () => {
@@ -505,7 +526,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -537,7 +558,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -584,7 +605,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -624,7 +645,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -654,7 +675,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -832,7 +853,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -857,7 +878,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, EXTERNAL_CHAT_TOKEN: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -901,7 +922,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -927,7 +948,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -975,7 +996,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -1005,7 +1026,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
           EXTERNAL_CHAT_TOKEN: "configured",
           workspaceDir: "workspace-env-value",
         },
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -1041,7 +1062,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -1070,7 +1091,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       } as never,
       {
         env: { ...process.env },
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 

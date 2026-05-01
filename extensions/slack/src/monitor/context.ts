@@ -26,11 +26,7 @@ import { normalizeSlackChannelType } from "./channel-type.js";
 import { resolveSessionKey } from "./config.runtime.js";
 import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
-export {
-  inferSlackChannelType,
-  normalizeSlackChannelType,
-  resolveSlackChatType,
-} from "./channel-type.js";
+export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;

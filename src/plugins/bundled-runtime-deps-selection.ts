@@ -482,6 +482,7 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   pluginDir: string;
   configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
   if (
@@ -560,7 +561,11 @@ export function isBundledPluginConfiguredForRuntimeDeps(params: {
   ) {
     return true;
   }
-  return manifest.enabledByDefault && manifest.providers.length === 0;
+  return (
+    (params.includeEnabledByDefaultPlugins ?? true) &&
+    manifest.enabledByDefault &&
+    manifest.providers.length === 0
+  );
 }
 
 function isBundledPluginExplicitlyDisabledForRuntimeDeps(params: {
@@ -595,16 +600,17 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
   config?: OpenClawConfig;
   plugins?: NormalizedPluginsConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   pluginId: string;
   pluginDir: string;
   configuredModelOwnerPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
 }): boolean {
-  if (params.selectedPluginIds) {
+  if (params.exactPluginIds) {
     return (
-      params.selectedPluginIds.has(params.pluginId) &&
+      params.exactPluginIds.has(params.pluginId) &&
       !(
         params.config &&
         params.plugins &&
@@ -650,6 +656,7 @@ function shouldIncludeBundledPluginRuntimeDeps(params: {
     pluginDir: params.pluginDir,
     configuredModelOwnerPluginIds: params.configuredModelOwnerPluginIds,
     includeConfiguredChannels: params.includeConfiguredChannels,
+    includeEnabledByDefaultPlugins: params.includeEnabledByDefaultPlugins,
     manifestCache: params.manifestCache,
   });
 }
@@ -658,8 +665,9 @@ export function collectBundledPluginRuntimeDeps(params: {
   extensionsDir: string;
   config?: OpenClawConfig;
   pluginIds?: ReadonlySet<string>;
-  selectedPluginIds?: ReadonlySet<string>;
+  exactPluginIds?: ReadonlySet<string>;
   includeConfiguredChannels?: boolean;
+  includeEnabledByDefaultPlugins?: boolean;
   manifestCache?: BundledPluginRuntimeDepsManifestCache;
   normalizePluginId?: NormalizePluginId;
 }): {
@@ -702,11 +710,12 @@ export function collectBundledPluginRuntimeDeps(params: {
         config: params.config,
         plugins,
         pluginIds: params.pluginIds,
-        selectedPluginIds: params.selectedPluginIds,
+        exactPluginIds: params.exactPluginIds,
         pluginId,
         pluginDir,
         configuredModelOwnerPluginIds,
         includeConfiguredChannels: params.includeConfiguredChannels,
+        includeEnabledByDefaultPlugins: params.includeEnabledByDefaultPlugins,
         manifestCache,
       })
     ) {
