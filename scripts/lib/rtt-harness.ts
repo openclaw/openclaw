@@ -10,6 +10,8 @@ export type RttProviderMode = "mock-openai" | "live-frontier";
 export type RttCliOptions = {
   providerMode: RttProviderMode;
   runs: number;
+  samples: number;
+  sampleTimeoutMs: number;
   harnessRoot: string;
   output: string;
   scenarios: string[];
@@ -35,6 +37,12 @@ export type RttResult = {
   rtt: {
     canaryMs?: number;
     mentionReplyMs?: number;
+    warmSamples?: number[];
+    avgMs?: number;
+    p50Ms?: number;
+    p95Ms?: number;
+    maxMs?: number;
+    failedSamples?: number;
   };
   artifacts: {
     rawSummaryPath: string;
@@ -49,6 +57,20 @@ export type TelegramQaSummary = {
     id?: string;
     rttMs?: number;
     status?: string;
+    samples?: Array<{
+      index?: number;
+      status?: string;
+      rttMs?: number;
+    }>;
+    stats?: {
+      total?: number;
+      passed?: number;
+      failed?: number;
+      avgMs?: number;
+      p50Ms?: number;
+      p95Ms?: number;
+      maxMs?: number;
+    };
   }>;
 };
 
@@ -82,11 +104,26 @@ export function buildRunId(params: { now: Date; spec: string; index?: number }) 
 
 export function extractRtt(summary: TelegramQaSummary) {
   const scenarios = summary.scenarios ?? [];
-  return {
+  const mention = scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply");
+  const warmSamples = mention?.samples
+    ?.filter((sample) => sample.status === "pass" && sample.rttMs !== undefined)
+    .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
+    .flatMap((sample) => (sample.rttMs === undefined ? [] : [sample.rttMs]));
+  const rtt: RttResult["rtt"] = {
     canaryMs: scenarios.find((scenario) => scenario.id === "telegram-canary")?.rttMs,
-    mentionReplyMs: scenarios.find((scenario) => scenario.id === "telegram-mentioned-message-reply")
-      ?.rttMs,
+    mentionReplyMs: mention?.stats?.p50Ms ?? mention?.rttMs,
   };
+  if (warmSamples?.length) {
+    rtt.warmSamples = warmSamples;
+  }
+  if (mention?.stats) {
+    rtt.avgMs = mention.stats.avgMs;
+    rtt.p50Ms = mention.stats.p50Ms;
+    rtt.p95Ms = mention.stats.p95Ms;
+    rtt.maxMs = mention.stats.maxMs;
+    rtt.failedSamples = mention.stats.failed;
+  }
+  return rtt;
 }
 
 export function createHarnessEnv(params: {
@@ -96,6 +133,8 @@ export function createHarnessEnv(params: {
   spec: string;
   version: string;
   rawOutputDir: string;
+  samples: number;
+  sampleTimeoutMs: number;
   timeoutMs: number;
 }) {
   return {
@@ -106,6 +145,8 @@ export function createHarnessEnv(params: {
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: params.scenarios.join(","),
     OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: params.rawOutputDir,
     OPENCLAW_NPM_TELEGRAM_FAST: params.baseEnv.OPENCLAW_NPM_TELEGRAM_FAST ?? "1",
+    OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES: String(params.samples),
+    OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS: String(params.sampleTimeoutMs),
     OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS: String(params.timeoutMs),
     OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS: String(params.timeoutMs),
   };

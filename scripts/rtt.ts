@@ -20,10 +20,12 @@ import {
 const DEFAULT_SCENARIOS = ["telegram-mentioned-message-reply"];
 const DEFAULT_PROVIDER_MODE = "mock-openai" satisfies RttProviderMode;
 const DEFAULT_TIMEOUT_MS = 180_000;
+const DEFAULT_SAMPLES = 20;
+const DEFAULT_SAMPLE_TIMEOUT_MS = 30_000;
 
 function usage() {
   return [
-    "Usage: pnpm rtt <openclaw@spec> [--provider mock-openai|live-frontier] [--runs N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
+    "Usage: pnpm rtt <openclaw@spec> [--provider mock-openai|live-frontier] [--runs N] [--samples N] [--sample-timeout-ms N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
     "",
     "Examples:",
     "  pnpm rtt openclaw@beta",
@@ -61,6 +63,8 @@ function parseArgs(argv: string[]) {
   let spec: string | undefined;
   let providerMode = DEFAULT_PROVIDER_MODE;
   let runs = 1;
+  let samples = DEFAULT_SAMPLES;
+  let sampleTimeoutMs = DEFAULT_SAMPLE_TIMEOUT_MS;
   let harnessRoot = "~/Developer/clawdbot";
   let output = "runs";
   let timeoutMs = DEFAULT_TIMEOUT_MS;
@@ -77,6 +81,14 @@ function parseArgs(argv: string[]) {
     }
     if (arg === "--runs") {
       runs = parsePositiveInt("--runs", argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--samples") {
+      samples = parsePositiveInt("--samples", argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--sample-timeout-ms") {
+      sampleTimeoutMs = parsePositiveInt("--sample-timeout-ms", argv[++index] ?? "");
       continue;
     }
     if (arg === "--harness-root") {
@@ -115,6 +127,8 @@ function parseArgs(argv: string[]) {
     options: {
       providerMode,
       runs,
+      samples,
+      sampleTimeoutMs,
       harnessRoot: path.resolve(resolveHome(harnessRoot)),
       output: path.resolve(resolveHome(output)),
       scenarios: DEFAULT_SCENARIOS,
@@ -140,6 +154,8 @@ async function runOne(params: {
     baseEnv: process.env,
     providerMode: params.options.providerMode,
     rawOutputDir,
+    samples: params.options.samples,
+    sampleTimeoutMs: params.options.sampleTimeoutMs,
     scenarios: params.options.scenarios,
     spec: params.spec,
     timeoutMs: params.options.timeoutMs,
