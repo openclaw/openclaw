@@ -716,8 +716,7 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
-    hasTaggedCronEvents ||
-    dueCommitments.length > 0;
+    hasTaggedCronEvents;
   const basePreflight = {
     ...reasonFlags,
     session,
@@ -738,7 +737,11 @@ async function resolveHeartbeatPreflight(params: {
   try {
     heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
     const tasks = parseHeartbeatTasks(heartbeatFileContent);
-    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && tasks.length === 0) {
+    if (
+      isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
+      tasks.length === 0 &&
+      dueCommitments.length === 0
+    ) {
       return {
         ...basePreflight,
         skipReason: "empty-heartbeat-file",
@@ -772,6 +775,23 @@ type HeartbeatPromptResolution = {
   hasCronEvents: boolean;
   hasDueCommitments: boolean;
 };
+
+function resolveDueHeartbeatTasks(
+  preflight: Pick<HeartbeatPreflight, "session" | "tasks">,
+  startedAt: number,
+): HeartbeatTask[] {
+  const tasks = preflight.tasks;
+  if (!tasks || tasks.length === 0) {
+    return [];
+  }
+  return tasks.filter((task) =>
+    isTaskDue(
+      (preflight.session.entry?.heartbeatTaskState as Record<string, number>)?.[task.name],
+      task.interval,
+      startedAt,
+    ),
+  );
+}
 
 function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string): string {
   if (!/heartbeat\.md/i.test(prompt)) {
@@ -821,6 +841,7 @@ function resolveHeartbeatRunPrompt(params: {
   canRelayToUser: boolean;
   workspaceDir: string;
   startedAt: number;
+  dueTasks: HeartbeatTask[];
   heartbeatFileContent?: string;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
@@ -844,14 +865,7 @@ function resolveHeartbeatRunPrompt(params: {
   const hasDueCommitments = Boolean(commitmentPrompt);
 
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
-    const tasks = params.preflight.tasks;
-    const dueTasks = tasks.filter((task) =>
-      isTaskDue(
-        (params.preflight.session.entry?.heartbeatTaskState as Record<string, number>)?.[task.name],
-        task.interval,
-        params.startedAt,
-      ),
-    );
+    const dueTasks = params.dueTasks;
 
     if (dueTasks.length > 0) {
       const taskList = dueTasks.map((task) => `- ${task.name}: ${task.prompt}`).join("\n");
@@ -867,15 +881,12 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
         }
       }
-      if (commitmentPrompt) {
-        prompt += `\n\n${commitmentPrompt}`;
-      }
       return {
         prompt,
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
-        hasDueCommitments,
+        hasDueCommitments: false,
       };
     }
     if (commitmentPrompt) {
@@ -1002,6 +1013,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const previousUpdatedAt = entry?.updatedAt;
+  const dueHeartbeatTasks = resolveDueHeartbeatTasks(preflight, startedAt);
 
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
@@ -1009,9 +1021,10 @@ export async function runHeartbeatOnce(opts: {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const useIsolatedSession = heartbeat?.isolatedSession === true;
-  const firstDueCommitment = canHeartbeatDeliverCommitments(heartbeat)
-    ? preflight.dueCommitments[0]
-    : undefined;
+  const firstDueCommitment =
+    canHeartbeatDeliverCommitments(heartbeat) && dueHeartbeatTasks.length === 0
+      ? preflight.dueCommitments[0]
+      : undefined;
   const commitmentDeliveryContext = firstDueCommitment
     ? {
         channel: firstDueCommitment.channel,
@@ -1083,6 +1096,7 @@ export async function runHeartbeatOnce(opts: {
     canRelayToUser,
     workspaceDir,
     startedAt,
+    dueTasks: dueHeartbeatTasks,
     heartbeatFileContent: preflight.heartbeatFileContent,
   });
   const dueCommitmentIds = hasDueCommitments
