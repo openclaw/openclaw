@@ -2,12 +2,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 
+/**
+ * Sentinel text injected when a blank-only user message is repaired on disk.
+ * Using a human-readable sentinel (rather than dropping the entry) preserves
+ * the user turn so the transcript never ends up with no user role — strict
+ * providers like Qwen/mlx-vlm reject transcripts missing a user turn.
+ */
+export const BLANK_USER_FALLBACK_TEXT = "(continue)";
+
 type RepairReport = {
   repaired: boolean;
   droppedLines: number;
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  trimmedTrailingAssistantMessages?: number;
   backupPath?: string;
   reason?: string;
 };
@@ -79,7 +88,21 @@ type UserEntryRepair =
 function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEntryRepair {
   const content = entry.message.content;
   if (typeof content === "string") {
-    return content.trim() ? { kind: "keep" } : { kind: "drop" };
+    if (content.trim()) {
+      return { kind: "keep" };
+    }
+    // Rewrite blank string content to a placeholder instead of dropping;
+    // same rationale as the empty-array case below.
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: BLANK_USER_FALLBACK_TEXT,
+        },
+      },
+    };
   }
   if (!Array.isArray(content)) {
     return { kind: "keep" };
@@ -101,7 +124,20 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
     return false;
   });
   if (nextContent.length === 0) {
-    return { kind: "drop" };
+    // Rewrite to a synthetic placeholder instead of dropping so the user
+    // turn is preserved in the transcript. Dropping blank-only user entries
+    // can leave a session as [system, asst, asst, …] with no user role,
+    // which strict providers (Qwen/mlx-vlm, Anthropic) reject outright.
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: [{ type: "text", text: BLANK_USER_FALLBACK_TEXT }],
+        },
+      },
+    };
   }
   if (!touched) {
     return { kind: "keep" };
@@ -118,11 +154,28 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
   };
 }
 
+/**
+ * Check whether a parsed entry is a message with `role=assistant`.
+ * Used by the trailing-assistant trimming pass that runs after per-entry
+ * repairs to ensure a session file never ends on an assistant turn.
+ */
+function isAssistantMessageEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  return (record.message as { role?: unknown }).role === "assistant";
+}
+
 function buildRepairSummaryParts(params: {
   droppedLines: number;
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  trimmedTrailingAssistantMessages: number;
 }): string {
   const parts: string[] = [];
   if (params.droppedLines > 0) {
@@ -136,6 +189,9 @@ function buildRepairSummaryParts(params: {
   }
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
+  }
+  if (params.trimmedTrailingAssistantMessages > 0) {
+    parts.push(`trimmed ${params.trimmedTrailingAssistantMessages} trailing assistant message(s)`);
   }
   // Caller only invokes this once at least one counter is non-zero, so the
   // empty-array branch is unreachable in production. Kept for defensive output.
@@ -217,11 +273,24 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
+  // Trim trailing assistant messages so the session file never ends on
+  // role=assistant. Session files ending on an assistant turn cause Anthropic
+  // to reject the request with "does not support assistant message prefill"
+  // (400) when thinking/extended-thinking is enabled. The outbound replay
+  // path strips these per-request, but the on-disk file stays corrupted and
+  // triggers repeated repair+reject cycles across restarts.
+  let trimmedTrailingAssistantMessages = 0;
+  while (entries.length > 1 && isAssistantMessageEntry(entries[entries.length - 1])) {
+    entries.pop();
+    trimmedTrailingAssistantMessages += 1;
+  }
+
   if (
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
-    rewrittenUserMessages === 0
+    rewrittenUserMessages === 0 &&
+    trimmedTrailingAssistantMessages === 0
   ) {
     return { repaired: false, droppedLines: 0 };
   }
@@ -256,6 +325,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      trimmedTrailingAssistantMessages,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -266,6 +336,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      trimmedTrailingAssistantMessages,
     })} (${path.basename(sessionFile)})`,
   );
   return {
@@ -274,6 +345,7 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    trimmedTrailingAssistantMessages,
     backupPath,
   };
 }
