@@ -205,7 +205,8 @@ function summarizeSamples(samples) {
 async function runWarmScenario(params) {
   const samples = [];
   let failures = 0;
-  for (let index = 0; index < params.sampleCount; index += 1) {
+  let passed = 0;
+  for (let index = 0; passed < params.sampleCount; index += 1) {
     const sample = await runScenario({
       allowAnySutReply: true,
       id: params.id,
@@ -217,6 +218,8 @@ async function runWarmScenario(params) {
     });
     if (sample.status === "fail") {
       failures += 1;
+    } else {
+      passed += 1;
     }
     samples.push({
       index: index + 1,
@@ -227,7 +230,7 @@ async function runWarmScenario(params) {
     if (failures >= params.maxFailures) {
       break;
     }
-    if (index + 1 < params.sampleCount) {
+    if (passed < params.sampleCount) {
       await sleep(500);
     }
   }
@@ -236,7 +239,7 @@ async function runWarmScenario(params) {
   return {
     id: params.id,
     title: params.title,
-    status: stats.failed > 0 ? "fail" : "pass",
+    status: stats.passed >= params.sampleCount ? "pass" : "fail",
     details: `${stats.passed}/${stats.total} warm samples passed`,
     rttMs: stats.p50Ms,
     samples,
