@@ -50,9 +50,6 @@ import { normalizeSource, type MediaSource, type RawMediaSource } from "./media-
 
 // ============ Re-exported types ============
 
-export { ApiError } from "../types.js";
-export type { OutboundMeta, MessageResponse, UploadMediaResponse } from "../types.js";
-export { MediaFileType } from "../types.js";
 export { UploadDailyLimitExceededError } from "../api/media-chunked.js";
 
 // ============ Plugin User-Agent ============
@@ -357,7 +354,7 @@ export interface DeliveryTarget {
 }
 
 /** Account credentials for API authentication. */
-export interface AccountCreds {
+interface AccountCreds {
   appId: string;
   clientSecret: string;
 }
@@ -528,7 +525,7 @@ export function createRawInputNotifyFn(
 // ============ Media sending (unified) ============
 
 /** Rich-media kind accepted by {@link sendMedia}. */
-export type MediaKind = "image" | "voice" | "video" | "file";
+type MediaKind = "image" | "voice" | "video" | "file";
 
 /** Map a {@link MediaKind} to the wire-level {@link MediaFileType} code. */
 const KIND_TO_FILE_TYPE: Record<MediaKind, MediaFileType> = {
@@ -538,16 +535,13 @@ const KIND_TO_FILE_TYPE: Record<MediaKind, MediaFileType> = {
   file: MediaFileType.FILE,
 };
 
-/** Re-export source types so callers can construct them without importing media-source. */
-export type { MediaSource, RawMediaSource } from "./media-source.js";
-
 /**
  * Options for the unified {@link sendMedia} API.
  *
  * This replaces the legacy four-method surface
  * (`sendImage / sendVoiceMessage / sendVideoMessage / sendFileMessage`).
  */
-export interface SendMediaOptions {
+interface SendMediaOptions {
   /** Delivery target. Only `c2c` and `group` support rich media. */
   target: DeliveryTarget;
   /** Account credentials. */
