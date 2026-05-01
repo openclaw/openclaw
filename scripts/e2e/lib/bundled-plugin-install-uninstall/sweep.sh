@@ -48,7 +48,7 @@ for plugin_entry in "${plugin_entries[@]}"; do
   if [[ "${OPENCLAW_BUNDLED_PLUGIN_RUNTIME_SMOKE:-1}" != "0" ]]; then
     echo "Running bundled plugin runtime smoke: $plugin_id ($plugin_dir)"
     node "$runtime_smoke" plugin "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index"
-    node "$runtime_smoke" tts-global-disable "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index"
+    node "$runtime_smoke" tts-global-disable "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index" ""
     if [[ "$plugin_id" == "${OPENCLAW_BUNDLED_PLUGIN_TTS_LIVE_PROVIDER:-openai}" ]]; then
       node "$runtime_smoke" tts-openai-live "$plugin_id" "$plugin_dir" "$requires_config" "$plugin_index"
     fi
