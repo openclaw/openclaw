@@ -516,8 +516,8 @@ export class TwilioProvider implements VoiceCallProvider {
 
   /**
    * Initiate an outbound call via Twilio API.
-   * If inlineTwiml is provided, uses that directly (for notify mode).
-   * Otherwise, uses webhook URL for dynamic TwiML.
+   * If inlineTwiml or preConnectTwiml is provided, the first webhook request
+   * receives that TwiML before normal dynamic TwiML resumes.
    */
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
     const url = new URL(input.webhookUrl);
@@ -533,6 +533,8 @@ export class TwilioProvider implements VoiceCallProvider {
     if (input.inlineTwiml) {
       this.twimlStorage.set(input.callId, input.inlineTwiml);
       this.notifyCalls.add(input.callId);
+    } else if (input.preConnectTwiml) {
+      this.twimlStorage.set(input.callId, input.preConnectTwiml);
     }
 
     // Build request params - always use URL-based TwiML.

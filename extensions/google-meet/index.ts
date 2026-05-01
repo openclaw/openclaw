@@ -118,9 +118,14 @@ const googleMeetConfigSchema = {
       label: "Voice Call Request Timeout (ms)",
       advanced: true,
     },
-    "voiceCall.dtmfDelayMs": { label: "DTMF Delay (ms)", advanced: true },
+    "voiceCall.dtmfDelayMs": {
+      label: "Legacy DTMF Delay (ms)",
+      help: "Compatibility setting from the old post-connect DTMF flow. Twilio Meet joins now play DTMF before realtime connect.",
+      advanced: true,
+    },
     "voiceCall.postDtmfSpeechDelayMs": {
-      label: "Post-DTMF Speech Delay (ms)",
+      label: "Legacy Post-DTMF Speech Delay (ms)",
+      help: "Compatibility setting from the old delayed-speech flow. Twilio Meet joins now carry the intro as the initial Voice Call message.",
       advanced: true,
     },
     "voiceCall.introMessage": { label: "Voice Call Intro Message", advanced: true },

@@ -121,6 +121,7 @@ const VoiceCallToolSchema = Type.Union([
     to: Type.Optional(Type.String({ description: "Call target" })),
     message: Type.String({ description: "Intro message" }),
     mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
+    dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
   Type.Object({
     action: Type.Literal("continue_call"),
@@ -150,6 +151,7 @@ const VoiceCallToolSchema = Type.Union([
     to: Type.Optional(Type.String({ description: "Call target" })),
     sid: Type.Optional(Type.String({ description: "Call SID" })),
     message: Type.Optional(Type.String({ description: "Optional intro message" })),
+    dtmfSequence: Type.Optional(Type.String({ description: "DTMF digits to play before connect" })),
   }),
 ]);
 
@@ -275,10 +277,12 @@ export default definePluginEntry({
       to: string;
       message?: string;
       mode?: "notify" | "conversation";
+      dtmfSequence?: string;
     }) => {
       const result = await params.rt.manager.initiateCall(params.to, undefined, {
         message: params.message,
         mode: params.mode,
+        dtmfSequence: params.dtmfSequence,
       });
       if (!result.success) {
         params.respond(false, { error: result.error || "initiate failed" });
@@ -470,6 +474,7 @@ export default definePluginEntry({
         try {
           const to = normalizeOptionalString(params?.to) ?? "";
           const message = normalizeOptionalString(params?.message) ?? "";
+          const dtmfSequence = normalizeOptionalString(params?.dtmfSequence);
           if (!to) {
             respond(false, { error: "to required" });
             return;
@@ -483,6 +488,7 @@ export default definePluginEntry({
             to,
             message: message || undefined,
             mode,
+            dtmfSequence,
           });
         } catch (err) {
           sendError(respond, err);
@@ -518,6 +524,7 @@ export default definePluginEntry({
                 }
                 const result = await rt.manager.initiateCall(to, undefined, {
                   message,
+                  dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
                   mode:
                     rawParams.mode === "notify" || rawParams.mode === "conversation"
                       ? rawParams.mode
@@ -602,6 +609,7 @@ export default definePluginEntry({
             throw new Error("to required for call");
           }
           const result = await rt.manager.initiateCall(to, undefined, {
+            dtmfSequence: normalizeOptionalString(rawParams.dtmfSequence),
             message: normalizeOptionalString(rawParams.message),
           });
           if (!result.success) {

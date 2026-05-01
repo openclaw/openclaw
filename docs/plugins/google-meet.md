@@ -981,7 +981,9 @@ Twilio-only config:
 ```
 
 `voiceCall.enabled` defaults to `true`; with Twilio transport it delegates the
-actual PSTN call and DTMF to the Voice Call plugin. If `voice-call` is not
+actual PSTN call, DTMF, and intro greeting to the Voice Call plugin. Voice Call
+plays the DTMF sequence before opening the realtime media stream, then uses the
+saved intro text as the initial realtime greeting. If `voice-call` is not
 enabled, Google Meet can still validate and record the dial plan, but it cannot
 place the Twilio call.
 
@@ -1411,9 +1413,10 @@ participant:
   the PIN.
 - Increase the leading pauses in `--dtmf-sequence` if Meet answers slowly, for
   example `wwww123456#`.
-- If the participant joins but you miss the first spoken line, increase
-  `plugins.entries.google-meet.config.voiceCall.postDtmfSpeechDelayMs` so the
-  intro is spoken after Meet finishes admitting the phone participant.
+- If the participant joins but you do not hear the greeting, check
+  `openclaw voicecall tail` for a Twilio stream start followed by realtime
+  provider readiness. The greeting is now generated from the initial
+  `voicecall.start` message after the stream connects.
 
 If webhooks do not arrive, debug the Voice Call plugin first: the provider must
 reach `plugins.entries.voice-call.config.publicUrl` or the configured tunnel.

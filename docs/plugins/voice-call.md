@@ -766,10 +766,10 @@ If Voice Call is green but the Meet participant never joins, check the Meet
 dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy while
 the meeting rejects or ignores an incorrect DTMF sequence.
 
-Google Meet starts Voice Call silently, sends DTMF, then asks Voice Call to
-speak the intro after `voiceCall.postDtmfSpeechDelayMs`. Increase that delay in
-the Google Meet plugin config if the first line is spoken before Meet admits the
-phone participant.
+Google Meet passes the Meet DTMF sequence and intro text to `voicecall.start`.
+For Twilio calls, Voice Call serves the DTMF TwiML first, redirects back to the
+webhook, then opens the realtime media stream so the saved intro is generated
+after the phone participant has joined the meeting.
 
 ### Realtime call has no speech
 

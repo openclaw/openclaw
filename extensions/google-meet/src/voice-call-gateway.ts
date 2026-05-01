@@ -1,4 +1,3 @@
-import { setTimeout as sleep } from "node:timers/promises";
 import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
@@ -84,36 +83,13 @@ export async function joinMeetViaVoiceCallGateway(params: {
       {
         to: params.dialInNumber,
         mode: "conversation",
+        ...(params.message ? { message: params.message } : {}),
+        ...(params.dtmfSequence ? { dtmfSequence: params.dtmfSequence } : {}),
       },
       { timeoutMs: params.config.voiceCall.requestTimeoutMs },
     )) as VoiceCallStartResult;
     if (!start.callId) {
       throw new Error(start.error || "voicecall.start did not return callId");
-    }
-    if (params.dtmfSequence) {
-      await sleep(params.config.voiceCall.dtmfDelayMs);
-      await client.request(
-        "voicecall.dtmf",
-        {
-          callId: start.callId,
-          digits: params.dtmfSequence,
-        },
-        { timeoutMs: params.config.voiceCall.requestTimeoutMs },
-      );
-    }
-    if (params.message) {
-      await sleep(params.config.voiceCall.postDtmfSpeechDelayMs);
-      const spoken = (await client.request(
-        "voicecall.speak",
-        {
-          callId: start.callId,
-          message: params.message,
-        },
-        { timeoutMs: params.config.voiceCall.requestTimeoutMs },
-      )) as VoiceCallSpeakResult;
-      if (spoken.success === false) {
-        throw new Error(spoken.error || "voicecall.speak failed");
-      }
     }
     return {
       callId: start.callId,

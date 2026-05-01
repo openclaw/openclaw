@@ -27,12 +27,11 @@ describe("Google Meet voice-call gateway", () => {
     gatewayMocks.startGatewayClientWhenEventLoopReady.mockClear();
   });
 
-  it("starts Twilio Meet calls silently, sends DTMF, then speaks the realtime intro", async () => {
+  it("starts Twilio Meet calls with pre-connect DTMF and intro metadata", async () => {
     const config = resolveGoogleMeetConfig({
       voiceCall: {
         gatewayUrl: "ws://127.0.0.1:18789",
         dtmfDelayMs: 1,
-        postDtmfSpeechDelayMs: 1,
       },
       realtime: { introMessage: "Say exactly: I'm here and listening." },
     });
@@ -50,26 +49,11 @@ describe("Google Meet voice-call gateway", () => {
       {
         to: "+15551234567",
         mode: "conversation",
-      },
-      { timeoutMs: 30_000 },
-    );
-    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
-      2,
-      "voicecall.dtmf",
-      {
-        callId: "call-1",
-        digits: "123456#",
-      },
-      { timeoutMs: 30_000 },
-    );
-    expect(gatewayMocks.request).toHaveBeenNthCalledWith(
-      3,
-      "voicecall.speak",
-      {
-        callId: "call-1",
         message: "Say exactly: I'm here and listening.",
+        dtmfSequence: "123456#",
       },
       { timeoutMs: 30_000 },
     );
+    expect(gatewayMocks.request).toHaveBeenCalledTimes(1);
   });
 });

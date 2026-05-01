@@ -325,10 +325,16 @@ describe("voice-call plugin", () => {
       | undefined;
     const respond = vi.fn();
     await handler?.({
-      params: { message: "Hi", mode: "conversation", to: "+15550001234" },
+      params: {
+        dtmfSequence: "ww123456#",
+        message: "Hi",
+        mode: "conversation",
+        to: "+15550001234",
+      },
       respond,
     });
     expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith("+15550001234", undefined, {
+      dtmfSequence: "ww123456#",
       message: "Hi",
       mode: "conversation",
     });

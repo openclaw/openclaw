@@ -99,6 +99,41 @@ describe("TwilioProvider", () => {
     expectStreamingTwiml(requireResponseBody(result.providerResponseBody));
   });
 
+  it("serves pre-connect TwiML once before outbound streaming starts", async () => {
+    const provider = createProvider();
+    (
+      provider as unknown as {
+        apiRequest: TwilioApiRequest;
+      }
+    ).apiRequest = vi.fn<TwilioApiRequest>(async () => ({
+      sid: "CA999",
+      status: "queued",
+    }));
+    const preConnectTwiml = '<Response><Play digits="ww123456#" /></Response>';
+
+    await provider.initiateCall({
+      callId: "call-1",
+      from: "+15550000001",
+      to: "+15550000002",
+      webhookUrl: "https://example.ngrok.app/voice/twilio",
+      preConnectTwiml,
+    });
+
+    const first = provider.parseWebhookEvent(
+      createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA999", {
+        callId: "call-1",
+      }),
+    );
+    expect(requireResponseBody(first.providerResponseBody)).toBe(preConnectTwiml);
+
+    const second = provider.parseWebhookEvent(
+      createContext("CallStatus=initiated&Direction=outbound-api&CallSid=CA999", {
+        callId: "call-1",
+      }),
+    );
+    expectStreamingTwiml(requireResponseBody(second.providerResponseBody));
+  });
+
   it("returns empty TwiML for status callbacks", () => {
     const provider = createProvider();
     const ctx = createContext("CallStatus=ringing&Direction=outbound-api", {
