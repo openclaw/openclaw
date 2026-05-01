@@ -240,9 +240,11 @@ function resolveExpressiveTagsModelId(
  * `sourceTextHandling: "preserve_expressive_tags"` AND, when an
  * `expressiveTagsModels` allowlist is set, having a matching configured
  * model id) receive `expressiveText` untouched; all other providers receive
- * `plainText`. Callers MUST supply `plainText` — this function does not
- * strip tags on the fly so that the source-text routing layer stays
- * orthogonal to whichever tag dialect a downstream PR chooses to ship.
+ * `plainText`. Callers should usually supply non-empty `plainText` for
+ * non-tag-aware providers; passing an empty value intentionally routes to
+ * empty text so the provider can be skipped. This function does not strip tags
+ * on the fly so the source-text routing layer stays orthogonal to whichever tag
+ * dialect a downstream PR chooses to ship.
  */
 function resolveSpeechTextForProvider(params: {
   provider: TtsProvider;
