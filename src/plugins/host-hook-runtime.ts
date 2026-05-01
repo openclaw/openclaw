@@ -2,6 +2,7 @@ import type { AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { withPluginHostCleanupTimeout } from "./host-hook-cleanup-timeout.js";
 import {
   isPluginJsonValue,
   type PluginHostCleanupReason,
@@ -33,6 +34,7 @@ type PluginHostRuntimeState = {
 
 const PLUGIN_HOST_RUNTIME_STATE_KEY = Symbol.for("openclaw.pluginHostRuntimeState");
 const CLOSED_RUN_IDS_MAX = 512;
+export const PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS = 5_000;
 const log = createSubsystemLogger("plugins/host-hooks");
 
 function getPluginHostRuntimeState(): PluginHostRuntimeState {
@@ -83,6 +85,24 @@ function trackAgentEventHandler(runId: string, pending: Promise<void>): void {
   });
 }
 
+function waitForTerminalEventHandlers(pendingHandlers: Set<Promise<void>>): Promise<void> {
+  if (pendingHandlers.size === 0) {
+    return Promise.resolve();
+  }
+  let timeout: NodeJS.Timeout | undefined = setTimeout(() => {
+    log.warn(
+      `plugin terminal agent event subscriptions still running after ${PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS}ms; preserving run context until they settle`,
+    );
+  }, PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
+  timeout.unref?.();
+  return Promise.allSettled(pendingHandlers).then(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+      timeout = undefined;
+    }
+  });
+}
+
 function getPluginRunContextNamespaces(params: {
   runId: string;
   pluginId: string;
@@ -108,13 +128,14 @@ function getPluginRunContextNamespaces(params: {
 export function setPluginRunContext(params: {
   pluginId: string;
   patch: PluginRunContextPatch;
+  allowClosedRun?: boolean;
 }): boolean {
   const runId = normalizeOptionalString(params.patch.runId);
   const namespace = normalizeNamespace(params.patch.namespace);
   if (!runId || !namespace) {
     return false;
   }
-  if (isPluginRunClosed(runId)) {
+  if (!params.allowClosedRun && isPluginRunClosed(runId)) {
     return false;
   }
   // Only an explicit `unset: true` deletes the run-context entry — silently
@@ -230,6 +251,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
 }): void {
   const subscriptions = params.registry?.agentEventSubscriptions ?? [];
   const pendingHandlers: Promise<void>[] = [];
+  const isTerminalEvent = isTerminalAgentRunEvent(params.event);
   for (const registration of subscriptions) {
     const streams = registration.subscription.streams;
     if (streams && streams.length > 0 && !streams.includes(params.event.stream)) {
@@ -237,12 +259,17 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     }
     const pluginId = registration.pluginId;
     const runId = params.event.runId;
+    let handlerActive = true;
     const ctx = {
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
       getRunContext: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
         getPluginRunContext<T>({ pluginId, get: { runId, namespace } }),
       setRunContext: (namespace: string, value: PluginJsonValue) => {
-        setPluginRunContext({ pluginId, patch: { runId, namespace, value } });
+        setPluginRunContext({
+          pluginId,
+          patch: { runId, namespace, value },
+          allowClosedRun: isTerminalEvent && handlerActive,
+        });
       },
       clearRunContext: (namespace?: string) => {
         clearPluginRunContext({ pluginId, runId, namespace });
@@ -251,16 +278,21 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     try {
       const pending = Promise.resolve(
         registration.subscription.handle(structuredClone(params.event), ctx),
-      ).catch((error) => {
-        logAgentEventSubscriptionFailure({
-          pluginId,
-          subscriptionId: registration.subscription.id,
-          error,
+      )
+        .catch((error) => {
+          logAgentEventSubscriptionFailure({
+            pluginId,
+            subscriptionId: registration.subscription.id,
+            error,
+          });
+        })
+        .finally(() => {
+          handlerActive = false;
         });
-      });
       trackAgentEventHandler(runId, pending);
       pendingHandlers.push(pending);
     } catch (error) {
+      handlerActive = false;
       logAgentEventSubscriptionFailure({
         pluginId,
         subscriptionId: registration.subscription.id,
@@ -268,12 +300,12 @@ export function dispatchPluginAgentEventSubscriptions(params: {
       });
     }
   }
-  if (isTerminalAgentRunEvent(params.event)) {
+  if (isTerminalEvent) {
     markPluginRunClosed(params.event.runId);
     const pendingForRun =
       getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.get(params.event.runId) ??
       new Set(pendingHandlers);
-    void Promise.allSettled(pendingForRun).then(() => {
+    void waitForTerminalEventHandlers(new Set(pendingForRun)).then(() => {
       clearPluginRunContext({ runId: params.event.runId });
     });
   }
@@ -360,6 +392,10 @@ export function getPluginSessionSchedulerJobGeneration(params: {
   return record.generation;
 }
 
+export function makePluginSessionSchedulerJobKey(pluginId: string, jobId: string): string {
+  return JSON.stringify([pluginId, jobId]);
+}
+
 export async function cleanupPluginSessionSchedulerJobs(params: {
   pluginId?: string;
   reason: PluginHostCleanupReason;
@@ -371,6 +407,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
     generation?: number;
   }[];
   preserveJobIds?: ReadonlySet<string>;
+  excludeJobKeys?: ReadonlySet<string>;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
   const failures: Array<{ pluginId: string; hookId: string; error: unknown }> = [];
@@ -406,25 +443,30 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         continue;
       }
       const preserveJob = params.preserveJobIds?.has(jobId) ?? false;
-      if (
-        preserveJob &&
-        (record.generation === undefined || liveGeneration === record.generation)
-      ) {
+      if (preserveJob) {
+        // preserveJobIds means "do not run cleanup at all" — even across
+        // generation mismatches. The generation-matched deletion below would
+        // otherwise still call the OLD cleanup callback, which can remove
+        // external scheduled jobs (e.g. cron.remove) and break the live
+        // newer-generation registration that took over this jobId.
         continue;
       }
       // A newer generation may already own this id. The old cleanup callback can
       // still release plugin-owned resources, while deletion below is generation
       // matched so it cannot remove the newer live record.
+      const hookId = `scheduler:${jobId}`;
       try {
-        await record.job.cleanup?.({
-          reason: params.reason,
-          sessionKey,
-          jobId,
-        });
+        await withPluginHostCleanupTimeout(hookId, () =>
+          record.job.cleanup?.({
+            reason: params.reason,
+            sessionKey,
+            jobId,
+          }),
+        );
       } catch (error) {
         failures.push({
           pluginId: record.pluginId,
-          hookId: `scheduler:${jobId}`,
+          hookId,
           error,
         });
         continue;
@@ -448,16 +490,25 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
         continue;
       }
+      if (params.excludeJobKeys?.has(makePluginSessionSchedulerJobKey(pluginId, jobId))) {
+        continue;
+      }
+      if (params.preserveJobIds?.has(jobId)) {
+        continue;
+      }
+      const hookId = `scheduler:${jobId}`;
       try {
-        await record.job.cleanup?.({
-          reason: params.reason,
-          sessionKey: record.job.sessionKey,
-          jobId,
-        });
+        await withPluginHostCleanupTimeout(hookId, () =>
+          record.job.cleanup?.({
+            reason: params.reason,
+            sessionKey: record.job.sessionKey,
+            jobId,
+          }),
+        );
       } catch (error) {
         failures.push({
           pluginId,
-          hookId: `scheduler:${jobId}`,
+          hookId,
           error,
         });
         continue;

@@ -7,11 +7,53 @@ import type {
   PluginHookLlmInputEvent,
   PluginHookLlmOutputEvent,
 } from "../../plugins/hook-types.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
 const log = createSubsystemLogger("agents/harness");
+const FINALIZE_RETRY_BUDGET_KEY = Symbol.for("openclaw.pluginFinalizeRetryBudget");
+const FINALIZE_RETRY_BUDGET_MAX_ENTRIES = 2048;
 
 type AgentHarnessHookRunner = ReturnType<typeof getGlobalHookRunner>;
+type FinalizeRetryBudget = Map<string, Map<string, number>>;
+
+function getFinalizeRetryBudget(): FinalizeRetryBudget {
+  return resolveGlobalSingleton<FinalizeRetryBudget>(FINALIZE_RETRY_BUDGET_KEY, () => new Map());
+}
+
+function countFinalizeRetryBudgetEntries(budget: FinalizeRetryBudget): number {
+  let count = 0;
+  for (const runBudget of budget.values()) {
+    count += runBudget.size;
+  }
+  return count;
+}
+
+function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
+  while (countFinalizeRetryBudgetEntries(budget) > FINALIZE_RETRY_BUDGET_MAX_ENTRIES) {
+    const oldestRunId = budget.keys().next().value;
+    if (oldestRunId === undefined) {
+      return;
+    }
+    const oldestRunBudget = budget.get(oldestRunId);
+    const oldestRetryKey = oldestRunBudget?.keys().next().value;
+    if (oldestRunBudget && oldestRetryKey !== undefined) {
+      oldestRunBudget.delete(oldestRetryKey);
+    }
+    if (!oldestRunBudget || oldestRunBudget.size === 0) {
+      budget.delete(oldestRunId);
+    }
+  }
+}
+
+export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }): void {
+  const budget = getFinalizeRetryBudget();
+  if (!params?.runId) {
+    budget.clear();
+    return;
+  }
+  budget.delete(params.runId);
+}
 
 export function runAgentHarnessLlmInputHook(params: {
   event: PluginHookLlmInputEvent;
@@ -73,8 +115,16 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
     return { action: "continue" };
   }
   try {
+    const eventForNormalization: PluginHookBeforeAgentFinalizeEvent = {
+      ...params.event,
+      runId: params.event.runId ?? params.ctx.runId,
+    };
     return normalizeBeforeAgentFinalizeResult(
-      await hookRunner.runBeforeAgentFinalize(params.event, buildAgentHookContext(params.ctx)),
+      await hookRunner.runBeforeAgentFinalize(
+        eventForNormalization,
+        buildAgentHookContext(params.ctx),
+      ),
+      eventForNormalization,
     );
   } catch (error) {
     log.warn(`before_agent_finalize hook failed: ${String(error)}`);
@@ -84,6 +134,7 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
 
 function normalizeBeforeAgentFinalizeResult(
   result: PluginHookBeforeAgentFinalizeResult | undefined,
+  event?: PluginHookBeforeAgentFinalizeEvent,
 ): AgentHarnessBeforeAgentFinalizeOutcome {
   if (result?.action === "finalize") {
     return result.reason?.trim()
@@ -91,6 +142,27 @@ function normalizeBeforeAgentFinalizeResult(
       : { action: "finalize" };
   }
   if (result?.action === "revise") {
+    const retryInstruction = result.retry?.instruction?.trim();
+    if (retryInstruction) {
+      const maxAttempts =
+        typeof result.retry?.maxAttempts === "number" && Number.isFinite(result.retry.maxAttempts)
+          ? Math.max(1, Math.floor(result.retry.maxAttempts))
+          : 1;
+      const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
+      const retryKey = result.retry?.idempotencyKey?.trim() || retryInstruction.slice(0, 160);
+      const budget = getFinalizeRetryBudget();
+      const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
+      const nextCount = (runBudget.get(retryKey) ?? 0) + 1;
+      runBudget.delete(retryKey);
+      runBudget.set(retryKey, nextCount);
+      budget.delete(retryRunId);
+      budget.set(retryRunId, runBudget);
+      pruneFinalizeRetryBudget(budget);
+      if (nextCount > maxAttempts) {
+        return { action: "continue" };
+      }
+      return { action: "revise", reason: retryInstruction };
+    }
     const reason = result.reason?.trim();
     return reason ? { action: "revise", reason } : { action: "continue" };
   }
