@@ -219,6 +219,11 @@ describe("doctor preview warnings", () => {
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
         channels: {
           signal: {
             accounts: {
@@ -256,6 +261,11 @@ describe("doctor preview warnings", () => {
   it("includes stale channel config warnings without plugin config", async () => {
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
         channels: {
           "openclaw-weixin": {
             enabled: true,
@@ -315,6 +325,11 @@ describe("doctor preview warnings", () => {
 
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
         channels: {
           telegram: {
             botToken: "123:abc",
@@ -345,6 +360,11 @@ describe("doctor preview warnings", () => {
 
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
         channels: {
           telegram: {
             botToken: "123:abc",
@@ -371,6 +391,11 @@ describe("doctor preview warnings", () => {
 
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
         channels: {
           telegram: {
             botToken: "123:abc",
@@ -408,9 +433,12 @@ describe("doctor preview warnings", () => {
 
     expect(warnings).toEqual([
       expect.stringContaining('messages.groupChat.visibleReplies defaults to "message_tool"'),
+      expect.stringContaining("message tool is unavailable"),
     ]);
-    expect(warnings[0]).toContain("message tool is unavailable");
-    expect(warnings[0]).toContain("falls back to automatic group/channel replies");
+    expect(warnings[0]).toContain("normal final replies stay private");
+    expect(warnings[0]).toContain('messages.groupChat.visibleReplies to "automatic"');
+    expect(warnings[1]).toContain("message tool is unavailable");
+    expect(warnings[1]).toContain("falls back to automatic group/channel replies");
   });
 
   it("warns strongly when explicit group visible replies require an unavailable message tool", () => {
@@ -470,7 +498,7 @@ describe("doctor preview warnings", () => {
     ]);
   });
 
-  it("skips visible reply tool warnings when the message tool is available or default groups are unused", () => {
+  it("warns about default private group replies when channels are configured", () => {
     expect(
       collectVisibleReplyToolPolicyWarnings({
         channels: {
@@ -480,9 +508,29 @@ describe("doctor preview warnings", () => {
           profile: "messaging",
         },
       }),
+    ).toEqual([
+      expect.stringContaining('messages.groupChat.visibleReplies defaults to "message_tool"'),
+    ]);
+  });
+
+  it("skips visible reply tool warnings when default groups are unused or groups are automatic", () => {
+    expect(
+      collectVisibleReplyToolPolicyWarnings({
+        tools: {
+          allow: ["read"],
+        },
+      }),
     ).toEqual([]);
     expect(
       collectVisibleReplyToolPolicyWarnings({
+        channels: {
+          slack: {},
+        },
+        messages: {
+          groupChat: {
+            visibleReplies: "automatic",
+          },
+        },
         tools: {
           allow: ["read"],
         },
