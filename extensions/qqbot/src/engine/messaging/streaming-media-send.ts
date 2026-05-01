@@ -6,7 +6,6 @@
  */
 
 import type { GatewayAccount } from "../types.js";
-import { normalizeMediaTags } from "../utils/media-tags.js";
 import { normalizePath } from "../utils/platform.js";
 import {
   sendPhoto,
@@ -160,21 +159,6 @@ export function isInsideCodeBlock(text: string, position: number): boolean {
 }
 
 // ============ 媒体标签解析 ============
-
-/**
- * 检测文本是否包含富媒体标签（忽略代码块内的标签）
- */
-export function hasMediaTags(text: string): boolean {
-  const normalized = normalizeMediaTags(text);
-  const regex = createMediaTagRegex();
-  let match: RegExpExecArray | null;
-  while ((match = regex.exec(normalized)) !== null) {
-    if (!isInsideCodeBlock(normalized, match.index)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 /** findFirstClosedMediaTag 的返回值 */
 export interface FirstClosedMediaTag {
