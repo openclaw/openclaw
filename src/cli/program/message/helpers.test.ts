@@ -5,6 +5,12 @@ vi.mock("../../../commands/message.js", () => ({
   messageCommand: messageCommandMock,
 }));
 
+const callGatewayMock = vi.fn(async () => ({ ok: true, messageId: "m-1" }));
+vi.mock("../../../gateway/call.js", () => ({
+  callGateway: callGatewayMock,
+  randomIdempotencyKey: () => "idem-test",
+}));
+
 vi.mock("../../../globals.js", () => ({
   danger: (s: string) => s,
   setVerbose: vi.fn(),
@@ -85,6 +91,7 @@ describe("runMessageAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     messageCommandMock.mockClear().mockResolvedValue(undefined);
+    callGatewayMock.mockClear().mockResolvedValue({ ok: true, messageId: "m-1" });
     hasHooksMock.mockClear().mockReturnValue(false);
     runGatewayStopMock.mockClear().mockResolvedValue(undefined);
     runGlobalGatewayStopSafelyMock.mockClear();
@@ -254,5 +261,57 @@ describe("runMessageAction", () => {
       expect.anything(),
     );
     expectNoAccountFieldInPassedOptions();
+  });
+
+  it("routes telegram send through gateway fast path without local plugin registry loading", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("send", {
+        channel: "telegram",
+        account: "default",
+        target: "-100123",
+        message: "hi",
+        json: true,
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "message.action",
+        clientName: "cli",
+        mode: "cli",
+        params: expect.objectContaining({
+          channel: "telegram",
+          action: "send",
+          accountId: "default",
+          idempotencyKey: "idem-test",
+          params: expect.objectContaining({
+            to: "-100123",
+            message: "hi",
+          }),
+        }),
+      }),
+    );
+    expect(runtimeMock.log).toHaveBeenCalledWith(expect.stringContaining('"messageId": "m-1"'));
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("exits with failure when telegram gateway fast path fails", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("send", {
+        channel: "telegram",
+        target: "-100123",
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).toHaveBeenCalledWith("Error: gateway unavailable");
+    expect(exitMock).toHaveBeenCalledWith(1);
   });
 });
