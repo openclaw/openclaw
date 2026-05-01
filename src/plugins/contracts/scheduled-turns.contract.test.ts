@@ -31,6 +31,7 @@ vi.mock("../../agents/tools/gateway.js", () => ({
 
 describe("plugin scheduled turns", () => {
   afterEach(() => {
+    vi.useRealTimers();
     workflowMocks.callGatewayTool.mockReset();
     clearPluginLoaderCache();
     clearPluginHostRuntimeState();
@@ -251,6 +252,41 @@ describe("plugin scheduled turns", () => {
         kind: "session-turn",
       },
     ]);
+  });
+
+  it("prunes one-shot scheduled-turn records after cron should have deleted the job", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-01T00:00:00.000Z"));
+    workflowMocks.callGatewayTool.mockImplementation(async (method: string) => {
+      if (method === "cron.add") {
+        return { id: "one-shot-job" };
+      }
+      return { ok: true };
+    });
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "workflow-plugin",
+        pluginName: "Workflow Plugin",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1_000,
+        },
+      }),
+    ).resolves.toEqual({
+      id: "one-shot-job",
+      pluginId: "workflow-plugin",
+      sessionKey: "agent:main:main",
+      kind: "session-turn",
+    });
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(60_999);
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([]);
   });
 
   it("rejects invalid schedules and unsupported delivery modes before cron.add", async () => {
