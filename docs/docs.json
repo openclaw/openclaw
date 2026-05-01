@@ -1194,6 +1194,7 @@
                   "plugins/google-meet",
                   "plugins/webhooks",
                   "plugins/voice-call",
+                  "plugins/payment",
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
                   "plugins/message-presentation",
@@ -1629,6 +1630,7 @@
                     "pages": [
                       "cli/approvals",
                       "cli/browser",
+                      "cli/payment",
                       "cli/cron",
                       "cli/flows",
                       "cli/node",
