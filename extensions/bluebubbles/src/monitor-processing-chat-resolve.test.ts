@@ -94,14 +94,30 @@ describe("buildBlueBubblesInboundChatResolveTarget", () => {
     expect(target).toEqual({ kind: "handle", address: "+15551234567" });
   });
 
-  it("uses sender handle for DM inbound even when chatId is present (preserves prior behavior)", () => {
+  it("prefers chat_identifier for DM inbound when BlueBubbles provides it", () => {
     const target = buildBlueBubblesInboundChatResolveTarget({
       isGroup: false,
       chatId: 99,
       chatIdentifier: "iMessage;-;+15551234567",
       senderId: "+15551234567",
     });
-    expect(target).toEqual({ kind: "handle", address: "+15551234567" });
+    expect(target).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "iMessage;-;+15551234567",
+    });
+  });
+
+  it("trims chat_identifier for DM inbound before sender fallback", () => {
+    const target = buildBlueBubblesInboundChatResolveTarget({
+      isGroup: false,
+      chatId: undefined,
+      chatIdentifier: "  iMessage;-;founder@example.com  ",
+      senderId: "+15551234567",
+    });
+    expect(target).toEqual({
+      kind: "chat_identifier",
+      chatIdentifier: "iMessage;-;founder@example.com",
+    });
   });
 
   it("returns null for DM inbound with empty senderId", () => {

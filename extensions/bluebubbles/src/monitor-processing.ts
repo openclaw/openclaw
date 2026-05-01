@@ -375,8 +375,10 @@ export type BlueBubblesInboundChatResolveTarget =
  *
  * Returns null in that unresolvable group case so the caller can skip
  * actions that need a chatGuid rather than acting on a wrong one. DMs
- * always resolve via the sender handle (the chat is, by definition, the
- * conversation with that handle).
+ * prefer the inbound chat identifier when BlueBubbles provides it. On
+ * self / Apple-ID setups the visible iMessage thread can be keyed by the
+ * destination chat while senderId is only the sender handle. Falling back
+ * directly to senderId can create or target a different thread.
  */
 export function buildBlueBubblesInboundChatResolveTarget(params: {
   isGroup: boolean;
@@ -393,6 +395,10 @@ export function buildBlueBubblesInboundChatResolveTarget(params: {
       return { kind: "chat_identifier", chatIdentifier: trimmedIdentifier };
     }
     return null;
+  }
+  const trimmedIdentifier = params.chatIdentifier?.trim();
+  if (trimmedIdentifier) {
+    return { kind: "chat_identifier", chatIdentifier: trimmedIdentifier };
   }
   const trimmedSender = params.senderId.trim();
   if (!trimmedSender) {
