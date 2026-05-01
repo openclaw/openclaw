@@ -24,7 +24,8 @@ import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import { RateLimitError, type RequestClient } from "./internal/discord.js";
+import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
+import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
@@ -253,6 +254,83 @@ type UploadUrlResponse = {
   }>;
 };
 
+function coerceDiscordErrorBody(raw: string): unknown {
+  if (!raw) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { message: raw.slice(0, 200) };
+  }
+}
+
+async function createVoiceRequestError(
+  response: Response,
+  fallbackMessage: string,
+): Promise<Error> {
+  const raw = await response.text().catch(() => "");
+  const parsed = coerceDiscordErrorBody(raw);
+  if (response.status === 429) {
+    throw createRateLimitError(response, {
+      message: readDiscordMessage(parsed, "You are being rate limited."),
+      retry_after: readRetryAfter(parsed, response, 1),
+      global:
+        parsed && typeof parsed === "object" && "global" in parsed
+          ? Boolean((parsed as { global?: unknown }).global)
+          : false,
+    });
+  }
+  return new DiscordError(
+    response,
+    parsed ?? {
+      message: fallbackMessage,
+    },
+  );
+}
+
+async function requestVoiceUploadUrl(params: {
+  rest: RequestClient;
+  channelId: string;
+  botToken: string;
+  filename: string;
+  fileSize: number;
+}): Promise<UploadUrlResponse> {
+  const url = `${params.rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${params.channelId}/attachments`;
+  const uploadUrlRequest = new Request(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bot ${params.botToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      files: [{ filename: params.filename, file_size: params.fileSize, id: "0" }],
+    }),
+  });
+  const res = await fetch(uploadUrlRequest);
+  if (!res.ok) {
+    throw await createVoiceRequestError(res, "Upload URL request failed");
+  }
+  return (await res.json()) as UploadUrlResponse;
+}
+
+async function uploadVoiceAttachment(params: {
+  uploadUrl: string;
+  audioBuffer: Buffer;
+}): Promise<void> {
+  const uploadResponse = await fetch(params.uploadUrl, {
+    method: "PUT",
+    headers: {
+      "Content-Type": "audio/ogg",
+    },
+    body: new Uint8Array(params.audioBuffer),
+  });
+
+  if (!uploadResponse.ok) {
+    throw await createVoiceRequestError(uploadResponse, "Failed to upload voice message");
+  }
+}
+
 /**
  * Send a voice message to Discord
  *
@@ -283,64 +361,26 @@ export async function sendDiscordVoiceMessage(
   if (!botToken) {
     throw new Error("Discord bot token is required for voice message upload");
   }
-  const uploadUrlResponse = await request(async () => {
-    const url = `${rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${channelId}/attachments`;
-    const uploadUrlRequest = new Request(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bot ${botToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        files: [{ filename, file_size: fileSize, id: "0" }],
-      }),
+  const { upload_filename } = await request(async () => {
+    const uploadUrlResponse = await requestVoiceUploadUrl({
+      rest,
+      channelId,
+      botToken,
+      filename,
+      fileSize,
     });
-    const res = await fetch(uploadUrlRequest);
-    if (!res.ok) {
-      if (res.status === 429) {
-        const retryData = (await res.json().catch(() => ({}))) as {
-          message?: string;
-          retry_after?: number;
-          global?: boolean;
-        };
-        throw createRateLimitError(res, {
-          message: retryData.message ?? "You are being rate limited.",
-          retry_after: retryData.retry_after ?? 1,
-          global: retryData.global ?? false,
-        });
-      }
-      const errorBody = (await res.json().catch(() => null)) as {
-        code?: number;
-        message?: string;
-      } | null;
-      const err = new Error(`Upload URL request failed: ${res.status} ${errorBody?.message ?? ""}`);
-      if (errorBody?.code !== undefined) {
-        (err as Error & { code: number }).code = errorBody.code;
-      }
-      throw err;
+
+    if (!uploadUrlResponse.attachments?.[0]) {
+      throw new Error("Failed to get upload URL for voice message");
     }
-    return (await res.json()) as UploadUrlResponse;
-  }, "voice-upload-url");
 
-  if (!uploadUrlResponse.attachments?.[0]) {
-    throw new Error("Failed to get upload URL for voice message");
-  }
-
-  const { upload_url, upload_filename } = uploadUrlResponse.attachments[0];
-
-  // Step 2: Upload the file to Discord's CDN
-  // Note: Not wrapped in retry runner - upload URLs are single-use and CDN behavior differs
-  const uploadResponse = await fetch(upload_url, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "audio/ogg",
-    },
-    body: new Uint8Array(audioBuffer),
-  });
-
-  if (!uploadResponse.ok) {
-    throw new Error(`Failed to upload voice message: ${uploadResponse.status}`);
-  }
+    const attachment = uploadUrlResponse.attachments[0];
+    await uploadVoiceAttachment({
+      uploadUrl: attachment.upload_url,
+      audioBuffer,
+    });
+    return attachment;
+  }, "voice-upload");
 
   // Step 3: Send the message with voice message flag and metadata
   const flags = silent
