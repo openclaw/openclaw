@@ -8,7 +8,9 @@
     "@slack/bolt": "^4.7.2",
     "@slack/types": "^2.20.1",
     "@slack/web-api": "^7.15.1",
-    "https-proxy-agent": "^9.0.0"
+    "https-proxy-agent": "^9.0.0",
+    "json5": "^2.2.3",
+    "jiti": "^2.6.1"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

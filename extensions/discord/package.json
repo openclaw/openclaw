@@ -8,10 +8,12 @@
     "discord-api-types": "^0.38.47",
     "https-proxy-agent": "^9.0.0",
     "opusscript": "^0.1.1",
-    "typebox": "1.1.36",
+    "typebox": "1.1.34",
     "undici": "8.1.0",
-    "ws": "^8.20.0"
-  },
+    "ws": "^8.20.0",
+    "json5": "^2.2.3",
+    "jiti": "^2.6.1"
+    },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
