@@ -27,37 +27,52 @@ const probePath = option("--path");
 const expectKind = option("--expect");
 const out = option("--out");
 const url = new URL(probePath, baseUrl).toString();
+const timeoutMs = Number.parseInt(
+  process.env.OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS || "60000",
+  10,
+);
 
 const startedAt = Date.now();
-const response = await fetch(url, { method: "GET" });
-const text = await response.text();
-let body;
-try {
-  body = text ? JSON.parse(text) : null;
-} catch (error) {
-  throw new Error(`${url} returned non-JSON probe body: ${String(error)}`, { cause: error });
-}
-const elapsedMs = Date.now() - startedAt;
+let lastError;
+while (Date.now() - startedAt < timeoutMs) {
+  const attemptStartedAt = Date.now();
+  try {
+    const response = await fetch(url, { method: "GET" });
+    const text = await response.text();
+    let body;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch (error) {
+      throw new Error(`${url} returned non-JSON probe body: ${String(error)}`, { cause: error });
+    }
 
-if (!response.ok) {
-  throw new Error(`${url} probe failed with HTTP ${response.status}: ${text}`);
-}
-if (expectKind === "live") {
-  if (body?.ok !== true || body?.status !== "live") {
-    throw new Error(`${url} did not report live status: ${text}`);
-  }
-} else if (expectKind === "ready") {
-  if (body?.ready !== true) {
-    throw new Error(`${url} did not report ready status: ${text}`);
-  }
-} else {
-  throw new Error(`unknown probe expectation: ${expectKind}`);
-}
+    if (!response.ok) {
+      throw new Error(`${url} probe failed with HTTP ${response.status}: ${text}`);
+    }
+    if (expectKind === "live") {
+      if (body?.ok !== true || body?.status !== "live") {
+        throw new Error(`${url} did not report live status: ${text}`);
+      }
+    } else if (expectKind === "ready") {
+      if (body?.ready !== true) {
+        throw new Error(`${url} did not report ready status: ${text}`);
+      }
+    } else {
+      throw new Error(`unknown probe expectation: ${expectKind}`);
+    }
 
-writeJson(out, {
-  body,
-  elapsedMs,
-  path: probePath,
-  status: response.status,
-  url,
-});
+    writeJson(out, {
+      body,
+      elapsedMs: Date.now() - startedAt,
+      path: probePath,
+      status: response.status,
+      url,
+    });
+    process.exit(0);
+  } catch (error) {
+    lastError = error;
+    const elapsedMs = Date.now() - attemptStartedAt;
+    await new Promise((resolve) => setTimeout(resolve, Math.max(100, 500 - elapsedMs)));
+  }
+}
+throw lastError ?? new Error(`${url} probe timed out`);

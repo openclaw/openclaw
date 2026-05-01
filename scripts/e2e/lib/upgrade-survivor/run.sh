@@ -317,8 +317,17 @@ storage_preflight() {
   df -h "$ARTIFACT_ROOT" "$TMPDIR" /tmp || true
 }
 
+rm_rf_retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    rm -rf "$@" && return 0
+    sleep "$attempt"
+  done
+  rm -rf "$@"
+}
+
 reset_run_state() {
-  rm -rf "$npm_config_prefix" "$TMPDIR" "$ARTIFACT_ROOT/state-home"
+  rm_rf_retry "$npm_config_prefix" "$TMPDIR" "$ARTIFACT_ROOT/state-home"
   mkdir -p "$npm_config_prefix" "$npm_config_cache" "$TMPDIR"
 }
 

@@ -22,6 +22,7 @@ export function createPluginRecord(params: {
   compat?: readonly PluginCompatCode[];
   activationState?: PluginActivationState;
   syntheticAuthRefs?: string[];
+  channelIds?: readonly string[];
   configSchema: boolean;
   contracts?: PluginManifestContracts;
 }): PluginRecord {
@@ -47,7 +48,7 @@ export function createPluginRecord(params: {
     status: params.enabled ? "loaded" : "disabled",
     toolNames: [],
     hookNames: [],
-    channelIds: [],
+    channelIds: [...(params.channelIds ?? [])],
     cliBackendIds: [],
     providerIds: [],
     speechProviderIds: [],

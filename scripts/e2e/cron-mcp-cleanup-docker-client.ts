@@ -225,6 +225,19 @@ async function runSubagentCleanupScenario(params: {
     `agent did not accept subagent cleanup run: ${JSON.stringify(run)}`,
   );
 
+  const finished = await gateway.request<{ status?: string }>(
+    "agent.wait",
+    {
+      runId: run.runId,
+      timeoutMs: 240_000,
+    },
+    { timeoutMs: 250_000 },
+  );
+  assert(
+    finished.status === "ok",
+    `subagent cleanup run did not finish ok: ${JSON.stringify(finished)}`,
+  );
+
   const exitedPid = await waitForAnyProbeExit({
     pidsPath,
     label: "subagent",

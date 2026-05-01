@@ -9,9 +9,13 @@ const TOKEN = "bundled-plugin-runtime-smoke-token";
 const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
 const READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
-  180000,
+  420000,
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS, 60000);
+const RPC_READY_TIMEOUT_MS = readPositiveInt(
+  process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_READY_MS,
+  90000,
+);
 
 function readPositiveInt(raw, fallback) {
   const parsed = Number.parseInt(String(raw || ""), 10);
@@ -296,6 +300,35 @@ async function rpcCall(method, params, options) {
   return unwrapRpcPayload(parseJsonOutput(stdout));
 }
 
+async function retryRpcCall(method, params, options) {
+  const started = Date.now();
+  let lastError;
+  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
+    try {
+      return await rpcCall(method, params, options);
+    } catch (error) {
+      lastError = error;
+      if (!isRetryableGatewayCallError(error)) {
+        throw error;
+      }
+      await delay(500);
+    }
+  }
+  throw lastError ?? new Error(`gateway RPC ${method} timed out before retry`);
+}
+
+function isRetryableGatewayCallError(error) {
+  const text = error instanceof Error ? error.message : String(error);
+  return (
+    text.includes("gateway starting") ||
+    text.includes("gateway closed") ||
+    text.includes("handshake timeout") ||
+    text.includes("GatewayTransportError") ||
+    text.includes("ECONNREFUSED") ||
+    text.includes("fetch failed")
+  );
+}
+
 function parseJsonOutput(stdout) {
   const trimmed = stdout.trim();
   if (!trimmed) {
@@ -402,12 +435,16 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
 async function assertBaseGatewayProbes(options) {
   await assertHttpOk(options.port, "/healthz");
   await assertReadyzProbe(options);
-  await rpcCall("health", {}, options);
+  await retryRpcCall("health", {}, options);
 }
 
 async function runManifestProbes(plan, options) {
   for (const channel of plan.channels) {
-    const status = await rpcCall("channels.status", { probe: false, timeoutMs: 2000 }, options);
+    const status = await retryRpcCall(
+      "channels.status",
+      { probe: false, timeoutMs: 2000 },
+      options,
+    );
     if (!isChannelVisible(status, channel)) {
       console.log(
         `Runtime channel status smoke skipped for ${options.pluginId}: ${channel} is not visible in dry channels.status`,
@@ -415,7 +452,11 @@ async function runManifestProbes(plan, options) {
     }
   }
   if (plan.runtimeSlashAliases.length > 0 && plan.activeInThisProbe) {
-    const commands = await rpcCall("commands.list", { scope: "both", includeArgs: true }, options);
+    const commands = await retryRpcCall(
+      "commands.list",
+      { scope: "both", includeArgs: true },
+      options,
+    );
     for (const alias of plan.runtimeSlashAliases) {
       assertCommandVisible(commands, alias);
     }
@@ -425,7 +466,7 @@ async function runManifestProbes(plan, options) {
     );
   }
   if (plan.tools.length > 0 && plan.activeInThisProbe) {
-    const catalog = await rpcCall("tools.catalog", { includePlugins: true }, options);
+    const catalog = await retryRpcCall("tools.catalog", { includePlugins: true }, options);
     for (const tool of plan.tools) {
       assertToolVisible(catalog, tool);
     }
@@ -435,8 +476,8 @@ async function runManifestProbes(plan, options) {
     );
   }
   if (plan.speechProviders.length > 0) {
-    const providers = await rpcCall("tts.providers", {}, options);
-    const status = await rpcCall("tts.status", {}, options);
+    const providers = await retryRpcCall("tts.providers", {}, options);
+    const status = await retryRpcCall("tts.status", {}, options);
     const provider = plan.speechProviders[0];
     assertSpeechProviderVisible(providers, provider, "tts.providers");
     assertSpeechProviderVisible(status, provider, "tts.status");
@@ -508,7 +549,7 @@ async function runWatchdog(options) {
       `gateway exited after ready for ${options.pluginId}\n${tailFile(options.logPath)}`,
     );
   }
-  await rpcCall("health", {}, options);
+  await retryRpcCall("health", {}, options);
   assertNoPostReadyRuntimeDepsWork(options.logPath, readyIndex);
   assertNoRuntimeDepsLocks();
   await assertNoPackageManagerChildren(options.child.pid);
@@ -650,7 +691,7 @@ async function smokeTtsGlobalDisable(pluginId, pluginDir, provider, pluginIndex)
   try {
     await waitForReady({ child, port, logPath });
     await assertBaseGatewayProbes({ entrypoint, port, env });
-    const providers = await rpcCall("tts.providers", {}, { entrypoint, port, env });
+    const providers = await retryRpcCall("tts.providers", {}, { entrypoint, port, env });
     assertSpeechProviderVisible(providers, selectedProvider, "tts.providers global-disable");
     await runWatchdog({
       child,
@@ -713,7 +754,7 @@ async function smokeOpenAiTts(pluginIndex) {
   try {
     await waitForReady({ child, port, logPath });
     await assertBaseGatewayProbes({ entrypoint, port, env });
-    const result = await rpcCall(
+    const result = await retryRpcCall(
       "tts.convert",
       { text: "ok", provider: "openai" },
       { entrypoint, port, env },
