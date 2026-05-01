@@ -10,6 +10,10 @@ import {
   resolveMainSessionAlias,
   stripToolMessages,
 } from "../../../agents/tools/sessions-helpers.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveMainSessionKey,
+} from "../../../config/sessions/main-session.js";
 import { callGateway } from "../../../gateway/call.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
@@ -141,7 +145,15 @@ export function resolveRequesterSessionKey(
     return undefined;
   }
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
-  return resolveInternalSessionKey({ key: raw, alias, mainKey });
+  const resolved = resolveInternalSessionKey({ key: raw, alias, mainKey });
+  return canonicalizeMainSessionAlias({
+    cfg: params.cfg,
+    agentId:
+      parseAgentSessionKey(resolved)?.agentId ??
+      parseAgentSessionKey(resolveMainSessionKey(params.cfg))?.agentId ??
+      "main",
+    sessionKey: resolved,
+  });
 }
 
 export function resolveCommandSubagentController(
