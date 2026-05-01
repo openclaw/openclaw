@@ -10,6 +10,7 @@ import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
   PluginRuntimeLifecycleRegistration,
+  PluginSessionActionRegistration,
   PluginSessionSchedulerJobRegistration,
   PluginSessionExtensionRegistration,
   PluginToolMetadataRegistration,
@@ -74,6 +75,7 @@ export type CapturedPluginRegistration = {
   runtimeLifecycles: PluginRuntimeLifecycleRegistration[];
   agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[];
   sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[];
+  sessionActions: PluginSessionActionRegistration[];
   tools: AnyAgentTool[];
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
@@ -110,6 +112,7 @@ export function createCapturedPluginRegistration(params?: {
   const runtimeLifecycles: PluginRuntimeLifecycleRegistration[] = [];
   const agentEventSubscriptions: PluginAgentEventSubscriptionRegistration[] = [];
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
+  const sessionActions: PluginSessionActionRegistration[] = [];
   const tools: AnyAgentTool[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";
@@ -148,6 +151,7 @@ export function createCapturedPluginRegistration(params?: {
     runtimeLifecycles,
     agentEventSubscriptions,
     sessionSchedulerJobs,
+    sessionActions,
     tools,
     modelCatalogProviders,
     api: buildPluginApi({
@@ -270,6 +274,7 @@ export function createCapturedPluginRegistration(params?: {
         registerAgentEventSubscription(subscription: PluginAgentEventSubscriptionRegistration) {
           agentEventSubscriptions.push(subscription);
         },
+        emitAgentEvent: () => ({ emitted: false, reason: "captured registration" }),
         registerSessionSchedulerJob(job: PluginSessionSchedulerJobRegistration) {
           sessionSchedulerJobs.push(job);
           return {
@@ -278,6 +283,9 @@ export function createCapturedPluginRegistration(params?: {
             sessionKey: job.sessionKey,
             kind: job.kind,
           };
+        },
+        registerSessionAction(action: PluginSessionActionRegistration) {
+          sessionActions.push(action);
         },
         registerTool(tool) {
           if (typeof tool !== "function") {
