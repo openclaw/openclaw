@@ -521,10 +521,6 @@ export function createSessionStatusTool(opts?: {
         agentId,
         `${configured.provider}/${configured.model}`,
       );
-      const hasExplicitModelOverride = Boolean(
-        resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
-      );
-
       const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
       const runtimeModelForCard = runtimeModelIdentity.model.trim();
 
