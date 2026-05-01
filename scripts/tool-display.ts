@@ -1,13 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  TOOL_DISPLAY_CONFIG,
-  serializeToolDisplayConfig,
-} from "../src/agents/tool-display-config.ts";
+import type { TOOL_DISPLAY_CONFIG as TOOL_DISPLAY_CONFIG_TYPE } from "../src/agents/tool-display-config.ts";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+const configModuleUrl = new URL("../src/agents/tool-display-config.ts", import.meta.url);
+configModuleUrl.search = `tool-display=${Date.now()}`;
+const { TOOL_DISPLAY_CONFIG } = (await import(configModuleUrl.href)) as {
+  TOOL_DISPLAY_CONFIG: typeof TOOL_DISPLAY_CONFIG_TYPE;
+};
 const outputPath = path.join(
   repoRoot,
   "apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json",
@@ -61,6 +63,12 @@ if (actual !== expected) {
 }
 
 process.stdout.write("tool-display snapshot is up to date\n");
+
+function serializeToolDisplayConfig(
+  config: typeof TOOL_DISPLAY_CONFIG = TOOL_DISPLAY_CONFIG,
+): string {
+  return `${JSON.stringify(config, null, 2)}\n`;
+}
 
 function ensureCoreToolCoverage() {
   const toolNames = new Set<string>();

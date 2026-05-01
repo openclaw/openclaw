@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.ts";
-import { ToolsWebSearchSchema } from "./zod-schema.agent-runtime.ts";
+import type { ToolsWebSearchSchema as ToolsWebSearchSchemaType } from "./zod-schema.agent-runtime.ts";
+
+const schemaModuleUrl = new URL("./zod-schema.agent-runtime.ts", import.meta.url);
+schemaModuleUrl.search = `web-search-codex=${Date.now()}`;
+const { ToolsWebSearchSchema } = (await import(schemaModuleUrl.href)) as {
+  ToolsWebSearchSchema: typeof ToolsWebSearchSchemaType;
+};
 
 describe("web search Codex native config validation", () => {
   it("accepts tools.web.search.openaiCodex", async () => {
