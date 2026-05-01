@@ -85,6 +85,39 @@ describe("plugin run context lifecycle", () => {
     ).toEqual({ live: true });
   });
 
+  it("allows run-context mutations after a previous registry is restored active", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "restored-run-context-plugin",
+        name: "Restored Run Context Plugin",
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    setActivePluginRegistry(registry.registry);
+
+    expect(
+      capturedApi?.setRunContext({
+        runId: "restored-run",
+        namespace: "state",
+        value: { restored: true },
+      }),
+    ).toBe(true);
+    expect(
+      getPluginRunContext({
+        pluginId: "restored-run-context-plugin",
+        get: { runId: "restored-run", namespace: "state" },
+      }),
+    ).toEqual({ restored: true });
+  });
+
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
     let releaseToolHandler: (() => void) | undefined;
     let delayedToolHandlerSawContext: unknown;

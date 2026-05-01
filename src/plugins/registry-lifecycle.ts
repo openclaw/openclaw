@@ -8,6 +8,12 @@ export function markPluginRegistryRetired(registry: PluginRegistry | null | unde
   }
 }
 
+export function markPluginRegistryActive(registry: PluginRegistry | null | undefined): void {
+  if (registry) {
+    retiredRegistries.delete(registry);
+  }
+}
+
 export function isPluginRegistryRetired(registry: PluginRegistry): boolean {
   return retiredRegistries.has(registry);
 }

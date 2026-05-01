@@ -18,9 +18,11 @@ describe("plugin host cleanup config fallback", () => {
   it("records session store config failures while continuing runtime cleanup", async () => {
     const registry = createEmptyPluginRegistry();
     const cleanup = vi.fn();
+    registry.runtimeLifecycles ??= [];
     registry.runtimeLifecycles.push({
       pluginId: "cleanup-plugin",
       pluginName: "Cleanup Plugin",
+      source: "test",
       lifecycle: {
         id: "runtime-cleanup",
         cleanup,
