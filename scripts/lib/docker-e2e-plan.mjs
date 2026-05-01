@@ -70,6 +70,19 @@ function sanitizeLaneNameSuffix(value) {
   );
 }
 
+export const UPGRADE_SURVIVOR_SCENARIOS = [
+  "base",
+  "feishu-channel",
+  "bootstrap-persona",
+  "tilde-log-path",
+  "versioned-runtime-deps",
+];
+
+const UPGRADE_SURVIVOR_SCENARIO_ALIASES = new Map([
+  ["reported-issues", UPGRADE_SURVIVOR_SCENARIOS],
+  ["far-reaching", UPGRADE_SURVIVOR_SCENARIOS],
+]);
+
 export function normalizeUpgradeSurvivorBaselineSpec(raw) {
   const value = String(raw ?? "").trim();
   if (!value) {
@@ -102,26 +115,75 @@ export function parseUpgradeSurvivorBaselineSpecs(raw) {
   ];
 }
 
-export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs) {
+export function normalizeUpgradeSurvivorScenario(raw) {
+  const value = String(raw ?? "").trim();
+  if (!value) {
+    return undefined;
+  }
+  if (!UPGRADE_SURVIVOR_SCENARIOS.includes(value)) {
+    throw new Error(
+      `invalid published upgrade survivor scenario: ${JSON.stringify(
+        value,
+      )}. Expected one of: ${UPGRADE_SURVIVOR_SCENARIOS.join(", ")}, reported-issues.`,
+    );
+  }
+  return value;
+}
+
+export function parseUpgradeSurvivorScenarios(raw) {
+  if (!raw) {
+    return [];
+  }
+  return [
+    ...new Set(
+      String(raw)
+        .split(/[,\s]+/u)
+        .map((token) => token.trim())
+        .filter(Boolean)
+        .flatMap((token) => UPGRADE_SURVIVOR_SCENARIO_ALIASES.get(token) ?? [token])
+        .map(normalizeUpgradeSurvivorScenario)
+        .filter(Boolean),
+    ),
+  ];
+}
+
+export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
-  if (baselineSpecs.length === 0) {
+  const scenarios = parseUpgradeSurvivorScenarios(rawScenarios);
+  if (baselineSpecs.length === 0 && scenarios.length === 0) {
     return poolLanes;
   }
   return poolLanes.flatMap((poolLane) => {
     if (poolLane.name !== "published-upgrade-survivor") {
       return [poolLane];
     }
-    return baselineSpecs.map((baselineSpec) => {
-      const suffix = sanitizeLaneNameSuffix(baselineSpec);
-      const name = `${poolLane.name}-${suffix}`;
-      return Object.assign({}, poolLane, {
-        cacheKey: poolLane.cacheKey ? `${poolLane.cacheKey}-${suffix}` : name,
-        command: `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(
-          baselineSpec,
-        )} ${poolLane.command}`,
-        name,
-      });
-    });
+    const matrixBaselines = baselineSpecs.length > 0 ? baselineSpecs : [undefined];
+    const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
+    return matrixBaselines.flatMap((baselineSpec) =>
+      matrixScenarios.map((scenario) => {
+        const suffixParts = [
+          baselineSpec ? sanitizeLaneNameSuffix(baselineSpec) : "",
+          scenario && scenario !== "base" ? sanitizeLaneNameSuffix(scenario) : "",
+        ].filter(Boolean);
+        const suffix = suffixParts.join("-");
+        const name = suffix ? `${poolLane.name}-${suffix}` : poolLane.name;
+        const commandPrefix = [
+          baselineSpec ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}` : "",
+          scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
+        ]
+          .filter(Boolean)
+          .join(" ");
+        return Object.assign({}, poolLane, {
+          cacheKey: poolLane.cacheKey
+            ? suffix
+              ? `${poolLane.cacheKey}-${suffix}`
+              : poolLane.cacheKey
+            : name,
+          command: commandPrefix ? `${commandPrefix} ${poolLane.command}` : poolLane.command,
+          name,
+        });
+      }),
+    );
   });
 }
 
@@ -213,6 +275,7 @@ export function findLaneByName(name) {
     expandUpgradeSurvivorBaselineLanes(
       [...allReleasePathLanes({ includeOpenWebUI: true }), ...mainLanes, ...tailLanes],
       process.env.OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS,
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS,
     ),
   ).find((poolLane) => poolLane.name === name);
 }
@@ -277,13 +340,18 @@ export function resolveDockerE2ePlan(options) {
   const retriedMainLanes = applyLiveRetries(mainLanes, options.liveRetries);
   const retriedTailLanes = applyLiveRetries(tailLanes, options.liveRetries);
   const upgradeSurvivorBaselines = options.upgradeSurvivorBaselines ?? "";
+  const upgradeSurvivorScenarios = options.upgradeSurvivorScenarios ?? "";
   const unexpandedSelectableLanes = dedupeLanes([
     ...allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
     ...retriedMainLanes,
     ...retriedTailLanes,
   ]);
   const selectableLanes = dedupeLanes(
-    expandUpgradeSurvivorBaselineLanes(unexpandedSelectableLanes, upgradeSurvivorBaselines),
+    expandUpgradeSurvivorBaselineLanes(
+      unexpandedSelectableLanes,
+      upgradeSurvivorBaselines,
+      upgradeSurvivorScenarios,
+    ),
   );
   const releaseLanes =
     options.selectedLaneNames.length === 0 && options.profile === RELEASE_PATH_PROFILE
@@ -291,12 +359,14 @@ export function resolveDockerE2ePlan(options) {
         ? expandUpgradeSurvivorBaselineLanes(
             allReleasePathLanes({ includeOpenWebUI: options.includeOpenWebUI }),
             upgradeSurvivorBaselines,
+            upgradeSurvivorScenarios,
           )
         : expandUpgradeSurvivorBaselineLanes(
             releasePathChunkLanes(options.releaseChunk, {
               includeOpenWebUI: options.includeOpenWebUI,
             }),
             upgradeSurvivorBaselines,
+            upgradeSurvivorScenarios,
           )
       : undefined;
   const selectedLanes =
@@ -310,7 +380,11 @@ export function resolveDockerE2ePlan(options) {
             (poolLane) => poolLane.name === selectedName,
           );
           if (unexpandedLane) {
-            return expandUpgradeSurvivorBaselineLanes([unexpandedLane], upgradeSurvivorBaselines);
+            return expandUpgradeSurvivorBaselineLanes(
+              [unexpandedLane],
+              upgradeSurvivorBaselines,
+              upgradeSurvivorScenarios,
+            );
           }
           selectNamedLanes(selectableLanes, [selectedName], "OPENCLAW_DOCKER_ALL_LANES");
           return [];

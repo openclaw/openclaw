@@ -68,6 +68,31 @@ const representativeConfigSteps = [
   ),
 ];
 
+const scenarioConfigSteps = new Map([
+  [
+    "feishu-channel",
+    [
+      configSetJsonFile("plugins-feishu", "plugins", "plugins", "plugins-feishu.json"),
+      configSetJsonFile(
+        "channels-feishu",
+        "feishu-channel",
+        "channels.feishu",
+        "channels-feishu.json",
+      ),
+    ],
+  ],
+  [
+    "tilde-log-path",
+    [
+      {
+        id: "logging-file",
+        intent: "logging",
+        argv: ["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"],
+      },
+    ],
+  ],
+]);
+
 const recipe = [
   {
     id: "update-channel",
@@ -82,6 +107,10 @@ const recipe = [
     argv: ["config", "validate"],
   },
 ];
+
+function selectedScenario() {
+  return process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
+}
 
 function runOpenClaw(step) {
   const result = spawnSync("openclaw", step.argv, {
@@ -103,10 +132,13 @@ function runOpenClaw(step) {
 function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
+  const scenario = selectedScenario();
+  const scenarioSteps = scenarioConfigSteps.get(scenario) ?? [];
   const summary = {
     source: "baseline-cli-command-recipe",
     recipe: "upgrade-survivor-v1",
     baselineVersion,
+    scenario,
     acceptedIntents: [
       "update",
       "gateway",
@@ -117,12 +149,13 @@ function applyRecipe() {
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      ...scenarioSteps.map((step) => step.intent),
     ],
     skippedIntents: [],
     steps: [],
   };
 
-  for (const step of recipe) {
+  for (const step of [...recipe.slice(0, -1), ...scenarioSteps, recipe.at(-1)]) {
     const outcome = runOpenClaw(step);
     summary.steps.push(outcome);
     writeJson(summaryPath, summary);

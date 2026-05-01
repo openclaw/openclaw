@@ -12,6 +12,7 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-upgrade-survivor-e2e" OPENCLAW_
 SKIP_BUILD="${OPENCLAW_UPGRADE_SURVIVOR_E2E_SKIP_BUILD:-0}"
 DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-900s}"
 BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-}"
+SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor}"
 
 normalize_npm_candidate() {
@@ -81,6 +82,7 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     -e OPENCLAW_UPGRADE_SURVIVOR_BASELINE="$BASELINE_SPEC" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_KIND="$CANDIDATE_KIND" \
     -e OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC="$CANDIDATE_SPEC" \
+    -e OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="$SCENARIO" \
     -e OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON=/tmp/openclaw-upgrade-survivor-artifacts/summary.json \
     -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}" \
     -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}" \
@@ -103,6 +105,7 @@ docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENCLAW_TEST_STATE_SCRIPT_B64="$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   -e OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT=/tmp/openclaw-upgrade-survivor-artifacts \
+  -e OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="$SCENARIO" \
   -e OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_START_BUDGET_SECONDS:-90}" \
   -e OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS="${OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS:-30}" \
   -v "$ARTIFACT_DIR:/tmp/openclaw-upgrade-survivor-artifacts" \
@@ -134,6 +137,7 @@ export GATEWAY_AUTH_TOKEN_REF="upgrade-survivor-token"
 export OPENAI_API_KEY="sk-openclaw-upgrade-survivor"
 export DISCORD_BOT_TOKEN="upgrade-survivor-discord-token"
 export TELEGRAM_BOT_TOKEN="123456:upgrade-survivor-telegram-token"
+export FEISHU_APP_SECRET="upgrade-survivor-feishu-secret"
 
 gateway_pid=""
 cleanup() {
@@ -153,8 +157,8 @@ OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT="$(
 export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 
 echo "Checking dirty-state config before update..."
-node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
-node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
+OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
+OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 
 echo "Running package update against the mounted tarball..."
 set +e
@@ -171,6 +175,11 @@ fi
 echo "Running non-interactive doctor repair..."
 if ! openclaw doctor --fix --non-interactive >/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
   echo "openclaw doctor failed" >&2
+  cat /tmp/openclaw-upgrade-survivor-doctor.log >&2 || true
+  exit 1
+fi
+if ! openclaw config validate >>/tmp/openclaw-upgrade-survivor-doctor.log 2>&1; then
+  echo "post-doctor config validation failed" >&2
   cat /tmp/openclaw-upgrade-survivor-doctor.log >&2 || true
   exit 1
 fi
@@ -196,6 +205,18 @@ if [ "$start_seconds" -gt "$START_BUDGET" ]; then
   exit 1
 fi
 
+echo "Checking gateway HTTP probes..."
+node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
+  --base-url "http://127.0.0.1:$PORT" \
+  --path /healthz \
+  --expect live \
+  --out /tmp/openclaw-upgrade-survivor-healthz.json
+node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
+  --base-url "http://127.0.0.1:$PORT" \
+  --path /readyz \
+  --expect ready \
+  --out /tmp/openclaw-upgrade-survivor-readyz.json
+
 echo "Checking gateway RPC status..."
 status_start="$(node -e "process.stdout.write(String(Date.now()))")"
 if ! openclaw gateway status --url "ws://127.0.0.1:$PORT" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >/tmp/openclaw-upgrade-survivor-status.json 2>/tmp/openclaw-upgrade-survivor-status.err; then
@@ -213,5 +234,5 @@ if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
 
-echo "Upgrade survivor Docker E2E passed in startup=${start_seconds}s status=${status_seconds}s."
+echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} startup=${start_seconds}s status=${status_seconds}s."
 '

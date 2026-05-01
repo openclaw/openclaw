@@ -384,6 +384,49 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
+  it("expands the published upgrade survivor lane across scenarios", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.4.29 2026.4.23",
+      upgradeSurvivorScenarios: "base feishu-channel tilde-log-path",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.29-feishu-channel",
+      "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.23",
+      "published-upgrade-survivor-2026.4.23-feishu-channel",
+      "published-upgrade-survivor-2026.4.23-tilde-log-path",
+    ]);
+    expect(plan.lanes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: expect.stringContaining("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='feishu-channel'"),
+        }),
+        expect.objectContaining({
+          command: expect.stringContaining("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='tilde-log-path'"),
+        }),
+      ]),
+    );
+  });
+
+  it("expands reported upgrade issue scenarios", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.4.29",
+      upgradeSurvivorScenarios: "reported-issues",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.29-feishu-channel",
+      "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
+    ]);
+  });
+
   it("plans a live-only selected lane without package e2e images", () => {
     const plan = planFor({ selectedLaneNames: ["live-models"] });
 
