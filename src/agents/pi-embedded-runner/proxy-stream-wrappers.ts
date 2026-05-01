@@ -103,7 +103,8 @@ export function createOpenRouterWrapper(
       },
       (payload) => {
         normalizeProxyReasoningPayload(payload, thinkingLevel);
-        if (isAnthropicModelRef(readStringValue(model.id))) {
+        const modelId = readStringValue(model.id);
+        if (modelId && isAnthropicModelRef(modelId)) {
           stripTrailingAnthropicAssistantPrefillWhenThinking(payload);
         }
       },
