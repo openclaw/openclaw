@@ -1019,6 +1019,7 @@ export async function takeChromeMcpSnapshot(params: {
   profile?: ChromeMcpProfileOptions;
   userDataDir?: string;
   targetId: string;
+  timeoutMs?: number;
 }): Promise<ChromeMcpSnapshotNode> {
   const result = await callTool(
     params.profileName,
@@ -1027,6 +1028,7 @@ export async function takeChromeMcpSnapshot(params: {
     {
       pageId: parsePageId(params.targetId),
     },
+    { timeoutMs: params.timeoutMs },
   );
   return extractSnapshot(result);
 }

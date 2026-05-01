@@ -577,6 +577,7 @@ export function registerBrowserAgentSnapshotRoutes(
             profileName: profileCtx.profile.name,
             profile: profileCtx.profile,
             targetId: tab.targetId,
+            timeoutMs: plan.timeoutMs,
           });
           if (plan.format === "aria") {
             return res.json({
@@ -623,6 +624,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 profile: profileCtx.profile,
                 targetId: tab.targetId,
                 format: "png",
+                timeoutMs: plan.timeoutMs,
               });
               const normalized = await normalizeBrowserScreenshot(labeled, {
                 maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -683,6 +685,7 @@ export function registerBrowserAgentSnapshotRoutes(
             refsMode: plan.refsMode,
             ssrfPolicy: ctx.state().resolved.ssrfPolicy,
             urls: plan.urls,
+            timeoutMs: plan.timeoutMs,
             options: {
               interactive: plan.interactive ?? undefined,
               compact: plan.compact ?? undefined,
@@ -725,6 +728,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   targetId: tab.targetId,
                   ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                   urls: plan.urls,
+                  timeoutMs: plan.timeoutMs,
                   ...(typeof plan.resolvedMaxChars === "number"
                     ? { maxChars: plan.resolvedMaxChars }
                     : {}),
@@ -743,6 +747,7 @@ export function registerBrowserAgentSnapshotRoutes(
               targetId: tab.targetId,
               refs: "refs" in snap ? snap.refs : {},
               type: "png",
+              timeoutMs: plan.timeoutMs,
             });
             const normalized = await normalizeBrowserScreenshot(labeled.buffer, {
               maxSide: DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -797,6 +802,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   cdpUrl: profileCtx.profile.cdpUrl,
                   targetId: tab.targetId,
                   limit: plan.limit,
+                  timeoutMs: plan.timeoutMs,
                   ssrfPolicy: ctx.state().resolved.ssrfPolicy,
                 });
               });
