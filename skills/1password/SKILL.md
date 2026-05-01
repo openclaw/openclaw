@@ -70,6 +70,8 @@ If a call returns `1Password CLI couldn't connect to the 1Password desktop app`,
 
 This is the only mode where tmux helps. `op signin` prints an `eval`-style export setting an `OP_SESSION_*` token; later commands in the same shell are authenticated by that env var. The gateway's per-command shells lose that state between calls, so a persistent tmux pane keeps the session token alive — but only if the export is actually applied with `eval`. Sending `op signin` as a plain command leaves stdout printed to the pane and `op whoami` will fail.
 
+The tmux flow is only actionable on macOS/Linux hosts where the `tmux` skill is available. On Windows, prefer desktop app integration or service account auth. If the user only has standalone interactive signin on Windows, stop and ask them to provide a persistent PowerShell session mechanism or switch to desktop integration/service account auth; do not translate the tmux commands directly.
+
 ```bash
 SOCKET_DIR="${OPENCLAW_TMUX_SOCKET_DIR:-${TMPDIR:-/tmp}/openclaw-tmux-sockets}"
 mkdir -p "$SOCKET_DIR"
