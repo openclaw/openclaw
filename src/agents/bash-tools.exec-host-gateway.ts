@@ -274,6 +274,7 @@ export async function processGatewayAllowlist(
   const allowlistEval = evaluateShellAllowlist({
     command: params.command,
     allowlist: approvals.allowlist,
+    denylist: approvals.denylist,
     safeBins: params.safeBins,
     safeBinProfiles: params.safeBinProfiles,
     cwd: params.workdir,
@@ -283,6 +284,15 @@ export async function processGatewayAllowlist(
   });
   const allowlistMatches = allowlistEval.allowlistMatches;
   const analysisOk = allowlistEval.analysisOk;
+  // Denylist takes precedence: if a command segment matches the denylist, block immediately
+  // regardless of security mode (even "full" mode respects the denylist).
+  if (allowlistEval.deniedByDenylist && allowlistEval.denylistMatch) {
+    const deniedEntry = allowlistEval.denylistMatch;
+    const reason = deniedEntry.reason
+      ? `Command blocked by exec denylist: ${deniedEntry.pattern} (${deniedEntry.reason})`
+      : `Command blocked by exec denylist: ${deniedEntry.pattern}`;
+    throw new Error(reason);
+  }
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
   const durableApprovalSatisfied = hasDurableExecApproval({

@@ -21,7 +21,7 @@ import {
   type ExecutableResolution,
   type ShellChainOperator,
 } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import type { ExecAllowlistEntry, ExecDenylistEntry } from "./exec-approvals.types.js";
 import {
   detectInterpreterInlineEvalArgv,
   isInterpreterLikeAllowlistPattern,
@@ -129,6 +129,7 @@ export type SkillBinTrustEntry = {
 };
 type ExecAllowlistContext = {
   allowlist: ExecAllowlistEntry[];
+  denylist?: ExecDenylistEntry[];
   safeBins: Set<string>;
   safeBinProfiles?: Readonly<Record<string, SafeBinProfile>>;
   cwd?: string;
@@ -142,6 +143,7 @@ type ExecAllowlistContext = {
 function pickExecAllowlistContext(params: ExecAllowlistContext): ExecAllowlistContext {
   return {
     allowlist: params.allowlist,
+    denylist: params.denylist,
     safeBins: params.safeBins,
     safeBinProfiles: params.safeBinProfiles,
     cwd: params.cwd,
@@ -577,6 +579,66 @@ function evaluateShellWrapperInlineChain(params: {
   }
   return { matches, satisfiedBy: "allowlist" };
 }
+
+/**
+ * Checks whether any segment of a command matches the denylist.
+ * Denylist patterns are matched against executable basenames and resolved paths.
+ * A bare name pattern (no /) matches the basename of the resolved executable.
+ * A path-scoped pattern (containing /) matches the resolved path prefix.
+ * Returns the first matching denylist entry, or null if no match.
+ */
+export function evaluateDenylist(params: {
+  segments: ExecCommandSegment[];
+  denylist: ExecDenylistEntry[];
+}): ExecDenylistEntry | null {
+  if (!Array.isArray(params.denylist) || params.denylist.length === 0) {
+    return null;
+  }
+  for (const segment of params.segments) {
+    const execution = resolveExecutionTargetResolution(segment.resolution);
+    const candidates = [execution?.executableName, execution?.rawExecutable, segment.argv[0]];
+    for (const candidate of candidates) {
+      if (typeof candidate !== "string") continue;
+      const trimmed = candidate.trim();
+      if (!trimmed) continue;
+      for (const entry of params.denylist) {
+        const pattern = entry.pattern?.trim();
+        if (!pattern) continue;
+        // Bare name match (no /): matches basename regardless of path
+        if (!pattern.includes("/")) {
+          if (
+            normalizeLowercaseStringOrEmpty(trimmed) === normalizeLowercaseStringOrEmpty(pattern)
+          ) {
+            return entry;
+          }
+          // Also match basename of resolved path
+          if (execution?.resolvedPath) {
+            const basename = path.basename(execution.resolvedPath);
+            if (
+              normalizeLowercaseStringOrEmpty(basename) === normalizeLowercaseStringOrEmpty(pattern)
+            ) {
+              return entry;
+            }
+          }
+        } else {
+          // Path-scoped pattern: match the resolved path
+          if (execution?.resolvedPath) {
+            const normalizedPath = normalizeLowercaseStringOrEmpty(execution.resolvedPath);
+            const normalizedPattern = normalizeLowercaseStringOrEmpty(pattern);
+            if (
+              normalizedPath === normalizedPattern ||
+              normalizedPath.startsWith(normalizedPattern + "/")
+            ) {
+              return entry;
+            }
+          }
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function evaluateSegments(
   segments: ExecCommandSegment[],
   params: ExecAllowlistContext,
@@ -698,6 +760,10 @@ export type ExecAllowlistAnalysis = {
   segments: ExecCommandSegment[];
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  /** If true, a command segment matched the denylist and the command is blocked. */
+  deniedByDenylist?: boolean;
+  /** The denylist entry that caused the block, if any. */
+  denylistMatch?: ExecDenylistEntry | null;
 };
 
 function hasSegmentExecutableMatch(
@@ -1091,6 +1157,19 @@ export function evaluateShellAllowlist(
     segmentAllowlistEntries: [],
     segmentSatisfiedBy: [],
   });
+  const denylistBlocked = (
+    denyEntry: ExecDenylistEntry,
+    analysisSegments: ExecCommandSegment[],
+  ): ExecAllowlistAnalysis => ({
+    analysisOk: true,
+    allowlistSatisfied: false,
+    allowlistMatches: [],
+    segments: analysisSegments,
+    segmentAllowlistEntries: [],
+    segmentSatisfiedBy: [],
+    deniedByDenylist: true,
+    denylistMatch: denyEntry,
+  });
 
   // Keep allowlist analysis conservative: line-continuation semantics are shell-dependent
   // and can rewrite token boundaries at runtime.
@@ -1110,6 +1189,14 @@ export function evaluateShellAllowlist(
     });
     if (!analysis.ok) {
       return analysisFailure();
+    }
+    // Denylist check: if any segment matches the denylist, block the entire command.
+    const denylistEntry = evaluateDenylist({
+      segments: analysis.segments,
+      denylist: allowlistContext.denylist ?? [],
+    });
+    if (denylistEntry) {
+      return denylistBlocked(denylistEntry, analysis.segments);
     }
     const evaluation = evaluateExecAllowlist({ analysis, ...allowlistContext });
     return {
@@ -1147,6 +1234,17 @@ export function evaluateShellAllowlist(
     evaluation: ExecAllowlistEvaluation;
     opToNext: ShellChainOperator | null;
   }>;
+
+  // Denylist check across all chain segments
+  const allSegments = finalizedEvaluations.flatMap((entry) => entry.analysis.segments);
+  const denylistEntry = evaluateDenylist({
+    segments: allSegments,
+    denylist: allowlistContext.denylist ?? [],
+  });
+  if (denylistEntry) {
+    return denylistBlocked(denylistEntry, allSegments);
+  }
+
   const allowSkillPreludeAtIndex = new Set<number>();
   const reachableSkillIds = new Set<string>();
   // Only allow the `cat SKILL.md && printf ...` display prelude when it sits on a

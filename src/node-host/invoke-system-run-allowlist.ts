@@ -1,5 +1,6 @@
 import {
   analyzeArgvCommand,
+  evaluateDenylist,
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   resolvePlannedSegmentArgv,
@@ -12,12 +13,27 @@ import {
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import type { RunResult } from "./invoke-types.js";
 
-type SystemRunAllowlistAnalysis = {
+export class DenylistError extends Error {
+  constructor(
+    public readonly pattern: string,
+    public readonly reason: string | undefined,
+  ) {
+    super(
+      reason
+        ? `Command blocked by exec denylist: ${pattern} (${reason})`
+        : `Command blocked by exec denylist: ${pattern}`,
+    );
+  }
+}
+
+export type SystemRunAllowlistAnalysis = {
   analysisOk: boolean;
   allowlistMatches: ExecAllowlistEntry[];
   allowlistSatisfied: boolean;
   segments: ExecCommandSegment[];
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
+  deniedByDenylist?: boolean;
+  denylistMatch?: { pattern: string; reason?: string } | null;
 };
 
 export function evaluateSystemRunAllowlist(params: {
@@ -37,6 +53,7 @@ export function evaluateSystemRunAllowlist(params: {
     const allowlistEval = evaluateShellAllowlist({
       command: params.shellCommand,
       allowlist: params.approvals.allowlist,
+      denylist: params.approvals.denylist,
       safeBins: params.safeBins,
       safeBinProfiles: params.safeBinProfiles,
       cwd: params.cwd,
@@ -46,6 +63,13 @@ export function evaluateSystemRunAllowlist(params: {
       autoAllowSkills: params.autoAllowSkills,
       platform: process.platform,
     });
+    // Denylist takes precedence: block immediately regardless of security mode
+    if (allowlistEval.deniedByDenylist && allowlistEval.denylistMatch) {
+      throw new DenylistError(
+        allowlistEval.denylistMatch.pattern,
+        allowlistEval.denylistMatch.reason,
+      );
+    }
     return {
       analysisOk: allowlistEval.analysisOk,
       allowlistMatches: allowlistEval.allowlistMatches,
@@ -55,10 +79,22 @@ export function evaluateSystemRunAllowlist(params: {
           : false,
       segments: allowlistEval.segments,
       segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
+      deniedByDenylist: allowlistEval.deniedByDenylist,
+      denylistMatch: allowlistEval.denylistMatch,
     };
   }
 
   const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
+
+  // Denylist check for argv commands
+  const denylistEntry = evaluateDenylist({
+    segments: analysis.segments,
+    denylist: params.approvals.denylist,
+  });
+  if (denylistEntry) {
+    throw new DenylistError(denylistEntry.pattern, denylistEntry.reason);
+  }
+
   const allowlistEval = evaluateExecAllowlist({
     analysis,
     allowlist: params.approvals.allowlist,

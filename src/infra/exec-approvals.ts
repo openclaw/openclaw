@@ -10,12 +10,12 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
-import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+import type { ExecAllowlistEntry, ExecDenylistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix, resolveRequiredHomeDir } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
-export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
+export type { ExecAllowlistEntry, ExecDenylistEntry } from "./exec-approvals.types.js";
 
 export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
@@ -151,6 +151,7 @@ export type ExecApprovalsDefaults = {
   ask?: ExecAsk;
   askFallback?: ExecSecurity;
   autoAllowSkills?: boolean;
+  denylist?: ExecDenylistEntry[];
 };
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
@@ -187,6 +188,7 @@ export type ExecApprovalsResolved = {
     askFallback: string | null;
   };
   allowlist: ExecAllowlistEntry[];
+  denylist: ExecDenylistEntry[];
   file: ExecApprovalsFile;
 };
 
@@ -252,6 +254,26 @@ function mergeLegacyAgent(
     autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
     allowlist: allowlist.length > 0 ? allowlist : undefined,
   };
+}
+
+/** Merge denylist arrays from defaults, wildcard, and agent. Deduplicate by pattern. */
+function mergeDenylists(
+  sources: readonly (ExecDenylistEntry[] | undefined)[],
+): ExecDenylistEntry[] {
+  const seen = new Set<string>();
+  const result: ExecDenylistEntry[] = [];
+  for (const entries of sources) {
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const pattern = entry.pattern?.trim();
+      if (!pattern) continue;
+      const key = normalizeLowercaseStringOrEmpty(pattern);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({ ...entry, pattern });
+    }
+  }
+  return result;
 }
 
 function ensureDir(filePath: string) {
@@ -334,6 +356,27 @@ function coerceAllowlistEntries(allowlist: unknown): ExecAllowlistEntry[] | unde
   return changed ? (result.length > 0 ? result : undefined) : (allowlist as ExecAllowlistEntry[]);
 }
 
+function coerceDenylistEntries(denylist: unknown): ExecDenylistEntry[] | undefined {
+  if (!Array.isArray(denylist) || denylist.length === 0) {
+    return undefined;
+  }
+  const result: ExecDenylistEntry[] = [];
+  for (const item of denylist) {
+    if (typeof item === "string") {
+      const trimmed = item.trim();
+      if (trimmed) {
+        result.push({ pattern: trimmed });
+      }
+    } else if (item && typeof item === "object" && !Array.isArray(item)) {
+      const pattern = (item as { pattern?: unknown }).pattern;
+      if (typeof pattern === "string" && pattern.trim().length > 0) {
+        result.push(item as ExecDenylistEntry);
+      }
+    }
+  }
+  return result.length > 0 ? result : undefined;
+}
+
 function ensureAllowlistIds(
   allowlist: ExecAllowlistEntry[] | undefined,
 ): ExecAllowlistEntry[] | undefined {
@@ -384,6 +427,7 @@ function sanitizeExecApprovalPolicy(
         ? askFallback
         : undefined,
     autoAllowSkills: policy?.autoAllowSkills,
+    denylist: coerceDenylistEntries(policy?.denylist),
   };
 }
 
@@ -735,6 +779,7 @@ export function resolveExecApprovalsFromFile(params: {
       fallbackAskFallback,
     ),
     autoAllowSkills: defaults.autoAllowSkills ?? fallbackAutoAllowSkills,
+    denylist: defaults.denylist ?? [],
   };
   const resolvedAgentSecurity = resolveAgentSecurityField({
     field: "security",
@@ -771,11 +816,17 @@ export function resolveExecApprovalsFromFile(params: {
     askFallback: resolvedAgentAskFallback.value,
     autoAllowSkills:
       agent.autoAllowSkills ?? wildcard.autoAllowSkills ?? resolvedDefaults.autoAllowSkills,
+    denylist: agent.denylist ?? wildcard.denylist ?? resolvedDefaults.denylist,
   };
   const allowlist = [
     ...(Array.isArray(wildcard.allowlist) ? wildcard.allowlist : []),
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
+  const denylist = mergeDenylists([
+    defaults.denylist ?? [],
+    wildcard.denylist ?? [],
+    agent.denylist ?? [],
+  ]);
   return {
     path: params.path ?? resolveExecApprovalsPath(),
     socketPath: expandHomePrefix(
@@ -790,6 +841,7 @@ export function resolveExecApprovalsFromFile(params: {
       askFallback: resolvedAgentAskFallback.source,
     },
     allowlist,
+    denylist,
     file,
   };
 }
