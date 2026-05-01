@@ -484,6 +484,22 @@ function providerHasGenericConfig(params: {
   );
 }
 
+/**
+ * Check if any provider with the given capability is configured.
+ * Used to provide helpful error messages when media understanding operations fail.
+ */
+function hasConfiguredCapabilityProvider(capability: string, cfg: OpenClawConfig): boolean {
+  const registry = buildMediaUnderstandingRegistry(undefined, cfg);
+  const providers = [...registry.values()].filter((p) => p.capabilities?.includes(capability));
+  return providers.some((p) =>
+    providerHasGenericConfig({
+      cfg,
+      providerId: p.id,
+      envVars: getProviderEnvVars(p.id, { config: cfg, includeUntrustedWorkspacePlugins: false }),
+    }),
+  );
+}
+
 async function writeOutputAsset(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -964,7 +980,13 @@ async function runImageDescribe(params: {
             timeoutMs: params.timeoutMs,
           });
       if (!result.text) {
-        throw new Error(`No description returned for image: ${resolvedPath}`);
+        // Provide more helpful error message if provider might not be configured
+        const hasConfiguredImageProvider = hasConfiguredCapabilityProvider("image", cfg);
+        throw new Error(
+          hasConfiguredImageProvider
+            ? `No description returned for image: ${resolvedPath}`
+            : "No image-understanding provider available. Configure a provider like openai (OPENAI_API_KEY) first."
+        );
       }
       return {
         path: resolvedPath,
@@ -1002,7 +1024,13 @@ async function runAudioTranscribe(params: {
     prompt: params.prompt,
   });
   if (!result.text) {
-    throw new Error(`No transcript returned for audio: ${path.resolve(params.file)}`);
+    // Provide more helpful error message if provider might not be configured
+    const hasConfiguredAudioProvider = hasConfiguredCapabilityProvider("audio", cfg);
+    throw new Error(
+      hasConfiguredAudioProvider
+        ? `No transcript returned for audio: ${path.resolve(params.file)}`
+        : "No audio-transcription provider available. Configure a provider like openai (OPENAI_API_KEY) or deepgram (DEEPGRAM_API_KEY) first."
+    );
   }
   return {
     ok: true,

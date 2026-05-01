@@ -778,7 +778,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No description returned for image/),
+      expect.stringMatching(/No (description returned for image|image-understanding provider available)/),
     );
   });
 
@@ -1274,7 +1274,7 @@ describe("capability cli", () => {
       }),
     ).rejects.toThrow("exit 1");
     expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringMatching(/No transcript returned for audio/),
+      expect.stringMatching(/No (transcript returned for audio|audio-transcription provider available)/),
     );
   });
 
