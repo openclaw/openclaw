@@ -922,7 +922,10 @@ export async function runEmbeddedPiAgent(
               // Persist merged vault for subsequent turns
               if (vaultPersistPath) {
                 await fs
-                  .writeFile(vaultPersistPath, JSON.stringify(runVault.toDict()), "utf-8")
+                  .writeFile(vaultPersistPath, JSON.stringify(runVault.toDict()), {
+                    encoding: "utf-8",
+                    mode: 0o600,
+                  })
                   .catch(() => {});
               }
               if (scanResult.findingsCount > 0) {

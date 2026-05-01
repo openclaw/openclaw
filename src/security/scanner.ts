@@ -118,7 +118,7 @@ async function callLocalModelForSensitiveValues(
     });
 
     if (!response.ok) {
-      console.error(`[Guardrail] 本地模型返回 HTTP ${response.status}: ${await response.text()}`);
+      console.error(`[Guardrail] 本地模型返回 HTTP ${response.status}`);
       return null;
     }
 

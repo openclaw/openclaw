@@ -40,9 +40,21 @@ const SENSITIVE_PATTERNS: Array<[RegExp, string, "high" | "medium" | "low"]> = [
   [/jdbc:\w+:\/\/\S+/gi, "JDBC Connection String", "high"],
 
   // Private Keys
-  [/-----BEGIN\s+(?:RSA |EC |DSA |ED25519 )?PRIVATE KEY-----/g, "Private Key", "high"],
-  [/-----BEGIN\s+OPENSSH\s+PRIVATE\s+KEY-----/g, "SSH Private Key", "high"],
-  [/-----BEGIN\s+PGP\s+PRIVATE\s+KEY\s+BLOCK-----/g, "PGP Private Key", "high"],
+  [
+    /-----BEGIN\s+(?:RSA |EC |DSA |ED25519 )?PRIVATE KEY-----[\s\S]*?-----END\s+(?:RSA |EC |DSA |ED25519 )?PRIVATE KEY-----/g,
+    "Private Key",
+    "high",
+  ],
+  [
+    /-----BEGIN\s+OPENSSH\s+PRIVATE\s+KEY-----[\s\S]*?-----END\s+OPENSSH\s+PRIVATE\s+KEY-----/g,
+    "SSH Private Key",
+    "high",
+  ],
+  [
+    /-----BEGIN\s+PGP\s+PRIVATE\s+KEY\s+BLOCK-----[\s\S]*?-----END\s+PGP\s+PRIVATE\s+KEY\s+BLOCK-----/g,
+    "PGP Private Key",
+    "high",
+  ],
 
   // Bearer Token
   [/Authorization:\s*Bearer\s+\S+/gi, "Bearer Token", "high"],
