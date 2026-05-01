@@ -5689,6 +5689,22 @@
       },
       "additionalProperties": false
     },
+    "ChannelsStopParams": {
+      "type": "object",
+      "required": [
+        "channel"
+      ],
+      "properties": {
+        "channel": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accountId": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
     "ChannelsLogoutParams": {
       "type": "object",
       "required": [
