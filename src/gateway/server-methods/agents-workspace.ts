@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { loadConfig } from "../../config/config.js";
 import {
   mkdirPathWithinRoot,
   readFileWithinRoot,
@@ -29,8 +28,8 @@ const WORKSPACE_FILE_SIZE_LIMIT = 10 * 1024 * 1024; // 10MB
 function resolveWorkspaceOrError(
   agentIdRaw: string,
   respond: RespondFn,
+  cfg: ReturnType<typeof import("../../config/config.js").loadConfig>,
 ): { agentId: string; workspaceDir: string } | null {
-  const cfg = loadConfig();
   const agentId = normalizeAgentId(agentIdRaw);
 
   // Validate agent exists in configured agents list
@@ -402,7 +401,7 @@ async function workspaceStat(
 }
 
 export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
-  "agents.workspace.list": async ({ params, respond }) => {
+  "agents.workspace.list": async ({ params, respond, context }) => {
     if (!validateAgentsWorkspaceListParams(params)) {
       respond(
         false,
@@ -415,7 +414,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveWorkspaceOrError(params.agentId, respond);
+    const resolved = resolveWorkspaceOrError(params.agentId, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
@@ -446,7 +445,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "agents.workspace.get": async ({ params, respond }) => {
+  "agents.workspace.get": async ({ params, respond, context }) => {
     if (!validateAgentsWorkspaceGetParams(params)) {
       respond(
         false,
@@ -459,7 +458,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveWorkspaceOrError(params.agentId, respond);
+    const resolved = resolveWorkspaceOrError(params.agentId, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
@@ -493,7 +492,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "agents.workspace.set": async ({ params, respond }) => {
+  "agents.workspace.set": async ({ params, respond, context }) => {
     if (!validateAgentsWorkspaceSetParams(params)) {
       respond(
         false,
@@ -506,7 +505,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveWorkspaceOrError(params.agentId, respond);
+    const resolved = resolveWorkspaceOrError(params.agentId, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
@@ -544,7 +543,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "agents.workspace.delete": async ({ params, respond }) => {
+  "agents.workspace.delete": async ({ params, respond, context }) => {
     if (!validateAgentsWorkspaceDeleteParams(params)) {
       respond(
         false,
@@ -557,7 +556,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveWorkspaceOrError(params.agentId, respond);
+    const resolved = resolveWorkspaceOrError(params.agentId, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
@@ -588,7 +587,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "agents.workspace.mkdir": async ({ params, respond }) => {
+  "agents.workspace.mkdir": async ({ params, respond, context }) => {
     if (!validateAgentsWorkspaceMkdirParams(params)) {
       respond(
         false,
@@ -601,7 +600,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveWorkspaceOrError(params.agentId, respond);
+    const resolved = resolveWorkspaceOrError(params.agentId, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
@@ -632,7 +631,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "agents.workspace.move": async ({ params, respond }) => {
+  "agents.workspace.move": async ({ params, respond, context }) => {
     if (!validateAgentsWorkspaceMoveParams(params)) {
       respond(
         false,
@@ -645,7 +644,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveWorkspaceOrError(params.agentId, respond);
+    const resolved = resolveWorkspaceOrError(params.agentId, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }
@@ -677,7 +676,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "agents.workspace.stat": async ({ params, respond }) => {
+  "agents.workspace.stat": async ({ params, respond, context }) => {
     if (!validateAgentsWorkspaceStatParams(params)) {
       respond(
         false,
@@ -690,7 +689,7 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const resolved = resolveWorkspaceOrError(params.agentId, respond);
+    const resolved = resolveWorkspaceOrError(params.agentId, respond, context.getRuntimeConfig());
     if (!resolved) {
       return;
     }

@@ -106,6 +106,7 @@ function createContext() {
     logGateway: { info: vi.fn(), error: vi.fn() },
     broadcastToConnIds: vi.fn(),
     getSessionEventSubscriberConnIds: () => new Set(),
+    getRuntimeConfig: () => mocks.loadConfigReturn,
   };
 }
 
