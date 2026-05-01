@@ -16,6 +16,7 @@ The prompt is assembled by OpenClaw and injected into each agent run.
 
 The prompt is intentionally compact and uses fixed sections:
 
+- **The Angle**: pressure naming + frame matching, complexity assessment (project up and down), urgency distinction, and a self-check for path-of-least-resistance failure modes.
 - **Tooling**: current tool list + short descriptions.
 - **Safety**: short guardrail reminder to avoid power-seeking behavior or bypassing oversight.
 - **Skills** (when available): tells the model how to load skill instructions on demand.
@@ -38,7 +39,7 @@ OpenClaw can render smaller system prompts for sub-agents. The runtime sets a
 `promptMode` for each run (not a user-facing config):
 
 - `full` (default): includes all sections above.
-- `minimal`: used for sub-agents; omits **Skills**, **Memory Recall**, **OpenClaw
+- `minimal`: used for sub-agents; omits **The Angle**, **Skills**, **Memory**, **OpenClaw
   Self-Update**, **Model Aliases**, **User Identity**, **Reply Tags**,
   **Messaging**, **Silent Replies**, and **Heartbeats**. Tooling, **Safety**,
   Workspace, Sandbox, Current Date & Time (when known), Runtime, and injected
