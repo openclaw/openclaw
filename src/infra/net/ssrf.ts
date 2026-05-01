@@ -564,6 +564,7 @@ function resolvePinnedDispatcherLookup(
     address,
     family: address.includes(":") ? 6 : 4,
   }));
+  assertNoAlwaysBlockedResolvedAddressesOrThrow(records);
   if (!shouldSkipPrivateNetworkChecks(pinned.hostname, policy)) {
     assertAllowedResolvedAddressesOrThrow(records, policy);
   }

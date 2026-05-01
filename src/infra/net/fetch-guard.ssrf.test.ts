@@ -214,6 +214,34 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(lookupFn).not.toHaveBeenCalled();
   });
 
+  it("blocks metadata dispatcher overrides even when private network access is enabled", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const fetchImpl = vi.fn(async () => okResponse());
+    const lookupFn = createPublicLookup();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/resource",
+        fetchImpl,
+        lookupFn,
+        policy: { allowPrivateNetwork: true },
+        dispatcherPolicy: {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "public.example",
+            addresses: ["169.254.169.254"],
+          },
+        },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("blocks special-use IPv4 literal URLs before fetch", async () => {
     const fetchImpl = vi.fn();
     await expect(

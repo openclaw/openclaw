@@ -183,6 +183,29 @@ describe("createPinnedDispatcher", () => {
     ).toThrow(/private|internal|blocked/i);
   });
 
+  it("rejects metadata pinned override addresses even when private network access is enabled", () => {
+    const originalLookup = vi.fn() as unknown as PinnedHostname["lookup"];
+    const pinned: PinnedHostname = {
+      hostname: "api.telegram.org",
+      addresses: ["149.154.167.221"],
+      lookup: originalLookup,
+    };
+
+    expect(() =>
+      createPinnedDispatcher(
+        pinned,
+        {
+          mode: "direct",
+          pinnedHostname: {
+            hostname: "api.telegram.org",
+            addresses: ["169.254.169.254"],
+          },
+        },
+        { allowPrivateNetwork: true },
+      ),
+    ).toThrow(/private|internal|blocked/i);
+  });
+
   it("keeps env proxy route while pinning the direct no-proxy path", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
     const pinned: PinnedHostname = {
