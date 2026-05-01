@@ -65,7 +65,7 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 /opt/homebrew/bin/openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck("/opt/homebrew/bin/openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
@@ -111,6 +111,7 @@ function Stop-OpenClawGatewayProcesses {
 Remove-FuturePluginEntries
 Stop-OpenClawGatewayProcesses
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
+$env:OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'
 $updateOutput = Invoke-OpenClaw update --tag ${psSingleQuote(input.updateTarget)} --yes --json --no-restart 2>&1
 $updateExit = $LASTEXITCODE
 $updateOutput
@@ -215,7 +216,7 @@ wait_for_gateway() {
 }
 scrub_future_plugin_entries
 stop_openclaw_gateway_processes
-OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
+OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 openclaw update --tag ${shellQuote(input.updateTarget)} --yes --json --no-restart
 ${posixVersionCheck("openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway

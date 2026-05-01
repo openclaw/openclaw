@@ -14,7 +14,7 @@ import {
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
-  resolveProviderAuth,
+  resolveWindowsProviderAuth,
   resolveSnapshot,
   run,
   runStreaming,
@@ -241,7 +241,7 @@ class WindowsSmoke {
   };
 
   constructor(private options: WindowsOptions) {
-    this.auth = resolveProviderAuth({
+    this.auth = resolveWindowsProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
       provider: options.provider,
@@ -805,6 +805,7 @@ if ($null -eq $config.update) {
 }
 $config.update | Add-Member -Force -MemberType NoteProperty -Name channel -Value 'dev'
 $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$env:OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
 Invoke-OpenClaw update --channel dev --yes --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }

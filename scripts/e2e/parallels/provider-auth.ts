@@ -53,6 +53,25 @@ export function resolveProviderAuth(input: {
   return { ...resolved, apiKeyValue };
 }
 
+export function resolveWindowsProviderAuth(input: {
+  provider: Provider;
+  apiKeyEnv?: string;
+  modelId?: string;
+}): ProviderAuth {
+  const auth = resolveProviderAuth(input);
+  if (input.provider !== "openai" || input.modelId) {
+    return auth;
+  }
+  const windowsModel = process.env.OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL?.trim();
+  if (windowsModel) {
+    return { ...auth, modelId: windowsModel };
+  }
+  if (process.env.OPENCLAW_PARALLELS_OPENAI_MODEL?.trim()) {
+    return auth;
+  }
+  return { ...auth, modelId: "openai/gpt-4.1-mini" };
+}
+
 export function parseProvider(value: string): Provider {
   if (value === "openai" || value === "anthropic" || value === "minimax") {
     return value;
