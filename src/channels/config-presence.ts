@@ -27,7 +27,7 @@ type ChannelPresenceOptions = {
 
 export type ChannelPresenceSignalSource = "config" | "env" | "persisted-auth";
 
-export type ChannelPresenceSignal = {
+type ChannelPresenceSignal = {
   channelId: string;
   source: ChannelPresenceSignalSource;
 };
