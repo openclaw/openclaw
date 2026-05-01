@@ -1050,7 +1050,11 @@ describe("extractThreadCompletionFallbackText", () => {
   });
 
   it("steer fails + fallback throws → falls through to gateway call instead of returning delivered:false", async () => {
-    const callGateway = createGatewayMock({ delivered: true, path: "gateway" });
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "delivered via gateway" }],
+      },
+    });
     const queueEmbeddedPiMessage = vi.fn(() => false);
     const sendMessage = vi.fn(async () => {
       throw new Error("fallback send error");
