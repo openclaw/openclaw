@@ -145,6 +145,8 @@ vi.mock("./agent-runner-utils.js", () => ({
     runBaseParams: {
       provider: params.provider,
       model: params.model,
+      liveModelDefaultProvider: params.run.provider,
+      liveModelDefaultModel: params.run.model,
       authProfileId: params.provider === params.run.provider ? params.run.authProfileId : undefined,
       authProfileIdSource:
         params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
@@ -752,6 +754,35 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.fallbackProvider).toBe("anthropic");
       expect(result.fallbackAttempts[0]?.reason).toBe("format");
     }
+  });
+
+  it("keeps the caller-selected live model default while running fallback candidates", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude";
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback ok" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("success");
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.4",
+        liveModelDefaultProvider: "anthropic",
+        liveModelDefaultModel: "claude",
+      }),
+    );
   });
 
   it("does not classify silent NO_REPLY terminal results for fallback", async () => {
