@@ -46,6 +46,9 @@ function createTypingHarness(overrides: TypingCallbackOverrides = {}) {
     ...(overrides.maxConsecutiveFailures !== undefined
       ? { maxConsecutiveFailures: overrides.maxConsecutiveFailures }
       : {}),
+    ...(overrides.keepaliveIntervalMs !== undefined
+      ? { keepaliveIntervalMs: overrides.keepaliveIntervalMs }
+      : {}),
     ...(overrides.maxDurationMs !== undefined ? { maxDurationMs: overrides.maxDurationMs } : {}),
   });
   return { start, stop, onStartError, onStopError, callbacks };
@@ -193,6 +196,96 @@ describe("createTypingCallbacks", () => {
     await flushMicrotasks();
 
     expect(stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("issues final cleanup for Feishu-style persistent typing after pending start settles", async () => {
+    let resolveStart!: () => void;
+    let startCompleted = false;
+    let stopsAfterStart = 0;
+    const { stop, callbacks } = createTypingHarness({
+      start: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            resolveStart = () => {
+              startCompleted = true;
+              resolve();
+            };
+          }),
+      ),
+      stop: vi.fn(async () => {
+        if (startCompleted) {
+          stopsAfterStart += 1;
+        }
+      }),
+    });
+
+    await callbacks.onReplyStart();
+    callbacks.onCleanup?.();
+
+    expect(stop).toHaveBeenCalledTimes(1);
+    expect(stopsAfterStart).toBe(0);
+
+    resolveStart();
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(stop).toHaveBeenCalledTimes(2);
+    expect(stopsAfterStart).toBe(1);
+  });
+
+  it("sends stop again when cleanup runs before a pending keepalive settles", async () => {
+    await withFakeTimers(async () => {
+      let resolveKeepaliveStart!: () => void;
+      let active = false;
+      let removeCount = 0;
+      let startCount = 0;
+      const { start, stop, callbacks } = createTypingHarness({
+        keepaliveIntervalMs: 3_000,
+        start: vi.fn(async () => {
+          startCount += 1;
+          if (startCount === 1) {
+            active = true;
+            return;
+          }
+          await new Promise<void>((resolve) => {
+            resolveKeepaliveStart = () => {
+              active = true;
+              resolve();
+            };
+          });
+        }),
+        stop: vi.fn(async () => {
+          if (active) {
+            active = false;
+            removeCount += 1;
+          }
+        }),
+      });
+
+      await callbacks.onReplyStart();
+      await flushMicrotasks();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(active).toBe(true);
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(start).toHaveBeenCalledTimes(2);
+      await flushMicrotasks();
+
+      callbacks.onCleanup?.();
+      await flushMicrotasks();
+      expect(stop).toHaveBeenCalledTimes(1);
+      expect(removeCount).toBe(1);
+      expect(active).toBe(false);
+
+      resolveKeepaliveStart();
+      await flushMicrotasks();
+      await flushMicrotasks();
+      await flushMicrotasks();
+
+      expect(stop).toHaveBeenCalledTimes(2);
+      expect(removeCount).toBe(2);
+      expect(active).toBe(false);
+    });
   });
 
   it("does not restart keepalive after idle cleanup", async () => {
