@@ -590,6 +590,35 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("classifies daemon health ECONNREFUSED failures with a recovery command", async () => {
+    await withStateDir("state-local-daemon-health-refused-", async (stateDir) => {
+      waitForGatewayReachableMock = vi.fn(async () => ({
+        ok: false,
+        detail: "connect ECONNREFUSED 127.0.0.1:18789",
+      }));
+      gatewayServiceMock.readRuntime.mockResolvedValueOnce({
+        status: "stopped",
+        state: "failed",
+        pid: 0,
+      });
+      readLastGatewayErrorLineMock.mockResolvedValueOnce("");
+
+      const { runtimeWithCapture, readCapturedJson } = createJsonCaptureRuntime();
+      await expectLocalJsonSetupFailure(stateDir, runtimeWithCapture);
+
+      const parsed = JSON.parse(readCapturedJson()) as {
+        ok: boolean;
+        phase: string;
+        classification?: string;
+        hints?: string[];
+      };
+      expect(parsed.ok).toBe(false);
+      expect(parsed.phase).toBe("gateway-health");
+      expect(parsed.classification).toBe("service-stopped");
+      expect(parsed.hints).toContain("Fix: run `openclaw gateway restart`.");
+    });
+  }, 60_000);
+
   it("auto-generates token auth when binding LAN and persists the token", async () => {
     if (process.platform === "win32") {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.

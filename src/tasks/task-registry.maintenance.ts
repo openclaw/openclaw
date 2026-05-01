@@ -24,7 +24,7 @@ import {
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { deriveSessionChatType } from "../sessions/session-chat-type.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -386,7 +386,7 @@ function hasBackingSession(task: TaskRecord): boolean {
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
     if (task.runtime === "cli") {
-      const chatType = deriveSessionChatType(childSessionKey);
+      const chatType = deriveSessionChatTypeFromKey(childSessionKey);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
         return false;
       }
