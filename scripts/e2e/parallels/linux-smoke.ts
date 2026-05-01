@@ -12,9 +12,7 @@ import {
   parseBoolEnv,
   parseMode,
   parseProvider,
-  modelTransportConfigJson,
-  providerIdFromModelId,
-  providerTimeoutConfigJson,
+  modelProviderConfigBatchJson,
   repoRoot,
   resolveHostIp,
   resolveHostPort,
@@ -690,22 +688,14 @@ rm -rf /root/.openclaw/test-bad-plugin`);
 
   private verifyLocalTurn(): void {
     this.guestExec(["openclaw", "models", "set", this.auth.modelId]);
-    const providerId = providerIdFromModelId(this.auth.modelId) || this.options.provider;
-    const providerTimeoutConfig = providerTimeoutConfigJson(this.auth.modelId, "linux");
-    if (providerTimeoutConfig) {
-      this.guestBash(
-        `openclaw config set ${shellQuote(`models.providers.${providerId}`)} ${shellQuote(
-          providerTimeoutConfig,
-        )} --strict-json`,
-      );
-    }
-    const modelTransportConfig = modelTransportConfigJson(this.auth.modelId);
-    if (modelTransportConfig) {
-      this.guestBash(
-        `openclaw config set ${shellQuote(
-          `agents.defaults.models.${this.auth.modelId}`,
-        )} ${shellQuote(modelTransportConfig)} --strict-json`,
-      );
+    const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "linux");
+    if (modelProviderConfigBatch) {
+      this.guestBash(`provider_config_batch="$(mktemp)"
+cat >"$provider_config_batch" <<'JSON'
+${modelProviderConfigBatch}
+JSON
+openclaw config set --batch-file "$provider_config_batch" --strict-json
+rm -f "$provider_config_batch"`);
     }
     this.guestExec([
       "openclaw",

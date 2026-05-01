@@ -5,11 +5,7 @@ import {
   windowsModelProviderTimeoutScript,
   windowsOpenClawResolver,
 } from "./powershell.ts";
-import {
-  modelTransportConfigJson,
-  providerIdFromModelId,
-  providerTimeoutConfigJson,
-} from "./provider-auth.ts";
+import { modelProviderConfigBatchJson } from "./provider-auth.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
 export interface NpmUpdateScriptInput {
@@ -23,25 +19,20 @@ function posixModelProviderConfigCommands(
   modelId: string,
   platform: Platform,
 ): string {
-  const commands: string[] = [];
-  const providerId = providerIdFromModelId(modelId);
-  const configJson = providerTimeoutConfigJson(modelId, platform);
-  if (providerId && configJson) {
-    commands.push(
-      `${command} config set ${shellQuote(`models.providers.${providerId}`)} ${shellQuote(
-        configJson,
-      )} --strict-json`,
-    );
+  const batchJson = modelProviderConfigBatchJson(modelId, platform);
+  if (!batchJson) {
+    return "";
   }
-  const transportJson = modelTransportConfigJson(modelId);
-  if (transportJson) {
-    commands.push(
-      `${command} config set ${shellQuote(`agents.defaults.models.${modelId}`)} ${shellQuote(
-        transportJson,
-      )} --strict-json`,
-    );
-  }
-  return commands.join("\n");
+  return `provider_config_batch="$(mktemp)"
+cat >"$provider_config_batch" <<'JSON'
+${batchJson}
+JSON
+set +e
+${command} config set --batch-file "$provider_config_batch" --strict-json
+provider_config_exit=$?
+set -e
+rm -f "$provider_config_batch"
+if [ "$provider_config_exit" -ne 0 ]; then exit "$provider_config_exit"; fi`;
 }
 
 function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {

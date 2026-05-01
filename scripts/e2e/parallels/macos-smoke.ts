@@ -11,9 +11,7 @@ import {
   packOpenClaw,
   parseMode,
   parseProvider,
-  modelTransportConfigJson,
-  providerIdFromModelId,
-  providerTimeoutConfigJson,
+  modelProviderConfigBatchJson,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
@@ -974,22 +972,16 @@ exit 1`);
 
   private verifyTurn(): void {
     this.guestExec([guestNode, guestOpenClawEntry, "models", "set", this.auth.modelId]);
-    const providerId = providerIdFromModelId(this.auth.modelId) || this.options.provider;
-    const providerTimeoutConfig = providerTimeoutConfigJson(this.auth.modelId, "macos");
-    if (providerTimeoutConfig) {
-      this.guestSh(
-        `${shellQuote(guestNode)} ${shellQuote(guestOpenClawEntry)} config set ${shellQuote(
-          `models.providers.${providerId}`,
-        )} ${shellQuote(providerTimeoutConfig)} --strict-json`,
-      );
-    }
-    const modelTransportConfig = modelTransportConfigJson(this.auth.modelId);
-    if (modelTransportConfig) {
-      this.guestSh(
-        `${shellQuote(guestNode)} ${shellQuote(guestOpenClawEntry)} config set ${shellQuote(
-          `agents.defaults.models.${this.auth.modelId}`,
-        )} ${shellQuote(modelTransportConfig)} --strict-json`,
-      );
+    const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "macos");
+    if (modelProviderConfigBatch) {
+      this.guestSh(`provider_config_batch="$(mktemp)"
+cat >"$provider_config_batch" <<'JSON'
+${modelProviderConfigBatch}
+JSON
+${shellQuote(guestNode)} ${shellQuote(
+        guestOpenClawEntry,
+      )} config set --batch-file "$provider_config_batch" --strict-json
+rm -f "$provider_config_batch"`);
     }
     this.guestExec([
       guestNode,
