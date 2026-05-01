@@ -274,13 +274,15 @@ jobs:
               runMacos ? [{ check_name: "macos-node", runtime: "node", task: "test" }] : [],
             ),
             run_macos_swift: runMacos,
-            run_android_job: true,
+            run_android_job: runAndroid,
             android_matrix: createMatrix(
-              [
-                { check_name: "android-test-play", task: "test-play" },
-                { check_name: "android-test-third-party", task: "test-third-party" },
-                { check_name: "android-build-play", task: "build-play" },
-              ]
+              runAndroid
+                ? [
+                    { check_name: "android-test-play", task: "test-play" },
+                    { check_name: "android-test-third-party", task: "test-third-party" },
+                    { check_name: "android-build-play", task: "build-play" },
+                  ]
+                : [],
             ),
           };
 
@@ -740,14 +742,6 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Upload Android APK
-        if: matrix.task == 'build-play'
-        uses: actions/upload-artifact@v4
-        with:
-          name: openclaw-android-apk
-          path: apps/android/app/build/outputs/apk/**/*.apk
-          retention-days: 14
 
   checks-fast-plugin-contracts-shard:
     permissions:
@@ -2148,3 +2142,11 @@ jobs:
               exit 1
               ;;
           esac
+
+      - name: Upload Android APK
+        if: matrix.task == 'build-play'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-android-apk
+          path: apps/android/app/build/outputs/apk/**/*.apk
+          retention-days: 14
