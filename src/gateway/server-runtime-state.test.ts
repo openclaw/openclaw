@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import {
+  getActivePluginChannelRegistry,
   pinActivePluginHttpRouteRegistry,
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   resolveActivePluginHttpRouteRegistry,
@@ -25,10 +28,11 @@ function createRegistryWithRoute(path: string) {
 describe("createGatewayRuntimeState", () => {
   afterEach(() => {
     releasePinnedPluginHttpRouteRegistry();
+    releasePinnedPluginChannelRegistry();
     resetPluginRuntimeStateForTest();
   });
 
-  it("releases a post-bootstrap repinned HTTP route registry on cleanup", async () => {
+  it("releases post-bootstrap repinned plugin registries on cleanup", async () => {
     const startupRegistry = createRegistryWithRoute("/startup");
     const loadedRegistry = createRegistryWithRoute("/loaded");
     const fallbackRegistry = createRegistryWithRoute("/fallback");
@@ -57,10 +61,13 @@ describe("createGatewayRuntimeState", () => {
     });
 
     pinActivePluginHttpRouteRegistry(loadedRegistry);
+    pinActivePluginChannelRegistry(loadedRegistry);
     expect(resolveActivePluginHttpRouteRegistry(fallbackRegistry)).toBe(loadedRegistry);
+    expect(getActivePluginChannelRegistry()).toBe(loadedRegistry);
 
     runtimeState.releasePluginRouteRegistry();
 
     expect(resolveActivePluginHttpRouteRegistry(fallbackRegistry)).toBe(startupRegistry);
+    expect(getActivePluginChannelRegistry()).toBe(startupRegistry);
   });
 });

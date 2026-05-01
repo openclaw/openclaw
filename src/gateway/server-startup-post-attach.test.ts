@@ -309,6 +309,57 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
+  it("waits for deferred startup plugin attachment before channel sidecars", async () => {
+    const events: string[] = [];
+    let finishAttachment!: () => void;
+    const attachmentFinished = new Promise<void>((resolve) => {
+      finishAttachment = () => {
+        events.push("startup-loaded-end");
+        resolve();
+      };
+    });
+    const loadedPluginRegistry = {
+      plugins: [{ id: "acpx", status: "loaded" }],
+      typedHooks: [],
+    } as never;
+    const loadStartupPlugins = vi.fn(async () => ({
+      pluginRegistry: loadedPluginRegistry,
+      gatewayMethods: ["ping", "acp.spawn"],
+    }));
+    const onStartupPluginsLoaded = vi.fn(() => {
+      events.push("startup-loaded-start");
+      return attachmentFinished;
+    });
+    const startGatewaySidecars = vi.fn(async () => {
+      events.push("sidecars");
+      return { pluginServices: null };
+    });
+
+    const runtimePromise = startGatewayPostAttachRuntime(
+      {
+        ...createPostAttachParams({
+          pluginRegistry: {
+            plugins: [],
+            typedHooks: [],
+          } as never,
+          loadStartupPlugins,
+          onStartupPluginsLoaded,
+        }),
+      },
+      createPostAttachRuntimeDeps({ startGatewaySidecars }),
+    );
+
+    await vi.waitFor(() => {
+      expect(events).toEqual(["startup-loaded-start"]);
+    });
+    expect(startGatewaySidecars).not.toHaveBeenCalled();
+
+    finishAttachment();
+    await runtimePromise;
+
+    expect(events).toEqual(["startup-loaded-start", "startup-loaded-end", "sidecars"]);
+  });
+
   it("keeps the qmd memory backend lazy by default", async () => {
     await startGatewayPostAttachRuntime({
       ...createPostAttachParams(),

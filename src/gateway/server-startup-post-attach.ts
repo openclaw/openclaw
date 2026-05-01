@@ -588,7 +588,7 @@ export async function startGatewayPostAttachRuntime(
     onStartupPluginsLoaded?: (result: {
       pluginRegistry: PluginRegistry;
       gatewayMethods: string[];
-    }) => void;
+    }) => Awaitable<void>;
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
     onSidecarsReady?: () => void;
@@ -612,7 +612,7 @@ export async function startGatewayPostAttachRuntime(
       params.loadStartupPlugins!(),
     );
     pluginRegistry = loaded.pluginRegistry;
-    params.onStartupPluginsLoaded?.(loaded);
+    await params.onStartupPluginsLoaded?.(loaded);
   }
 
   await measureStartup(params.startupTrace, "post-attach.log", () =>
