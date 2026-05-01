@@ -1458,6 +1458,32 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     ).not.toThrow();
   });
 
+  it("accepts staged runtime deps that expose a package bin entry", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "@zed-industries", "codex-acp");
+    fs.mkdirSync(path.join(packageDir, "bin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "@zed-industries/codex-acp",
+        version: "0.12.0",
+        bin: {
+          "codex-acp": "bin/codex-acp.js",
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageDir, "bin", "codex-acp.js"), "#!/usr/bin/env node\n");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["@zed-industries/codex-acp@0.12.0"]);
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["@zed-industries/codex-acp@0.12.0"])).toBe(
+      true,
+    );
+    expect(() =>
+      assertBundledRuntimeDepsInstalled(installRoot, ["@zed-industries/codex-acp@0.12.0"]),
+    ).not.toThrow();
+  });
+
   it("accepts staged runtime deps with exported package entry files", () => {
     const installRoot = makeTempDir();
     const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
@@ -1635,6 +1661,29 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     fs.writeFileSync(
       path.join(packageDir, "package.json"),
       JSON.stringify({ name: "alpha-runtime", version: "1.0.0" }),
+      "utf8",
+    );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(false);
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"])).toThrow(
+      /alpha-runtime@1\.0\.0/,
+    );
+  });
+
+  it("reports staged runtime deps as missing when a package bin entry is absent", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "alpha-runtime",
+        version: "1.0.0",
+        bin: {
+          "alpha-runtime": "bin/alpha-runtime.js",
+        },
+      }),
       "utf8",
     );
     writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);

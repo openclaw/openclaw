@@ -213,6 +213,9 @@ function hasInstalledRuntimeDepExportFiles(packageDir: string, rawExports: unkno
 }
 
 function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonObject): boolean {
+  if (hasInstalledRuntimeDepBinFiles(packageDir, packageJson.bin)) {
+    return true;
+  }
   if (packageJson.exports !== undefined) {
     return hasInstalledRuntimeDepExportFiles(packageDir, packageJson.exports);
   }
@@ -221,6 +224,23 @@ function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonO
     return hasRuntimeDepEntryFile(packageDir, main);
   }
   return hasRuntimeDepEntryFile(packageDir, "index");
+}
+
+function collectRuntimeDepBinTargets(rawBin: unknown): string[] {
+  if (typeof rawBin === "string" && rawBin.trim() !== "") {
+    return [rawBin];
+  }
+  if (!isJsonObject(rawBin)) {
+    return [];
+  }
+  return Object.values(rawBin).filter(
+    (value): value is string => typeof value === "string" && value.trim() !== "",
+  );
+}
+
+function hasInstalledRuntimeDepBinFiles(packageDir: string, rawBin: unknown): boolean {
+  const targets = collectRuntimeDepBinTargets(rawBin);
+  return targets.some((target) => hasRuntimeDepEntryFile(packageDir, target));
 }
 
 function isRuntimeDepSatisfied(rootDir: string, dep: { name: string; version: string }): boolean {
