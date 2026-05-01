@@ -1316,11 +1316,15 @@ async function processMessageAfterDedupe(
         replyToSender = fetched.sender;
       }
       if (core.logging.shouldLogVerbose()) {
-        const preview = (fetched.body ?? "").replace(/\s+/g, " ").slice(0, 120);
+        // Run the body preview through sanitizeForLog so the redaction regex
+        // (?password=, ?token=, Authorization: …) catches credential-shaped
+        // strings that may appear in user message bodies, matching the
+        // hygiene of adjacent verbose log lines in this file.
+        const preview = sanitizeForLog((fetched.body ?? "").replace(/\s+/g, " "), 120);
         logVerbose(
           core,
           runtime,
-          `reply-context API fallback replyToId=${replyToId} sender=${fetched.sender ?? ""} body="${preview}"`,
+          `reply-context API fallback replyToId=${sanitizeForLog(replyToId)} sender=${sanitizeForLog(fetched.sender ?? "")} body="${preview}"`,
         );
       }
     }
