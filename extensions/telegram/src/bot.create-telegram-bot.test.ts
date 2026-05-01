@@ -629,6 +629,66 @@ describe("createTelegramBot", () => {
     expect(payload.Body).toContain("cmd:option_a");
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
+
+  it("suppresses direct-chat silent fallback for silent callback_query replies", async () => {
+    replySpy.mockResolvedValueOnce({ text: "NO_REPLY" });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-silent-1",
+        data: "cmd:quiet",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-silent-1");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("still sends real callback_query replies", async () => {
+    replySpy.mockResolvedValueOnce({ text: "Handled option A" });
+
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-visible-1",
+        data: "cmd:option_a",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-visible-1");
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      "1234",
+      "Handled option A",
+      expect.objectContaining({ parse_mode: "HTML" }),
+    );
+  });
+
   it("preserves native command source for prefixed callback_query payloads", async () => {
     loadConfig.mockReturnValue({
       commands: { text: false, native: true },
