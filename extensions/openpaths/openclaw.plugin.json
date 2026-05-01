@@ -1,0 +1,202 @@
+{
+  "id": "openpaths",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["openpaths"],
+  "modelIdNormalization": {
+    "providers": {
+      "openpaths": {
+        "prefixWhenBare": "openpaths"
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "openpaths",
+      "hostSuffixes": ["openpaths.io"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "openpaths": {
+        "family": "openai-compatible"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "openpaths": {
+        "baseUrl": "https://openpaths.io/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "auto",
+            "name": "OpenPaths Auto",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+              "reasoningEffortMap": {
+                "xhigh": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "auto-easy-task",
+            "name": "OpenPaths Auto Easy Task",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+              "reasoningEffortMap": {
+                "xhigh": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "auto-medium-task",
+            "name": "OpenPaths Auto Medium Task",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+              "reasoningEffortMap": {
+                "xhigh": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "auto-hard-task",
+            "name": "OpenPaths Auto Hard Task",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+              "reasoningEffortMap": {
+                "xhigh": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "auto-think",
+            "name": "OpenPaths Auto Think",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+              "reasoningEffortMap": {
+                "xhigh": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "autothink",
+            "name": "OpenPaths AutoThink",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["low", "medium", "high", "xhigh"],
+              "reasoningEffortMap": {
+                "xhigh": "high"
+              },
+              "maxTokensField": "max_tokens"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "openpaths": "static"
+    }
+  },
+  "providerAuthEnvVars": {
+    "openpaths": ["OPENPATHS_API_KEY"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "openpaths",
+      "method": "api-key",
+      "choiceId": "openpaths-api-key",
+      "choiceLabel": "OpenPaths API key",
+      "groupId": "openpaths",
+      "groupLabel": "OpenPaths",
+      "groupHint": "API key",
+      "optionKey": "openpathsApiKey",
+      "cliFlag": "--openpaths-api-key",
+      "cliOption": "--openpaths-api-key <key>",
+      "cliDescription": "OpenPaths API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -374,6 +374,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openai/**"
+"extensions: openpaths":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/openpaths/**"
+          - "docs/providers/openpaths.md"
 "extensions: codex":
   - changed-files:
       - any-glob-to-any-file:
