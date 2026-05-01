@@ -157,6 +157,45 @@ describe("collectPublishablePluginPackages", () => {
       },
     ]);
   });
+
+  it("does not validate unselected publishable plugin manifests", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10-beta.1",
+      openclaw: {
+        extensions: ["./index.ts"],
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    mkdirSync(join(repoDir, "extensions", "private-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "private-plugin", "package.json"), {
+      name: "@openclaw/private-plugin",
+      version: "2026.4.10-beta.1",
+      private: true,
+      openclaw: {
+        extensions: ["./index.ts"],
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(
+      collectPublishablePluginPackages(repoDir, {
+        packageNames: ["@openclaw/demo-plugin"],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        extensionId: "demo-plugin",
+        packageName: "@openclaw/demo-plugin",
+        publishTag: "beta",
+      }),
+    ]);
+  });
 });
 
 describe("resolveSelectedPublishablePluginPackages", () => {

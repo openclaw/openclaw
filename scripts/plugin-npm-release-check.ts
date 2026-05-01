@@ -11,7 +11,16 @@ import {
 
 export function runPluginNpmReleaseCheck(argv: string[]) {
   const { selection, selectionMode, baseRef, headRef } = parsePluginReleaseArgs(argv);
-  const publishable = collectPublishablePluginPackages();
+  const changedExtensionIds =
+    baseRef && headRef
+      ? collectChangedExtensionIdsFromGitRange({
+          gitRange: { baseRef, headRef },
+        })
+      : [];
+  const publishable = collectPublishablePluginPackages(".", {
+    extensionIds: selectionMode === "all-publishable" ? [] : changedExtensionIds,
+    packageNames: selection,
+  });
   const selected =
     selectionMode === "all-publishable"
       ? publishable
@@ -23,9 +32,7 @@ export function runPluginNpmReleaseCheck(argv: string[]) {
         : baseRef && headRef
           ? resolveChangedPublishablePluginPackages({
               plugins: publishable,
-              changedExtensionIds: collectChangedExtensionIdsFromGitRange({
-                gitRange: { baseRef, headRef },
-              }),
+              changedExtensionIds,
             })
           : publishable;
 
