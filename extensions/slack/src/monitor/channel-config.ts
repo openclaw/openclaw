@@ -5,7 +5,6 @@ import {
   type ChannelMatchSource,
 } from "openclaw/plugin-sdk/channel-targets";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
-import type { SlackMessageEvent } from "../types.js";
 import { normalizeSlackSlug } from "./allow-list.js";
 
 export type SlackChannelConfigResolved = {
@@ -19,7 +18,7 @@ export type SlackChannelConfigResolved = {
   matchSource?: ChannelMatchSource;
 };
 
-export type SlackChannelConfigEntry = {
+type SlackChannelConfigEntry = {
   enabled?: boolean;
   requireMention?: boolean;
   allowBots?: boolean;
@@ -117,5 +116,3 @@ export function resolveSlackChannelConfig(params: {
   };
   return applyChannelMatchMeta(result, match);
 }
-
-export type { SlackMessageEvent };

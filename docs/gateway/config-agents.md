@@ -922,12 +922,14 @@ noVNC observer access uses VNC auth by default and OpenClaw emits a short-lived 
 
 Browser sandboxing and `sandbox.docker.binds` are Docker-only.
 
-Build images:
+Build images (from a source checkout):
 
 ```bash
 scripts/sandbox-setup.sh           # main sandbox image
 scripts/sandbox-browser-setup.sh   # optional browser image
 ```
+
+For npm installs without a source checkout, see [Sandboxing § Images and setup](/gateway/sandboxing#images-and-setup) for inline `docker build` commands.
 
 ### `agents.list` (per-agent overrides)
 

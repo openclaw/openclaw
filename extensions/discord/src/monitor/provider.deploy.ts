@@ -117,7 +117,7 @@ function installDeployRestLogging(params: {
   };
 }
 
-export async function deployDiscordCommands(params: {
+async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
   enabled: boolean;

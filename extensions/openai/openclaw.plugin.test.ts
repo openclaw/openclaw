@@ -65,7 +65,7 @@ function providerWizardByKey() {
 
 describe("OpenAI plugin manifest", () => {
   it("opts into staging bundled runtime dependencies", () => {
-    expect(packageJson.dependencies?.["@mariozechner/pi-ai"]).toBe("0.70.6");
+    expect(packageJson.dependencies?.["@mariozechner/pi-ai"]).toBe("0.71.1");
     expect(packageJson.dependencies?.ws).toBe("^8.20.0");
     expect(packageJson.openclaw?.bundle?.stageRuntimeDependencies).toBe(true);
   });

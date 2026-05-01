@@ -10,7 +10,7 @@ import {
   validateArtifactsListParams,
 } from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
-import { loadSessionEntry, readSessionMessages } from "../session-utils.js";
+import { loadSessionEntry, visitSessionMessages } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -215,59 +215,70 @@ export function collectArtifactsFromMessages(params: {
   const artifacts: ArtifactRecord[] = [];
   let messageFallbackSeq = 0;
   for (const message of params.messages) {
-    const msg = asRecord(message);
-    if (!msg) {
-      continue;
-    }
     messageFallbackSeq += 1;
-    const messageSeq = resolveMessageSeq(msg, messageFallbackSeq);
-    const messageRunId = resolveMessageRunId(msg);
-    const messageTaskId = resolveMessageTaskId(msg);
-    if (params.runId && messageRunId !== params.runId) {
-      continue;
-    }
-    if (params.taskId && messageTaskId !== params.taskId) {
-      continue;
-    }
-    const content = Array.isArray(msg.content) ? msg.content : [];
-    for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
-      const block = asRecord(content[contentIndex]);
-      if (!block || !isArtifactBlock(block)) {
-        continue;
-      }
-      const type = normalizeArtifactType(asNonEmptyString(block.type) ?? "file");
-      const title =
-        asNonEmptyString(block.title) ??
-        asNonEmptyString(block.fileName) ??
-        asNonEmptyString(block.filename) ??
-        asNonEmptyString(block.alt) ??
-        `${type} ${artifacts.length + 1}`;
-      const download = resolveBlockDownload(block);
-      const summary: ArtifactRecord = {
-        id: artifactId({
-          sessionKey: params.sessionKey,
-          messageSeq,
-          contentIndex,
-          title,
-          type,
-        }),
-        type,
-        title,
-        ...(download.mimeType ? { mimeType: download.mimeType } : {}),
-        ...(download.sizeBytes !== undefined ? { sizeBytes: download.sizeBytes } : {}),
-        sessionKey: params.sessionKey,
-        ...(messageRunId ? { runId: messageRunId } : {}),
-        ...(messageTaskId ? { taskId: messageTaskId } : {}),
-        messageSeq,
-        source: "session-transcript",
-        download: { mode: download.mode },
-        ...(download.data ? { data: download.data } : {}),
-        ...(download.url ? { url: download.url } : {}),
-      };
-      artifacts.push(summary);
-    }
+    collectArtifactsFromMessage({ ...params, message, messageFallbackSeq, artifacts });
   }
   return artifacts;
+}
+
+function collectArtifactsFromMessage(params: {
+  message: unknown;
+  messageFallbackSeq: number;
+  artifacts: ArtifactRecord[];
+  sessionKey: string;
+  runId?: string;
+  taskId?: string;
+}): void {
+  const msg = asRecord(params.message);
+  if (!msg) {
+    return;
+  }
+  const messageSeq = resolveMessageSeq(msg, params.messageFallbackSeq);
+  const messageRunId = resolveMessageRunId(msg);
+  const messageTaskId = resolveMessageTaskId(msg);
+  if (params.runId && messageRunId !== params.runId) {
+    return;
+  }
+  if (params.taskId && messageTaskId !== params.taskId) {
+    return;
+  }
+  const content = Array.isArray(msg.content) ? msg.content : [];
+  for (let contentIndex = 0; contentIndex < content.length; contentIndex += 1) {
+    const block = asRecord(content[contentIndex]);
+    if (!block || !isArtifactBlock(block)) {
+      continue;
+    }
+    const type = normalizeArtifactType(asNonEmptyString(block.type) ?? "file");
+    const title =
+      asNonEmptyString(block.title) ??
+      asNonEmptyString(block.fileName) ??
+      asNonEmptyString(block.filename) ??
+      asNonEmptyString(block.alt) ??
+      `${type} ${params.artifacts.length + 1}`;
+    const download = resolveBlockDownload(block);
+    const summary: ArtifactRecord = {
+      id: artifactId({
+        sessionKey: params.sessionKey,
+        messageSeq,
+        contentIndex,
+        title,
+        type,
+      }),
+      type,
+      title,
+      ...(download.mimeType ? { mimeType: download.mimeType } : {}),
+      ...(download.sizeBytes !== undefined ? { sizeBytes: download.sizeBytes } : {}),
+      sessionKey: params.sessionKey,
+      ...(messageRunId ? { runId: messageRunId } : {}),
+      ...(messageTaskId ? { taskId: messageTaskId } : {}),
+      messageSeq,
+      source: "session-transcript",
+      download: { mode: download.mode },
+      ...(download.data ? { data: download.data } : {}),
+      ...(download.url ? { url: download.url } : {}),
+    };
+    params.artifacts.push(summary);
+  }
 }
 
 function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
@@ -296,16 +307,23 @@ function loadArtifacts(query: ArtifactQuery): { artifacts: ArtifactRecord[]; ses
   }
   const { storePath, entry } = loadSessionEntry(sessionKey);
   const sessionId = entry?.sessionId;
-  const messages =
-    sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
-  return {
-    sessionKey,
-    artifacts: collectArtifactsFromMessages({
-      messages,
+  if (!sessionId || !storePath) {
+    return { sessionKey, artifacts: [] };
+  }
+  const artifacts: ArtifactRecord[] = [];
+  visitSessionMessages(sessionId, storePath, entry?.sessionFile, (message, seq) => {
+    collectArtifactsFromMessage({
+      message,
+      messageFallbackSeq: seq,
+      artifacts,
       sessionKey,
       runId: query.runId,
       taskId: query.taskId,
-    }),
+    });
+  });
+  return {
+    sessionKey,
+    artifacts,
   };
 }
 

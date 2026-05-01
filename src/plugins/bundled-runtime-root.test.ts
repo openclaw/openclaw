@@ -244,14 +244,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
         "utf8",
       );
       const pluginInstallRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
-      fs.mkdirSync(path.join(pluginInstallRoot, "node_modules", `${pluginId}-runtime`), {
-        recursive: true,
-      });
-      fs.writeFileSync(
-        path.join(pluginInstallRoot, "node_modules", `${pluginId}-runtime`, "package.json"),
-        JSON.stringify({ name: `${pluginId}-runtime`, version: "1.0.0", type: "module" }),
-        "utf8",
-      );
+      writeInstalledRuntimeDepPackage(pluginInstallRoot, `${pluginId}-runtime`, "1.0.0");
     }
     writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "beta-runtime@1.0.0"]);
 
@@ -323,12 +316,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       "utf8",
     );
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
-    fs.mkdirSync(path.join(installRoot, "node_modules", "alpha-runtime"), { recursive: true });
-    fs.writeFileSync(
-      path.join(installRoot, "node_modules", "alpha-runtime", "package.json"),
-      JSON.stringify({ name: "alpha-runtime", version: "1.0.0", type: "module" }),
-      "utf8",
-    );
+    writeInstalledRuntimeDepPackage(installRoot, "alpha-runtime", "1.0.0");
     writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
 
     const realReaddirSync = fs.readdirSync.bind(fs);
@@ -389,12 +377,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       ),
       "utf8",
     );
-    fs.mkdirSync(path.join(installRoot, "node_modules", "qqbot-runtime"), { recursive: true });
-    fs.writeFileSync(
-      path.join(installRoot, "node_modules", "qqbot-runtime", "package.json"),
-      JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
-      "utf8",
-    );
+    writeInstalledRuntimeDepPackage(installRoot, "qqbot-runtime", "1.0.0");
     writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
@@ -473,12 +456,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       "utf8",
     );
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(runtimePluginRoot, { env });
-    fs.mkdirSync(path.join(installRoot, "node_modules", "qqbot-runtime"), { recursive: true });
-    fs.writeFileSync(
-      path.join(installRoot, "node_modules", "qqbot-runtime", "package.json"),
-      JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
-      "utf8",
-    );
+    writeInstalledRuntimeDepPackage(installRoot, "qqbot-runtime", "1.0.0");
     writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
@@ -539,12 +517,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       "utf8",
     );
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(runtimePluginRoot, { env });
-    fs.mkdirSync(path.join(installRoot, "node_modules", "qqbot-runtime"), { recursive: true });
-    fs.writeFileSync(
-      path.join(installRoot, "node_modules", "qqbot-runtime", "package.json"),
-      JSON.stringify({ name: "qqbot-runtime", version: "1.0.0", type: "module" }),
-      "utf8",
-    );
+    writeInstalledRuntimeDepPackage(installRoot, "qqbot-runtime", "1.0.0");
     writeGeneratedRuntimeDepsManifest(installRoot, ["qqbot-runtime@1.0.0"]);
 
     const lockPath = path.join(installRoot, ".openclaw-runtime-mirror.lock");
@@ -602,12 +575,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       "utf8",
     );
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
-    fs.mkdirSync(path.join(installRoot, "node_modules", "whatsapp-runtime"), { recursive: true });
-    fs.writeFileSync(
-      path.join(installRoot, "node_modules", "whatsapp-runtime", "package.json"),
-      JSON.stringify({ name: "whatsapp-runtime", version: "1.0.0", type: "module" }),
-      "utf8",
-    );
+    writeInstalledRuntimeDepPackage(installRoot, "whatsapp-runtime", "1.0.0");
     writeGeneratedRuntimeDepsManifest(installRoot, ["whatsapp-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({
@@ -759,12 +727,7 @@ describe("prepareBundledPluginRuntimeRoot", () => {
       "utf8",
     );
     const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
-    fs.mkdirSync(path.join(installRoot, "node_modules", "whatsapp-runtime"), { recursive: true });
-    fs.writeFileSync(
-      path.join(installRoot, "node_modules", "whatsapp-runtime", "package.json"),
-      JSON.stringify({ name: "whatsapp-runtime", version: "1.0.0", type: "module" }),
-      "utf8",
-    );
+    writeInstalledRuntimeDepPackage(installRoot, "whatsapp-runtime", "1.0.0");
     writeGeneratedRuntimeDepsManifest(installRoot, ["whatsapp-runtime@1.0.0"]);
 
     const prepared = prepareBundledPluginRuntimeRoot({

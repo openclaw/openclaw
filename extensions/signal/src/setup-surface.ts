@@ -13,7 +13,6 @@ import {
   signalCompletionNote,
   signalDmPolicy,
   signalNumberTextInput,
-  signalSetupAdapter,
 } from "./setup-core.js";
 
 const channel = "signal" as const;
@@ -88,4 +87,4 @@ export const signalSetupWizard: ChannelSetupWizard = {
   disable: (cfg) => setSetupChannelEnabled(cfg, channel, false),
 };
 
-export { normalizeSignalAccountInput, parseSignalAllowFromEntries, signalSetupAdapter };
+export { normalizeSignalAccountInput, parseSignalAllowFromEntries };

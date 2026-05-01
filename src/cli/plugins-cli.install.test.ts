@@ -16,6 +16,7 @@ import {
   installPluginFromNpmSpec,
   installPluginFromPath,
   loadConfig,
+  loadPluginManifestRegistry,
   readConfigFileSnapshot,
   parseClawHubPluginSpec,
   recordHookInstall,
@@ -383,6 +384,10 @@ describe("plugins cli install", () => {
     enablePluginInConfig.mockReturnValue({ config: enabledCfg });
     buildPluginSnapshotReport.mockReturnValue({
       plugins: [{ id: "alpha", kind: "provider" }],
+      diagnostics: [],
+    });
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "alpha", kind: "memory" }],
       diagnostics: [],
     });
     applyExclusiveSlotSelection.mockReturnValue({
