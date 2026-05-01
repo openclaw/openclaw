@@ -71,6 +71,11 @@ function setCachedSessionTitleFields(cacheKey: string, stat: fs.Stats, value: Se
   }
 }
 
+type ParsedSessionTreeEntry = SessionEntry & {
+  id: string;
+  parentId: string | null;
+};
+
 export function attachOpenClawTranscriptMeta(
   message: unknown,
   meta: Record<string, unknown>,
@@ -116,37 +121,7 @@ export function readSessionMessages(
   }
 
   if (branchEntries) {
-    const messages: unknown[] = [];
-    let messageSeq = 0;
-    for (const entry of branchEntries) {
-      if (entry.type === "message" && entry.message) {
-        messageSeq += 1;
-        messages.push(
-          attachOpenClawTranscriptMeta(entry.message, {
-            ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-            seq: messageSeq,
-          }),
-        );
-        continue;
-      }
-
-      if (entry.type === "compaction") {
-        const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-        const timestamp = Number.isFinite(ts) ? ts : Date.now();
-        messageSeq += 1;
-        messages.push({
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof entry.id === "string" ? entry.id : undefined,
-            seq: messageSeq,
-          },
-        });
-      }
-    }
-    return messages;
+    return branchEntriesToMessages(branchEntries);
   }
 
   const messages: unknown[] = [];
@@ -230,8 +205,11 @@ export function readRecentSessionMessages(
         .filter((line) => line.trim().length > 0)
         .slice(-maxLines);
 
-      if (lines.some(hasSessionTreeEntry)) {
-        return readSessionMessages(sessionId, storePath, sessionFile).slice(-maxMessages);
+      const tailTreeEntries = parseSessionTreeEntriesFromLines(lines);
+      if (tailTreeEntries.length > 0) {
+        return branchEntriesToMessages(buildActiveTreeBranchFromEntries(tailTreeEntries)).slice(
+          -maxMessages,
+        );
       }
 
       const messages: unknown[] = [];
@@ -294,43 +272,100 @@ function transcriptHasTreeEntries(filePath: string): boolean {
   return hasTreeEntries;
 }
 
-function visitSessionManagerBranchMessages(
-  filePath: string,
+function parseSessionTreeEntry(line: string): ParsedSessionTreeEntry | null {
+  if (!line.trim()) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
+    if (parsed.type === "session" || typeof parsed.id !== "string" || !("parentId" in parsed)) {
+      return null;
+    }
+    if (parsed.parentId !== null && typeof parsed.parentId !== "string") {
+      return null;
+    }
+    return parsed as ParsedSessionTreeEntry;
+  } catch {
+    return null;
+  }
+}
+
+function parseSessionTreeEntriesFromLines(lines: string[]): ParsedSessionTreeEntry[] {
+  const entries: ParsedSessionTreeEntry[] = [];
+  for (const line of lines) {
+    const entry = parseSessionTreeEntry(line);
+    if (entry) {
+      entries.push(entry);
+    }
+  }
+  return entries;
+}
+
+function buildActiveTreeBranchFromEntries(
+  entries: ParsedSessionTreeEntry[],
+): ParsedSessionTreeEntry[] {
+  const byId = new Map<string, ParsedSessionTreeEntry>();
+  let leaf: ParsedSessionTreeEntry | undefined;
+  for (const entry of entries) {
+    byId.set(entry.id, entry);
+    leaf = entry;
+  }
+  return buildActiveTreeBranch(byId, leaf);
+}
+
+function buildActiveTreeBranch(
+  byId: Map<string, ParsedSessionTreeEntry>,
+  leaf: ParsedSessionTreeEntry | undefined,
+): ParsedSessionTreeEntry[] {
+  const branch: ParsedSessionTreeEntry[] = [];
+  const seen = new Set<string>();
+  let current = leaf;
+  while (current && !seen.has(current.id)) {
+    seen.add(current.id);
+    branch.unshift(current);
+    current = current.parentId ? byId.get(current.parentId) : undefined;
+  }
+  return branch;
+}
+
+function readActiveTreeBranchEntries(filePath: string): ParsedSessionTreeEntry[] | null {
+  const byId = new Map<string, ParsedSessionTreeEntry>();
+  let leaf: ParsedSessionTreeEntry | undefined;
+  try {
+    visitTranscriptLines(filePath, (line) => {
+      const entry = parseSessionTreeEntry(line);
+      if (!entry) {
+        return;
+      }
+      byId.set(entry.id, entry);
+      leaf = entry;
+    });
+  } catch {
+    return null;
+  }
+  return buildActiveTreeBranch(byId, leaf);
+}
+
+function branchEntriesToMessages(entries: SessionEntry[]): unknown[] {
+  const messages: unknown[] = [];
+  visitBranchMessages(entries, (message) => {
+    messages.push(message);
+  });
+  return messages;
+}
+
+function visitBranchMessages(
+  branchEntries: SessionEntry[],
   visit: (message: unknown, seq: number) => void,
 ): number {
-  const branchEntries = SessionManager.open(filePath).getBranch();
   let messageSeq = 0;
   for (const entry of branchEntries) {
-    if (entry.type === "message" && entry.message) {
-      messageSeq += 1;
-      visit(
-        attachOpenClawTranscriptMeta(entry.message, {
-          ...(typeof entry.id === "string" ? { id: entry.id } : {}),
-          seq: messageSeq,
-        }),
-        messageSeq,
-      );
+    const message = parsedSessionEntryToMessage(entry, messageSeq + 1);
+    if (!message) {
       continue;
     }
-
-    if (entry.type === "compaction") {
-      const ts = typeof entry.timestamp === "string" ? Date.parse(entry.timestamp) : Number.NaN;
-      const timestamp = Number.isFinite(ts) ? ts : Date.now();
-      messageSeq += 1;
-      visit(
-        {
-          role: "system",
-          content: [{ type: "text", text: "Compaction" }],
-          timestamp,
-          __openclaw: {
-            kind: "compaction",
-            id: typeof entry.id === "string" ? entry.id : undefined,
-            seq: messageSeq,
-          },
-        },
-        messageSeq,
-      );
-    }
+    messageSeq += 1;
+    visit(message, messageSeq);
   }
   return messageSeq;
 }
@@ -348,7 +383,8 @@ export function visitSessionMessages(
 
   if (transcriptHasTreeEntries(filePath)) {
     try {
-      return visitSessionManagerBranchMessages(filePath, visit);
+      const branchEntries = readActiveTreeBranchEntries(filePath);
+      return branchEntries ? visitBranchMessages(branchEntries, visit) : 0;
     } catch {
       return 0;
     }
@@ -437,15 +473,7 @@ export function readRecentSessionTranscriptLines(params: {
 }
 
 function hasSessionTreeEntry(line: string): boolean {
-  if (!line.trim()) {
-    return false;
-  }
-  try {
-    const parsed = JSON.parse(line) as { type?: unknown; id?: unknown; parentId?: unknown };
-    return parsed.type !== "session" && typeof parsed.id === "string" && "parentId" in parsed;
-  } catch {
-    return false;
-  }
+  return parseSessionTreeEntry(line) !== null;
 }
 
 function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {

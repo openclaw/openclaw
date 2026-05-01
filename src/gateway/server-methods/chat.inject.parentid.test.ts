@@ -35,7 +35,7 @@ describe("gateway chat.inject transcript writes", () => {
     }
   });
 
-  it("uses raw append for oversized append-only transcripts", async () => {
+  it("keeps oversized append-only transcript writes parent-linked", async () => {
     const { dir, transcriptPath } = createTranscriptFixtureSync({
       prefix: "openclaw-chat-inject-large-",
       sessionId: "sess-1",
@@ -68,7 +68,7 @@ describe("gateway chat.inject transcript writes", () => {
       expect(last.type).toBe("message");
       expect(last).toHaveProperty("id", appended.messageId);
       expect(last).toHaveProperty("message");
-      expect(Object.prototype.hasOwnProperty.call(last, "parentId")).toBe(false);
+      expect(last).toHaveProperty("parentId", "legacy-large-message");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

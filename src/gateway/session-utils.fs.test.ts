@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
@@ -592,6 +593,98 @@ describe("readSessionMessages", () => {
         __openclaw: expect.objectContaining({ seq: 4 }),
       }),
     ]);
+  });
+
+  test("bounds recent tree-transcript reads without SessionManager branch materialization", () => {
+    const sessionId = "test-session-recent-tree-branch";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        {
+          type: "session",
+          version: 3,
+          id: sessionId,
+          cwd: tmpDir,
+          timestamp: "2026-04-27T00:00:00.000Z",
+        },
+        {
+          type: "message",
+          id: "root",
+          parentId: null,
+          timestamp: "2026-04-27T00:00:01.000Z",
+          message: { role: "user", content: "root prompt", timestamp: 1 },
+        },
+        {
+          type: "message",
+          id: "abandoned",
+          parentId: "root",
+          timestamp: "2026-04-27T00:00:02.000Z",
+          message: { role: "assistant", content: "abandoned answer", timestamp: 2 },
+        },
+        {
+          type: "message",
+          id: "edited",
+          parentId: "root",
+          timestamp: "2026-04-27T00:00:03.000Z",
+          message: { role: "user", content: "edited prompt", timestamp: 3 },
+        },
+        {
+          type: "message",
+          id: "answer",
+          parentId: "edited",
+          timestamp: "2026-04-27T00:00:04.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "latest answer" }],
+            api: "chat",
+            provider: "openclaw",
+            model: "test",
+            usage: {},
+            stopReason: "stop",
+            timestamp: 4,
+          },
+        },
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n"),
+      "utf-8",
+    );
+    const openSpy = vi.spyOn(SessionManager, "open");
+
+    try {
+      const recent = readRecentSessionMessages(sessionId, storePath, undefined, {
+        maxMessages: 2,
+        maxBytes: 1024,
+      });
+      expect(recent).toEqual([
+        expect.objectContaining({ role: "user", content: "edited prompt" }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "latest answer" }],
+        }),
+      ]);
+      expect(JSON.stringify(recent)).not.toContain("abandoned answer");
+
+      const withStats = readRecentSessionMessagesWithStats(sessionId, storePath, undefined, {
+        maxMessages: 2,
+        maxBytes: 1024,
+      });
+      expect(withStats.totalMessages).toBe(3);
+      expect(withStats.messages).toEqual([
+        expect.objectContaining({
+          content: "edited prompt",
+          __openclaw: expect.objectContaining({ seq: 2 }),
+        }),
+        expect.objectContaining({
+          content: [{ type: "text", text: "latest answer" }],
+          __openclaw: expect.objectContaining({ seq: 3 }),
+        }),
+      ]);
+      expect(openSpy).not.toHaveBeenCalled();
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 
   test("counts transcript messages without loading the whole file", () => {
