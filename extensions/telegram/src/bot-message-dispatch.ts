@@ -143,7 +143,7 @@ function createSharedEditRateLimiter(minIntervalMs: number): { acquire(): Promis
         () =>
           new Promise<void>((resolve) => {
             const waitMs = minIntervalMs - (Date.now() - lastSendMs);
-            const delay = waitMs > 0 ? waitMs : 0;
+            const delay = Math.max(waitMs, 0);
             setTimeout(() => {
               lastSendMs = Date.now();
               resolve();
