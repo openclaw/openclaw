@@ -36,6 +36,7 @@ const state = vi.hoisted(() => ({
   clearSessionAuthProfileOverrideMock: vi.fn(),
   isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
   resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
+  loadManifestModelCatalogMock: vi.fn(() => []),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
@@ -290,7 +291,7 @@ vi.mock("./lanes.js", () => ({
 }));
 
 vi.mock("./model-catalog.js", () => ({
-  loadModelCatalog: async () => [],
+  loadManifestModelCatalog: (...args: unknown[]) => state.loadManifestModelCatalogMock(...args),
 }));
 
 vi.mock("./model-selection.js", () => ({
@@ -480,6 +481,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = undefined;
     state.isThinkingLevelSupportedMock.mockReturnValue(true);
     state.resolveThinkingDefaultMock.mockReturnValue("low");
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });

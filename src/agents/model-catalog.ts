@@ -2,6 +2,10 @@ import { join } from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -103,6 +107,45 @@ function appendCatalogEntriesIfAbsent(
     models.push(entry);
     seen.add(key);
   }
+}
+
+export function loadManifestModelCatalog(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ModelCatalogEntry[] {
+  const snapshot =
+    getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    }) ??
+    loadPluginMetadataSnapshot({
+      config: params.config,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env: params.env ?? process.env,
+    });
+  const eligiblePlugins = snapshot.plugins.filter(
+    (plugin) =>
+      plugin.modelCatalog &&
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: params.config,
+      }),
+  );
+  const plan = planManifestModelCatalogRows({
+    registry: { plugins: eligiblePlugins },
+  });
+  return plan.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    provider: row.provider,
+    ...(row.contextWindow ? { contextWindow: row.contextWindow } : {}),
+    ...(row.contextTokens && !row.contextWindow ? { contextWindow: row.contextTokens } : {}),
+    ...(typeof row.reasoning === "boolean" ? { reasoning: row.reasoning } : {}),
+    ...(row.input?.length ? { input: [...row.input] } : {}),
+    ...(row.compat ? { compat: row.compat } : {}),
+  }));
 }
 
 export async function loadModelCatalog(params?: {
