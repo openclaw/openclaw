@@ -1,4 +1,4 @@
-const LEGACY_DAEMON_CLI_EXPORTS = [
+export const LEGACY_DAEMON_CLI_EXPORTS = [
   "registerDaemonCli",
   "runDaemonInstall",
   "runDaemonRestart",
