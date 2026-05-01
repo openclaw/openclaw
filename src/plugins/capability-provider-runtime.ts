@@ -4,7 +4,11 @@ import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import {
+  resolvePluginRegistryLoadCacheKey,
+  resolveRuntimePluginRegistry,
+  type PluginLoadOptions,
+} from "./loader.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
 
@@ -30,6 +34,12 @@ type CapabilityContractKey =
 
 type CapabilityProviderForKey<K extends CapabilityProviderRegistryKey> =
   PluginRegistry[K][number] extends { provider: infer T } ? T : never;
+type CapabilityProviderEntries = PluginRegistry[CapabilityProviderRegistryKey];
+
+const capabilityProviderSnapshotCache = new WeakMap<
+  OpenClawConfig,
+  Map<string, CapabilityProviderEntries>
+>();
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
   memoryEmbeddingProviders: "memoryEmbeddingProviders",
@@ -41,6 +51,20 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
   videoGenerationProviders: "videoGenerationProviders",
   musicGenerationProviders: "musicGenerationProviders",
 };
+
+function shouldResolveWhenPluginsAreGloballyDisabled(key: CapabilityProviderRegistryKey): boolean {
+  return key === "speechProviders";
+}
+
+function shouldSkipCapabilityResolution(params: {
+  key: CapabilityProviderRegistryKey;
+  cfg?: OpenClawConfig;
+}): boolean {
+  return (
+    params.cfg?.plugins?.enabled === false &&
+    !shouldResolveWhenPluginsAreGloballyDisabled(params.key)
+  );
+}
 
 function resolveBundledCapabilityCompatPluginIds(params: {
   key: CapabilityProviderRegistryKey;
@@ -62,6 +86,25 @@ function resolveBundledCapabilityCompatPluginIds(params: {
     )
     .map((plugin) => plugin.id)
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+export function resolveBundledCapabilityProviderIds(params: {
+  key: CapabilityProviderRegistryKey;
+  cfg?: OpenClawConfig;
+}): string[] {
+  const env = process.env;
+  const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
+  return [
+    ...new Set(
+      loadPluginManifestRegistryForPluginRegistry({
+        config: params.cfg,
+        env,
+        includeDisabled: true,
+      }).plugins.flatMap((plugin) =>
+        plugin.origin === "bundled" ? (plugin.contracts?.[contractKey] ?? []) : [],
+      ),
+    ),
+  ].toSorted((left, right) => left.localeCompare(right));
 }
 
 function resolveCapabilityProviderConfig(params: {
@@ -101,8 +144,28 @@ function createCapabilityProviderFallbackLoadOptions(params: {
   return loadOptions;
 }
 
-function arePluginsGloballyDisabled(cfg: OpenClawConfig | undefined): boolean {
-  return cfg?.plugins?.enabled === false;
+function resolveCapabilityProviderSnapshotCache(
+  cfg: OpenClawConfig | undefined,
+): Map<string, CapabilityProviderEntries> | undefined {
+  if (!cfg) {
+    return undefined;
+  }
+  let cache = capabilityProviderSnapshotCache.get(cfg);
+  if (!cache) {
+    cache = new Map();
+    capabilityProviderSnapshotCache.set(cfg, cache);
+  }
+  return cache;
+}
+
+function resolveCapabilityProviderSnapshotCacheKey(params: {
+  key: CapabilityProviderRegistryKey;
+  loadOptions: PluginLoadOptions;
+}): string {
+  return JSON.stringify({
+    key: params.key,
+    load: resolvePluginRegistryLoadCacheKey(params.loadOptions),
+  });
 }
 
 function findProviderById<K extends CapabilityProviderRegistryKey>(
@@ -178,6 +241,43 @@ function collectRequestedSpeechProviderIds(cfg: OpenClawConfig | undefined): Set
   return requested;
 }
 
+function addMediaModelProviders(target: Set<string>, value: unknown): void {
+  if (!Array.isArray(value)) {
+    return;
+  }
+  for (const entry of value) {
+    if (typeof entry === "object" && entry !== null) {
+      addStringValue(target, (entry as { provider?: unknown }).provider);
+    }
+  }
+}
+
+function collectRequestedMediaUnderstandingProviderIds(
+  cfg: OpenClawConfig | undefined,
+): Set<string> {
+  const requested = new Set<string>();
+  const media = cfg?.tools?.media;
+  addMediaModelProviders(requested, media?.models);
+  addMediaModelProviders(requested, media?.image?.models);
+  addMediaModelProviders(requested, media?.audio?.models);
+  addMediaModelProviders(requested, media?.video?.models);
+  return requested;
+}
+
+function collectRequestedCapabilityProviderIds(params: {
+  key: CapabilityProviderRegistryKey;
+  cfg?: OpenClawConfig;
+}): Set<string> | undefined {
+  switch (params.key) {
+    case "speechProviders":
+      return collectRequestedSpeechProviderIds(params.cfg);
+    case "mediaUnderstandingProviders":
+      return collectRequestedMediaUnderstandingProviderIds(params.cfg);
+    default:
+      return undefined;
+  }
+}
+
 function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
   for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
     const provider = entry.provider as { id?: unknown; aliases?: unknown };
@@ -199,7 +299,7 @@ function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderReg
   requested: Set<string>;
   entries: PluginRegistry[K];
 }): PluginRegistry[K] {
-  if (params.key !== "speechProviders") {
+  if (params.key !== "speechProviders" && params.key !== "mediaUnderstandingProviders") {
     return [] as unknown as PluginRegistry[K];
   }
   if (params.requested.size === 0) {
@@ -225,7 +325,7 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K> | undefined {
-  if (arePluginsGloballyDisabled(params.cfg)) {
+  if (shouldSkipCapabilityResolution(params)) {
     return undefined;
   }
 
@@ -252,10 +352,19 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
     pluginIds,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? false,
   });
-  const registry = resolveRuntimePluginRegistry(loadOptions);
-  return findProviderById(registry?.[params.key] ?? [], params.providerId);
+  const cache = resolveCapabilityProviderSnapshotCache(params.cfg);
+  const cacheKey = cache
+    ? resolveCapabilityProviderSnapshotCacheKey({ key: params.key, loadOptions })
+    : "";
+  let loadedProviders = cache?.get(cacheKey) as PluginRegistry[K] | undefined;
+  if (!loadedProviders) {
+    const registry = resolveRuntimePluginRegistry(loadOptions);
+    loadedProviders = registry?.[params.key] ?? [];
+    cache?.set(cacheKey, loadedProviders as CapabilityProviderEntries);
+  }
+  return findProviderById(loadedProviders, params.providerId);
 }
 
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
@@ -263,29 +372,22 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   cfg?: OpenClawConfig;
   installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K>[] {
-  if (arePluginsGloballyDisabled(params.cfg)) {
+  if (shouldSkipCapabilityResolution(params)) {
     return [];
   }
 
   const activeRegistry = resolveRuntimePluginRegistry();
   const activeProviders = activeRegistry?.[params.key] ?? [];
-  if (
-    activeProviders.length > 0 &&
-    params.key !== "memoryEmbeddingProviders" &&
-    params.key !== "speechProviders"
-  ) {
-    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-  }
-  if (activeProviders.length > 0 && params.key === "speechProviders" && !params.cfg) {
-    return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
-  }
-  const missingRequestedSpeechProviders =
-    activeProviders.length > 0 && params.key === "speechProviders"
-      ? collectRequestedSpeechProviderIds(params.cfg)
+  const missingRequestedProviders =
+    activeProviders.length > 0
+      ? collectRequestedCapabilityProviderIds({ key: params.key, cfg: params.cfg })
       : undefined;
-  if (missingRequestedSpeechProviders) {
-    removeActiveProviderIds(missingRequestedSpeechProviders, activeProviders);
-    if (missingRequestedSpeechProviders.size === 0) {
+  if (activeProviders.length > 0 && params.key !== "memoryEmbeddingProviders") {
+    if (!missingRequestedProviders) {
+      return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
+    }
+    removeActiveProviderIds(missingRequestedProviders, activeProviders);
+    if (missingRequestedProviders.size === 0) {
       return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
     }
   }
@@ -301,16 +403,24 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
     pluginIds,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
+    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? false,
   });
-  const registry = resolveRuntimePluginRegistry(loadOptions);
-  const loadedProviders = registry?.[params.key] ?? [];
+  const cache = resolveCapabilityProviderSnapshotCache(params.cfg);
+  const cacheKey = cache
+    ? resolveCapabilityProviderSnapshotCacheKey({ key: params.key, loadOptions })
+    : "";
+  let loadedProviders = cache?.get(cacheKey) as PluginRegistry[K] | undefined;
+  if (!loadedProviders) {
+    const registry = resolveRuntimePluginRegistry(loadOptions);
+    loadedProviders = registry?.[params.key] ?? [];
+    cache?.set(cacheKey, loadedProviders as CapabilityProviderEntries);
+  }
   if (params.key !== "memoryEmbeddingProviders") {
     const mergeLoadedProviders =
       activeProviders.length > 0
         ? filterLoadedProvidersForRequestedConfig({
             key: params.key,
-            requested: missingRequestedSpeechProviders ?? new Set(),
+            requested: missingRequestedProviders ?? new Set(),
             entries: loadedProviders,
           })
         : loadedProviders;

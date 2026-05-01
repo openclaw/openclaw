@@ -1,22 +1,12 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-
-const log = createSubsystemLogger("auto-reply");
-
-let visibleRepliesPrivateDefaultWarned = false;
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
   CommandSource?: "text" | "native";
 };
-
-/** @internal Test-only reset for the process-level one-shot warning. */
-export function resetVisibleRepliesPrivateDefaultWarningForTest(): void {
-  visibleRepliesPrivateDefaultWarned = false;
-}
 
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
@@ -25,7 +15,9 @@ export function resolveSourceReplyDeliveryMode(params: {
   messageToolAvailable?: boolean;
 }): SourceReplyDeliveryMode {
   if (params.requested) {
-    return params.requested;
+    return params.messageToolAvailable === false && params.requested === "message_tool_only"
+      ? "automatic"
+      : params.requested;
   }
   if (params.ctx.CommandSource === "native") {
     return "automatic";
@@ -36,20 +28,6 @@ export function resolveSourceReplyDeliveryMode(params: {
     const configuredMode =
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
     mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
-    if (
-      mode === "message_tool_only" &&
-      configuredMode === undefined &&
-      params.messageToolAvailable !== false &&
-      !visibleRepliesPrivateDefaultWarned
-    ) {
-      visibleRepliesPrivateDefaultWarned = true;
-      log.warn(
-        `Group/channel replies are private by default since 2026.4.27. ` +
-          `To restore automatic room posting, set messages.groupChat.visibleReplies to "automatic" in openclaw.json and save the config. ` +
-          `The gateway hot-reloads messages config; restart only if file watching/reload is disabled. ` +
-          `Relates to https://github.com/openclaw/openclaw/issues/74876`,
-      );
-    }
   } else {
     mode =
       params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";

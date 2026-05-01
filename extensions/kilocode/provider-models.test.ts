@@ -1,5 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
+
+const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchWithSsrFGuardMock: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => ({
+    allowedHostnames: [new URL(baseUrl).hostname],
+  }),
+}));
+
 import { discoverKilocodeModels, KILOCODE_MODELS_URL } from "./provider-models.js";
+
+type MockKilocodeFetchResponse = {
+  ok: boolean;
+  status?: number;
+  json?: () => Promise<unknown>;
+};
+
+type MockKilocodeFetch = ((
+  url: string,
+  init?: RequestInit,
+) => Promise<MockKilocodeFetchResponse>) & {
+  mock: { calls: unknown[][] };
+};
 
 function makeGatewayModel(overrides: Record<string, unknown> = {}) {
   return {
@@ -51,16 +76,24 @@ function makeAutoModel(overrides: Record<string, unknown> = {}) {
   });
 }
 
-async function withFetchPathTest(
-  mockFetch: ReturnType<typeof vi.fn>,
-  runAssertions: () => Promise<void>,
-) {
+async function withFetchPathTest(mockFetch: MockKilocodeFetch, runAssertions: () => Promise<void>) {
   const origNodeEnv = process.env.NODE_ENV;
   const origVitest = process.env.VITEST;
+  const release = vi.fn(async () => {});
   delete process.env.NODE_ENV;
   delete process.env.VITEST;
 
-  vi.stubGlobal("fetch", mockFetch);
+  fetchWithSsrFGuardMock.mockReset();
+  const callMockFetch = mockFetch as unknown as (
+    url: string,
+    init?: RequestInit,
+  ) => Promise<unknown>;
+  fetchWithSsrFGuardMock.mockImplementation(
+    async (params: { url: string; init?: RequestInit }) => ({
+      response: await callMockFetch(params.url, params.init),
+      release,
+    }),
+  );
 
   try {
     await runAssertions();
@@ -75,7 +108,7 @@ async function withFetchPathTest(
     } else {
       process.env.VITEST = origVitest;
     }
-    vi.unstubAllGlobals();
+    fetchWithSsrFGuardMock.mockReset();
   }
 }
 
@@ -111,6 +144,17 @@ describe("discoverKilocodeModels (fetch path)", () => {
     await withFetchPathTest(mockFetch, async () => {
       const models = await discoverKilocodeModels();
 
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: KILOCODE_MODELS_URL,
+          init: expect.objectContaining({
+            headers: { Accept: "application/json" },
+          }),
+          policy: { allowedHostnames: ["api.kilo.ai"] },
+          timeoutMs: 5000,
+          auditContext: "kilocode.model_discovery",
+        }),
+      );
       expect(mockFetch).toHaveBeenCalledWith(
         KILOCODE_MODELS_URL,
         expect.objectContaining({

@@ -39,19 +39,6 @@ export async function writeClaudeBundleManifest(params: {
   return pluginRoot;
 }
 
-export async function writeBundleTextFiles(
-  rootDir: string,
-  files: Readonly<Record<string, string>>,
-) {
-  await Promise.all(
-    Object.entries(files).map(async ([relativePath, contents]) => {
-      const filePath = path.join(rootDir, relativePath);
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await fs.writeFile(filePath, contents, "utf-8");
-    }),
-  );
-}
-
 export function createEnabledPluginEntries(pluginIds: readonly string[]) {
   return Object.fromEntries(pluginIds.map((pluginId) => [pluginId, { enabled: true }]));
 }
