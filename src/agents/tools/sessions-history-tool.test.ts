@@ -84,3 +84,55 @@ describe("sessions_history redaction", () => {
     expect(result.details).toMatchObject({ contentRedacted: true });
   });
 });
+
+describe("sessions_history includeArchived plumbing", () => {
+  beforeAll(async () => {
+    previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-history-include-archived-"));
+    useLoggingConfig("plumbing.json", { redactSensitive: "off" });
+    ({ createSessionsHistoryTool } = await import("./sessions-history-tool.js"));
+  });
+
+  afterAll(() => {
+    if (previousConfigPath === undefined) {
+      delete process.env.OPENCLAW_CONFIG_PATH;
+    } else {
+      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+    }
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  function createToolCapturingChatHistoryCall(): {
+    tool: ReturnType<typeof createSessionsHistoryTool>;
+    capturedParams: Array<Record<string, unknown>>;
+  } {
+    const capturedParams: Array<Record<string, unknown>> = [];
+    const tool = createSessionsHistoryTool({
+      config: {},
+      callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
+        if (request.method === "chat.history") {
+          capturedParams.push(request.params as Record<string, unknown>);
+          return { messages: [] } as T;
+        }
+        return {} as T;
+      },
+    });
+    return { tool, capturedParams };
+  }
+
+  it("forwards includeArchived=true to the chat.history gateway call", async () => {
+    const { tool, capturedParams } = createToolCapturingChatHistoryCall();
+    await tool.execute("call-1", { sessionKey: "main", includeArchived: true });
+    expect(capturedParams).toHaveLength(1);
+    expect(capturedParams[0]).toMatchObject({ includeArchived: true });
+  });
+
+  it("forwards includeArchived=false when omitted (default)", async () => {
+    const { tool, capturedParams } = createToolCapturingChatHistoryCall();
+    await tool.execute("call-1", { sessionKey: "main" });
+    expect(capturedParams).toHaveLength(1);
+    expect(capturedParams[0]).toMatchObject({ includeArchived: false });
+  });
+});
