@@ -56,7 +56,6 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "channels",
       routeLogsToStderr: true,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -73,7 +72,7 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
-  it("loads configured channel plugins without repairing runtime deps for read-only channel commands", async () => {
+  it("loads configured channel plugins without package-manager repair for read-only channel commands", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
       commandPath: ["channels", "resolve"],
@@ -83,7 +82,6 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",
       routeLogsToStderr: undefined,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -97,7 +95,6 @@ describe("ensureCliCommandBootstrap", () => {
     expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "all",
       routeLogsToStderr: undefined,
-      installBundledRuntimeDeps: true,
     });
   });
 

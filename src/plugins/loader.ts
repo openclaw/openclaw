@@ -26,18 +26,6 @@ import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { buildPluginApi } from "./api-builder.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
-import type { BundledRuntimeDepsInstallParams } from "./bundled-runtime-deps-install.js";
-import {
-  clearBundledRuntimeDependencyJitiAliases,
-  resolveBundledRuntimeDependencyJitiAliasMap,
-} from "./bundled-runtime-deps-jiti-aliases.js";
-import { clearBundledRuntimeDependencyNodePaths } from "./bundled-runtime-deps.js";
-import { clearBundledRuntimeDistMirrorPreparationCache } from "./bundled-runtime-dist-mirror-cache.js";
-import {
-  clearPreparedBundledPluginRuntimeLoadRoots,
-  ensureOpenClawPluginSdkAlias,
-} from "./bundled-runtime-root.js";
-import { prepareBundledRuntimeLoadRootForPlugin } from "./bundled-runtime-staging.js";
 import {
   clearPluginCommands,
   listRegisteredPluginCommands,
@@ -121,6 +109,7 @@ import {
   normalizePluginIdScope,
   serializePluginIdScope,
 } from "./plugin-scope.js";
+import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
 import { resolvePluginCacheInputs } from "./roots.js";
@@ -186,10 +175,7 @@ export type PluginLoadOptions = {
   toolDiscovery?: boolean;
   activate?: boolean;
   loadModules?: boolean;
-  installBundledRuntimeDeps?: boolean;
   throwOnLoadError?: boolean;
-  bundledRuntimeDepsInstaller?: (params: BundledRuntimeDepsInstallParams) => void;
-  bundledRuntimeDepsRepairError?: unknown;
   manifestRegistry?: PluginManifestRegistry;
 };
 
@@ -287,10 +273,6 @@ function createPluginCandidatesFromManifestRegistry(
 
 export function clearPluginLoaderCache(): void {
   pluginLoaderCacheState.clear();
-  clearBundledRuntimeDependencyNodePaths();
-  clearBundledRuntimeDistMirrorPreparationCache();
-  clearPreparedBundledPluginRuntimeLoadRoots();
-  clearBundledRuntimeDependencyJitiAliases();
   clearAgentHarnesses();
   clearPluginCommands();
   clearCompactionProviders();
@@ -477,25 +459,17 @@ function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResol
   const jitiLoaders: PluginJitiLoaderCache = new Map();
   return (modulePath: string) => {
     const tryNative = shouldPreferNativeJiti(modulePath);
-    const runtimeAliasMap = resolveBundledRuntimeDependencyJitiAliasMap();
     return getCachedPluginJitiLoader({
       cache: jitiLoaders,
       modulePath,
       importerUrl: import.meta.url,
       jitiFilename: modulePath,
-      ...(runtimeAliasMap
-        ? {
-            aliasMap: {
-              ...buildPluginLoaderAliasMap(
-                modulePath,
-                process.argv[1],
-                import.meta.url,
-                options.pluginSdkResolution,
-              ),
-              ...runtimeAliasMap,
-            },
-          }
-        : {}),
+      aliasMap: buildPluginLoaderAliasMap(
+        modulePath,
+        process.argv[1],
+        import.meta.url,
+        options.pluginSdkResolution,
+      ),
       pluginSdkResolution: options.pluginSdkResolution,
       // Source .ts runtime shims import sibling ".js" specifiers that only exist
       // after build. Disable native loading for source entries so Jiti rewrites
@@ -627,7 +601,6 @@ function buildCacheKey(params: {
   preferSetupRuntimeForChannelPlugins?: boolean;
   toolDiscovery?: boolean;
   loadModules?: boolean;
-  installBundledRuntimeDeps?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
   pluginSdkResolution?: PluginSdkResolutionPreference;
   coreGatewayMethodNames?: string[];
@@ -667,8 +640,6 @@ function buildCacheKey(params: {
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
-  const bundledRuntimeDepsMode =
-    params.installBundledRuntimeDeps === false ? "skip-runtime-deps" : "install-runtime-deps";
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   const activationMode = params.activate === false ? "snapshot" : "active";
@@ -678,7 +649,7 @@ function buildCacheKey(params: {
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${discoveryMode}::${bundledRuntimeDepsMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${discoveryMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -756,7 +727,6 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.forceSetupOnlyChannelPlugins === true ||
     options.requireSetupEntryForSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
-    options.installBundledRuntimeDeps === false ||
     options.loadModules === false
   );
 }
@@ -773,18 +743,7 @@ function pluginLoadOptionsMatchCacheKey(
   options: PluginLoadOptions,
   expectedCacheKey: string,
 ): boolean {
-  if (resolvePluginLoadCacheContext(options).cacheKey === expectedCacheKey) {
-    return true;
-  }
-  if (options.installBundledRuntimeDeps !== false) {
-    return false;
-  }
-  return (
-    resolvePluginLoadCacheContext({
-      ...options,
-      installBundledRuntimeDeps: undefined,
-    }).cacheKey === expectedCacheKey
-  );
+  return resolvePluginLoadCacheContext(options).cacheKey === expectedCacheKey;
 }
 
 type PluginRegistrationPlan = {
@@ -899,7 +858,6 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
-  const shouldInstallBundledRuntimeDeps = options.installBundledRuntimeDeps !== false;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   const installRecords = {
@@ -922,7 +880,6 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     preferSetupRuntimeForChannelPlugins,
     toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
-    installBundledRuntimeDeps: options.installBundledRuntimeDeps,
     runtimeSubagentMode,
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
@@ -942,7 +899,6 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     preferSetupRuntimeForChannelPlugins,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
-    shouldInstallBundledRuntimeDeps,
     runtimeSubagentMode,
     installRecords,
     cacheKey,
@@ -1210,7 +1166,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     preferSetupRuntimeForChannelPlugins,
     shouldActivate,
     shouldLoadModules,
-    shouldInstallBundledRuntimeDeps,
     cacheKey,
     runtimeSubagentMode,
     installRecords,
@@ -1588,32 +1543,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         markPluginActivationDisabled(record, enableState.reason);
       }
 
-      if (shouldLoadModules && candidate.origin === "bundled" && enableState.enabled) {
-        try {
-          const preparedRuntimeRoot = prepareBundledRuntimeLoadRootForPlugin({
-            pluginId: record.id,
-            pluginRoot,
-            modulePath: runtimeCandidateSource,
-            ...(runtimeSetupSource ? { setupModulePath: runtimeSetupSource } : {}),
-            env,
-            config: cfg,
-            installMissingDeps: shouldInstallBundledRuntimeDeps,
-            previousRepairError: options.bundledRuntimeDepsRepairError,
-            shouldLog: shouldActivate,
-            logger,
-            ...(options.bundledRuntimeDepsInstaller
-              ? { installer: options.bundledRuntimeDepsInstaller }
-              : {}),
-          });
-          runtimePluginRoot = preparedRuntimeRoot.pluginRoot;
-          runtimeCandidateSource = preparedRuntimeRoot.modulePath;
-          runtimeSetupSource = preparedRuntimeRoot.setupModulePath;
-        } catch (error) {
-          pushPluginLoadError(`failed to prepare bundled runtime deps: ${String(error)}`);
-          continue;
-        }
-      }
-
       if (record.format === "bundle") {
         const unsupportedCapabilities = (record.bundleCapabilities ?? []).filter(
           (capability) =>
@@ -1802,11 +1731,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (registrationPlan.loadSetupEntry && manifestRecord.setupSource) {
-        const setupRegistration = resolveSetupChannelRegistration(mod, {
-          installRuntimeDeps:
-            shouldInstallBundledRuntimeDeps &&
-            (enableState.enabled || forceSetupOnlyChannelPlugins),
-        });
+        const setupRegistration = resolveSetupChannelRegistration(mod);
         if (setupRegistration.loadError) {
           recordPluginError({
             logger,

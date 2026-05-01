@@ -302,7 +302,7 @@ assert_legacy_runtime_deps_symlink_repaired() {
   local target_dir
   target_dir="$(legacy_runtime_deps_symlink_target "$plugin")"
   if [ -L "$target_dir" ]; then
-    echo "legacy runtime deps symlink survived package update: $target_dir -> $(readlink "$target_dir")" >&2
+    echo "legacy runtime deps symlink survived update/doctor: $target_dir -> $(readlink "$target_dir")" >&2
     return 1
   fi
   echo "Legacy runtime deps symlink repaired for $plugin."
@@ -536,8 +536,8 @@ phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
 phase update-candidate update_candidate
-phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase doctor run_doctor
+phase assert-legacy-runtime-deps-symlink-repaired assert_legacy_runtime_deps_symlink_repaired
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
 phase gateway-start start_gateway

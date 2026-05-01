@@ -9,7 +9,6 @@ export type CliRouteConfigGuardPolicy = "never" | "always" | "when-suppressed";
 export type CliPluginRegistryScope = "all" | "channels" | "configured-channels";
 export type CliPluginRegistryPolicy = {
   scope: CliPluginRegistryScope;
-  installBundledRuntimeDeps?: boolean;
 };
 export type CliNetworkProxyPolicy = "default" | "bypass";
 export type CliNetworkProxyPolicyResolver =
@@ -59,7 +58,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["agent"],
     policy: {
       loadPlugins: ({ argv, jsonOutputMode }) => hasFlag(argv, "--local") || !jsonOutputMode,
-      pluginRegistry: { scope: "all", installBundledRuntimeDeps: true },
+      pluginRegistry: { scope: "all" },
       networkProxy: ({ argv }) => (hasFlag(argv, "--local") ? "default" : "bypass"),
     },
   },
@@ -113,7 +112,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["status"],
     policy: {
       loadPlugins: "never",
-      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "channels" },
       routeConfigGuard: "when-suppressed",
       ensureCliPath: false,
       networkProxy: "bypass",
@@ -124,7 +123,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["health"],
     policy: {
       loadPlugins: "never",
-      pluginRegistry: { scope: "channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "channels" },
       ensureCliPath: false,
       networkProxy: "bypass",
     },
@@ -323,7 +322,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["channels", "remove"],
     exact: true,
     policy: {
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
     },
   },
@@ -331,7 +330,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["channels", "resolve"],
     exact: true,
     policy: {
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
     },
   },

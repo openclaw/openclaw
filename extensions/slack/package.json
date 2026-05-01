@@ -36,9 +36,6 @@
         "specifier": "./configured-state",
         "exportName": "hasSlackConfiguredState"
       }
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
     }
   }
 }

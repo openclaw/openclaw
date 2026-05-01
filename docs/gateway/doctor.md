@@ -339,10 +339,10 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="7. Sandbox image repair">
     When sandboxing is enabled, doctor checks Docker images and offers to build or switch to legacy names if the current image is missing.
   </Accordion>
-  <Accordion title="7b. Bundled plugin runtime deps">
-    Doctor verifies runtime dependencies only for bundled plugins that are active in the current config or enabled by their bundled manifest default, for example `plugins.entries.discord.enabled: true`, legacy `channels.discord.enabled: true`, configured `models.providers.*` / agent model refs, or a default-enabled bundled plugin without provider ownership. If any are missing, doctor reports the packages and installs them in `openclaw doctor --fix` / `openclaw doctor --repair` mode. External plugins still use `openclaw plugins install` / `openclaw plugins update`; doctor does not install dependencies for arbitrary plugin paths.
+  <Accordion title="7b. Plugin install cleanup">
+    Doctor removes legacy OpenClaw-generated plugin dependency staging state in `openclaw doctor --fix` / `openclaw doctor --repair` mode. This covers stale generated dependency roots, old install-stage directories, and package-local debris from earlier bundled-plugin dependency repair code.
 
-    During doctor repair, bundled runtime-dependency npm installs report spinner progress in TTY sessions and periodic line progress in piped/headless output. Gateway startup and config reload enter plugin-plan mode before importing bundled plugin runtime modules; normal runtime imports are verify-only and do not spawn package-manager repair. These installs are scoped to the plugin runtime install root, run with scripts disabled, do not write a package lock, and are guarded by an install-root lock so concurrent CLI or Gateway starts do not mutate the same `node_modules` tree at the same time. Stale legacy locks from killed Docker/container starts are reclaimed when their owner metadata cannot prove a current process incarnation and the lock files are old.
+    Doctor can also reinstall configured downloadable plugins when the config references them but the local plugin registry cannot find them. Gateway startup and config reload do not run package managers; plugin installs remain explicit doctor/install/update work.
 
   </Accordion>
   <Accordion title="8. Gateway service migrations and cleanup hints">

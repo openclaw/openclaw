@@ -214,7 +214,7 @@ async function expectBuiltArtifactNodeRequireFastPath(
     const sidecarPath = path.join(pluginRoot, "fast-path-sidecar.cjs");
     fs.writeFileSync(importerPath, "export default {};\n", "utf8");
     // CommonJS so `nodeRequire` succeeds without falling back to jiti, even
-    // after runtime-deps mirroring writes a `type: "module"` package boundary.
+    // inside built plugin artifacts with a `type: "module"` package boundary.
     fs.writeFileSync(sidecarPath, "module.exports = { sentinel: 7 };\n", "utf8");
 
     expect(
@@ -337,7 +337,6 @@ describe("loadBundledEntryExportSync", () => {
             specifier: "./helper.ts",
             exportName: "load",
           },
-          { installRuntimeDeps: false },
         ),
       ).toBe(42);
       expect(jitiLoad).toHaveBeenCalledWith(
@@ -398,9 +397,9 @@ describe("loadBundledEntryExportSync", () => {
   });
 
   it("emits non-negative jiti sub-step timings on the built-artifact load path", async () => {
-    // Built artifacts prefer `nodeRequire`, but runtime-deps staging can still
-    // make Node reject a sidecar and fall back through jiti. The profile line
-    // must never report negative or missing jiti sub-step timings either way.
+    // Built artifacts prefer `nodeRequire`, but Node can still reject a sidecar
+    // and fall back through jiti. The profile line must never report negative
+    // or missing jiti sub-step timings either way.
     await expectBuiltArtifactNodeRequireFastPath("built-artifact-profile-fast-path");
   });
 

@@ -108,13 +108,18 @@ function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCa
 }
 
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
-  const bundledEntries = readBundledExtensionCatalogEntriesSync()
+  const entries = new Map<string, BundledChannelCatalogEntry>();
+  for (const entry of readOfficialCatalogFileSync()
     .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
-  if (bundledEntries.length > 0) {
-    return bundledEntries;
+    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
+    entries.set(entry.id, entry);
   }
-  return readOfficialCatalogFileSync()
+  for (const entry of readBundledExtensionCatalogEntriesSync()
     .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
+    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
+    entries.set(entry.id, entry);
+  }
+  return Array.from(entries.values()).toSorted(
+    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
+  );
 }

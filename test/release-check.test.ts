@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -17,8 +17,6 @@ import {
   collectCriticalPluginSdkEntrypointSizeErrors,
   collectDeclaredRootRuntimeDependencyMetadataErrors,
   collectForbiddenPackContentPaths,
-  collectInstalledBundledPluginRuntimeDepErrors,
-  bundledRuntimeDependencySentinelCandidates,
   collectRootDistBundledRuntimeMirrors,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
@@ -690,7 +688,6 @@ describe("collectMissingPackPaths", () => {
         "dist/control-ui/index.html",
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
-        "scripts/lib/bundled-runtime-deps-install.mjs",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/task-registry-control.runtime.js",
@@ -723,7 +720,6 @@ describe("collectMissingPackPaths", () => {
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
         "scripts/npm-runner.mjs",
         "scripts/preinstall-package-manager-warning.mjs",
-        "scripts/lib/bundled-runtime-deps-install.mjs",
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/plugin-sdk/root-alias.cjs",
@@ -831,114 +827,5 @@ describe("createPackedBundledPluginPostinstallEnv", () => {
       PATH: "/usr/bin",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     });
-  });
-});
-
-describe("collectInstalledBundledPluginRuntimeDepErrors", () => {
-  function createPackageRoot(): string {
-    const packageRoot = mkdtempSync(join(tmpdir(), "release-check-installed-bundled-"));
-    mkdirSync(join(packageRoot, "dist", "extensions"), { recursive: true });
-    return packageRoot;
-  }
-
-  function writeBundledPluginPackageJson(
-    packageRoot: string,
-    pluginId: string,
-    packageJson: Record<string, unknown>,
-  ): void {
-    const pluginRoot = join(packageRoot, "dist", "extensions", pluginId);
-    mkdirSync(pluginRoot, { recursive: true });
-    writeFileSync(join(pluginRoot, "package.json"), JSON.stringify(packageJson, null, 2));
-  }
-
-  function installRuntimeDependencyAtPackageRoot(
-    packageRoot: string,
-    dependencyName: string,
-    version: string,
-  ): void {
-    const dependencyRoot = join(packageRoot, "node_modules", ...dependencyName.split("/"));
-    mkdirSync(dependencyRoot, { recursive: true });
-    writeFileSync(
-      join(dependencyRoot, "package.json"),
-      JSON.stringify({ name: dependencyName, version }, null, 2),
-    );
-  }
-
-  it("returns no errors when declared deps are installed at the openclaw package root", () => {
-    const packageRoot = createPackageRoot();
-    try {
-      writeBundledPluginPackageJson(packageRoot, "whatsapp", {
-        name: "@openclaw/whatsapp",
-        dependencies: { "@whiskeysockets/baileys": "7.0.0-rc.9" },
-        openclaw: { bundle: { stageRuntimeDependencies: true } },
-      });
-      installRuntimeDependencyAtPackageRoot(packageRoot, "@whiskeysockets/baileys", "7.0.0-rc.9");
-
-      expect(collectInstalledBundledPluginRuntimeDepErrors(packageRoot)).toEqual([]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("surfaces an error naming the owning plugin and missing dependency", () => {
-    const packageRoot = createPackageRoot();
-    try {
-      writeBundledPluginPackageJson(packageRoot, "whatsapp", {
-        name: "@openclaw/whatsapp",
-        dependencies: { "@whiskeysockets/baileys": "7.0.0-rc.9" },
-        openclaw: { bundle: { stageRuntimeDependencies: true } },
-      });
-
-      expect(collectInstalledBundledPluginRuntimeDepErrors(packageRoot)).toEqual([
-        "bundled plugin runtime dependency '@whiskeysockets/baileys@7.0.0-rc.9' (owners: whatsapp) is missing at node_modules/@whiskeysockets/baileys/package.json.",
-      ]);
-    } finally {
-      rmSync(packageRoot, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("bundledRuntimeDependencySentinelCandidates", () => {
-  it("checks canonical external runtime-deps roots for packed installs", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-check-runtime-candidates-"));
-    const packageRoot = join(root, "package");
-    const aliasRoot = join(root, "package-alias");
-    const homeRoot = join(root, "home");
-    try {
-      mkdirSync(join(packageRoot, "dist", "extensions", "browser"), { recursive: true });
-      writeFileSync(
-        join(packageRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.4.25-beta.1" }, null, 2),
-      );
-      symlinkSync(packageRoot, aliasRoot, "dir");
-
-      const candidates = bundledRuntimeDependencySentinelCandidates(
-        aliasRoot,
-        "browser",
-        "playwright-core",
-        { HOME: homeRoot } as NodeJS.ProcessEnv,
-      );
-      const realRootCandidates = bundledRuntimeDependencySentinelCandidates(
-        packageRoot,
-        "browser",
-        "playwright-core",
-        { HOME: homeRoot } as NodeJS.ProcessEnv,
-      );
-      const externalCandidates = candidates.filter(
-        (candidate) =>
-          candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
-          candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
-      );
-      const realRootExternalCandidates = realRootCandidates.filter(
-        (candidate) =>
-          candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
-          candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
-      );
-
-      expect(externalCandidates).toEqual(realRootExternalCandidates);
-      expect(externalCandidates).toHaveLength(1);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
   });
 });

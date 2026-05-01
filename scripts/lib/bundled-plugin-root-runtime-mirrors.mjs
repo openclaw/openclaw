@@ -44,18 +44,6 @@ function collectPackageJsonPaths(rootDir) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function usesStagedRuntimeDependencies(packageJson) {
-  return packageJson?.openclaw?.bundle?.stageRuntimeDependencies === true;
-}
-
-function dependencySentinelPath(packageRoot, dependencyName) {
-  return path.join(packageRoot, "node_modules", ...dependencyName.split("/"), "package.json");
-}
-
-function pluginIdFromPackageJsonPath(packageJsonPath) {
-  return path.basename(path.dirname(packageJsonPath));
-}
-
 export function collectBundledPluginRuntimeDependencySpecs(bundledPluginsDir) {
   const specs = new Map();
 
@@ -77,30 +65,6 @@ export function collectBundledPluginRuntimeDependencySpecs(bundledPluginsDir) {
   }
 
   return specs;
-}
-
-export function collectBuiltBundledPluginStagedRuntimeDependencyErrors(params) {
-  const errors = [];
-
-  for (const packageJsonPath of collectPackageJsonPaths(params.bundledPluginsDir)) {
-    const packageJson = readJson(packageJsonPath);
-    if (!usesStagedRuntimeDependencies(packageJson)) {
-      continue;
-    }
-    const pluginId = pluginIdFromPackageJsonPath(packageJsonPath);
-    const pluginRoot = path.dirname(packageJsonPath);
-
-    for (const [dependencyName, spec] of collectRuntimeDependencySpecs(packageJson)) {
-      if (!fs.existsSync(dependencySentinelPath(pluginRoot, dependencyName))) {
-        const specText = String(spec);
-        errors.push(
-          `built bundled plugin '${pluginId}' is missing staged runtime dependency '${dependencyName}: ${specText}' under dist/extensions/${pluginId}/node_modules.`,
-        );
-      }
-    }
-  }
-
-  return errors.toSorted((left, right) => left.localeCompare(right));
 }
 
 function walkJavaScriptFiles(rootDir) {

@@ -510,9 +510,3 @@ jobs:
         with:
           install-bun: "false"
           install-deps: "true"
-
-      - name: Run fast bundled plugin Docker E2E
-        env:
-          OPENCLAW_BUNDLED_CHANNEL_DEPS_E2E_IMAGE: openclaw-bundled-channel-fast:local
-          OPENCLAW_BUNDLED_CHANNEL_DOCKER_RUN_TIMEOUT: 90s
-        run: timeout 480s pnpm test:docker:bundled-channel-deps:fast

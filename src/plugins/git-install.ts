@@ -1,11 +1,19 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { withTempDir } from "../infra/install-source-utils.js";
+import {
+  createSafeNpmInstallArgs,
+  createSafeNpmInstallEnv,
+} from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveDefaultPluginGitDir } from "./install-paths.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
-import { installPluginFromDir, type InstallPluginResult } from "./install.js";
+import { installPluginFromInstalledPackageDir, type InstallPluginResult } from "./install.js";
 
 const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
@@ -170,6 +178,14 @@ function createGitCommandEnv(): NodeJS.ProcessEnv {
   };
 }
 
+function resolveGitInstallRepoDir(params: {
+  gitDir?: string;
+  source: ParsedGitPluginSpec;
+}): string {
+  const gitRoot = params.gitDir ? resolveUserPath(params.gitDir) : resolveDefaultPluginGitDir();
+  return path.join(gitRoot, safePathSegmentHashed(params.source.normalizedSpec), "repo");
+}
+
 function formatGitCommandFailure(params: {
   action: string;
   source: ParsedGitPluginSpec;
@@ -210,6 +226,7 @@ export async function installPluginFromGitSpec(
   params: InstallSafetyOverrides & {
     spec: string;
     extensionsDir?: string;
+    gitDir?: string;
     timeoutMs?: number;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
@@ -225,8 +242,13 @@ export async function installPluginFromGitSpec(
     };
   }
 
+  const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
   return await withTempDir("openclaw-git-plugin-", async (tmpDir) => {
-    const repoDir = `${tmpDir}/repo`;
+    const repoDir = params.dryRun ? path.join(tmpDir, "repo") : persistentRepoDir;
+    if (!params.dryRun) {
+      await fs.rm(repoDir, { recursive: true, force: true });
+      await fs.mkdir(path.dirname(repoDir), { recursive: true });
+    }
     params.logger?.info?.(
       `Cloning ${sanitizeForLog(redactSensitiveUrlLikeString(parsed.label))}...`,
     );
@@ -267,15 +289,39 @@ export async function installPluginFromGitSpec(
       return rev;
     }
 
-    const result = await installPluginFromDir({
+    if (!params.dryRun) {
+      params.logger?.info?.("Installing plugin dependencies with npm…");
+      const install = await runCommandWithTimeout(
+        [
+          "npm",
+          ...createSafeNpmInstallArgs({
+            omitDev: true,
+            loglevel: "error",
+            noAudit: true,
+            noFund: true,
+          }),
+        ],
+        {
+          cwd: repoDir,
+          timeoutMs: Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
+          env: createSafeNpmInstallEnv(process.env, { packageLock: true, quiet: true }),
+        },
+      );
+      if (install.code !== 0) {
+        return {
+          ok: false,
+          error: `npm install failed: ${install.stderr.trim() || install.stdout.trim()}`,
+        };
+      }
+    }
+
+    const result = await installPluginFromInstalledPackageDir({
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-      dirPath: repoDir,
+      packageDir: repoDir,
       dryRun: params.dryRun,
       expectedPluginId: params.expectedPluginId,
-      extensionsDir: params.extensionsDir,
       logger: params.logger,
       mode: params.mode,
-      timeoutMs: params.timeoutMs,
       installPolicyRequest: {
         kind: "plugin-git",
         requestedSpecifier: parsed.input,

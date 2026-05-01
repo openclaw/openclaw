@@ -78,12 +78,10 @@ describe("plugin-registry-loader", () => {
   it("forwards explicit runtime dependency install policy", async () => {
     await ensureCliPluginRegistryLoaded({
       scope: "configured-channels",
-      installBundledRuntimeDeps: false,
     });
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",
-      installBundledRuntimeDeps: false,
     });
   });
 });

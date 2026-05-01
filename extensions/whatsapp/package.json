@@ -59,9 +59,6 @@
     "compat": {
       "pluginApi": ">=2026.4.25"
     },
-    "bundle": {
-      "stageRuntimeDependencies": true
-    },
     "build": {
       "openclawVersion": "2026.4.25"
     },

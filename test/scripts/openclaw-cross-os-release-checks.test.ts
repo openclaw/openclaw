@@ -98,17 +98,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("retries transient bundled runtime deps staging failures during agent turns", () => {
-    expect(
-      shouldRetryCrossOsAgentTurnError(
-        new Error("document-extract: failed to install bundled runtime deps: npm install failed"),
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCrossOsAgentTurnError(
-        new Error("document-extract failed to stage bundled runtime deps after 463ms"),
-      ),
-    ).toBe(true);
+  it("retries transient agent-turn failures", () => {
     expect(
       shouldRetryCrossOsAgentTurnError(
         new Error("Agent output did not contain the expected OK marker."),
@@ -671,7 +661,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("rejects bundled runtime-deps staging debris before candidate inventory generation", async () => {
+  it("rejects legacy plugin dependency staging debris before candidate inventory generation", async () => {
     const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-stage-debris-"));
     try {
       mkdirSync(
@@ -689,7 +679,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           sourceDir: packageRoot,
           logPath: join(packageRoot, "npm-pack-dry-run.log"),
         }),
-      ).rejects.toThrow("unexpected bundled-runtime-deps install staging debris");
+      ).rejects.toThrow("unexpected legacy plugin dependency staging debris");
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 // Runs after install to keep packaged dist safe and compatible.
-// Bundled extension runtime dependencies are extension-owned. `openclaw doctor
-// --fix` and `openclaw plugins deps --repair` own the repair path for plugins
-// that are actually used.
+// Keep packaged dist safe and compatible. Plugin package dependencies are
+// installed only by explicit plugin install/update flows, never postinstall.
 import { randomUUID } from "node:crypto";
 import {
   chmodSync,
@@ -24,7 +23,6 @@ import { basename, dirname, isAbsolute, join, posix, relative } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEFAULT_EXTENSIONS_DIR = join(__dirname, "..", "dist", "extensions");
 const DEFAULT_PACKAGE_ROOT = join(__dirname, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
@@ -103,10 +101,6 @@ const NODE_COMPILE_CACHE_VERSION_DIR_RE = /^v\d+\.\d+\.\d+-/u;
 function hasEnvFlag(env, key) {
   const value = env?.[key]?.trim().toLowerCase();
   return Boolean(value && value !== "0" && value !== "false" && value !== "no");
-}
-
-function readJson(filePath) {
-  return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
 function normalizeRelativePath(filePath) {
@@ -451,71 +445,6 @@ export function pruneInstalledPackageDist(params = {}) {
     log.log(`[postinstall] pruned stale dist files: ${removed.join(", ")}`);
   }
   return removed;
-}
-
-function dependencySentinelPath(depName) {
-  return join("node_modules", ...depName.split("/"), "package.json");
-}
-
-function collectRuntimeDeps(packageJson) {
-  return {
-    ...packageJson.dependencies,
-    ...packageJson.optionalDependencies,
-  };
-}
-
-export function discoverBundledPluginRuntimeDeps(params = {}) {
-  const extensionsDir = params.extensionsDir ?? DEFAULT_EXTENSIONS_DIR;
-  const pathExists = params.existsSync ?? existsSync;
-  const readDir = params.readdirSync ?? readdirSync;
-  const readJsonFile = params.readJson ?? readJson;
-  const deps = new Map();
-
-  if (!pathExists(extensionsDir)) {
-    return [...deps.values()].toSorted((a, b) => a.name.localeCompare(b.name));
-  }
-
-  for (const entry of readDir(extensionsDir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const pluginId = entry.name;
-    const packageJsonPath = join(extensionsDir, pluginId, "package.json");
-    if (!pathExists(packageJsonPath)) {
-      continue;
-    }
-    try {
-      const packageJson = readJsonFile(packageJsonPath);
-      for (const [name, version] of Object.entries(collectRuntimeDeps(packageJson))) {
-        const existing = deps.get(name);
-        if (existing) {
-          if (existing.version !== version) {
-            continue;
-          }
-          if (!existing.pluginIds.includes(pluginId)) {
-            existing.pluginIds.push(pluginId);
-          }
-          continue;
-        }
-        deps.set(name, {
-          name,
-          version,
-          sentinelPath: dependencySentinelPath(name),
-          pluginIds: [pluginId],
-        });
-      }
-    } catch {
-      // Ignore malformed plugin manifests; runtime will surface those separately.
-    }
-  }
-
-  return [...deps.values()]
-    .map((dep) =>
-      Object.assign({}, dep, {
-        pluginIds: [...dep.pluginIds].toSorted((a, b) => a.localeCompare(b)),
-      }),
-    )
-    .toSorted((a, b) => a.name.localeCompare(b.name));
 }
 
 export function applyBaileysEncryptedStreamFinishHotfix(params = {}) {
