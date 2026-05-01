@@ -877,14 +877,6 @@ export const testModel = {
   input: ["text"],
 } as unknown as Model<Api>;
 
-export const cacheTtlEligibleModel = {
-  api: "anthropic",
-  provider: "anthropic",
-  compat: {},
-  contextWindow: 8192,
-  input: ["text"],
-} as unknown as Model<Api>;
-
 const testAuthStorage = {
   getApiKey: async () => undefined,
 };
