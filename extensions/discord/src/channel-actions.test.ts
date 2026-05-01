@@ -82,12 +82,11 @@ describe("discordMessageActions", () => {
     );
   });
 
-  it("describes scoped account actions when the account token is an unresolved SecretRef", () => {
+  it("describes scoped account actions when only the account token is an unresolved SecretRef", () => {
     const discovery = discordMessageActions.describeMessageTool?.({
       cfg: {
         channels: {
           discord: {
-            token: "Bot token-main",
             actions: {
               polls: true,
               reactions: false,

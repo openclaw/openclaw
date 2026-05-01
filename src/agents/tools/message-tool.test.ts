@@ -287,6 +287,9 @@ describe("message tool secret scoping", () => {
       channels: {
         discord: {
           token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+          accounts: {
+            ops: { token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" } },
+          },
         },
       },
     };
@@ -294,6 +297,9 @@ describe("message tool secret scoping", () => {
       channels: {
         discord: {
           token: "resolved-discord-token",
+          accounts: {
+            ops: { token: "resolved-discord-ops-token" },
+          },
         },
       },
     };
@@ -306,6 +312,7 @@ describe("message tool secret scoping", () => {
       config: rawConfig as never,
       currentChannelProvider: "discord",
       currentChannelId: "channel:123",
+      agentAccountId: "ops",
       resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway as never,
       runMessageAction: mocks.runMessageAction as never,
     });
@@ -321,8 +328,12 @@ describe("message tool secret scoping", () => {
       allowedPaths?: Set<string>;
     };
     expect(secretResolveCall.config).toBe(rawConfig);
-    expect(secretResolveCall.targetIds).toEqual(new Set(["channels.discord.token"]));
-    expect(secretResolveCall.allowedPaths).toEqual(new Set(["channels.discord.token"]));
+    expect(secretResolveCall.targetIds).toEqual(
+      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
+    );
+    expect(secretResolveCall.allowedPaths).toEqual(
+      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
+    );
     expect(mocks.runMessageAction.mock.calls[0]?.[0]?.cfg).toBe(resolvedConfig);
   });
 });
