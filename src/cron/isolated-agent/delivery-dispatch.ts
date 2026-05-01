@@ -16,6 +16,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
+import { prepareOutboundMirrorRoute } from "../../infra/outbound/message-action-threading.js";
+import type { DeliveryMirror } from "../../infra/outbound/mirror.js";
+import {
+  ensureOutboundSessionEntry,
+  resolveOutboundSessionRoute,
+} from "../../infra/outbound/outbound-session.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -94,6 +100,83 @@ export function matchesMessagingToolDeliveryTarget(
 
 export function resolveCronDeliveryBestEffort(job: CronJob): boolean {
   return job.delivery?.bestEffort === true;
+}
+
+/**
+ * Build a transcript mirror spec for BlueBubbles cron deliveries so the
+ * target channel's session records what cron pushed. Without this mirror,
+ * when a BlueBubbles recipient replies in plain text (no iMessage
+ * reply-quote, which is how most people use BB groups), the agent sees an
+ * orphan user message with no prior assistant turn and has to guess or
+ * hallucinate the context.
+ *
+ * Scope: BlueBubbles only. Other channels return undefined — callers keep
+ * the previous behavior of not mirroring cron output.
+ *
+ * Route resolution goes through the same plugin-aware outbound session seam
+ * used by the message tool. That keeps BlueBubbles-specific target
+ * normalization (for example `chat_guid` DM-vs-group disambiguation) in the
+ * plugin and ensures the outbound session entry exists before the transcript
+ * append runs.
+ */
+async function buildBluebubblesCronMirror(params: {
+  cfg: OpenClawConfig;
+  delivery: { channel: string; to: string; accountId?: string; threadId?: string | number };
+  agentId: string;
+  currentSessionKey: string;
+  payloads: ReplyPayload[];
+  deliveryIdempotencyKey: string;
+}): Promise<DeliveryMirror | undefined> {
+  const channel = normalizeLowercaseStringOrEmpty(params.delivery.channel);
+  if (channel !== "bluebubbles") {
+    return undefined;
+  }
+  const to = normalizeOptionalString(params.delivery.to);
+  if (!to) {
+    return undefined;
+  }
+  const text = params.payloads
+    .map((payload) => normalizeOptionalString(payload.text))
+    .filter((value): value is string => Boolean(value))
+    .join("\n\n");
+  if (!text) {
+    return undefined;
+  }
+  const actionParams: Record<string, unknown> = {};
+  if (params.delivery.threadId !== undefined) {
+    actionParams.threadId = params.delivery.threadId;
+  }
+  try {
+    const { outboundRoute } = await prepareOutboundMirrorRoute({
+      cfg: params.cfg,
+      channel: "bluebubbles",
+      to,
+      actionParams,
+      accountId: params.delivery.accountId ?? null,
+      agentId: params.agentId,
+      currentSessionKey: params.currentSessionKey,
+      resolveOutboundSessionRoute,
+      ensureOutboundSessionEntry,
+    });
+    if (!outboundRoute) {
+      return undefined;
+    }
+    const isGroup = outboundRoute.chatType !== "direct";
+    return {
+      sessionKey: outboundRoute.sessionKey,
+      agentId: params.agentId,
+      text,
+      // Reuse the delivery idempotency key so retries of the same cron run
+      // do not append duplicate transcript entries.
+      idempotencyKey: params.deliveryIdempotencyKey,
+      isGroup,
+      // Only set groupId for group/channel sessions; DM sessions have no group id
+      // and outbound consumers branch on isGroup before reading groupId.
+      ...(isGroup ? { groupId: outboundRoute.peer.id } : {}),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 export type SuccessfulDeliveryTarget = Extract<DeliveryTargetResolution, { ok: true }>;
@@ -588,6 +671,32 @@ export async function dispatchCronDelivery(
         sessionKey: params.agentSessionKey,
       });
 
+      // Mirror cron deliveries to the target channel's session transcript so
+      // the agent has context when a recipient replies later. Without this,
+      // cron pushes are invisible to the agent: on reply it sees an orphan
+      // user message with no prior assistant turn explaining what was sent.
+      //
+      // Scoped to BlueBubbles only — the family group chat is where this
+      // matters because recipients rarely use iMessage reply-quote, so
+      // context cannot be reconstructed from the reply itself. Other
+      // channels leave mirror unset and keep current behavior.
+      //
+      // Use the plugin-aware outbound route seam so provider-specific target
+      // normalization and outbound session-entry creation stay in one place.
+      const bluebubblesMirror = await buildBluebubblesCronMirror({
+        cfg: params.cfgWithAgentDefaults,
+        delivery: {
+          channel: delivery.channel,
+          to: delivery.to,
+          accountId: delivery.accountId,
+          threadId: delivery.threadId,
+        },
+        agentId: params.agentId,
+        currentSessionKey: params.runSessionKey,
+        payloads: payloadsForDelivery,
+        deliveryIdempotencyKey,
+      });
+
       // Track bestEffort partial failures so we can log them and avoid
       // marking the job as delivered when payloads were silently dropped.
       let hadPartialFailure = false;
@@ -614,6 +723,7 @@ export async function dispatchCronDelivery(
           deps: createOutboundSendDeps(params.deps),
           abortSignal: params.abortSignal,
           onError,
+          ...(bluebubblesMirror ? { mirror: bluebubblesMirror } : {}),
           // Isolated cron direct delivery uses its own transient retry loop.
           // Keep all attempts out of the write-ahead delivery queue so a
           // late-successful first send cannot leave behind a failed queue
