@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 
@@ -65,8 +68,11 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 const { createGatewayCloseHandler } = await import("./server-close.js");
+const { createChatRunRegistry } = await import("./server-chat-state.js");
+const { readDrainManifest, writeDrainManifest } = await import("./server-drain-manifest.js");
 type GatewayCloseHandlerParams = Parameters<typeof createGatewayCloseHandler>[0];
 type GatewayCloseClient = GatewayCloseHandlerParams["clients"] extends Set<infer T> ? T : never;
+const ORIGINAL_ENV = process.env;
 
 function createGatewayCloseTestDeps(
   overrides: Partial<GatewayCloseHandlerParams> = {},
@@ -126,6 +132,7 @@ describe("createGatewayCloseHandler", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    process.env = { ...ORIGINAL_ENV };
   });
 
   it("completes a clean shutdown with a ShutdownResult", async () => {
@@ -399,6 +406,89 @@ describe("createGatewayCloseHandler", () => {
 
     expect(result.warnings).toContain("ws-clients");
     expect(clients.size).toBe(0);
+  });
+
+  it("preserves the drain manifest when active runs existed at shutdown", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-close-drain-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    try {
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          chatRunRegistry: {
+            entries: () => [
+              {
+                sessionId: "session-1",
+                runs: [{ sessionKey: "linear-AI-587-charles", clientRunId: "run-1" }],
+              },
+            ],
+          },
+        }),
+      );
+
+      const result = await close({ reason: "test shutdown" });
+
+      expect(result.warnings).toEqual([]);
+      expect(readDrainManifest()?.sessions).toEqual([
+        {
+          sessionId: "session-1",
+          sessionKey: "linear-AI-587-charles",
+          clientRunId: "run-1",
+          linearTicketId: "AI-587",
+        },
+      ]);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("deletes a stale drain manifest when shutdown has no active runs", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-close-drain-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    try {
+      const staleRegistry = createChatRunRegistry();
+      staleRegistry.add("stale-session", { sessionKey: "linear-AI-501", clientRunId: "stale-run" });
+      expect(writeDrainManifest(staleRegistry)).toBe(1);
+      expect(readDrainManifest()).not.toBeNull();
+
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          chatRunRegistry: { entries: () => [] },
+        }),
+      );
+
+      const result = await close({ reason: "test shutdown" });
+
+      expect(result.warnings).toEqual([]);
+      expect(readDrainManifest()).toBeNull();
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("records a warning when drain manifest writing fails", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-close-drain-"));
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    try {
+      fs.writeFileSync(path.join(tmpDir, "state"), "not a directory");
+      const close = createGatewayCloseHandler(
+        createGatewayCloseTestDeps({
+          chatRunRegistry: {
+            entries: () => [
+              {
+                sessionId: "session-1",
+                runs: [{ sessionKey: "linear-AI-587", clientRunId: "run-1" }],
+              },
+            ],
+          },
+        }),
+      );
+
+      const result = await close({ reason: "test shutdown" });
+
+      expect(result.warnings).toContain("drain-manifest-write");
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("records a warning when HTTP server close fails", async () => {

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { ChatRunEntry } from "./server-chat-state.js";
+import type { ChatRunRegistry } from "./server-chat-state.js";
 
 const drainLog = createSubsystemLogger("gateway/drain-manifest");
 
@@ -10,6 +10,7 @@ export type DrainManifestEntry = {
   sessionId: string;
   sessionKey: string;
   clientRunId: string;
+  linearTicketId: string | null;
 };
 
 export type DrainManifest = {
@@ -18,29 +19,28 @@ export type DrainManifest = {
   sessions: DrainManifestEntry[];
 };
 
-type DrainManifestSource = {
-  entries: () => ReadonlyArray<{ sessionId: string; runs: ReadonlyArray<ChatRunEntry> }>;
-};
-
 const DRAIN_MANIFEST_FILENAME = "draining-sessions.json";
 
-function resolveManifestPath(): string {
+export function resolveDrainManifestPath(): string {
   const stateDir = resolveStateDir();
   return path.join(stateDir, "state", DRAIN_MANIFEST_FILENAME);
+}
+
+export function extractLinearTicketId(sessionKey: string): string | null {
+  const match = /\b([A-Z]+-\d+)\b/i.exec(sessionKey);
+  return match?.[1]?.toUpperCase() ?? null;
 }
 
 /**
  * Write a drain manifest of all active chat runs to a durable file.
  * Called during gateway shutdown before sessions are cleared.
+ *
+ * Returns the number of active sessions captured. Write failures are allowed
+ * to propagate so shutdown warning accounting can record the failure.
  */
-export function writeDrainManifest(registry: DrainManifestSource): void {
-  const manifestPath = resolveManifestPath();
+export function writeDrainManifest(registry: Pick<ChatRunRegistry, "entries">): number {
+  const manifestPath = resolveDrainManifestPath();
   const activeEntries = registry.entries();
-
-  if (activeEntries.length === 0) {
-    drainLog.info("no active sessions to drain, skipping manifest write");
-    return;
-  }
 
   const sessions: DrainManifestEntry[] = [];
   for (const entry of activeEntries) {
@@ -49,8 +49,14 @@ export function writeDrainManifest(registry: DrainManifestSource): void {
         sessionId: entry.sessionId,
         sessionKey: run.sessionKey,
         clientRunId: run.clientRunId,
+        linearTicketId: extractLinearTicketId(run.sessionKey),
       });
     }
+  }
+
+  if (sessions.length === 0) {
+    drainLog.info("no active sessions to drain, skipping manifest write");
+    return 0;
   }
 
   const manifest: DrainManifest = {
@@ -59,18 +65,13 @@ export function writeDrainManifest(registry: DrainManifestSource): void {
     sessions,
   };
 
-  try {
-    const dir = path.dirname(manifestPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
-    }
-    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
-    drainLog.info(
-      `drain manifest written: ${sessions.length} active session(s) to ${manifestPath}`,
-    );
-  } catch (err) {
-    drainLog.warn(`failed to write drain manifest: ${String(err)}`);
+  const dir = path.dirname(manifestPath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
   }
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), "utf-8");
+  drainLog.info(`drain manifest written: ${sessions.length} active session(s) to ${manifestPath}`);
+  return sessions.length;
 }
 
 /**
@@ -78,7 +79,7 @@ export function writeDrainManifest(registry: DrainManifestSource): void {
  * If the manifest doesn't exist, this is a no-op.
  */
 export function deleteDrainManifest(): void {
-  const manifestPath = resolveManifestPath();
+  const manifestPath = resolveDrainManifestPath();
   try {
     if (fs.existsSync(manifestPath)) {
       fs.unlinkSync(manifestPath);
@@ -94,7 +95,7 @@ export function deleteDrainManifest(): void {
  * Returns null if no manifest exists or it's invalid.
  */
 export function readDrainManifest(): DrainManifest | null {
-  const manifestPath = resolveManifestPath();
+  const manifestPath = resolveDrainManifestPath();
   try {
     if (!fs.existsSync(manifestPath)) {
       return null;

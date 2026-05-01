@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createChatRunRegistry } from "./server-chat-state.js";
 import {
   deleteDrainManifest,
+  extractLinearTicketId,
   readDrainManifest,
   writeDrainManifest,
 } from "./server-drain-manifest.js";
@@ -38,13 +39,13 @@ describe("server-drain-manifest", () => {
       expect(manifest).toBeNull();
     });
 
-    it("writes manifest with active sessions", () => {
+    it("writes manifest with active sessions and extracted ticket IDs", () => {
       const registry = createChatRunRegistry();
-      registry.add("session-1", { sessionKey: "agent:charles", clientRunId: "run-1" });
-      registry.add("session-1", { sessionKey: "agent:charles", clientRunId: "run-2" });
+      registry.add("session-1", { sessionKey: "linear-AI-587-charles", clientRunId: "run-1" });
+      registry.add("session-1", { sessionKey: "linear-ai-588-charles", clientRunId: "run-2" });
       registry.add("session-2", { sessionKey: "agent:noah", clientRunId: "run-3" });
 
-      writeDrainManifest(registry);
+      expect(writeDrainManifest(registry)).toBe(3);
 
       const manifest = readDrainManifest();
       expect(manifest).not.toBeNull();
@@ -53,12 +54,14 @@ describe("server-drain-manifest", () => {
       expect(manifest!.writtenAt).toBeTruthy();
 
       const sessionKeys = manifest!.sessions.map((s) => s.sessionKey);
-      expect(sessionKeys).toContain("agent:charles");
+      expect(sessionKeys).toContain("linear-AI-587-charles");
       expect(sessionKeys).toContain("agent:noah");
 
       const sessionIds = manifest!.sessions.map((s) => s.sessionId);
       expect(sessionIds.filter((id) => id === "session-1")).toHaveLength(2);
       expect(sessionIds.filter((id) => id === "session-2")).toHaveLength(1);
+
+      expect(manifest!.sessions.map((s) => s.linearTicketId)).toEqual(["AI-587", "AI-588", null]);
     });
 
     it("creates state directory if it does not exist", () => {
@@ -69,6 +72,25 @@ describe("server-drain-manifest", () => {
       writeDrainManifest(registry);
       const manifest = readDrainManifest();
       expect(manifest).not.toBeNull();
+    });
+
+    it("propagates manifest write failures", () => {
+      const registry = createChatRunRegistry();
+      registry.add("s1", { sessionKey: "linear-AI-587", clientRunId: "r1" });
+      fs.writeFileSync(path.join(tmpDir, "state"), "not a directory");
+
+      expect(() => writeDrainManifest(registry)).toThrow();
+    });
+  });
+
+  describe("extractLinearTicketId", () => {
+    it("extracts canonical and lower-case Linear ticket IDs", () => {
+      expect(extractLinearTicketId("linear-AI-587-charles")).toBe("AI-587");
+      expect(extractLinearTicketId("linear-ai-588-charles")).toBe("AI-588");
+    });
+
+    it("returns null for non-Linear session keys", () => {
+      expect(extractLinearTicketId("agent:charles")).toBeNull();
     });
   });
 

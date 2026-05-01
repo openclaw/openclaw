@@ -213,6 +213,7 @@ export function createGatewayCloseHandler(params: {
   }): Promise<ShutdownResult> => {
     const start = Date.now();
     const warnings: string[] = [];
+    let drainManifestSessionCount: number | undefined;
     try {
       const reasonRaw = normalizeOptionalString(opts?.reason) ?? "";
       const reason = reasonRaw || "gateway stopping";
@@ -334,11 +335,13 @@ export function createGatewayCloseHandler(params: {
       if (params.lifecycleUnsub) {
         await shutdownStep("lifecycle-unsub", () => params.lifecycleUnsub!(), warnings);
       }
-      // Write drain manifest of active sessions before clearing
+      // Write drain manifest of active sessions before clearing. The manifest
+      // must survive shutdown when active runs existed so boot recovery can act.
       if (params.chatRunRegistry) {
         try {
-          writeDrainManifest(params.chatRunRegistry);
+          drainManifestSessionCount = writeDrainManifest(params.chatRunRegistry);
         } catch (err) {
+          drainManifestSessionCount = -1;
           shutdownLog.warn(`failed to write drain manifest: ${String(err)}`);
           recordShutdownWarning(warnings, "drain-manifest-write");
         }
@@ -468,12 +471,15 @@ export function createGatewayCloseHandler(params: {
       }
     }
 
-    // Clean shutdown — remove drain manifest so boot-time consumer knows
-    // all sessions were drained successfully (no unclean restart).
-    try {
-      deleteDrainManifest();
-    } catch (err) {
-      shutdownLog.warn(`failed to delete drain manifest on clean shutdown: ${String(err)}`);
+    // Clean shutdown with no active runs — remove any stale drain manifest.
+    // If active runs existed (or manifest writing failed), keep the manifest so
+    // the boot-time consumer can detect and recover interrupted work.
+    if (drainManifestSessionCount === 0) {
+      try {
+        deleteDrainManifest();
+      } catch (err) {
+        shutdownLog.warn(`failed to delete drain manifest on clean shutdown: ${String(err)}`);
+      }
     }
 
     const durationMs = Date.now() - start;
