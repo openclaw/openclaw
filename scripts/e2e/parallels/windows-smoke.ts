@@ -904,6 +904,8 @@ $config.models.providers | Add-Member -Force -MemberType NoteProperty -Name open
   timeoutSeconds = 300
 })
 $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-windows-smoke.jsonl'
+Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $args = ${psArray([

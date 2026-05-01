@@ -424,6 +424,7 @@ console.log(JSON.stringify(result));
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
     expect(script).toContain("$config.models.providers");
     expect(script).toContain("timeoutSeconds = 300");
+    expect(script).toContain("parallels-windows-smoke.jsonl");
   });
 
   it("waits through transient Windows restoring state before VM operations", () => {

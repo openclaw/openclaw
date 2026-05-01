@@ -157,6 +157,8 @@ $config.models.providers | Add-Member -Force -MemberType NoteProperty -Name open
   timeoutSeconds = 300
 })
 $config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
+Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
 Invoke-OpenClaw agent --local --agent main --session-id parallels-npm-update-windows --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
