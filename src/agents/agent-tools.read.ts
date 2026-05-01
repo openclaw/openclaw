@@ -26,7 +26,12 @@ import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
+import {
+  createEditTool,
+  createReadTool,
+  createWriteTool,
+  withFileMutationQueue,
+} from "./sessions/index.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 
 export {
@@ -1079,7 +1084,7 @@ export function wrapToolWriteWithAppend(
       const normalized = filePath.startsWith("@") ? filePath.slice(1) : filePath;
       const expanded = expandTildeToOsHome(normalized);
       const resolved = path.isAbsolute(expanded) ? expanded : path.resolve(ops.root, expanded);
-      await ops.appendFile(resolved, content);
+      await withFileMutationQueue(resolved, () => ops.appendFile(resolved, content));
       return {
         content: [{ type: "text", text: `Appended to ${filePath}.` }],
         details: { path: filePath, append: true },
