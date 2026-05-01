@@ -109,10 +109,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `plugin session action requires gateway scope: ${missingScope}`,
-        ),
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${missingScope}`),
       );
       return;
     }
