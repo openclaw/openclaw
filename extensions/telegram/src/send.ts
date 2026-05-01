@@ -454,7 +454,7 @@ function resolveTelegramApiContext(opts: {
   } else {
     const bot = new Bot(token, client ? { client } : undefined);
     bot.api.config.use(getOrCreateAccountThrottler(token));
-    api = bot.api as TelegramApi;
+    api = bot.api;
   }
   return { cfg, account, api };
 }
