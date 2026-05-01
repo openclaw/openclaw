@@ -1,4 +1,5 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/plugins/setup-helpers.js";
@@ -299,6 +300,7 @@ export async function channelsAddCommand(
     });
     return (
       snapshot.channelSetups.find((entry) => entry.plugin.id === channelId)?.plugin ??
+      getBundledChannelSetupPlugin(channelId) ??
       snapshot.channels.find((entry) => entry.plugin.id === channelId)?.plugin ??
       existing
     );

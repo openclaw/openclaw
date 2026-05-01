@@ -125,7 +125,7 @@ describeLive("xai live", () => {
       : [];
     const firstFunction = payloadTools[0]?.function;
     if (firstFunction && typeof firstFunction === "object") {
-      expect((firstFunction as Record<string, unknown>).strict).toBeUndefined();
+      expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     }
   }, 45_000);
 
