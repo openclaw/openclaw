@@ -12,6 +12,7 @@ import {
   parseBoolEnv,
   parseMode,
   parseProvider,
+  modelTransportConfigJson,
   providerIdFromModelId,
   providerTimeoutConfigJson,
   repoRoot,
@@ -696,6 +697,14 @@ rm -rf /root/.openclaw/test-bad-plugin`);
         `openclaw config set ${shellQuote(`models.providers.${providerId}`)} ${shellQuote(
           providerTimeoutConfig,
         )} --strict-json`,
+      );
+    }
+    const modelTransportConfig = modelTransportConfigJson(this.auth.modelId);
+    if (modelTransportConfig) {
+      this.guestBash(
+        `openclaw config set ${shellQuote(
+          `agents.defaults.models.${this.auth.modelId}`,
+        )} ${shellQuote(modelTransportConfig)} --strict-json`,
       );
     }
     this.guestExec([

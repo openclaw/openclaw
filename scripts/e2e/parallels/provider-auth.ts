@@ -110,6 +110,18 @@ export function providerTimeoutConfigJson(modelId: string, platform: Platform): 
   });
 }
 
+export function modelTransportConfigJson(modelId: string): string {
+  if (providerIdFromModelId(modelId) !== "openai") {
+    return "";
+  }
+  return JSON.stringify({
+    alias: "GPT",
+    params: {
+      transport: "sse",
+    },
+  });
+}
+
 export function parseProvider(value: string): Provider {
   if (value === "openai" || value === "anthropic" || value === "minimax") {
     return value;

@@ -5,7 +5,11 @@ import {
   windowsModelProviderTimeoutScript,
   windowsOpenClawResolver,
 } from "./powershell.ts";
-import { providerIdFromModelId, providerTimeoutConfigJson } from "./provider-auth.ts";
+import {
+  modelTransportConfigJson,
+  providerIdFromModelId,
+  providerTimeoutConfigJson,
+} from "./provider-auth.ts";
 import type { Platform, ProviderAuth } from "./types.ts";
 
 export interface NpmUpdateScriptInput {
@@ -14,19 +18,30 @@ export interface NpmUpdateScriptInput {
   updateTarget: string;
 }
 
-function posixModelProviderTimeoutCommand(
+function posixModelProviderConfigCommands(
   command: string,
   modelId: string,
   platform: Platform,
 ): string {
+  const commands: string[] = [];
   const providerId = providerIdFromModelId(modelId);
   const configJson = providerTimeoutConfigJson(modelId, platform);
-  if (!providerId || !configJson) {
-    return "";
+  if (providerId && configJson) {
+    commands.push(
+      `${command} config set ${shellQuote(`models.providers.${providerId}`)} ${shellQuote(
+        configJson,
+      )} --strict-json`,
+    );
   }
-  return `${command} config set ${shellQuote(`models.providers.${providerId}`)} ${shellQuote(
-    configJson,
-  )} --strict-json`;
+  const transportJson = modelTransportConfigJson(modelId);
+  if (transportJson) {
+    commands.push(
+      `${command} config set ${shellQuote(`agents.defaults.models.${modelId}`)} ${shellQuote(
+        transportJson,
+      )} --strict-json`,
+    );
+  }
+  return commands.join("\n");
 }
 
 function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {
@@ -123,7 +138,7 @@ ${posixVersionCheck("/opt/homebrew/bin/openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
 /opt/homebrew/bin/openclaw models set ${shellQuote(input.auth.modelId)}
-${posixModelProviderTimeoutCommand("/opt/homebrew/bin/openclaw", input.auth.modelId, "macos")}
+${posixModelProviderConfigCommands("/opt/homebrew/bin/openclaw", input.auth.modelId, "macos")}
 /opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
 /opt/homebrew/bin/openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
@@ -280,7 +295,7 @@ ${posixVersionCheck("openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
 openclaw models set ${shellQuote(input.auth.modelId)}
-${posixModelProviderTimeoutCommand("openclaw", input.auth.modelId, "linux")}
+${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
 openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}

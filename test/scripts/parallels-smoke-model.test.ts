@@ -322,7 +322,9 @@ console.log(JSON.stringify(result));
       expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
     }
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("providerTimeoutConfigJson");
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("modelTransportConfigJson");
     expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("providerTimeoutConfigJson");
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("modelTransportConfigJson");
     expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsModelProviderTimeoutScript");
     expect(readFileSync(TS_PATHS.powershell, "utf8")).toContain("config set --batch-file");
 
@@ -334,6 +336,8 @@ console.log(JSON.stringify(result));
     expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
     expect(npmUpdateScripts).toContain("windowsModelProviderTimeoutScript");
+    expect(npmUpdateScripts).toContain("modelTransportConfigJson");
+    expect(npmUpdateScripts).toContain("agents.defaults.models.${modelId}");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {

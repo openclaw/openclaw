@@ -11,6 +11,7 @@ import {
   packOpenClaw,
   parseMode,
   parseProvider,
+  modelTransportConfigJson,
   providerIdFromModelId,
   providerTimeoutConfigJson,
   resolveHostIp,
@@ -980,6 +981,14 @@ exit 1`);
         `${shellQuote(guestNode)} ${shellQuote(guestOpenClawEntry)} config set ${shellQuote(
           `models.providers.${providerId}`,
         )} ${shellQuote(providerTimeoutConfig)} --strict-json`,
+      );
+    }
+    const modelTransportConfig = modelTransportConfigJson(this.auth.modelId);
+    if (modelTransportConfig) {
+      this.guestSh(
+        `${shellQuote(guestNode)} ${shellQuote(guestOpenClawEntry)} config set ${shellQuote(
+          `agents.defaults.models.${this.auth.modelId}`,
+        )} ${shellQuote(modelTransportConfig)} --strict-json`,
       );
     }
     this.guestExec([
