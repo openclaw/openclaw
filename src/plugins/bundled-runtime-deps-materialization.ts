@@ -102,8 +102,21 @@ function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function isRuntimeDepExportTarget(value: string): boolean {
-  return value.trim().startsWith("./");
+function isRuntimeDepRuntimeExportTarget(value: string): boolean {
+  const target = value.trim();
+  if (!target.startsWith("./")) {
+    return false;
+  }
+  const normalizedTarget = target.slice("./".length);
+  return (
+    normalizedTarget !== "package.json" &&
+    !normalizedTarget.endsWith(".d.ts") &&
+    !normalizedTarget.endsWith(".d.mts") &&
+    !normalizedTarget.endsWith(".d.cts") &&
+    !normalizedTarget.endsWith(".d.ts.map") &&
+    !normalizedTarget.endsWith(".d.mts.map") &&
+    !normalizedTarget.endsWith(".d.cts.map")
+  );
 }
 
 function collectRuntimeDepExportTargets(rawExports: unknown): string[] {
@@ -113,7 +126,7 @@ function collectRuntimeDepExportTargets(rawExports: unknown): string[] {
     const value = queue.shift();
     if (typeof value === "string") {
       const target = value.trim();
-      if (isRuntimeDepExportTarget(target)) {
+      if (isRuntimeDepRuntimeExportTarget(target)) {
         targets.add(target);
       }
       continue;
@@ -196,16 +209,16 @@ function hasInstalledRuntimeDepExportFiles(packageDir: string, rawExports: unkno
   if (targets.length === 0) {
     return hasRuntimeDepEntryFile(packageDir, "index");
   }
-  return targets.every((target) => hasRuntimeDepExportPatternFile(packageDir, target));
+  return targets.some((target) => hasRuntimeDepExportPatternFile(packageDir, target));
 }
 
 function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonObject): boolean {
+  if (packageJson.exports !== undefined) {
+    return hasInstalledRuntimeDepExportFiles(packageDir, packageJson.exports);
+  }
   const main = packageJson.main;
   if (typeof main === "string") {
     return hasRuntimeDepEntryFile(packageDir, main);
-  }
-  if (packageJson.exports !== undefined) {
-    return hasInstalledRuntimeDepExportFiles(packageDir, packageJson.exports);
   }
   return hasRuntimeDepEntryFile(packageDir, "index");
 }
