@@ -39,6 +39,7 @@ describe("package acceptance workflow", () => {
 
   it("offers bounded product profiles and can run Telegram against the resolved artifact", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    const npmTelegramWorkflow = readFileSync(NPM_TELEGRAM_WORKFLOW, "utf8");
 
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
@@ -64,6 +65,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}",
     );
+    expect(npmTelegramWorkflow).toContain("package_artifact_run_id:");
+    expect(npmTelegramWorkflow).toContain("Download package-under-test artifact from release run");
+    expect(npmTelegramWorkflow).toContain("run-id: ${{ inputs.package_artifact_run_id }}");
+    expect(npmTelegramWorkflow).toContain("github-token: ${{ github.token }}");
     expect(workflow).toContain(
       "package_source_sha: ${{ steps.resolve.outputs.package_source_sha }}",
     );
@@ -449,6 +454,12 @@ describe("package artifact reuse", () => {
       'gh workflow run npm-telegram-beta-e2e.yml --ref "$CHILD_WORKFLOW_REF" "${args[@]}"',
     );
     expect(workflow).toContain('-f harness_ref="$TARGET_SHA"');
+    expect(workflow).toContain("needs: [resolve_target, release_checks]");
+    expect(workflow).toContain("inputs.rerun_group == 'all' && inputs.release_profile == 'full'");
+    expect(workflow).toContain("RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}");
+    expect(workflow).toContain("-f package_artifact_name=release-package-under-test");
+    expect(workflow).toContain('-f package_artifact_run_id="$RELEASE_CHECKS_RUN_ID"');
+    expect(workflow).toContain('-f package_label="full-release-${TARGET_SHA:0:12}"');
     expect(workflow).toContain("child_rerun_group=all");
     expect(workflow).toContain('-f rerun_group="$child_rerun_group"');
     expect(workflow).toContain('args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")');

@@ -29,14 +29,14 @@ when validating an older release branch or tag.
 
 ## Top-level stages
 
-| Stage                 | Details                                                                                                                                                                                                                                                                                                                                                                                       |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Target resolution     | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                              |
-| Vitest and normal CI  | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, channel contracts, Node 22 compatibility, `check`, `check-additional`, build smoke, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`. |
-| Plugin prerelease     | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full extension batch shards, and plugin prerelease Docker lanes.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                       |
-| Release checks        | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, live/E2E suites, Docker release-path chunks, Package Acceptance, QA Lab parity, live Matrix, and live Telegram.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle.                                |
-| Post-publish Telegram | **Job:** `Run post-publish Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** optional published-package Telegram proof when `npm_telegram_package_spec` is set.<br />**Rerun:** `rerun_group=npm-telegram`.                                                                                                                                                     |
-| Umbrella verifier     | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                   |
+| Stage                | Details                                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Target resolution    | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                              |
+| Vitest and normal CI | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, channel contracts, Node 22 compatibility, `check`, `check-additional`, build smoke, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`. |
+| Plugin prerelease    | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full extension batch shards, and plugin prerelease Docker lanes.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                       |
+| Release checks       | **Job:** `Run release/live/Docker/QA validation`<br />**Child workflow:** `OpenClaw Release Checks`<br />**Proves:** install smoke, cross-OS package checks, live/E2E suites, Docker release-path chunks, Package Acceptance, QA Lab parity, live Matrix, and live Telegram.<br />**Rerun:** `rerun_group=release-checks` or a narrower release-checks handle.                                |
+| Package Telegram     | **Job:** `Run package Telegram E2E`<br />**Child workflow:** `NPM Telegram Beta E2E`<br />**Proves:** artifact-backed Telegram package proof for `rerun_group=all` with `release_profile=full`, or published-package Telegram proof when `npm_telegram_package_spec` is set.<br />**Rerun:** `rerun_group=npm-telegram` with `npm_telegram_package_spec`.                                     |
+| Umbrella verifier    | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** re-checks recorded child run conclusions and appends slowest-job tables from child workflows.<br />**Rerun:** rerun only this job after rerunning a failed child to green.                                                                                                                                   |
 
 For `ref=main` and `rerun_group=all`, a newer umbrella supersedes an older one.
 When the parent is cancelled, its monitor cancels any child workflow it already
@@ -84,9 +84,12 @@ commands with package artifact and image reuse inputs when available.
 
 ## Release profiles
 
-`release_profile` only controls live/provider breadth inside release checks. It
-does not remove normal full CI, Plugin Prerelease, install smoke, package
-acceptance, QA Lab, or Docker release-path chunks.
+`release_profile` mostly controls live/provider breadth inside release checks.
+It does not remove normal full CI, Plugin Prerelease, install smoke, package
+acceptance, QA Lab, or Docker release-path chunks. `full` also makes the
+umbrella run package Telegram E2E against the release package artifact when
+`rerun_group=all`, so a full pre-publish candidate does not silently skip that
+Telegram package lane.
 
 | Profile   | Intended use                      | Included live/provider coverage                                                                                                                                               |
 | --------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -113,20 +116,20 @@ uses the broader OpenCode Go model shards instead.
 
 Use `rerun_group` to avoid repeating unrelated release boxes:
 
-| Handle              | Scope                                             |
-| ------------------- | ------------------------------------------------- |
-| `all`               | All Full Release Validation stages.               |
-| `ci`                | Manual full CI child only.                        |
-| `plugin-prerelease` | Plugin Prerelease child only.                     |
-| `release-checks`    | All OpenClaw Release Checks stages.               |
-| `install-smoke`     | Install Smoke through release checks.             |
-| `cross-os`          | Cross-OS release checks.                          |
-| `live-e2e`          | Repo/live E2E and Docker release-path validation. |
-| `package`           | Package Acceptance.                               |
-| `qa`                | QA parity plus QA live lanes.                     |
-| `qa-parity`         | QA parity lanes and report only.                  |
-| `qa-live`           | QA live Matrix and Telegram only.                 |
-| `npm-telegram`      | Optional post-publish Telegram E2E only.          |
+| Handle              | Scope                                                                 |
+| ------------------- | --------------------------------------------------------------------- |
+| `all`               | All Full Release Validation stages.                                   |
+| `ci`                | Manual full CI child only.                                            |
+| `plugin-prerelease` | Plugin Prerelease child only.                                         |
+| `release-checks`    | All OpenClaw Release Checks stages.                                   |
+| `install-smoke`     | Install Smoke through release checks.                                 |
+| `cross-os`          | Cross-OS release checks.                                              |
+| `live-e2e`          | Repo/live E2E and Docker release-path validation.                     |
+| `package`           | Package Acceptance.                                                   |
+| `qa`                | QA parity plus QA live lanes.                                         |
+| `qa-parity`         | QA parity lanes and report only.                                      |
+| `qa-live`           | QA live Matrix and Telegram only.                                     |
+| `npm-telegram`      | Published-package Telegram E2E; requires `npm_telegram_package_spec`. |
 
 Use `live_suite_filter` with `rerun_group=live-e2e` when one live suite failed.
 Valid filter ids are defined in the reusable live/E2E workflow, including
