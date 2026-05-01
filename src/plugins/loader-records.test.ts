@@ -15,4 +15,18 @@ describe("plugin loader records", () => {
 
     expect(record.channelIds).toEqual(["kitchen-sink-channel"]);
   });
+
+  it("preserves manifest-declared provider ids before runtime registration", () => {
+    const record = createPluginRecord({
+      id: "kitchen-sink",
+      name: "Kitchen Sink",
+      source: "/tmp/kitchen-sink/index.js",
+      origin: "global",
+      enabled: true,
+      providerIds: ["kitchen-sink-provider"],
+      configSchema: false,
+    });
+
+    expect(record.providerIds).toEqual(["kitchen-sink-provider"]);
+  });
 });

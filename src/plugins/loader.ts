@@ -1460,6 +1460,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           activationState,
           syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
           channelIds: manifestRecord.channels,
+          providerIds: manifestRecord.providers,
           configSchema: Boolean(manifestRecord.configSchema),
           contracts: manifestRecord.contracts,
         });
@@ -1496,6 +1497,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         activationState,
         syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
         channelIds: manifestRecord.channels,
+        providerIds: manifestRecord.providers,
         configSchema: Boolean(manifestRecord.configSchema),
         contracts: manifestRecord.contracts,
       });
@@ -2305,6 +2307,7 @@ export async function loadOpenClawPluginCliRegistry(
         activationState,
         syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
         channelIds: manifestRecord.channels,
+        providerIds: manifestRecord.providers,
         configSchema: Boolean(manifestRecord.configSchema),
         contracts: manifestRecord.contracts,
       });
@@ -2341,6 +2344,7 @@ export async function loadOpenClawPluginCliRegistry(
       activationState,
       syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
       channelIds: manifestRecord.channels,
+      providerIds: manifestRecord.providers,
       configSchema: Boolean(manifestRecord.configSchema),
       contracts: manifestRecord.contracts,
     });

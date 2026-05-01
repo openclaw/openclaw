@@ -811,7 +811,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    record.providerIds.push(id);
+    if (!record.providerIds.includes(id)) {
+      record.providerIds.push(id);
+    }
     registry.providers.push({
       pluginId: record.id,
       pluginName: record.name,
