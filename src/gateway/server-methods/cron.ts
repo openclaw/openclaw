@@ -28,11 +28,181 @@ import {
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+const OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG = "OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG";
+
+type CronListDiagnosticStage =
+  | "handler_entered"
+  | "params_validated"
+  | "list_page_start"
+  | "list_page_end"
+  | "list_page_error"
+  | "config_reload_start"
+  | "config_reload_end"
+  | "config_reload_error"
+  | "delivery_preview_start"
+  | "delivery_preview_end"
+  | "delivery_preview_error"
+  | "response_payload_assembled"
+  | "response_send_start"
+  | "response_send_end"
+  | "response_send_error";
+
+type CronListDiagnosticEvent = {
+  stage: CronListDiagnosticStage;
+  elapsedMs: number;
+  includeDisabled?: boolean;
+  limit?: number;
+  jobCount?: number;
+  deliveryPreviewCount?: number;
+  ok?: boolean;
+  errorName?: string;
+  errorCode?: string;
+};
+
+type CronListDiagnosticInput = {
+  stage: CronListDiagnosticStage;
+  elapsedMs: number;
+  includeDisabled?: unknown;
+  limit?: unknown;
+  jobCount?: unknown;
+  deliveryPreviewCount?: unknown;
+  ok?: unknown;
+  error?: unknown;
+};
+
 function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
   return listConfiguredAnnounceChannelIdsForConfig({
     config: cfg,
     env: process.env,
   });
+}
+
+function isCronListDiagnosticDebugEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env[OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG] === "1";
+}
+
+function sanitizeDiagnosticString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!/^[A-Za-z0-9_.-]{1,80}$/.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+function sanitizeDiagnosticNumber(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function sanitizeDiagnosticError(
+  error: unknown,
+): Pick<CronListDiagnosticEvent, "errorName" | "errorCode"> {
+  if (!error || typeof error !== "object") {
+    return {};
+  }
+  const record = error as { name?: unknown; code?: unknown };
+  const errorName = sanitizeDiagnosticString(record.name);
+  const errorCode = sanitizeDiagnosticString(record.code);
+  return {
+    ...(errorName ? { errorName } : {}),
+    ...(errorCode ? { errorCode } : {}),
+  };
+}
+
+export function buildCronListDiagnosticEvent(
+  input: CronListDiagnosticInput,
+): CronListDiagnosticEvent {
+  const event: CronListDiagnosticEvent = {
+    stage: input.stage,
+    elapsedMs: sanitizeDiagnosticNumber(input.elapsedMs) ?? 0,
+  };
+  if (typeof input.includeDisabled === "boolean") {
+    event.includeDisabled = input.includeDisabled;
+  }
+  const limit = sanitizeDiagnosticNumber(input.limit);
+  if (limit !== undefined) {
+    event.limit = limit;
+  }
+  const jobCount = sanitizeDiagnosticNumber(input.jobCount);
+  if (jobCount !== undefined) {
+    event.jobCount = jobCount;
+  }
+  const deliveryPreviewCount = sanitizeDiagnosticNumber(input.deliveryPreviewCount);
+  if (deliveryPreviewCount !== undefined) {
+    event.deliveryPreviewCount = deliveryPreviewCount;
+  }
+  if (typeof input.ok === "boolean") {
+    event.ok = input.ok;
+  }
+  return {
+    ...event,
+    ...sanitizeDiagnosticError(input.error),
+  };
+}
+
+function formatCronListDiagnosticEvent(event: CronListDiagnosticEvent): string {
+  const fields: string[] = [`stage=${event.stage}`, `elapsedMs=${event.elapsedMs}`];
+  if (event.includeDisabled !== undefined) {
+    fields.push(`includeDisabled=${event.includeDisabled}`);
+  }
+  if (event.limit !== undefined) {
+    fields.push(`limit=${event.limit}`);
+  }
+  if (event.jobCount !== undefined) {
+    fields.push(`jobCount=${event.jobCount}`);
+  }
+  if (event.deliveryPreviewCount !== undefined) {
+    fields.push(`deliveryPreviewCount=${event.deliveryPreviewCount}`);
+  }
+  if (event.ok !== undefined) {
+    fields.push(`ok=${event.ok}`);
+  }
+  if (event.errorName) {
+    fields.push(`errorName=${event.errorName}`);
+  }
+  if (event.errorCode) {
+    fields.push(`errorCode=${event.errorCode}`);
+  }
+  return `cron.list diagnostic ${fields.join(" ")}`;
+}
+
+function elapsedSince(startedAtMs: number): number {
+  return Math.max(0, Math.round(performance.now() - startedAtMs));
+}
+
+function logCronListDiagnostic(params: {
+  log: { info: (message: string) => void };
+  startedAtMs: number;
+  stage: CronListDiagnosticStage;
+  includeDisabled?: unknown;
+  limit?: unknown;
+  jobCount?: unknown;
+  deliveryPreviewCount?: unknown;
+  ok?: unknown;
+  error?: unknown;
+}) {
+  if (!isCronListDiagnosticDebugEnabled()) {
+    return;
+  }
+  params.log.info(
+    formatCronListDiagnosticEvent(
+      buildCronListDiagnosticEvent({
+        stage: params.stage,
+        elapsedMs: elapsedSince(params.startedAtMs),
+        includeDisabled: params.includeDisabled,
+        limit: params.limit,
+        jobCount: params.jobCount,
+        deliveryPreviewCount: params.deliveryPreviewCount,
+        ok: params.ok,
+        error: params.error,
+      }),
+    ),
+  );
 }
 
 function assertConfiguredAnnounceChannel(params: {
@@ -133,7 +303,19 @@ export const cronHandlers: GatewayRequestHandlers = {
     respond(true, result, undefined);
   },
   "cron.list": async ({ params, respond, context }) => {
+    const startedAtMs = performance.now();
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "handler_entered",
+    });
     if (!validateCronListParams(params)) {
+      logCronListDiagnostic({
+        log: context.logGateway,
+        startedAtMs,
+        stage: "params_validated",
+        ok: false,
+      });
       respond(
         false,
         undefined,
@@ -153,21 +335,171 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
     };
-    const page = await context.cron.listPage({
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "params_validated",
       includeDisabled: p.includeDisabled,
       limit: p.limit,
-      offset: p.offset,
-      query: p.query,
-      enabled: p.enabled,
-      sortBy: p.sortBy,
-      sortDir: p.sortDir,
+      ok: true,
     });
-    const deliveryPreviews = await resolveCronDeliveryPreviews({
-      cfg: context.getRuntimeConfig(),
-      defaultAgentId: context.cron.getDefaultAgentId(),
-      jobs: page.jobs,
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "list_page_start",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
     });
-    respond(true, { ...page, deliveryPreviews }, undefined);
+    let page: Awaited<ReturnType<typeof context.cron.listPage>>;
+    try {
+      page = await context.cron.listPage({
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        offset: p.offset,
+        query: p.query,
+        enabled: p.enabled,
+        sortBy: p.sortBy,
+        sortDir: p.sortDir,
+      });
+    } catch (err) {
+      logCronListDiagnostic({
+        log: context.logGateway,
+        startedAtMs,
+        stage: "list_page_error",
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        ok: false,
+        error: err,
+      });
+      throw err;
+    }
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "list_page_end",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
+      jobCount: page.jobs.length,
+      ok: true,
+    });
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "config_reload_start",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
+      jobCount: page.jobs.length,
+    });
+    let cfg: OpenClawConfig;
+    try {
+      cfg = context.getRuntimeConfig();
+    } catch (err) {
+      logCronListDiagnostic({
+        log: context.logGateway,
+        startedAtMs,
+        stage: "config_reload_error",
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        jobCount: page.jobs.length,
+        ok: false,
+        error: err,
+      });
+      throw err;
+    }
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "config_reload_end",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
+      jobCount: page.jobs.length,
+      ok: true,
+    });
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "delivery_preview_start",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
+      jobCount: page.jobs.length,
+    });
+    let deliveryPreviews: Awaited<ReturnType<typeof resolveCronDeliveryPreviews>>;
+    try {
+      deliveryPreviews = await resolveCronDeliveryPreviews({
+        cfg,
+        defaultAgentId: context.cron.getDefaultAgentId(),
+        jobs: page.jobs,
+      });
+    } catch (err) {
+      logCronListDiagnostic({
+        log: context.logGateway,
+        startedAtMs,
+        stage: "delivery_preview_error",
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        jobCount: page.jobs.length,
+        ok: false,
+        error: err,
+      });
+      throw err;
+    }
+    const deliveryPreviewCount = Object.keys(deliveryPreviews).length;
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "delivery_preview_end",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
+      jobCount: page.jobs.length,
+      deliveryPreviewCount,
+      ok: true,
+    });
+    const responsePayload = { ...page, deliveryPreviews };
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "response_payload_assembled",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
+      jobCount: page.jobs.length,
+      deliveryPreviewCount,
+      ok: true,
+    });
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "response_send_start",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
+      jobCount: page.jobs.length,
+      deliveryPreviewCount,
+    });
+    try {
+      respond(true, responsePayload, undefined);
+    } catch (err) {
+      logCronListDiagnostic({
+        log: context.logGateway,
+        startedAtMs,
+        stage: "response_send_error",
+        includeDisabled: p.includeDisabled,
+        limit: p.limit,
+        jobCount: page.jobs.length,
+        deliveryPreviewCount,
+        ok: false,
+        error: err,
+      });
+      throw err;
+    }
+    logCronListDiagnostic({
+      log: context.logGateway,
+      startedAtMs,
+      stage: "response_send_end",
+      includeDisabled: p.includeDisabled,
+      limit: p.limit,
+      jobCount: page.jobs.length,
+      deliveryPreviewCount,
+      ok: true,
+    });
   },
   "cron.status": async ({ params, respond, context }) => {
     if (!validateCronStatusParams(params)) {

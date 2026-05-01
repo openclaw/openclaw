@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../../cron/types.js";
 
@@ -15,7 +15,9 @@ vi.mock("../../config/config.js", async () => {
   };
 });
 
-import { cronHandlers } from "./cron.js";
+import { buildCronListDiagnosticEvent, cronHandlers } from "./cron.js";
+
+const OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG = "OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG";
 
 function createCronContext(currentJob?: CronJob) {
   return {
@@ -60,6 +62,54 @@ async function invokeCronUpdate(params: Record<string, unknown>, currentJob: Cro
   return { context, respond };
 }
 
+async function invokeCronList(params: Record<string, unknown>, jobs: CronJob[]) {
+  const logLines: string[] = [];
+  let result: { ok: boolean; payload?: unknown; error?: unknown } | undefined;
+  await cronHandlers["cron.list"]({
+    req: {} as never,
+    params: params as never,
+    respond: (ok: boolean, payload?: unknown, error?: unknown) => {
+      result = { ok, payload, error };
+    },
+    context: {
+      cron: {
+        listPage: async () => ({
+          jobs,
+          total: jobs.length,
+          offset: 0,
+          limit: jobs.length || 50,
+          hasMore: false,
+          nextOffset: null,
+        }),
+        getDefaultAgentId: () => "main",
+      },
+      logGateway: {
+        info: (message: string) => {
+          logLines.push(message);
+        },
+      },
+      getRuntimeConfig: () =>
+        ({
+          session: { mainKey: "SESSION_CONTENT_SHOULD_NOT_APPEAR" },
+          plugins: {
+            entries: {
+              telegram: {
+                enabled: true,
+                label: "CONFIG_CONTENT_SHOULD_NOT_APPEAR",
+              },
+            },
+          },
+        }) as OpenClawConfig,
+    } as never,
+    client: null,
+    isWebchatConnect: () => false,
+  });
+  if (!result) {
+    throw new Error("cron.list did not respond");
+  }
+  return { result, logLines };
+}
+
 function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
   return {
     id: "cron-1",
@@ -80,6 +130,124 @@ function createCronJob(overrides: Partial<CronJob> = {}): CronJob {
 describe("cron method validation", () => {
   beforeEach(() => {
     getRuntimeConfig.mockReset().mockReturnValue({} as OpenClawConfig);
+    delete process.env[OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG];
+  });
+
+  afterEach(() => {
+    delete process.env[OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG];
+  });
+
+  it("builds cron.list diagnostics from an allow-listed redacted shape", () => {
+    const err = new Error("PROMPT_CONTENT_SHOULD_NOT_APPEAR");
+    err.name = "CronListTimeout";
+    (err as Error & { code: string }).code = "E_CRON_TIMEOUT";
+
+    const event = buildCronListDiagnosticEvent({
+      stage: "delivery_preview_error",
+      elapsedMs: 12.8,
+      includeDisabled: true,
+      limit: 25,
+      jobCount: 3,
+      deliveryPreviewCount: 2,
+      ok: false,
+      error: err,
+    });
+
+    expect(event).toEqual({
+      stage: "delivery_preview_error",
+      elapsedMs: 12,
+      includeDisabled: true,
+      limit: 25,
+      jobCount: 3,
+      deliveryPreviewCount: 2,
+      ok: false,
+      errorName: "CronListTimeout",
+      errorCode: "E_CRON_TIMEOUT",
+    });
+    expect(Object.keys(event).toSorted()).toEqual(
+      [
+        "deliveryPreviewCount",
+        "elapsedMs",
+        "errorCode",
+        "errorName",
+        "includeDisabled",
+        "jobCount",
+        "limit",
+        "ok",
+        "stage",
+      ].toSorted(),
+    );
+    expect(JSON.stringify(event)).not.toContain("PROMPT_CONTENT_SHOULD_NOT_APPEAR");
+  });
+
+  it("does not emit cron.list diagnostics unless explicitly enabled", async () => {
+    const { result, logLines } = await invokeCronList({ includeDisabled: true, limit: 1 }, [
+      createCronJob(),
+    ]);
+
+    expect(result.ok).toBe(true);
+    expect(logLines).toEqual([]);
+  });
+
+  it("emits redacted cron.list stage timing without changing the response payload", async () => {
+    process.env[OPENCLAW_CRON_LIST_DIAGNOSTIC_DEBUG] = "1";
+    const job = createCronJob({
+      id: "cron-sensitive",
+      name: "diagnostic list job",
+      description: "JOB_COMMAND_SHOULD_NOT_APPEAR",
+      payload: {
+        kind: "agentTurn",
+        message: "PROMPT_CONTENT_SHOULD_NOT_APPEAR",
+      },
+      delivery: {
+        mode: "webhook",
+        to: "WEBHOOK_DESTINATION_SHOULD_NOT_APPEAR",
+      },
+    });
+
+    const { result, logLines } = await invokeCronList({ includeDisabled: true, limit: 1 }, [job]);
+
+    expect(result.ok).toBe(true);
+    expect(result.payload).toEqual({
+      jobs: [job],
+      total: 1,
+      offset: 0,
+      limit: 1,
+      hasMore: false,
+      nextOffset: null,
+      deliveryPreviews: {
+        "cron-sensitive": {
+          label: "webhook:WEBHOOK_DESTINATION_SHOULD_NOT_APPEAR",
+          detail: "webhook",
+        },
+      },
+    });
+    const expectedStages = [
+      "handler_entered",
+      "params_validated",
+      "list_page_start",
+      "list_page_end",
+      "config_reload_start",
+      "config_reload_end",
+      "delivery_preview_start",
+      "delivery_preview_end",
+      "response_payload_assembled",
+      "response_send_start",
+      "response_send_end",
+    ];
+    for (const stage of expectedStages) {
+      expect(logLines.some((line) => line.includes(`stage=${stage}`))).toBe(true);
+    }
+    for (const line of logLines) {
+      expect(line).toMatch(/^cron\.list diagnostic /);
+      expect(line).toMatch(/elapsedMs=\d+/);
+      expect(line).not.toContain("JOB_COMMAND_SHOULD_NOT_APPEAR");
+      expect(line).not.toContain("PROMPT_CONTENT_SHOULD_NOT_APPEAR");
+      expect(line).not.toContain("WEBHOOK_DESTINATION_SHOULD_NOT_APPEAR");
+      expect(line).not.toContain("CONFIG_CONTENT_SHOULD_NOT_APPEAR");
+      expect(line).not.toContain("SESSION_CONTENT_SHOULD_NOT_APPEAR");
+      expect(line).not.toContain("telegram");
+    }
   });
 
   it("accepts threadId on announce delivery add params", async () => {
