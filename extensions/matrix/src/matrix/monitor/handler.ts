@@ -1205,7 +1205,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId: _threadRootId,
         thread,
-        effectiveAllowFrom,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
