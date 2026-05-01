@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { repairSessionFileIfNeeded } from "./session-file-repair.js";
+import { BLANK_USER_FALLBACK_TEXT, repairSessionFileIfNeeded } from "./session-file-repair.js";
 
 function buildSessionHeaderAndMessage() {
   const header = {
@@ -145,7 +145,10 @@ describe("repairSessionFileIfNeeded", () => {
     ]);
   });
 
-  it("drops persisted blank user text messages", async () => {
+  it("rewrites persisted blank user text messages with (continue) placeholder (#75313)", async () => {
+    // Regression for openclaw/openclaw#75313: dropping blank user entries can leave
+    // a session with no user role at all (e.g. [system, assistant, …]), which strict
+    // OpenAI-compatible chat templates reject with "No user query found in messages."
     const { file } = await createTempSessionPath();
     const { header, message } = buildSessionHeaderAndMessage();
     const blankUserEntry = {
@@ -165,16 +168,19 @@ describe("repairSessionFileIfNeeded", () => {
     const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
 
     expect(result.repaired).toBe(true);
-    expect(result.droppedBlankUserMessages).toBe(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("dropped 1 blank user message(s)");
+    expect(result.rewrittenBlankUserMessages).toBe(1);
+    expect(warn.mock.calls[0]?.[0]).toContain("rewrote 1 blank user message(s) with (continue)");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(2);
-    expect(JSON.parse(repairedLines[1])?.id).toBe("msg-1");
+    expect(repairedLines).toHaveLength(3);
+    const blankEntry = JSON.parse(repairedLines[1] ?? "{}");
+    expect(blankEntry.id).toBe("msg-blank");
+    expect(blankEntry.message.content).toEqual([{ type: "text", text: BLANK_USER_FALLBACK_TEXT }]);
+    expect(JSON.parse(repairedLines[2])?.id).toBe("msg-1");
   });
 
-  it("removes blank user text blocks while preserving media blocks", async () => {
+  it("rewrites blank user text blocks while preserving media blocks", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();
     const mediaUserEntry = {
@@ -204,7 +210,7 @@ describe("repairSessionFileIfNeeded", () => {
     ]);
   });
 
-  it("reports both drops and rewrites in the warn message when both occur", async () => {
+  it("reports assistant rewrites and blank-user rewrites in the warn message when both occur", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();
     const poisonedAssistantEntry = {
@@ -222,7 +228,24 @@ describe("repairSessionFileIfNeeded", () => {
         stopReason: "error",
       },
     };
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(poisonedAssistantEntry)}\n{"type":"message"`;
+    const blankUserEntry = {
+      type: "message",
+      id: "msg-blank",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "   " }],
+      },
+    };
+    const userMessage = {
+      type: "message",
+      id: "msg-3",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "hello" },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(poisonedAssistantEntry)}\n${JSON.stringify(blankUserEntry)}\n${JSON.stringify(userMessage)}\n{"type":"message"`;
     await fs.writeFile(file, original, "utf-8");
 
     const warn = vi.fn();
@@ -231,9 +254,11 @@ describe("repairSessionFileIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
     expect(result.rewrittenAssistantMessages).toBe(1);
+    expect(result.rewrittenBlankUserMessages).toBe(1);
     const warnMessage = warn.mock.calls[0]?.[0] as string;
     expect(warnMessage).toContain("dropped 1 malformed line(s)");
     expect(warnMessage).toContain("rewrote 1 assistant message(s)");
+    expect(warnMessage).toContain("rewrote 1 blank user message(s) with (continue)");
   });
 
   it("does not rewrite silent-reply turns (stopReason=stop, content=[]) on disk", async () => {

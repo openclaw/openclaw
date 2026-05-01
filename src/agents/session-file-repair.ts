@@ -6,7 +6,7 @@ type RepairReport = {
   repaired: boolean;
   droppedLines: number;
   rewrittenAssistantMessages?: number;
-  droppedBlankUserMessages?: number;
+  rewrittenBlankUserMessages?: number;
   rewrittenUserMessages?: number;
   backupPath?: string;
   reason?: string;
@@ -71,15 +71,31 @@ function rewriteAssistantEntryWithEmptyContent(entry: SessionMessageEntry): Sess
   };
 }
 
-type UserEntryRepair =
-  | { kind: "drop" }
-  | { kind: "rewrite"; entry: SessionMessageEntry }
-  | { kind: "keep" };
+type UserEntryRepair = { kind: "rewrite"; entry: SessionMessageEntry } | { kind: "keep" };
+
+// Synthetic user text used when all content blocks are blank.  Dropping a
+// blank user entry entirely can leave a session with no user role at all
+// (e.g. [system, assistant, assistant, …]), which strict OpenAI-compatible
+// chat templates reject with "No user query found in messages."
+// See openclaw/openclaw#75313.
+export const BLANK_USER_FALLBACK_TEXT = "(continue)";
 
 function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEntryRepair {
   const content = entry.message.content;
   if (typeof content === "string") {
-    return content.trim() ? { kind: "keep" } : { kind: "drop" };
+    if (!content.trim()) {
+      return {
+        kind: "rewrite",
+        entry: {
+          ...entry,
+          message: {
+            ...entry.message,
+            content: [{ type: "text", text: BLANK_USER_FALLBACK_TEXT }],
+          },
+        },
+      };
+    }
+    return { kind: "keep" };
   }
   if (!Array.isArray(content)) {
     return { kind: "keep" };
@@ -100,8 +116,19 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
     touched = true;
     return false;
   });
+  // All text blocks were blank — rewrite with synthetic placeholder instead
+  // of dropping, so the session always retains at least one user role entry.
   if (nextContent.length === 0) {
-    return { kind: "drop" };
+    return {
+      kind: "rewrite",
+      entry: {
+        ...entry,
+        message: {
+          ...entry.message,
+          content: [{ type: "text", text: BLANK_USER_FALLBACK_TEXT }],
+        },
+      },
+    };
   }
   if (!touched) {
     return { kind: "keep" };
@@ -121,7 +148,7 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
 function buildRepairSummaryParts(params: {
   droppedLines: number;
   rewrittenAssistantMessages: number;
-  droppedBlankUserMessages: number;
+  rewrittenBlankUserMessages: number;
   rewrittenUserMessages: number;
 }): string {
   const parts: string[] = [];
@@ -131,8 +158,10 @@ function buildRepairSummaryParts(params: {
   if (params.rewrittenAssistantMessages > 0) {
     parts.push(`rewrote ${params.rewrittenAssistantMessages} assistant message(s)`);
   }
-  if (params.droppedBlankUserMessages > 0) {
-    parts.push(`dropped ${params.droppedBlankUserMessages} blank user message(s)`);
+  if (params.rewrittenBlankUserMessages > 0) {
+    parts.push(
+      `rewrote ${params.rewrittenBlankUserMessages} blank user message(s) with (continue)`,
+    );
   }
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
@@ -168,7 +197,7 @@ export async function repairSessionFileIfNeeded(params: {
   const entries: unknown[] = [];
   let droppedLines = 0;
   let rewrittenAssistantMessages = 0;
-  let droppedBlankUserMessages = 0;
+  let rewrittenBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
 
   for (const line of lines) {
@@ -190,13 +219,19 @@ export async function repairSessionFileIfNeeded(params: {
         ((entry as { message: { role?: unknown } }).message?.role ?? undefined) === "user"
       ) {
         const repairedUser = repairUserEntryWithBlankTextContent(entry as SessionMessageEntry);
-        if (repairedUser.kind === "drop") {
-          droppedBlankUserMessages += 1;
-          continue;
-        }
         if (repairedUser.kind === "rewrite") {
+          const msg = (repairedUser.entry as { message?: { content?: unknown } }).message;
+          const content = msg?.content;
+          if (
+            Array.isArray(content) &&
+            content.length === 1 &&
+            (content[0] as { text?: string })?.text === BLANK_USER_FALLBACK_TEXT
+          ) {
+            rewrittenBlankUserMessages += 1;
+          } else {
+            rewrittenUserMessages += 1;
+          }
           entries.push(repairedUser.entry);
-          rewrittenUserMessages += 1;
           continue;
         }
       }
@@ -220,7 +255,7 @@ export async function repairSessionFileIfNeeded(params: {
   if (
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
-    droppedBlankUserMessages === 0 &&
+    rewrittenBlankUserMessages === 0 &&
     rewrittenUserMessages === 0
   ) {
     return { repaired: false, droppedLines: 0 };
@@ -254,7 +289,7 @@ export async function repairSessionFileIfNeeded(params: {
       repaired: false,
       droppedLines,
       rewrittenAssistantMessages,
-      droppedBlankUserMessages,
+      rewrittenBlankUserMessages,
       rewrittenUserMessages,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
@@ -264,7 +299,7 @@ export async function repairSessionFileIfNeeded(params: {
     `session file repaired: ${buildRepairSummaryParts({
       droppedLines,
       rewrittenAssistantMessages,
-      droppedBlankUserMessages,
+      rewrittenBlankUserMessages,
       rewrittenUserMessages,
     })} (${path.basename(sessionFile)})`,
   );
@@ -272,7 +307,7 @@ export async function repairSessionFileIfNeeded(params: {
     repaired: true,
     droppedLines,
     rewrittenAssistantMessages,
-    droppedBlankUserMessages,
+    rewrittenBlankUserMessages,
     rewrittenUserMessages,
     backupPath,
   };
