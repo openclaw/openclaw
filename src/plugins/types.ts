@@ -2515,7 +2515,14 @@ export type OpenClawPluginApi = {
   registerSessionSchedulerJob: (
     job: PluginSessionSchedulerJobRegistration,
   ) => PluginSessionSchedulerJobHandle | undefined;
-  /** Send one or more host-validated files to the active channel for a session. */
+  /**
+   * Send one or more host-validated files to the active channel for a session.
+   *
+   * This API is intended for bundled plugins running with the host channel/session
+   * integration available. Calls may resolve to `{ ok: false }` instead of attaching
+   * files when global side effects are disabled or when the required plugin/channel
+   * runtime is not loaded, so callers must handle rejection via the returned result.
+   */
   sendSessionAttachment: (
     params: PluginSessionAttachmentParams,
   ) => Promise<PluginSessionAttachmentResult>;

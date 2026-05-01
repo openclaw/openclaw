@@ -83,6 +83,16 @@ describe("plugin session attachments", () => {
     expect(
       resolveAttachmentDelivery({
         channel: "telegram",
+        captionFormat: "plain",
+        channelHints: { telegram: { parseMode: "HTML" } },
+      }),
+    ).toEqual({
+      parseMode: "HTML",
+      escapePlainHtmlCaption: true,
+    });
+    expect(
+      resolveAttachmentDelivery({
+        channel: "telegram",
         channelHints: {
           telegram: { disableNotification: true, forceDocumentMime: "application/pdf" },
         },
@@ -186,6 +196,7 @@ describe("plugin session attachments", () => {
           files: [{ path: filePath }],
           text: "1 < 2 & 3 > 2",
           captionFormat: "plain",
+          channelHints: { telegram: { parseMode: "HTML" } },
         }),
       ).resolves.toMatchObject({
         ok: true,
@@ -196,6 +207,43 @@ describe("plugin session attachments", () => {
       expect(workflowMocks.sendMessage.mock.calls[0]?.[0]).toMatchObject({
         content: "1 &lt; 2 &amp; 3 &gt; 2",
         parseMode: "HTML",
+      });
+    });
+  });
+
+  it("prefers the thread encoded in a threaded session key over stale stored routes", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      const baseKey = "agent:main:telegram:group:12345";
+      const threadKey = `${baseKey}:thread:99`;
+      await updateSessionStore(storePath, (store) => {
+        store[threadKey] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "group:12345",
+            threadId: 42,
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      workflowMocks.sendMessage.mockImplementation(async (params: Record<string, unknown>) => ({
+        channel: params.channel,
+        to: params.to,
+        via: "direct" as const,
+        mediaUrl: null,
+        result: { channel: params.channel, messageId: "attachment-1" },
+      }));
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: threadKey,
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toMatchObject({ ok: true, channel: "telegram", count: 1 });
+      expect(workflowMocks.sendMessage.mock.calls[0]?.[0]).toMatchObject({
+        threadId: "99",
       });
     });
   });
@@ -268,7 +316,7 @@ describe("plugin session attachments", () => {
   });
 
   it("rejects malformed or oversized attachment inputs before delivery", async () => {
-    await withSessionStore(async ({ storePath, stateDir }) => {
+    await withSessionStore(async ({ storePath, stateDir, filePath }) => {
       await updateSessionStore(storePath, (store) => {
         store["agent:main:main"] = {
           sessionId: "session-id",
@@ -317,6 +365,29 @@ describe("plugin session attachments", () => {
       ).resolves.toEqual({
         ok: false,
         error: "attachment files exceed 5 bytes total",
+      });
+      const symlinkPath = path.join(stateDir, "linked.txt");
+      await fs.symlink(first, symlinkPath);
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: symlinkPath }],
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: `attachment file symlinks are not allowed: ${symlinkPath}`,
+      });
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: filePath }],
+          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: `attachment file MIME mismatch for ${filePath}: expected application/pdf, got text/plain`,
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
     });

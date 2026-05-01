@@ -1,7 +1,8 @@
-import { stat } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { detectMime, normalizeMimeType } from "../media/mime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   PluginAttachmentChannelHints,
@@ -54,15 +55,17 @@ export function resolveAttachmentDelivery(params: {
   const channel = params.channel.trim().toLowerCase();
   if (channel === "telegram") {
     const hint = params.channelHints?.telegram;
-    const parseMode = hint?.parseMode ?? fallbackParseMode;
-    const escapePlainHtmlCaption = params.captionFormat === "plain" && !hint?.parseMode;
+    const parseMode =
+      hint?.parseMode ?? (params.captionFormat === "plain" ? "HTML" : fallbackParseMode);
+    const escapePlainHtmlCaption = params.captionFormat === "plain" && parseMode === "HTML";
+    const forceDocumentMime = normalizeMimeType(hint?.forceDocumentMime);
     return {
-      parseMode: escapePlainHtmlCaption ? "HTML" : parseMode,
+      ...(parseMode ? { parseMode } : {}),
       ...(escapePlainHtmlCaption ? { escapePlainHtmlCaption: true } : {}),
       ...(hint?.disableNotification !== undefined
         ? { disableNotification: hint.disableNotification }
         : {}),
-      ...(hint?.forceDocumentMime ? { forceDocumentMime: hint.forceDocumentMime } : {}),
+      ...(forceDocumentMime ? { forceDocumentMime } : {}),
     };
   }
   if (channel === "discord") {
@@ -81,6 +84,7 @@ export function resolveAttachmentDelivery(params: {
 async function validateAttachmentFiles(
   files: PluginSessionAttachmentParams["files"],
   maxBytes: number,
+  options?: { forceDocumentMime?: string },
 ): Promise<string[] | { error: string }> {
   if (files.length > MAX_ATTACHMENT_FILES) {
     return { error: `at most ${MAX_ATTACHMENT_FILES} attachment files are allowed` };
@@ -95,9 +99,22 @@ async function validateAttachmentFiles(
     if (!filePath) {
       return { error: "attachment file path is required" };
     }
-    const info = await stat(filePath).catch(() => undefined);
+    const info = await lstat(filePath).catch(() => undefined);
+    if (info?.isSymbolicLink()) {
+      return { error: `attachment file symlinks are not allowed: ${filePath}` };
+    }
     if (!info?.isFile()) {
       return { error: `attachment file not found: ${filePath}` };
+    }
+    if (options?.forceDocumentMime) {
+      const detectedMime = normalizeMimeType(await detectMime({ filePath }));
+      if (detectedMime !== options.forceDocumentMime) {
+        return {
+          error:
+            `attachment file MIME mismatch for ${filePath}: ` +
+            `expected ${options.forceDocumentMime}, got ${detectedMime ?? "unknown"}`,
+        };
+      }
     }
     if (info.size > maxBytes) {
       return { error: `attachment file exceeds ${maxBytes} bytes: ${filePath}` };
@@ -135,10 +152,6 @@ export async function sendPluginSessionAttachment(
     typeof params.maxBytes === "number" && Number.isFinite(params.maxBytes)
       ? Math.min(DEFAULT_ATTACHMENT_MAX_BYTES, Math.max(1, Math.floor(params.maxBytes)))
       : DEFAULT_ATTACHMENT_MAX_BYTES;
-  const validated = await validateAttachmentFiles(params.files, maxBytes);
-  if (!Array.isArray(validated)) {
-    return { ok: false, error: validated.error };
-  }
   const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey, { cfg: params.config });
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
@@ -152,8 +165,14 @@ export async function sendPluginSessionAttachment(
     captionFormat: params.captionFormat,
     channelHints: params.channelHints,
   });
+  const validated = await validateAttachmentFiles(params.files, maxBytes, {
+    forceDocumentMime: resolvedDelivery.forceDocumentMime,
+  });
+  if (!Array.isArray(validated)) {
+    return { ok: false, error: validated.error };
+  }
   const resolvedThreadId =
-    resolvedDelivery.threadTs ?? explicitThreadId ?? deliveryThreadId ?? fallbackThreadId;
+    resolvedDelivery.threadTs ?? explicitThreadId ?? fallbackThreadId ?? deliveryThreadId;
   let result: Awaited<ReturnType<SendMessage>>;
   try {
     const sendMessage = await loadSendMessage();

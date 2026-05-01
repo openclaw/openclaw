@@ -159,6 +159,10 @@ export type PluginAttachmentChannelHints = {
   telegram?: {
     parseMode?: "HTML";
     disableNotification?: boolean;
+    /**
+     * Require host-side detection to match this MIME before forcing document delivery.
+     * Mismatched files are rejected before the outbound adapter is called.
+     */
     forceDocumentMime?: string;
   };
   slack?: {

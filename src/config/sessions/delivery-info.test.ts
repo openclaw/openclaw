@@ -105,6 +105,35 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("does not build the normalized index when an exact routable key is present", () => {
+    const sessionKey = "agent:main:webchat:dm:user-123";
+    storeState.store = new Proxy(
+      {
+        [sessionKey]: buildEntry({
+          channel: "webchat",
+          to: "webchat:user-123",
+          accountId: "default",
+        }),
+      },
+      {
+        ownKeys() {
+          throw new Error("normalized index should not be built");
+        },
+      },
+    );
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "webchat",
+        to: "webchat:user-123",
+        accountId: "default",
+      },
+      threadId: undefined,
+    });
+  });
+
   it("falls back to base sessions for :thread: keys", () => {
     const baseKey = "agent:main:slack:channel:C0123ABC";
     const threadKey = `${baseKey}:thread:1234567890.123456`;

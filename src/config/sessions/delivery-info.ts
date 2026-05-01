@@ -105,15 +105,24 @@ function findSessionEntryInStore(
   for (const key of keys) {
     const trimmed = key.trim();
     const normalized = normalizeLowercaseStringOrEmpty(key);
+    let foundRoutableCandidate = false;
     if (Object.prototype.hasOwnProperty.call(store, normalized)) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(store[normalized]),
+      );
       acceptCandidate(store[normalized]);
     }
     if (trimmed !== normalized && Object.prototype.hasOwnProperty.call(store, trimmed)) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(store[trimmed]),
+      );
       acceptCandidate(store[trimmed]);
     }
-    normalizedIndex ??= buildFreshestSessionEntryIndex(store);
-    const freshest = normalizedIndex.get(normalized);
-    acceptCandidate(freshest);
+    if (!foundRoutableCandidate) {
+      normalizedIndex ??= buildFreshestSessionEntryIndex(store);
+      const freshest = normalizedIndex.get(normalized);
+      acceptCandidate(freshest);
+    }
   }
   return bestEntry;
 }
