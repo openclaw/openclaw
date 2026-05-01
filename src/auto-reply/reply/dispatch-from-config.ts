@@ -76,6 +76,7 @@ import type { BlockReplyContext } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
+import type { BlockReplyResult } from "./block-reply-pipeline.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import {
   createInternalHookEvent,
@@ -1331,7 +1332,7 @@ export async function dispatchReplyFromConfig(
         },
         onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => {
           markProgress();
-          const run = async () => {
+          const run = async (): Promise<BlockReplyResult | void> => {
             if (
               payload.isReasoning !== true &&
               resolveSendableOutboundReplyParts(payload).hasContent
@@ -1398,12 +1399,16 @@ export async function dispatchReplyFromConfig(
               accountId: replyRoute.accountId,
             });
             const normalizedPayload = await normalizeReplyMediaPayload(ttsPayload);
+            const reply = resolveSendableOutboundReplyParts(normalizedPayload);
+            const confirmedMedia =
+              reply.mediaUrls.length > 0 ? { sentMediaUrls: reply.mediaUrls } : undefined;
             if (shouldRouteToOriginating) {
               await sendPayloadAsync(normalizedPayload, context?.abortSignal, false);
             } else {
               markInboundDedupeReplayUnsafe();
               dispatcher.sendBlockReply(normalizedPayload);
             }
+            return confirmedMedia;
           };
           return run();
         },
