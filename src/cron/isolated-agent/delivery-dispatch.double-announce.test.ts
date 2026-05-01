@@ -1287,4 +1287,45 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(second.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
   });
+
+  it("does not collapse same-slot deliveries to different threadIds (topic/thread targets)", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+    vi.mocked(deliverOutboundPayloads).mockResolvedValue([{ ok: true } as never]);
+
+    const scheduledAtMs = Date.now();
+    // Two deliveries share the same job, scheduled slot, channel, accountId,
+    // and recipient `to`, but target different topic/thread IDs. Both must
+    // fire — the slot guard should treat them as distinct destinations,
+    // matching the execution-level idempotency key shape.
+    const params1 = makeBaseParams({
+      synthesizedText: "Morning briefing.",
+      runStartedAt: scheduledAtMs,
+    });
+    params1.resolvedDelivery = { ...params1.resolvedDelivery, threadId: "topic-100" };
+    (params1.job as { state?: { nextRunAtMs?: number } }).state = {
+      nextRunAtMs: scheduledAtMs,
+    };
+
+    const params2 = makeBaseParams({
+      synthesizedText: "Morning briefing.",
+      runStartedAt: scheduledAtMs + 250,
+    });
+    params2.resolvedDelivery = { ...params2.resolvedDelivery, threadId: "topic-200" };
+    (params2.job as { state?: { nextRunAtMs?: number } }).state = {
+      nextRunAtMs: scheduledAtMs,
+    };
+
+    const first = await dispatchCronDelivery(params1);
+    expect(first.delivered).toBe(true);
+    expect(first.deliveryAttempted).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+
+    const second = await dispatchCronDelivery(params2);
+    expect(second.delivered).toBe(true);
+    expect(second.deliveryAttempted).toBe(true);
+    // Both threads must receive the announcement; the slot cache must not
+    // short-circuit the second delivery just because the chat/account match.
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
+  });
 });

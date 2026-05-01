@@ -399,7 +399,13 @@ function buildSlotDeliveryKey(
 ): string {
   const normalizedTo = normalizeDeliveryTarget(delivery.channel, delivery.to);
   const accountId = delivery.accountId?.trim() ?? "";
-  return `cron-slot:v1:${jobId}:${scheduledAtMs}:${delivery.channel}:${accountId}:${normalizedTo}`;
+  // Match the threadId normalization used by buildDirectCronDeliveryIdempotencyKey
+  // so the slot guard identifies the same destination tuple. Without this,
+  // a same-slot replay to a different topic/thread on the same chat/account
+  // would be silently swallowed.
+  const threadId =
+    delivery.threadId == null || delivery.threadId === "" ? "" : String(delivery.threadId);
+  return `cron-slot:v1:${jobId}:${scheduledAtMs}:${delivery.channel}:${accountId}:${normalizedTo}:${threadId}`;
 }
 
 function pruneSlotDeliveries(now: number) {
