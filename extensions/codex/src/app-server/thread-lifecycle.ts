@@ -223,7 +223,7 @@ export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): st
   const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
     "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
-    "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
+    "Preserve the user's existing channel/session context. For normal replies to the current conversation, answer in your final response; OpenClaw will deliver it. Use the OpenClaw messaging tool only for explicit messaging actions such as reading, reacting, sending to another conversation, or posting a requested notification.",
     promptOverlay,
     params.extraSystemPrompt,
     params.skillsSnapshot?.prompt,
