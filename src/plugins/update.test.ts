@@ -125,6 +125,7 @@ function createClawHubInstallConfig(params: {
   clawhubPackage: string;
   clawhubFamily: "bundle-plugin" | "code-plugin";
   clawhubChannel: "community" | "official" | "private";
+  version?: string;
 }): OpenClawConfig {
   return {
     plugins: {
@@ -137,6 +138,7 @@ function createClawHubInstallConfig(params: {
           clawhubPackage: params.clawhubPackage,
           clawhubFamily: params.clawhubFamily,
           clawhubChannel: params.clawhubChannel,
+          ...(params.version ? { version: params.version } : {}),
         },
       },
     },
@@ -1665,6 +1667,200 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(result.changed).toBe(false);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "path",
+    });
+  });
+
+  it("switches an older external same-id plugin install back to the bundled plugin", async () => {
+    const bundledPath = createInstalledPackageDir({
+      name: "@openclaw/whatsapp",
+      version: "2026.4.25",
+    });
+    const externalPath = createInstalledPackageDir({
+      name: "@openclaw/whatsapp",
+      version: "2026.2.09",
+    });
+    mockBundledSources(
+      createBundledSource({
+        pluginId: "whatsapp",
+        localPath: bundledPath,
+        npmSpec: "@openclaw/whatsapp",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      config: {
+        plugins: {
+          load: { paths: [externalPath] },
+          installs: {
+            whatsapp: {
+              source: "clawhub",
+              spec: "clawhub:whatsapp",
+              installPath: externalPath,
+              version: "2026.2.09",
+              clawhubUrl: "https://clawhub.ai",
+              clawhubPackage: "whatsapp",
+              clawhubFamily: "code-plugin",
+              clawhubChannel: "official",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.summary.switchedToBundled).toEqual(["whatsapp"]);
+    expect(result.summary.warnings).toEqual([
+      "Using bundled whatsapp 2026.4.25 instead of older clawhub install 2026.2.09.",
+    ]);
+    expect(result.config.plugins?.load?.paths).toEqual([bundledPath]);
+    expectBundledPathInstall({
+      install: result.config.plugins?.installs?.whatsapp,
+      sourcePath: bundledPath,
+      installPath: bundledPath,
+      spec: "clawhub:whatsapp",
+    });
+    expect(result.config.plugins?.installs?.whatsapp?.version).toBe("2026.4.25");
+  });
+
+  it("keeps an external same-id plugin install when it is newer than the bundled plugin", async () => {
+    const bundledPath = createInstalledPackageDir({
+      name: "@openclaw/whatsapp",
+      version: "2026.4.25",
+    });
+    const externalPath = createInstalledPackageDir({
+      name: "@openclaw/whatsapp",
+      version: "2026.5.1",
+    });
+    mockBundledSources(
+      createBundledSource({
+        pluginId: "whatsapp",
+        localPath: bundledPath,
+        npmSpec: "@openclaw/whatsapp",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      config: {
+        plugins: {
+          load: { paths: [externalPath] },
+          installs: {
+            whatsapp: {
+              source: "clawhub",
+              spec: "clawhub:whatsapp",
+              installPath: externalPath,
+              version: "2026.5.1",
+              clawhubUrl: "https://clawhub.ai",
+              clawhubPackage: "whatsapp",
+              clawhubFamily: "code-plugin",
+              clawhubChannel: "official",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.changed).toBe(false);
+    expect(result.summary.switchedToBundled).toEqual([]);
+    expect(result.summary.warnings).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toEqual([externalPath]);
+    expect(result.config.plugins?.installs?.whatsapp).toMatchObject({
+      source: "clawhub",
+      installPath: externalPath,
+      version: "2026.5.1",
+    });
+  });
+
+  it("switches to a newer bundled beta plugin when the external install is older", async () => {
+    const bundledPath = createInstalledPackageDir({
+      name: "@openclaw/whatsapp",
+      version: "2026.5.1-beta.1",
+    });
+    const externalPath = createInstalledPackageDir({
+      name: "@openclaw/whatsapp",
+      version: "2026.4.25",
+    });
+    mockBundledSources(
+      createBundledSource({
+        pluginId: "whatsapp",
+        localPath: bundledPath,
+        npmSpec: "@openclaw/whatsapp",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "beta",
+      config: {
+        plugins: {
+          load: { paths: [externalPath] },
+          installs: {
+            whatsapp: {
+              source: "clawhub",
+              spec: "clawhub:whatsapp",
+              installPath: externalPath,
+              version: "2026.4.25",
+              clawhubUrl: "https://clawhub.ai",
+              clawhubPackage: "whatsapp",
+              clawhubFamily: "code-plugin",
+              clawhubChannel: "official",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.summary.switchedToBundled).toEqual(["whatsapp"]);
+    expect(result.config.plugins?.load?.paths).toEqual([bundledPath]);
+    expect(result.config.plugins?.installs?.whatsapp).toMatchObject({
+      source: "path",
+      installPath: bundledPath,
+      version: "2026.5.1-beta.1",
+    });
+  });
+
+  it("keeps npm same-id plugin installs on the npm update path", async () => {
+    const bundledPath = createInstalledPackageDir({
+      name: "@openclaw/whatsapp",
+      version: "2026.4.25",
+    });
+    const npmPath = createInstalledPackageDir({
+      name: "@openclaw/whatsapp",
+      version: "2026.2.9",
+    });
+    mockBundledSources(
+      createBundledSource({
+        pluginId: "whatsapp",
+        localPath: bundledPath,
+        npmSpec: "@openclaw/whatsapp",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      config: {
+        plugins: {
+          load: { paths: [bundledPath, npmPath] },
+          installs: {
+            whatsapp: {
+              source: "npm",
+              spec: "@openclaw/whatsapp",
+              installPath: npmPath,
+              version: "2026.2.9",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.summary.switchedToBundled).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toEqual([npmPath]);
+    expect(result.config.plugins?.installs?.whatsapp).toMatchObject({
+      source: "npm",
+      installPath: npmPath,
+      version: "2026.2.9",
     });
   });
 

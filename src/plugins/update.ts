@@ -464,6 +464,118 @@ function createPluginUpdateIntegrityDriftHandler(params: {
   };
 }
 
+type ComparablePluginVersion = {
+  parts: [number, number, number];
+  prerelease?: string;
+};
+
+function parseComparablePluginVersion(version: string | undefined): ComparablePluginVersion | null {
+  const value = version?.trim();
+  if (!value) {
+    return null;
+  }
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+.*)?$/.exec(value);
+  if (!match) {
+    return null;
+  }
+  return {
+    parts: [Number(match[1]), Number(match[2]), Number(match[3])],
+    ...(match[4] ? { prerelease: match[4] } : {}),
+  };
+}
+
+function comparePrereleaseVersions(left: string, right: string) {
+  const leftParts = left.split(".");
+  const rightParts = right.split(".");
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let i = 0; i < length; i++) {
+    const leftPart = leftParts[i];
+    const rightPart = rightParts[i];
+    if (leftPart === undefined) {
+      return -1;
+    }
+    if (rightPart === undefined) {
+      return 1;
+    }
+    const leftNumber = /^\d+$/.test(leftPart) ? Number(leftPart) : undefined;
+    const rightNumber = /^\d+$/.test(rightPart) ? Number(rightPart) : undefined;
+    if (leftNumber !== undefined && rightNumber !== undefined) {
+      if (leftNumber !== rightNumber) {
+        return leftNumber > rightNumber ? 1 : -1;
+      }
+      continue;
+    }
+    if (leftNumber !== undefined) {
+      return -1;
+    }
+    if (rightNumber !== undefined) {
+      return 1;
+    }
+    if (leftPart !== rightPart) {
+      return leftPart > rightPart ? 1 : -1;
+    }
+  }
+  return 0;
+}
+
+function comparePluginVersions(left: string | undefined, right: string | undefined) {
+  const leftVersion = parseComparablePluginVersion(left);
+  const rightVersion = parseComparablePluginVersion(right);
+  if (!leftVersion || !rightVersion) {
+    return undefined;
+  }
+  for (let i = 0; i < leftVersion.parts.length; i++) {
+    if (leftVersion.parts[i] > rightVersion.parts[i]) {
+      return 1;
+    }
+    if (leftVersion.parts[i] < rightVersion.parts[i]) {
+      return -1;
+    }
+  }
+  if (!leftVersion.prerelease && rightVersion.prerelease) {
+    return 1;
+  }
+  if (leftVersion.prerelease && !rightVersion.prerelease) {
+    return -1;
+  }
+  if (leftVersion.prerelease && rightVersion.prerelease) {
+    return comparePrereleaseVersions(leftVersion.prerelease, rightVersion.prerelease);
+  }
+  return 0;
+}
+
+async function readInstallRecordVersion(record: PluginInstallRecord): Promise<string | undefined> {
+  if (record.version?.trim()) {
+    return record.version;
+  }
+  if (!record.installPath?.trim()) {
+    return undefined;
+  }
+  try {
+    return await readInstalledPackageVersion(resolveUserPath(record.installPath));
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveNewerBundledPluginVersion(params: {
+  bundledPath: string;
+  record: PluginInstallRecord;
+}): Promise<{ bundledVersion: string; recordVersion: string } | undefined> {
+  const [bundledVersion, recordVersion] = await Promise.all([
+    readInstalledPackageVersion(params.bundledPath),
+    readInstallRecordVersion(params.record),
+  ]);
+  if (!bundledVersion || !recordVersion) {
+    return undefined;
+  }
+  const comparison = comparePluginVersions(bundledVersion, recordVersion);
+  if (comparison === undefined || comparison <= 0) {
+    return undefined;
+  }
+  return { bundledVersion, recordVersion };
+}
+
 export async function updateNpmInstalledPlugins(params: {
   config: OpenClawConfig;
   logger?: PluginUpdateLogger;
@@ -1029,6 +1141,39 @@ export async function syncPluginsForUpdateChannel(params: {
       const bundledInfo = bundled.get(pluginId);
       if (!bundledInfo) {
         continue;
+      }
+
+      if (record.source === "clawhub") {
+        const newerBundled = await resolveNewerBundledPluginVersion({
+          bundledPath: bundledInfo.localPath,
+          record,
+        });
+        if (newerBundled) {
+          if (record.sourcePath) {
+            loadHelpers.removePath(record.sourcePath);
+          }
+          if (record.installPath) {
+            loadHelpers.removePath(record.installPath);
+          }
+          loadHelpers.addPath(bundledInfo.localPath);
+          next = recordPluginInstall(next, {
+            pluginId,
+            source: "path",
+            sourcePath: bundledInfo.localPath,
+            installPath: bundledInfo.localPath,
+            spec: record.spec ?? bundledInfo.npmSpec,
+            version: newerBundled.bundledVersion,
+          });
+          installs = next.plugins?.installs ?? {};
+          summary.switchedToBundled.push(pluginId);
+          const message =
+            `Using bundled ${pluginId} ${newerBundled.bundledVersion} instead of ` +
+            `older ${record.source} install ${newerBundled.recordVersion}.`;
+          summary.warnings.push(message);
+          logger.warn?.(message);
+          changed = true;
+          continue;
+        }
       }
 
       if (record.source === "npm") {
