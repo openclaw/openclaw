@@ -94,7 +94,10 @@ function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonO
   if (typeof main === "string") {
     return hasRuntimeDepEntryFile(packageDir, main);
   }
-  return true;
+  if (packageJson.exports !== undefined) {
+    return true;
+  }
+  return hasRuntimeDepEntryFile(packageDir, "index");
 }
 
 function isRuntimeDepSatisfied(rootDir: string, dep: { name: string; version: string }): boolean {

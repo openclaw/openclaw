@@ -810,11 +810,7 @@ describe("installBundledRuntimeDeps", () => {
     const installExecutionRoot = makeTempDir();
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       const cwd = String(options?.cwd ?? "");
-      fs.mkdirSync(path.join(cwd, "node_modules", "tokenjuice"), { recursive: true });
-      fs.writeFileSync(
-        path.join(cwd, "node_modules", "tokenjuice", "package.json"),
-        JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
-      );
+      writeInstalledPackage(cwd, "tokenjuice", "0.6.1");
       return {
         pid: 123,
         output: [],
@@ -1028,11 +1024,7 @@ describe("installBundledRuntimeDeps", () => {
     const installExecutionRoot = path.join(installRoot, ".openclaw-install-stage");
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       const cwd = String(options?.cwd ?? "");
-      fs.mkdirSync(path.join(cwd, "node_modules", "tokenjuice"), { recursive: true });
-      fs.writeFileSync(
-        path.join(cwd, "node_modules", "tokenjuice", "package.json"),
-        JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
-      );
+      writeInstalledPackage(cwd, "tokenjuice", "0.6.1");
       return {
         pid: 123,
         output: [],
@@ -1083,11 +1075,7 @@ describe("installBundledRuntimeDeps", () => {
     });
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       const cwd = String(options?.cwd ?? "");
-      fs.mkdirSync(path.join(cwd, "node_modules", "tokenjuice"), { recursive: true });
-      fs.writeFileSync(
-        path.join(cwd, "node_modules", "tokenjuice", "package.json"),
-        JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
-      );
+      writeInstalledPackage(cwd, "tokenjuice", "0.6.1");
       return {
         pid: 123,
         output: [],
@@ -1450,6 +1438,41 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n", "utf8");
 
     expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["jszip@^3.10.1"])).not.toThrow();
+  });
+
+  it("accepts staged runtime deps that rely on the default package entry", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "alpha-runtime", version: "1.0.0" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageDir, "index.js"), "export {};\n", "utf8");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(true);
+    expect(() =>
+      assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"]),
+    ).not.toThrow();
+  });
+
+  it("reports staged runtime deps as missing when the default package entry is absent", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "alpha-runtime", version: "1.0.0" }),
+      "utf8",
+    );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(false);
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"])).toThrow(
+      /alpha-runtime@1\.0\.0/,
+    );
   });
 
   it("reports staged runtime deps as missing when a declared entry file is absent", () => {
@@ -2367,13 +2390,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       env,
       installDeps: (params) => {
         calls.push(params);
-        fs.mkdirSync(path.join(params.installRoot, "node_modules", "@slack", "web-api"), {
-          recursive: true,
-        });
-        fs.writeFileSync(
-          path.join(params.installRoot, "node_modules", "@slack", "web-api", "package.json"),
-          JSON.stringify({ name: "@slack/web-api", version: "7.15.1" }),
-        );
+        writeInstalledPackage(params.installRoot, "@slack/web-api", "7.15.1");
       },
       pluginId: "slack",
       pluginRoot,
@@ -2529,11 +2546,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       calls.push(params);
       for (const spec of params.installSpecs ?? params.missingSpecs) {
         const name = spec.slice(0, spec.lastIndexOf("@"));
-        fs.mkdirSync(path.join(params.installRoot, "node_modules", name), { recursive: true });
-        fs.writeFileSync(
-          path.join(params.installRoot, "node_modules", name, "package.json"),
-          JSON.stringify({ name, version: spec.slice(spec.lastIndexOf("@") + 1) }),
-        );
+        writeInstalledPackage(params.installRoot, name, spec.slice(spec.lastIndexOf("@") + 1));
       }
     };
 
@@ -3073,11 +3086,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       path.join(mirroredPluginRoot, "package.json"),
       JSON.stringify({ dependencies: { grammy: "^1.42.0" } }),
     );
-    fs.mkdirSync(path.join(installRoot, "node_modules", "grammy"), { recursive: true });
-    fs.writeFileSync(
-      path.join(installRoot, "node_modules", "grammy", "package.json"),
-      JSON.stringify({ name: "grammy", version: "1.42.0" }),
-    );
+    writeInstalledPackage(installRoot, "grammy", "1.42.0");
     writeGeneratedRuntimeDepsManifest(installRoot, ["grammy@^1.42.0"]);
 
     const nestedUnknownRoot = path.join(
@@ -3225,12 +3234,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     spawnSyncMock.mockImplementation((_command, _args, options) => {
       const cwd = String(options?.cwd);
       expect(cwd).toBe(path.join(pluginRoot, ".openclaw-install-stage"));
-      const depRoot = path.join(cwd, "node_modules", "voice-runtime");
-      fs.mkdirSync(depRoot, { recursive: true });
-      fs.writeFileSync(
-        path.join(depRoot, "package.json"),
-        JSON.stringify({ name: "voice-runtime", version: "1.0.0" }),
-      );
+      writeInstalledPackage(cwd, "voice-runtime", "1.0.0");
       return { status: 0, stdout: "", stderr: "" } as ReturnType<typeof spawnSync>;
     });
 
@@ -3845,7 +3849,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     fs.mkdirSync(path.join(packageRoot, ".git"), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
     const pluginRoot = path.join(packageRoot, "extensions", "tokenjuice");
-    fs.mkdirSync(path.join(pluginRoot, "node_modules", "tokenjuice"), { recursive: true });
+    fs.mkdirSync(pluginRoot, { recursive: true });
     fs.writeFileSync(
       path.join(pluginRoot, "package.json"),
       JSON.stringify({
@@ -3854,10 +3858,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
         },
       }),
     );
-    fs.writeFileSync(
-      path.join(pluginRoot, "node_modules", "tokenjuice", "package.json"),
-      JSON.stringify({ name: "tokenjuice", version: "0.6.1" }),
-    );
+    writeInstalledPackage(pluginRoot, "tokenjuice", "0.6.1");
     fs.writeFileSync(
       path.join(pluginRoot, ".openclaw-runtime-deps.json"),
       JSON.stringify({ specs: ["stale@9.9.9"] }),
