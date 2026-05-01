@@ -103,6 +103,12 @@ export type RunEmbeddedPiAgentParams = {
   disableTools?: boolean;
   provider?: string;
   model?: string;
+  /**
+   * Stable caller-selected model for live-session reset-to-default checks.
+   * This may differ from provider/model while a fallback candidate is running.
+   */
+  liveModelDefaultProvider?: string;
+  liveModelDefaultModel?: string;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
   authProfileId?: string;

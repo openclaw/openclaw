@@ -138,13 +138,20 @@ vi.mock("./agent-runner-utils.js", () => ({
   buildEmbeddedRunExecutionParams: (params: {
     provider: string;
     model: string;
-    run: { provider?: string; authProfileId?: string; authProfileIdSource?: "auto" | "user" };
+    run: {
+      provider?: string;
+      model?: string;
+      authProfileId?: string;
+      authProfileIdSource?: "auto" | "user";
+    };
   }) => ({
     embeddedContext: {},
     senderContext: {},
     runBaseParams: {
       provider: params.provider,
       model: params.model,
+      liveModelDefaultProvider: params.run.provider,
+      liveModelDefaultModel: params.run.model,
       authProfileId: params.provider === params.run.provider ? params.run.authProfileId : undefined,
       authProfileIdSource:
         params.provider === params.run.provider ? params.run.authProfileIdSource : undefined,
@@ -752,6 +759,35 @@ describe("runAgentTurnWithFallback", () => {
       expect(result.fallbackProvider).toBe("anthropic");
       expect(result.fallbackAttempts[0]?.reason).toBe("format");
     }
+  });
+
+  it("keeps the caller-selected live model default while running fallback candidates", async () => {
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude";
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "fallback ok" }],
+      meta: {},
+    });
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("openai", "gpt-5.4"),
+      provider: "openai",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+
+    expect(result.kind).toBe("success");
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.4",
+        liveModelDefaultProvider: "anthropic",
+        liveModelDefaultModel: "claude",
+      }),
+    );
   });
 
   it("does not classify silent NO_REPLY terminal results for fallback", async () => {
@@ -2562,15 +2598,17 @@ describe("runAgentTurnWithFallback", () => {
   it("restarts the active prompt when a live model switch is requested", async () => {
     let fallbackInvocation = 0;
     state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-        result: await params.run(
-          fallbackInvocation === 0 ? "anthropic" : "openai",
-          fallbackInvocation === 0 ? "claude" : "gpt-5.4",
-        ),
-        provider: fallbackInvocation === 0 ? "anthropic" : "openai",
-        model: fallbackInvocation++ === 0 ? "claude" : "gpt-5.4",
-        attempts: [],
-      }),
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        const invocation = fallbackInvocation++;
+        const provider = invocation === 0 ? "anthropic" : "openai";
+        const model = invocation === 0 ? "claude" : "gpt-5.4";
+        return {
+          result: await params.run(provider, model),
+          provider,
+          model,
+          attempts: [],
+        };
+      },
     );
     state.runEmbeddedPiAgentMock
       .mockImplementationOnce(async () => {
@@ -2620,6 +2658,20 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude",
+      }),
+    );
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    );
     expect(followupRun.run.provider).toBe("openai");
     expect(followupRun.run.model).toBe("gpt-5.4");
   });

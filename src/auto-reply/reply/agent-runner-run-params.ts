@@ -76,6 +76,8 @@ export function buildEmbeddedRunBaseParams(params: {
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     provider: params.provider,
     model: params.model,
+    liveModelDefaultProvider: params.run.provider,
+    liveModelDefaultModel: params.run.model,
     ...params.authProfile,
     thinkLevel: params.run.thinkLevel,
     verboseLevel: params.run.verboseLevel,
