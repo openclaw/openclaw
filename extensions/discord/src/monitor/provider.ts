@@ -47,7 +47,10 @@ import {
   type GetPluginCommandSpecs,
 } from "./provider.commands.js";
 import { logDiscordResolvedConfig } from "./provider.config-log.js";
-import { formatDiscordDeployErrorDetails } from "./provider.deploy-errors.js";
+import {
+  formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
+} from "./provider.deploy-errors.js";
 import {
   clearDiscordNativeCommands,
   runDiscordCommandDeployInBackground,
@@ -523,7 +526,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     }
 
     if (voiceEnabled) {
-      const { DiscordVoiceManager, DiscordVoiceReadyListener } = await loadDiscordVoiceRuntime();
+      const { DiscordVoiceManager, DiscordVoiceReadyListener, DiscordVoiceResumedListener } =
+        await loadDiscordVoiceRuntime();
       voiceManager = new DiscordVoiceManager({
         client,
         cfg,
@@ -534,6 +538,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       });
       voiceManagerRef.current = voiceManager;
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));
+      registerDiscordListener(client.listeners, new DiscordVoiceResumedListener(voiceManager));
     }
 
     const messageHandler = discordProviderSessionRuntime.createDiscordMessageHandler({
@@ -644,6 +649,7 @@ export const __testing = {
   resolveDiscordRestFetch,
   resolveThreadBindingsEnabled: resolveThreadBindingsEnabledForTesting,
   formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
   setFetchDiscordApplicationId(mock?: typeof fetchDiscordApplicationId) {
     fetchDiscordApplicationIdForTesting = mock;
   },

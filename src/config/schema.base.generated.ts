@@ -3695,6 +3695,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               skipBootstrap: {
                 type: "boolean",
               },
+              skipOptionalBootstrapFiles: {
+                type: "array",
+                items: {
+                  type: "string",
+                  enum: ["SOUL.md", "USER.md", "HEARTBEAT.md", "IDENTITY.md"],
+                },
+                title: "Skipped Optional Bootstrap Files",
+                description:
+                  "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.",
+              },
               contextInjection: {
                 anyOf: [
                   {
@@ -21643,6 +21653,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           type: "string",
                           const: "clawhub",
                         },
+                        {
+                          type: "string",
+                          const: "git",
+                        },
                       ],
                     },
                     spec: {
@@ -21711,6 +21725,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           const: "private",
                         },
                       ],
+                    },
+                    gitUrl: {
+                      type: "string",
+                    },
+                    gitRef: {
+                      type: "string",
+                    },
+                    gitCommit: {
+                      type: "string",
                     },
                     hooks: {
                       type: "array",
@@ -26188,6 +26211,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "GPT-5 Personality Overlay",
       help: 'Friendly interaction-style layer for GPT-5-family models ("friendly" or "on" enables it; "off" disables only that layer). The tagged behavior contract remains enabled for matching GPT-5 models.',
       tags: ["advanced"],
+    },
+    "agents.defaults.skipOptionalBootstrapFiles": {
+      label: "Skipped Optional Bootstrap Files",
+      help: "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.",
+      tags: ["storage"],
     },
     "agents.defaults.contextInjection": {
       label: "Context Injection",

@@ -14,7 +14,7 @@ import {
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
-  resolveProviderAuth,
+  resolveWindowsProviderAuth,
   resolveSnapshot,
   run,
   runStreaming,
@@ -241,7 +241,7 @@ class WindowsSmoke {
   };
 
   constructor(private options: WindowsOptions) {
-    this.auth = resolveProviderAuth({
+    this.auth = resolveWindowsProviderAuth({
       apiKeyEnv: options.apiKeyEnv,
       modelId: options.modelId,
       provider: options.provider,
@@ -798,6 +798,14 @@ if ((Test-Path $logPath) -or (Test-Path $donePath)) {
 $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps') 'portable-git') ''
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
 where.exe git.exe
+$configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if ($null -eq $config.update) {
+  $config | Add-Member -MemberType NoteProperty -Name update -Value ([pscustomobject]@{})
+}
+$config.update | Add-Member -Force -MemberType NoteProperty -Name channel -Value 'dev'
+$config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
+$env:OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS = '1'
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
 Invoke-OpenClaw update --channel dev --yes --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
@@ -881,6 +889,10 @@ Invoke-OpenClaw models set ${psSingleQuote(this.auth.modelId)}
 if ($LASTEXITCODE -ne 0) { throw "models set failed" }
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
+Invoke-OpenClaw config set tools.profile minimal
+if ($LASTEXITCODE -ne 0) { throw "tools profile config set failed" }
+$sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-windows-smoke.jsonl'
+Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 $args = ${psArray([
@@ -892,6 +904,8 @@ $args = ${psArray([
         "parallels-windows-smoke",
         "--message",
         "Reply with exact ASCII text OK only.",
+        "--thinking",
+        "minimal",
         "--json",
       ])}
 $output = Invoke-OpenClaw @args 2>&1

@@ -281,10 +281,22 @@ export function hasGenerationToolAvailability(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   modelConfig?: AgentModelConfig;
+  providers?: CapabilityProvider[] | (() => CapabilityProvider[]);
   providerKey: GenerationCapabilityProviderKey;
 }): boolean {
   if (hasToolModelConfig(coerceToolModelConfig(params.modelConfig))) {
     return true;
+  }
+  const providers = typeof params.providers === "function" ? params.providers() : params.providers;
+  if (providers) {
+    return providers.some((provider) =>
+      isCapabilityProviderConfigured({
+        providers,
+        provider,
+        cfg: params.cfg,
+        agentDir: params.agentDir,
+      }),
+    );
   }
   return resolveBundledCapabilityProviderIds({
     key: params.providerKey,

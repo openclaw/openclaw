@@ -13,6 +13,10 @@ export type DiscordDeployErrorLike = {
   scope?: unknown;
   rawBody?: unknown;
   deployRequestBody?: unknown;
+  deployRestMethod?: unknown;
+  deployRestPath?: unknown;
+  deployRequestMs?: unknown;
+  deployTimeoutMs?: unknown;
 };
 
 export type DiscordDeployRateLimitDetails = {
@@ -29,6 +33,27 @@ export function attachDiscordDeployRequestBody(err: unknown, body: unknown) {
   const deployErr = err as DiscordDeployErrorLike;
   if (deployErr.deployRequestBody === undefined) {
     deployErr.deployRequestBody = body;
+  }
+}
+
+export function attachDiscordDeployRestContext(
+  err: unknown,
+  context: {
+    method: string;
+    path: string;
+    requestMs: number;
+    timeoutMs?: number;
+  },
+) {
+  if (!err || typeof err !== "object") {
+    return;
+  }
+  const deployErr = err as DiscordDeployErrorLike;
+  deployErr.deployRestMethod = context.method;
+  deployErr.deployRestPath = context.path;
+  deployErr.deployRequestMs = context.requestMs;
+  if (typeof context.timeoutMs === "number" && Number.isFinite(context.timeoutMs)) {
+    deployErr.deployTimeoutMs = context.timeoutMs;
   }
 }
 
@@ -80,6 +105,78 @@ function readFiniteNumber(value: unknown): number | undefined {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+function formatDurationMs(ms: number): string {
+  return formatDurationSeconds(ms, { decimals: ms >= 1000 ? 1 : 0 });
+}
+
+function isAbortLikeError(err: unknown): boolean {
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  const name = "name" in err && typeof err.name === "string" ? err.name : undefined;
+  const message = formatErrorMessage(err);
+  return (
+    name === "AbortError" ||
+    message === "This operation was aborted" ||
+    message === "The operation was aborted" ||
+    /\boperation was aborted\b/i.test(message)
+  );
+}
+
+function formatDiscordDeployRestOperation(err: DiscordDeployErrorLike): string {
+  const method =
+    typeof err.deployRestMethod === "string" && err.deployRestMethod.trim().length > 0
+      ? err.deployRestMethod.toUpperCase()
+      : undefined;
+  const path =
+    typeof err.deployRestPath === "string" && err.deployRestPath.trim().length > 0
+      ? err.deployRestPath
+      : undefined;
+  if (method && path) {
+    return `${method} ${path}`;
+  }
+  if (method) {
+    return method;
+  }
+  if (path) {
+    return path;
+  }
+  return "request";
+}
+
+export function formatDiscordDeployErrorMessage(err: unknown): string {
+  if (!isAbortLikeError(err)) {
+    return formatErrorMessage(err);
+  }
+  const deployErr =
+    err && typeof err === "object"
+      ? (err as DiscordDeployErrorLike)
+      : ({} as DiscordDeployErrorLike);
+  const requestMs = readFiniteNumber(deployErr.deployRequestMs);
+  const timeoutMs = readFiniteNumber(deployErr.deployTimeoutMs);
+  const operation = formatDiscordDeployRestOperation(deployErr);
+  const hasRestContext =
+    requestMs !== undefined ||
+    timeoutMs !== undefined ||
+    deployErr.deployRestMethod !== undefined ||
+    deployErr.deployRestPath !== undefined;
+  if (!hasRestContext) {
+    return "Discord REST request was aborted";
+  }
+  const timing: string[] = [];
+  if (timeoutMs !== undefined) {
+    timing.push(`timeout=${formatDurationMs(timeoutMs)}`);
+  }
+  if (requestMs !== undefined) {
+    timing.push(`observed=${formatDurationMs(requestMs)}`);
+  }
+  const timingText = timing.length > 0 ? ` (${timing.join(", ")})` : "";
+  if (timeoutMs !== undefined && requestMs !== undefined && requestMs >= timeoutMs) {
+    return `Discord REST ${operation} timed out${timingText}`;
+  }
+  return `Discord REST ${operation} was aborted${timingText}`;
 }
 
 export function resolveDiscordDeployRateLimitDetails(

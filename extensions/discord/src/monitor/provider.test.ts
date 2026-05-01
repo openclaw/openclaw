@@ -106,6 +106,7 @@ vi.mock("../voice/manager.runtime.js", () => {
   return {
     DiscordVoiceManager: function DiscordVoiceManager() {},
     DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
+    DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
   };
 });
 describe("monitorDiscordProvider", () => {
@@ -222,6 +223,7 @@ describe("monitorDiscordProvider", () => {
       return {
         DiscordVoiceManager: function DiscordVoiceManager() {},
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
+        DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
       } as never;
     });
     providerTesting.setLoadDiscordProviderSessionRuntime(
@@ -792,9 +794,23 @@ describe("monitorDiscordProvider", () => {
         .mock.calls.some(
           (call) =>
             String(call[0]).includes("native slash command deploy warning (not message send):") &&
-            String(call[0]).includes("This operation was aborted"),
+            String(call[0]).includes("Discord REST request was aborted"),
         ),
     ).toBe(true);
+  });
+
+  it("formats native command deploy aborts with REST timeout context", () => {
+    const error = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+      deployRestMethod: "patch",
+      deployRestPath: "/applications/app-1/commands/cmd-1",
+      deployRequestMs: 24_657,
+      deployTimeoutMs: 15_000,
+    });
+
+    expect(providerTesting.formatDiscordDeployErrorMessage(error)).toBe(
+      "Discord REST PATCH /applications/app-1/commands/cmd-1 timed out (timeout=15s, observed=24.7s)",
+    );
   });
 
   it("logs repeated native command deploy rate limits as one concise warning", async () => {

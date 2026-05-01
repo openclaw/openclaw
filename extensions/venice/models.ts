@@ -6,11 +6,11 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtim
 const log = createSubsystemLogger("venice-models");
 
 export const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
-export const VENICE_DEFAULT_MODEL_ID = "kimi-k2-5";
+const VENICE_DEFAULT_MODEL_ID = "kimi-k2-5";
 export const VENICE_DEFAULT_MODEL_REF = `venice/${VENICE_DEFAULT_MODEL_ID}`;
 const VENICE_ALLOWED_HOSTNAMES = ["api.venice.ai"];
 
-export const VENICE_DEFAULT_COST = {
+const VENICE_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -413,7 +413,7 @@ export const VENICE_MODEL_CATALOG = [
   },
 ] as const;
 
-export type VeniceCatalogEntry = (typeof VENICE_MODEL_CATALOG)[number];
+type VeniceCatalogEntry = (typeof VENICE_MODEL_CATALOG)[number];
 
 export function buildVeniceModelDefinition(entry: VeniceCatalogEntry): ModelDefinitionConfig {
   return {

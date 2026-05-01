@@ -381,6 +381,15 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("scopes Voice Call CLI activation to the voicecall command", () => {
+    const entry = listRepoBundledPluginManifests().find(
+      ({ manifest }) => manifest.id === "voice-call",
+    );
+
+    expect(entry?.manifest.commandAliases).toContainEqual({ name: "voicecall" });
+    expect(entry?.manifest.activation?.onCommands).toContain("voicecall");
+  });
+
   it("keeps empty-config Gateway startup narrower than declared startup sidecars", () => {
     const manifestRegistry = {
       plugins: listRepoBundledPluginManifests().map(({ manifest, dirName }) => ({
