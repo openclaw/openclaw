@@ -31,7 +31,6 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -130,7 +129,7 @@ import type {
 } from "./registry-types.js";
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { validateJsonSchemaValue, type JsonSchemaValue } from "./schema-validator.js";
 import { normalizeSessionEntrySlotKey } from "./session-entry-slot-keys.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
 import {
@@ -1621,7 +1620,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     id: string,
     schema: unknown,
-  ): schema is JsonSchemaObject => {
+  ): schema is JsonSchemaValue => {
     if (schema === undefined) {
       return true;
     }
@@ -1634,18 +1633,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return false;
     }
-    if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    if (
+      typeof schema !== "boolean" &&
+      (!schema || typeof schema !== "object" || Array.isArray(schema))
+    ) {
       pushDiagnostic({
         level: "error",
         pluginId: record.id,
         source: record.source,
-        message: `session action schema must be a JSON schema object: ${id}`,
+        message: `session action schema must be a JSON schema object or boolean: ${id}`,
       });
       return false;
     }
     try {
       validateJsonSchemaValue({
-        schema: schema as JsonSchemaObject,
+        schema,
         cacheKey: `plugin-session-action-registration:${record.id}:${id}`,
         value: undefined,
       });

@@ -5,8 +5,8 @@ import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   validateJsonSchemaValue,
   type JsonSchemaValidationError,
+  type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
-import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import {
@@ -126,19 +126,22 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         return;
       }
       if (registration.action.schema !== undefined) {
-        if (!isRecord(registration.action.schema)) {
+        if (
+          typeof registration.action.schema !== "boolean" &&
+          !isRecord(registration.action.schema)
+        ) {
           respond(
             false,
             undefined,
             errorShape(
               ErrorCodes.INVALID_REQUEST,
-              "plugin session action schema must be an object",
+              "plugin session action schema must be an object or boolean",
             ),
           );
           return;
         }
         const validation = validateJsonSchemaValue({
-          schema: registration.action.schema as JsonSchemaObject,
+          schema: registration.action.schema as JsonSchemaValue,
           cacheKey: `plugin-session-action:${pluginId}:${actionId}`,
           value: params.payload,
         });
