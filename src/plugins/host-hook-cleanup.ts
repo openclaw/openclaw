@@ -115,16 +115,24 @@ export async function runPluginHostCleanup(params: {
   runId?: string;
   preserveSchedulerJobIds?: ReadonlySet<string>;
 }): Promise<PluginHostCleanupResult> {
-  const persistentCleanupCount =
-    params.reason === "restart"
-      ? 0
-      : await clearPluginOwnedSessionStores({
-          cfg: params.cfg ?? getRuntimeConfig(),
-          pluginId: params.pluginId,
-          sessionKey: params.sessionKey,
-        });
-  const registry = params.registry;
   const failures: PluginHostCleanupFailure[] = [];
+  let persistentCleanupCount = 0;
+  if (params.reason !== "restart") {
+    try {
+      persistentCleanupCount = await clearPluginOwnedSessionStores({
+        cfg: params.cfg ?? getRuntimeConfig(),
+        pluginId: params.pluginId,
+        sessionKey: params.sessionKey,
+      });
+    } catch (error) {
+      failures.push({
+        pluginId: params.pluginId ?? "plugin-host",
+        hookId: "session-store",
+        error,
+      });
+    }
+  }
+  const registry = params.registry;
   let cleanupCount = persistentCleanupCount;
   if (registry) {
     for (const registration of registry.sessionExtensions ?? []) {

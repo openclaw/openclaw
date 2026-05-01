@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -44,6 +45,10 @@ function pruneFinalizeRetryBudget(budget: FinalizeRetryBudget): void {
       budget.delete(oldestRunId);
     }
   }
+}
+
+function buildFinalizeRetryInstructionKey(instruction: string): string {
+  return `instruction:${createHash("sha256").update(instruction).digest("hex")}`;
 }
 
 export function clearAgentHarnessFinalizeRetryBudget(params?: { runId?: string }): void {
@@ -149,7 +154,8 @@ function normalizeBeforeAgentFinalizeResult(
           : 1;
       const retryRunId = event?.runId ?? event?.sessionId ?? "unknown-run";
       const retryKey =
-        normalizeTrimmedString(result.retry?.idempotencyKey) || retryInstruction.slice(0, 160);
+        normalizeTrimmedString(result.retry?.idempotencyKey) ||
+        buildFinalizeRetryInstructionKey(retryInstruction);
       const budget = getFinalizeRetryBudget();
       const runBudget = budget.get(retryRunId) ?? new Map<string, number>();
       const nextCount = (runBudget.get(retryKey) ?? 0) + 1;

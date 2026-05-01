@@ -245,4 +245,52 @@ describe("agent harness lifecycle hook helpers", () => {
       }),
     ).resolves.toEqual({ action: "continue" });
   });
+
+  it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
+    const sharedPrefix = "x".repeat(180);
+    const firstInstruction = `${sharedPrefix} first`;
+    const secondInstruction = `${sharedPrefix} second`;
+    const hookRunner = {
+      hasHooks: () => true,
+      runBeforeAgentFinalize: vi
+        .fn()
+        .mockResolvedValueOnce({
+          action: "revise",
+          retry: {
+            instruction: firstInstruction,
+            idempotencyKey: { invalid: true },
+            maxAttempts: 1,
+          },
+        })
+        .mockResolvedValueOnce({
+          action: "revise",
+          retry: {
+            instruction: secondInstruction,
+            idempotencyKey: { invalid: true },
+            maxAttempts: 1,
+          },
+        }),
+    };
+
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      action: "revise",
+      reason: firstInstruction,
+    });
+    await expect(
+      runAgentHarnessBeforeAgentFinalizeHook({
+        event: EVENT,
+        ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+        hookRunner: hookRunner as never,
+      }),
+    ).resolves.toEqual({
+      action: "revise",
+      reason: secondInstruction,
+    });
+  });
 });
