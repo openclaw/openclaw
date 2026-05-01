@@ -5,21 +5,23 @@
  *
  * Usage:
  *   node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts \
- *     --mode closure-extracted --iters 50 --batches 5
+ *     --mode production --iters 50 --batches 5
  *
  * Modes:
- *   closure-extracted (default): production fix shape (helper at module scope)
- *   closure-inline:              pre-fix shape (closure inside runner scope)
+ *   production (default):        imports the real abortable from src; PASS proves the fix works.
+ *   closure-extracted:           self-contained module-scope helper (mirrors production shape).
+ *   closure-inline:              pre-fix shape (closure inside runner scope).
  *   synthetic-leak:              deliberately retains via module-level bucket
- *                                (sanity check that the harness detects leaks)
+ *                                (sanity check that the harness detects leaks).
  *
  * Exit code: 0 if PASS, 1 if FAIL (leak detected).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as v8 from "node:v8";
+import { abortable as productionAbortable } from "../src/agents/pi-embedded-runner/run/abortable.js";
 
-type Mode = "closure-extracted" | "closure-inline" | "synthetic-leak";
+type Mode = "production" | "closure-extracted" | "closure-inline" | "synthetic-leak";
 
 type Options = {
   iters: number;
@@ -37,7 +39,7 @@ function parseArgs(argv: string[]): Options {
     iters: 50,
     batches: 5,
     snapDir: ".tmp/embedded-run-abort-leak",
-    mode: "closure-extracted",
+    mode: "production",
     maxRssGrowthMb: 64,
     maxTrackedRetention: 16,
     scopeBytes: 2_000_000,
@@ -61,13 +63,16 @@ function parseArgs(argv: string[]): Options {
         break;
       case "--mode":
         if (
+          next === "production" ||
           next === "closure-extracted" ||
           next === "closure-inline" ||
           next === "synthetic-leak"
         ) {
           opts.mode = next;
         } else {
-          fail(`--mode must be one of: closure-extracted, closure-inline, synthetic-leak`);
+          fail(
+            `--mode must be one of: production, closure-extracted, closure-inline, synthetic-leak`,
+          );
         }
         i += 1;
         break;
@@ -108,7 +113,7 @@ function printUsage(): void {
   process.stderr.write(
     [
       "Usage: node --import tsx --expose-gc scripts/embedded-run-abort-leak.ts [flags]",
-      "  --mode <closure-extracted|closure-inline|synthetic-leak>",
+      "  --mode <production|closure-extracted|closure-inline|synthetic-leak>",
       "  --iters N            iterations per batch (default 50)",
       "  --batches B          batches between snapshots (default 5)",
       "  --snap-dir DIR       heap snapshot output dir (default .tmp/embedded-run-abort-leak)",
@@ -173,7 +178,9 @@ function runOnce(mode: Mode, scopeBytes: number, iter: number): void {
   const neverSettling = new Promise<unknown>(() => {});
   KEEP_ALIVE.push(neverSettling);
 
-  if (mode === "closure-extracted") {
+  if (mode === "production") {
+    void productionAbortable(ac.signal, neverSettling).catch(() => {});
+  } else if (mode === "closure-extracted") {
     void abortableExtracted(ac.signal, neverSettling).catch(() => {});
   } else if (mode === "closure-inline") {
     const wrapped = new Promise<unknown>((resolve, reject) => {
