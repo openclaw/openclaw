@@ -851,7 +851,7 @@ export async function runTaskRegistryMaintenance(): Promise<TaskRegistryMaintena
       }
       continue;
     }
-    await cleanupTerminalAcpSession(current, taskRegistryMaintenanceRuntime.listTaskRecords());
+    await cleanupTerminalAcpSession(current, tasks);
     if (
       shouldPruneTerminalTask(current, now) &&
       taskRegistryMaintenanceRuntime.deleteTaskRecordById(current.taskId)

@@ -90,6 +90,7 @@ vi.mock("../utils/message-channel.js", () => ({
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
   currentTasks: Map<string, ReturnType<typeof createTaskRecord>>;
   snapshotTasks: ReturnType<typeof createTaskRecord>[];
+  listTaskRecords?: () => ReturnType<typeof createTaskRecord>[];
   acpEntry?: AcpSessionStoreEntry;
   acpEntries?: AcpSessionStoreEntry[];
   sessionBindings?: SessionBindingRecord[];
@@ -126,7 +127,7 @@ function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     deleteTaskRecordById: (taskId: string) => params.currentTasks.delete(taskId),
     ensureTaskRegistryReady: () => {},
     getTaskById: (taskId: string) => params.currentTasks.get(taskId),
-    listTaskRecords: () => params.snapshotTasks,
+    listTaskRecords: params.listTaskRecords ?? (() => params.snapshotTasks),
     markTaskLostById: (patch: {
       taskId: string;
       endedAt: number;
@@ -1625,6 +1626,47 @@ describe("task-registry", () => {
         targetSessionKey: childSessionKey,
         reason: "terminal-task-cleanup",
       });
+    });
+  });
+
+  it("reuses the maintenance task snapshot while closing terminal ACP sessions", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const now = Date.now();
+      const tasks = Array.from({ length: 20 }, (_, index) => {
+        const task = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          requesterSessionKey: "agent:main:main",
+          scopeKind: "session",
+          childSessionKey: `agent:claude:acp:terminal-${index}`,
+          runId: `run-terminal-acp-snapshot-${index}`,
+          task: `Terminal ACP task ${index}`,
+          status: "succeeded",
+          deliveryStatus: "delivered",
+        });
+        return {
+          ...task,
+          endedAt: now - 60_000,
+          lastEventAt: now - 60_000,
+        };
+      });
+      const currentTasks = new Map(tasks.map((task) => [task.taskId, task]));
+      let listCalls = 0;
+
+      configureTaskRegistryMaintenanceRuntimeForTest({
+        currentTasks,
+        snapshotTasks: tasks,
+        listTaskRecords: () => {
+          listCalls += 1;
+          return tasks;
+        },
+      });
+
+      await runTaskRegistryMaintenance();
+
+      expect(listCalls).toBe(2);
     });
   });
 
