@@ -10,6 +10,8 @@ describe("parseTimeoutMs", () => {
     expect(parseTimeoutMs(undefined)).toBeUndefined();
     expect(parseTimeoutMs("")).toBeUndefined();
     expect(parseTimeoutMs("nope")).toBeUndefined();
+    expect(parseTimeoutMs("123abc")).toBeUndefined();
+    expect(parseTimeoutMs("1e3")).toBeUndefined();
   });
 });
 
@@ -39,5 +41,13 @@ describe("parseTimeoutMsWithFallback", () => {
   it("throws on non-positive parsed values", () => {
     expect(() => parseTimeoutMsWithFallback("0", 3000)).toThrow("invalid --timeout: 0");
     expect(() => parseTimeoutMsWithFallback("-1", 3000)).toThrow("invalid --timeout: -1");
+  });
+
+  it("throws on non-numeric, partial, and scientific notation strings", () => {
+    expect(() => parseTimeoutMsWithFallback("foo", 3000)).toThrow("invalid --timeout: foo");
+    expect(() => parseTimeoutMsWithFallback("123abc", 3000)).toThrow(
+      "invalid --timeout: 123abc",
+    );
+    expect(() => parseTimeoutMsWithFallback("1e3", 3000)).toThrow("invalid --timeout: 1e3");
   });
 });

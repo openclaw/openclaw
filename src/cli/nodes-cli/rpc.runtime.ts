@@ -1,5 +1,6 @@
 import { callGateway } from "../../gateway/call.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
+import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import { withProgress } from "../progress.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -21,7 +22,9 @@ export async function callGatewayCliRuntime(
         token: opts.token,
         method,
         params,
-        timeoutMs: callOpts?.transportTimeoutMs ?? Number(opts.timeout ?? 10_000),
+        timeoutMs:
+          callOpts?.transportTimeoutMs ??
+          parseTimeoutMsWithFallback(opts.timeout, 10_000, { invalidType: "error" }),
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,
       }),
