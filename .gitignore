@@ -188,6 +188,8 @@ changelog/fragments/
 test/fixtures/openclaw-vitest-unit-report.json
 analysis/
 .artifacts/qa-e2e/
+/runs/
+/data/rtt.jsonl
 extensions/qa-lab/web/dist/
 
 # Generated bundled plugin runtime dependency manifests

@@ -1439,6 +1439,7 @@
     "release:plugins:clawhub:plan": "node --import tsx scripts/plugin-clawhub-release-plan.ts",
     "release:plugins:npm:check": "node --import tsx scripts/plugin-npm-release-check.ts",
     "release:plugins:npm:plan": "node --import tsx scripts/plugin-npm-release-plan.ts",
+    "rtt": "node --import tsx scripts/rtt.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
     "stage:bundled-plugin-runtime-deps": "node scripts/stage-bundled-plugin-runtime-deps.mjs",
