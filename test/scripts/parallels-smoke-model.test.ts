@@ -324,6 +324,7 @@ console.log(JSON.stringify(result));
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("providerTimeoutConfigJson");
     expect(readFileSync(TS_PATHS.linux, "utf8")).toContain("providerTimeoutConfigJson");
     expect(readFileSync(TS_PATHS.windows, "utf8")).toContain("windowsModelProviderTimeoutScript");
+    expect(readFileSync(TS_PATHS.powershell, "utf8")).toContain("config set --batch-file");
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
