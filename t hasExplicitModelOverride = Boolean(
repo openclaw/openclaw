@@ -1,0 +1,87 @@
+[1mdiff --git a/src/agents/tools/session-status-tool.ts b/src/agents/tools/session-status-tool.ts[m
+[1mindex 54ee73d3ce..cd50cc0640 100644[m
+[1m--- a/src/agents/tools/session-status-tool.ts[m
+[1m+++ b/src/agents/tools/session-status-tool.ts[m
+[36m@@ -526,24 +526,29 @@[m [mexport function createSessionStatusTool(opts?: {[m
+       );[m
+       const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();[m
+       const runtimeModelForCard = runtimeModelIdentity.model.trim();[m
+[31m-      const defaultProviderForCard =[m
+[31m-        runtimeProviderForCard ??[m
+[31m-        resolved.entry.providerOverride ??[m
+[31m-        configured.provider;[m
+[31m-      const defaultModelForCard =[m
+[31m-        runtimeModelForCard ??[m
+[31m-        resolved.entry.modelOverride ??[m
+[31m-        configured.model;[m
+[31m-      const statusSessionEntry =[m
+[31m-        !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard[m
+[31m-          ? { ...resolved.entry, providerOverride: "" }[m
+[31m-          : resolved.entry;[m
+[31m-      const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();[m
+[31m-      const providerForCard = providerOverrideForCard ?? defaultProviderForCard;[m
+[32m+[m[32m      let providerForCard: string;[m
+[32m+[m[32m      let modelForCard: string;[m
+[32m+[m
+[32m+[m[32m      // ✅ Keep provider + model from SAME source[m
+[32m+[m[32m      if (runtimeProviderForCard && runtimeModelForCard) {[m
+[32m+[m[32m        providerForCard = runtimeProviderForCard;[m
+[32m+[m[32m        modelForCard = runtimeModelForCard;[m
+[32m+[m[32m      } else if ([m
+[32m+[m[32m        resolved.entry.providerOverride?.trim() &&[m
+[32m+[m[32m        resolved.entry.modelOverride?.trim()[m
+[32m+[m[32m      ) {[m
+[32m+[m[32m        providerForCard = resolved.entry.providerOverride.trim();[m
+[32m+[m[32m        modelForCard = resolved.entry.modelOverride.trim();[m
+[32m+[m[32m      } else {[m
+[32m+[m[32m        providerForCard = configured.provider;[m
+[32m+[m[32m        modelForCard = configured.model;[m
+[32m+[m[32m      }[m
+[32m+[m
+[32m+[m[32m      const statusSessionEntry = resolved.entry;[m
+       const primaryModelLabel =[m
+[31m-        providerForCard && defaultModelForCard[m
+[31m-          ? `${providerForCard}/${defaultModelForCard}`[m
+[31m-          : defaultModelForCard;[m
+[32m+[m[32m        providerForCard && modelForCard[m
+[32m+[m[32m          ? `${providerForCard}/${modelForCard}`[m
+[32m+[m[32m          : modelForCard;[m
+       const isGroup =[m
+         statusSessionEntry.chatType === "group" ||[m
+         statusSessionEntry.chatType === "channel" ||[m
+[36m@@ -568,7 +573,7 @@[m [mexport function createSessionStatusTool(opts?: {[m
+           "unknown",[m
+         workspaceDir: statusSessionEntry.spawnedWorkspaceDir,[m
+         provider: providerForCard,[m
+[31m-        model: defaultModelForCard,[m
+[32m+[m[32m        model: modelForCard,[m
+         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,[m
+         resolvedFastMode: statusSessionEntry.fastMode,[m
+         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,[m
+[36m@@ -577,7 +582,7 @@[m [mexport function createSessionStatusTool(opts?: {[m
+         resolveDefaultThinkingLevel: async () => {[m
+           const configuredCatalog = buildConfiguredModelCatalog({ cfg });[m
+           const configuredSelectedEntry = configuredCatalog.find([m
+[31m-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,[m
+[32m+[m[32m            (entry) => entry.provider === providerForCard && entry.id === modelForCard,[m
+           );[m
+           const shouldHydrateRuntimeCatalog =[m
+             configuredCatalog.length === 0 ||[m
+[36m@@ -587,7 +592,7 @@[m [mexport function createSessionStatusTool(opts?: {[m
+             ? await loadModelCatalog({ config: cfg })[m
+             : undefined;[m
+           const runtimeSelectedEntry = runtimeCatalog?.find([m
+[31m-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,[m
+[32m+[m[32m            (entry) => entry.provider === providerForCard && entry.id === modelForCard,[m
+           );[m
+           const catalog =[m
+             runtimeSelectedEntry || configuredCatalog.length === 0[m
+[36m@@ -596,7 +601,7 @@[m [mexport function createSessionStatusTool(opts?: {[m
+           return resolveThinkingDefault({[m
+             cfg,[m
+             provider: providerForCard,[m
+[31m-            model: defaultModelForCard,[m
+[32m+[m[32m            model: modelForCard,[m
+             catalog,[m
+           });[m
+         },[m

@@ -213,8 +213,11 @@ async function resolveModelOverride(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  const currentProvider = params.sessionEntry?.providerOverride?.trim() || configDefault.provider;
-  const currentModel = params.sessionEntry?.modelOverride?.trim() || configDefault.model;
+  const currentProvider = params.sessionEntry?.providerOverride?.trim() ?? configDefault.provider;
+  const currentModel =
+    params.sessionEntry?.modelOverride?.trim() ??
+    params.sessionEntry?.model?.trim() ??
+    configDefault.model;
 
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
@@ -515,33 +518,20 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      const runtimeModelIdentity = resolveSessionModelIdentityRef(
-        cfg,
-        resolved.entry,
-        agentId,
-        `${configured.provider}/${configured.model}`,
-      );
-      const hasExplicitModelOverride = Boolean(
-        resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
-      );
-      const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
-      const runtimeModelForCard = runtimeModelIdentity.model.trim();
-      const defaultProviderForCard = hasExplicitModelOverride
-        ? configured.provider
-        : (runtimeProviderForCard ?? "");
-      const defaultModelForCard = hasExplicitModelOverride
-        ? configured.model
-        : runtimeModelForCard || configured.model;
-      const statusSessionEntry =
-        !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
-          ? { ...resolved.entry, providerOverride: "" }
-          : resolved.entry;
-      const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
-      const providerForCard = providerOverrideForCard ?? defaultProviderForCard;
+      const selectedProvider = resolved.entry.providerOverride?.trim() ?? configured.provider;
+
+      const selectedModel =
+        resolved.entry.modelOverride?.trim() ?? resolved.entry.model?.trim() ?? configured.model;
+
+      // ✅ FIX: Pass SELECTED to status text (NOT runtime)
+      const providerForCard = selectedProvider;
+      const modelForCard = selectedModel;
+
+      // Keep session entry untouched (runtime stays inside it)
+      const statusSessionEntry = resolved.entry;
+
       const primaryModelLabel =
-        providerForCard && defaultModelForCard
-          ? `${providerForCard}/${defaultModelForCard}`
-          : defaultModelForCard;
+        providerForCard && modelForCard ? `${providerForCard}/${modelForCard}` : modelForCard;
       const isGroup =
         statusSessionEntry.chatType === "group" ||
         statusSessionEntry.chatType === "channel" ||
@@ -566,7 +556,7 @@ export function createSessionStatusTool(opts?: {
           "unknown",
         workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
         provider: providerForCard,
-        model: defaultModelForCard,
+        model: modelForCard,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
         resolvedFastMode: statusSessionEntry.fastMode,
         resolvedVerboseLevel: (statusSessionEntry.verboseLevel ?? "off") as VerboseLevel,
@@ -575,7 +565,7 @@ export function createSessionStatusTool(opts?: {
         resolveDefaultThinkingLevel: async () => {
           const configuredCatalog = buildConfiguredModelCatalog({ cfg });
           const configuredSelectedEntry = configuredCatalog.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+            (entry) => entry.provider === providerForCard && entry.id === modelForCard,
           );
           const shouldHydrateRuntimeCatalog =
             configuredCatalog.length === 0 ||
@@ -585,7 +575,7 @@ export function createSessionStatusTool(opts?: {
             ? await loadModelCatalog({ config: cfg })
             : undefined;
           const runtimeSelectedEntry = runtimeCatalog?.find(
-            (entry) => entry.provider === providerForCard && entry.id === defaultModelForCard,
+            (entry) => entry.provider === providerForCard && entry.id === modelForCard,
           );
           const catalog =
             runtimeSelectedEntry || configuredCatalog.length === 0
@@ -594,7 +584,7 @@ export function createSessionStatusTool(opts?: {
           return resolveThinkingDefault({
             cfg,
             provider: providerForCard,
-            model: defaultModelForCard,
+            model: modelForCard,
             catalog,
           });
         },
