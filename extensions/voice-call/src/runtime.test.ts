@@ -6,6 +6,7 @@ import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
 const mocks = vi.hoisted(() => ({
   resolveVoiceCallConfig: vi.fn(),
+  resolveTwilioAuthToken: vi.fn(),
   validateProviderConfig: vi.fn(),
   managerInitialize: vi.fn(),
   managerGetCall: vi.fn(),
@@ -26,6 +27,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./config.js", () => ({
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
+  resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
 }));
 
@@ -109,6 +111,9 @@ describe("createVoiceCallRuntime lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.resolveVoiceCallConfig.mockImplementation((cfg: VoiceCallConfig) => cfg);
+    mocks.resolveTwilioAuthToken.mockImplementation(
+      (cfg: VoiceCallConfig) => cfg.twilio?.authToken,
+    );
     mocks.validateProviderConfig.mockReturnValue({ valid: true, errors: [] });
     mocks.managerInitialize.mockResolvedValue(undefined);
     mocks.managerGetCall.mockReset();
