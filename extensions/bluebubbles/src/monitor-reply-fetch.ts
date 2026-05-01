@@ -84,9 +84,18 @@ export function fetchBlueBubblesReplyContext(
     return Promise.resolve(null);
   }
   const key = `${params.accountId}:${replyToId}`;
+  const partIndexReplyToId = normalizePartIndexReplyToIdAlias(params.replyToId, replyToId);
   const existing = inflight.get(key);
   if (existing) {
-    return existing;
+    if (!partIndexReplyToId) {
+      return existing;
+    }
+    return existing.then((result) => {
+      if (result) {
+        rememberBlueBubblesReplyContext(params, partIndexReplyToId, result);
+      }
+      return result;
+    });
   }
   const promise = runFetch(params, replyToId).finally(() => {
     inflight.delete(key);
@@ -179,10 +188,7 @@ async function runFetch(
     rememberBlueBubblesReplyCache(cacheEntry);
     const partIndexReplyToId = normalizePartIndexReplyToIdAlias(params.replyToId, replyToId);
     if (partIndexReplyToId) {
-      rememberBlueBubblesReplyCache({
-        ...cacheEntry,
-        messageId: partIndexReplyToId,
-      });
+      rememberBlueBubblesReplyContext(params, partIndexReplyToId, { body, sender });
     }
     return { body, sender };
   } catch {
@@ -190,6 +196,23 @@ async function runFetch(
     // reply context, which matches existing pre-fallback behavior.
     return null;
   }
+}
+
+function rememberBlueBubblesReplyContext(
+  params: FetchBlueBubblesReplyContextParams,
+  messageId: string,
+  result: BlueBubblesReplyFetchResult,
+): void {
+  rememberBlueBubblesReplyCache({
+    accountId: params.accountId,
+    messageId,
+    chatGuid: params.chatGuid,
+    chatIdentifier: params.chatIdentifier,
+    chatId: params.chatId,
+    senderLabel: result.sender,
+    body: result.body,
+    timestamp: Date.now(),
+  });
 }
 
 function extractBody(data: Record<string, unknown>): string | undefined {

@@ -364,6 +364,46 @@ describe("fetchBlueBubblesReplyContext", () => {
     expect(resB).toEqual(resA);
   });
 
+  it("caches a prefixed alias that joins an in-flight bare fetch", async () => {
+    let resolveOnce: (value: Response) => void = () => {};
+    const pending = new Promise<Response>((resolve) => {
+      resolveOnce = resolve;
+    });
+    const { factory } = makeFakeClient(() => pending);
+    const bare = fetchBlueBubblesReplyContext({
+      ...baseParams,
+      replyToId: "msg-race",
+      chatGuid: "iMessage;-;+15558675309",
+      clientFactory: factory,
+    });
+    const prefixed = fetchBlueBubblesReplyContext({
+      ...baseParams,
+      replyToId: "p:0/msg-race",
+      chatGuid: "iMessage;-;+15558675309",
+      clientFactory: factory,
+    });
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    resolveOnce(jsonResponse({ data: { text: "race body", handle: { address: "+15558675309" } } }));
+    await Promise.all([bare, prefixed]);
+
+    expect(
+      resolveReplyContextFromCache({
+        accountId: "default",
+        replyToId: "msg-race",
+        chatGuid: "iMessage;-;+15558675309",
+      })?.body,
+    ).toBe("race body");
+    expect(
+      resolveReplyContextFromCache({
+        accountId: "default",
+        replyToId: "p:0/msg-race",
+        chatGuid: "iMessage;-;+15558675309",
+      })?.body,
+    ).toBe("race body");
+    expect(getShortIdForUuid("p:0/msg-race")).toBeTruthy();
+  });
+
   it("does not dedupe across different accountIds", async () => {
     const { factory } = makeFakeClient([
       jsonResponse({ data: { text: "a", handle: { address: "+15551000001" } } }),

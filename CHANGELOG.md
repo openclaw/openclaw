@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- BlueBubbles: cache prefixed reply-context aliases when they join an existing bare-message in-flight API fallback, so later `p:n/<guid>` reply lookups stay in RAM instead of refetching the original message.
 - Voice Call/Twilio: honor stored pre-connect TwiML before realtime webhook shortcuts and reject DTMF sequences outside conversation mode, so Meet PIN entry cannot be skipped or silently dropped. Thanks @donkeykong91 and @PfanP.
 - Google Meet/Voice Call: play Twilio Meet DTMF before opening the realtime media stream and carry the intro as the initial Voice Call message, so the greeting is generated after Meet admits the phone participant instead of racing a live-call TwiML update. Thanks @donkeykong91 and @PfanP.
 - Google Meet/Voice Call: make Twilio setup preflight honor explicit `--transport twilio` and fail local/private Voice Call webhook URLs, including IPv6 loopback and unique-local forms, before joins. Thanks @donkeykong91 and @PfanP.
