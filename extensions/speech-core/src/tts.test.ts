@@ -607,14 +607,14 @@ describe("speech-core native voice-note routing", () => {
   });
 
   it("passes directive overrides to telephony synthesis providers", async () => {
-    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+    const synthesizeTelephonyMock = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
       audioBuffer: Buffer.from("voice"),
       outputFormat: "pcm",
-      sampleRate: 24000,
+      sampleRate: 24_000,
     }));
     installSpeechProviders([
       createMockSpeechProvider("mock", {
-        synthesizeTelephony,
+        synthesizeTelephony: synthesizeTelephonyMock,
       }),
     ]);
 
@@ -638,6 +638,7 @@ describe("speech-core native voice-note routing", () => {
         providerOverrides: {
           mock: {
             voice: "directed-voice",
+            speed: 1.5,
           },
         },
       },
@@ -646,10 +647,11 @@ describe("speech-core native voice-note routing", () => {
     expect(result.success).toBe(true);
     expect(result.providerModel).toBe("telephony-model");
     expect(result.providerVoice).toBe("directed-voice");
-    expect(synthesizeTelephony).toHaveBeenCalledWith(
+    expect(synthesizeTelephonyMock).toHaveBeenCalledWith(
       expect.objectContaining({
         providerOverrides: {
           voice: "directed-voice",
+          speed: 1.5,
         },
       }),
     );
