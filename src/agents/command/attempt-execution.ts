@@ -343,6 +343,7 @@ export function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
@@ -575,6 +576,7 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,

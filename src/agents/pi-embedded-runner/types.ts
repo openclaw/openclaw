@@ -190,6 +190,13 @@ export type EmbeddedPiCompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
+  /** Structured failure metadata used by model fallback classification. */
+  failure?: {
+    reason?: string;
+    status?: number;
+    code?: string;
+    rawError?: string;
+  };
   result?: {
     summary: string;
     firstKeptEntryId: string;

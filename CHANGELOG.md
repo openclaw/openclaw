@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/config: report failed backup restores as failed in logs and config observe audit records instead of marking them valid. (#70515) Thanks @davidangularme.
+- Compaction: use the active session model fallback chain for implicit summarization failures without persisting fallback model selection, so Azure content-filter 400s can recover. Fixes #64960. (#74470) Thanks @jalehman and @OpenCodeEngineer.
 
 ## 2026.4.30
 
