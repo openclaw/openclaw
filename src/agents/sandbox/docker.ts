@@ -283,7 +283,18 @@ export function isDockerDaemonUnavailable(stderr: string): boolean {
   return DOCKER_DAEMON_UNAVAILABLE_MARKERS.some((marker) => stderr.toLowerCase().includes(marker));
 }
 
-async function inspectDockerImage(image: string): Promise<"exists" | "missing" | "unavailable"> {
+export function formatDockerDaemonUnavailableError(stderr: string): string {
+  const detail = stderr.trim();
+  return [
+    "Sandbox mode requires Docker, but the Docker daemon is not available.",
+    "Start Docker, or set `agents.defaults.sandbox.mode=off` to disable sandboxing.",
+    detail ? `Docker said: ${detail}` : undefined,
+  ]
+    .filter((line): line is string => Boolean(line))
+    .join(" ");
+}
+
+async function inspectDockerImage(image: string): Promise<"exists" | "missing"> {
   const result = await execDocker(["image", "inspect", image], {
     allowFailure: true,
   });
@@ -294,18 +305,15 @@ async function inspectDockerImage(image: string): Promise<"exists" | "missing" |
   if (stderr.toLowerCase().includes("no such image")) {
     return "missing";
   }
-  // When Docker daemon is unavailable, treat the image as unavailable
-  // rather than throwing. This allows sandbox.mode="off" sessions to
-  // start without a running Docker daemon.
   if (isDockerDaemonUnavailable(stderr)) {
-    return "unavailable";
+    throw new Error(formatDockerDaemonUnavailableError(stderr));
   }
   throw new Error(`Failed to inspect sandbox image: ${stderr}`);
 }
 
 export async function ensureDockerImage(image: string) {
   const imageState = await inspectDockerImage(image);
-  if (imageState === "exists" || imageState === "unavailable") {
+  if (imageState === "exists") {
     return;
   }
   if (image === DEFAULT_SANDBOX_IMAGE) {

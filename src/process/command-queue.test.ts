@@ -22,6 +22,7 @@ type CommandQueueModule = typeof import("./command-queue.js");
 
 let clearCommandLane: CommandQueueModule["clearCommandLane"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
+let CommandLaneTaskTimeoutError: CommandQueueModule["CommandLaneTaskTimeoutError"];
 let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
@@ -63,6 +64,7 @@ describe("command queue", () => {
     ({
       clearCommandLane,
       CommandLaneClearedError,
+      CommandLaneTaskTimeoutError,
       enqueueCommand,
       enqueueCommandInLane,
       GatewayDrainingError,
@@ -324,6 +326,42 @@ describe("command queue", () => {
     otherBlocker.resolve();
     await expect(first).resolves.toBe("first");
     await expect(other).resolves.toBe("other");
+  });
+
+  it("task timeout releases a stuck lane and drains queued work", async () => {
+    const lane = `timeout-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 25,
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "second";
+      });
+
+      expect(secondRan).toBe(false);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({
+        activeCount: 1,
+        queuedCount: 1,
+      });
+
+      await vi.advanceTimersByTimeAsync(25);
+
+      await firstRejected;
+      await expect(second).resolves.toBe("second");
+      expect(secondRan).toBe(true);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({
+        activeCount: 0,
+        queuedCount: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("getCommandLaneSnapshot reports active and queued work for one lane", async () => {

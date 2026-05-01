@@ -8,6 +8,7 @@ import {
   consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
   isEmbeddedPiRunHandleActive,
+  queueEmbeddedPiMessage,
   requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
   setActiveEmbeddedRun,
@@ -64,6 +65,32 @@ describe("pi-embedded runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes steering options to active embedded runs", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-steer", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    expect(
+      queueEmbeddedPiMessage("session-steer", "continue", { steeringMode: "one-at-a-time" }),
+    ).toBe(true);
+
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "one-at-a-time" });
+  });
+
+  it("defaults active embedded steering to all pending messages", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-default-steer", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    expect(queueEmbeddedPiMessage("session-default-steer", "continue")).toBe(true);
+
+    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
   });
 
   it("force-clears an aborted run that does not drain", async () => {

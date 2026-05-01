@@ -27,7 +27,15 @@ Generated locale trees and live translation memory now live in the publish repo:
 
 - Keep generated locale output out of the main product repo.
 - Keep Mintlify on a single published docs tree.
-- Preserve the built-in language switcher by letting the publish repo own generated locale trees.
+- Preserve the built-in language switcher for Mintlify-supported generated locales by letting the publish repo own generated locale trees.
+- Keep generated Thai (`th`) and Persian (`fa`) docs plus translation memory even though Mintlify does not currently accept those codes in `navigation.languages`. Their absence from the built-in docs language picker is a host limitation, not a failed translation run.
+
+## Locale visibility
+
+- Control UI supports `en`, `zh-CN`, `zh-TW`, `pt-BR`, `de`, `es`, `ja-JP`, `ko`, `fr`, `ar`, `it`, `tr`, `uk`, `id`, `pl`, `th`, `vi`, `nl`, and `fa`.
+- Docs translation workflows generate the same non-English locale set in `openclaw/docs`.
+- The Mintlify docs language picker can expose only the locales accepted by Mintlify `navigation.languages`; today that includes Vietnamese (`vi`) and Dutch (`nl`), but not Thai (`th`) or Persian (`fa`).
+- Do not treat missing `th` or `fa` entries in generated `docs/docs.json` as a pipeline failure. Verify their generated folders in `openclaw/docs` instead.
 
 ## Files in this folder
 

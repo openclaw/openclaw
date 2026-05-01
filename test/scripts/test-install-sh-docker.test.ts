@@ -176,17 +176,24 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain('cron: "17 3 * * *"');
     expect(workflow).toContain("run_bun_global_install_smoke:");
     expect(workflow).toContain(
-      "install-bun: ${{ needs.preflight.outputs.run_bun_global_install_smoke }}",
+      "if: needs.preflight.outputs.run_full_install_smoke == 'true' && needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
     );
-    expect(workflow).toContain(
-      "if: needs.preflight.outputs.run_bun_global_install_smoke == 'true'",
-    );
+    expect(workflow).toContain("bun_global_install_smoke:");
+    expect(workflow).toContain("Setup Node environment for Bun smoke");
+    expect(workflow).toContain('install-bun: "true"');
+    expect(workflow).toContain('install-bun: "false"');
     expect(workflow).toContain("Run Bun global install image-provider smoke");
     expect(workflow).toContain("bash scripts/e2e/bun-global-install-smoke.sh");
     expect(workflow).toContain(
-      "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: openclaw-dockerfile-smoke:local",
+      "OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE: ${{ needs.root_dockerfile_image.outputs.image_ref }}",
     );
-    expect(workflow).toContain("format('{0}-manual-{1}', github.workflow, github.run_id)");
+    expect(workflow).toContain(
+      "github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call'",
+    );
+    expect(workflow).toContain(
+      "format('{0}-{1}-{2}', github.workflow, github.event_name, github.run_id)",
+    );
+    expect(workflow).toContain("cancel-in-progress: ${{ github.event_name != 'workflow_call' }}");
     expect(workflow).not.toContain(
       "github.event_name == 'workflow_call' || github.event_name == 'push'",
     );
@@ -201,6 +208,12 @@ describe("bun global install smoke", () => {
     expect(workflow).toContain("install-smoke-fast:");
     expect(workflow).toContain("run_fast_install_smoke");
     expect(workflow).toContain("run_full_install_smoke");
+    expect(workflow).toContain("timeout 45m docker buildx build");
+    expect(workflow).toContain("--progress=plain");
+    expect(workflow).toContain("--load");
+    expect(workflow).not.toContain("--cache-from");
+    expect(workflow).not.toContain("--cache-to");
+    expect(workflow).not.toContain("type=gha");
     expect(workflow).toContain('OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL: "1"');
     expect(releaseChecks).toContain("install_smoke_release_checks:");
     expect(releaseChecks).toContain("uses: ./.github/workflows/install-smoke.yml");

@@ -1156,7 +1156,7 @@ extension MenuSessionsInjector {
     }
 
     private func sortedNodeEntries() -> [NodeInfo] {
-        let entries = self.nodesStore.nodes.filter(\.isConnected)
+        let entries = self.nodesStore.nodes.filter { $0.isConnected || $0.isPaired }
         return entries.sorted { lhs, rhs in
             if lhs.isConnected != rhs.isConnected { return lhs.isConnected }
             if lhs.isPaired != rhs.isPaired { return lhs.isPaired }
@@ -1238,6 +1238,10 @@ extension MenuSessionsInjector {
 
     func testingFindNodesInsertIndex(in menu: NSMenu) -> Int? {
         self.findNodesInsertIndex(in: menu)
+    }
+
+    func testingSortedNodeEntries() -> [NodeInfo] {
+        self.sortedNodeEntries()
     }
 }
 #endif

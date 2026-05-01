@@ -77,6 +77,8 @@ describe("command-path-policy", () => {
     });
 
     for (const commandPath of [
+      ["agents"],
+      ["agents", "list"],
       ["agents", "bind"],
       ["agents", "bindings"],
       ["agents", "unbind"],

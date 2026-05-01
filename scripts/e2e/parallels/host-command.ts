@@ -34,11 +34,12 @@ export function run(command: string, args: string[], options: RunOptions = {}): 
     timeout: options.timeoutMs,
   });
 
-  if (result.error) {
+  const timedOut = (result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT";
+  if (result.error && !(timedOut && options.check === false)) {
     throw result.error;
   }
 
-  const status = result.status ?? (result.signal ? 128 : 1);
+  const status = timedOut ? 124 : (result.status ?? (result.signal ? 128 : 1));
   const commandResult = {
     stderr: result.stderr ?? "",
     stdout: result.stdout ?? "",
