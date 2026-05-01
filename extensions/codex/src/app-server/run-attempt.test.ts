@@ -368,6 +368,46 @@ describe("runCodexAppServerAttempt", () => {
     ).toEqual(["read", "exec", "message"]);
   });
 
+  it("starts Codex threads without duplicate OpenClaw workspace tools by default", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = {
+      ...createParams(sessionFile, workspaceDir),
+      disableTools: false,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      model: createCodexTestModel("openai"),
+      agentDir: tempDir,
+      senderIsOwner: true,
+    } as EmbeddedRunAttemptParams;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const dynamicToolNames = (
+      (startRequest?.params as { dynamicTools?: Array<{ name: string }> } | undefined)
+        ?.dynamicTools ?? []
+    ).map((tool) => tool.name);
+
+    expect(dynamicToolNames).toContain("message");
+    expect(dynamicToolNames).toContain("web_search");
+    expect(dynamicToolNames).not.toEqual(
+      expect.arrayContaining([
+        "read",
+        "write",
+        "edit",
+        "apply_patch",
+        "exec",
+        "process",
+        "update_plan",
+      ]),
+    );
+  });
+
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;
