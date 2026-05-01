@@ -113,7 +113,6 @@ inter-session user turns that only have provenance metadata.
 
 ---
 
-
 ## Global rule: fallback tail cleanup
 
 When a provider attempt fails after appending an assistant turn with no usable
@@ -136,6 +135,8 @@ Implementation:
 - `stripTrailingEmptyAssistantTurn` in `src/agents/session-transcript-repair.ts`
 - Applied in `src/agents/pi-embedded-runner/run/attempt.ts` before fallback and
   before normalized replay submission
+
+---
 
 ## Provider matrix (current behavior)
 
