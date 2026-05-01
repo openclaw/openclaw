@@ -342,7 +342,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(second.plugins.find((plugin) => plugin.id === "cached-manifest")?.name).toBe("After");
   });
 
-  it("keeps only the higher-precedence plugin for truly distinct duplicates", () => {
+  it("warns for distinct duplicate plugin roots within the same origin", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -358,7 +358,7 @@ describe("loadPluginManifestRegistry", () => {
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirB,
-        origin: "global",
+        origin: "bundled",
       }),
     ];
 
@@ -368,11 +368,11 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("bundled");
     expectRegistryDiagnosticContains(
       registry,
-      "global plugin will be overridden by bundled plugin",
+      "bundled plugin root collides with another bundled plugin",
     );
   });
 
-  it("lets config-loaded plugins replace bundled duplicates", () => {
+  it("warns when config-loaded plugins replace bundled distinct-root duplicates", () => {
     const bundledDir = makeTempDir();
     const configDir = makeTempDir();
     const manifest = { id: "config-shadow", configSchema: { type: "object" } };
@@ -400,7 +400,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(warning?.message).toContain(path.join(configDir, "index.ts"));
   });
 
-  it("suppresses duplicate warnings for explicit installed globals overriding bundled plugins", () => {
+  it("warns while keeping explicit installed globals as the effective duplicate winner", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
     const manifest = { id: "zalouser", configSchema: { type: "object" } };
@@ -428,12 +428,16 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(countDuplicateWarnings(registry)).toBe(1);
     expect(registry.plugins).toHaveLength(1);
     expect(registry.plugins[0]?.origin).toBe("global");
+    expectRegistryDiagnosticContains(
+      registry,
+      "bundled plugin will be overridden by global plugin",
+    );
   });
 
-  it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
+  it("warns when the installed global is discovered before bundled", () => {
     const bundledDir = makeTempDir();
     const globalDir = makeTempDir();
     const manifest = { id: "zalouser", configSchema: { type: "object" } };
@@ -461,9 +465,13 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(countDuplicateWarnings(registry)).toBe(0);
+    expect(countDuplicateWarnings(registry)).toBe(1);
     expect(registry.plugins).toHaveLength(1);
     expect(registry.plugins[0]?.origin).toBe("global");
+    expectRegistryDiagnosticContains(
+      registry,
+      "bundled plugin will be overridden by global plugin",
+    );
   });
 
   it("preserves provider auth env metadata from plugin manifests", () => {
@@ -1552,6 +1560,40 @@ describe("loadPluginManifestRegistry", () => {
     expectRegistryDiagnosticContains(registry, expectedMessage);
     expect(registry.plugins).toHaveLength(1);
     expect(registry.plugins[0]?.origin).toBe("bundled");
+  });
+
+  it("warns for same-origin duplicates after same-root origin promotion", () => {
+    const promotedDir = makeTempDir();
+    const duplicateDir = makeTempDir();
+    const manifest = { id: "promoted-shadow", configSchema: { type: "object" } };
+    writeManifest(promotedDir, manifest);
+    writeManifest(duplicateDir, manifest);
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "promoted-shadow",
+        rootDir: promotedDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "promoted-shadow",
+        rootDir: promotedDir,
+        origin: "global",
+      }),
+      createPluginCandidate({
+        idHint: "promoted-shadow",
+        rootDir: duplicateDir,
+        origin: "global",
+      }),
+    ]);
+
+    expect(countDuplicateWarnings(registry)).toBe(1);
+    expectRegistryDiagnosticContains(
+      registry,
+      "global plugin root collides with another global plugin",
+    );
+    expect(registry.plugins).toHaveLength(1);
+    expect(registry.plugins[0]?.origin).toBe("global");
   });
 
   it("suppresses duplicate warning when candidates share the same physical directory via symlink", () => {

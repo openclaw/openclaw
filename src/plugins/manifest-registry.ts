@@ -82,6 +82,10 @@ type SeenIdEntry = {
   recordIndex: number;
 };
 
+type SeenRootEntry = {
+  candidate: PluginCandidate;
+};
+
 // Canonicalize identical physical plugin roots with the most explicit source.
 // This only applies when multiple candidates resolve to the same on-disk plugin.
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
@@ -440,6 +444,64 @@ function pushManifestCompatibilityDiagnostics(params: {
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
 }
 
+function resolvePluginRootKey(
+  candidate: PluginCandidate,
+  realpathCache: Map<string, string>,
+): string {
+  return safeRealpathSync(candidate.rootDir, realpathCache) ?? candidate.rootDir;
+}
+
+function ensureSeenRootsForId(
+  seenRootsById: Map<string, Map<string, SeenRootEntry>>,
+  pluginId: string,
+): Map<string, SeenRootEntry> {
+  const existing = seenRootsById.get(pluginId);
+  if (existing) {
+    return existing;
+  }
+  const roots = new Map<string, SeenRootEntry>();
+  seenRootsById.set(pluginId, roots);
+  return roots;
+}
+
+function ensureSeenOriginsForId(
+  seenOriginsById: Map<string, Map<PluginOrigin, Set<string>>>,
+  pluginId: string,
+): Map<PluginOrigin, Set<string>> {
+  const existing = seenOriginsById.get(pluginId);
+  if (existing) {
+    return existing;
+  }
+  const origins = new Map<PluginOrigin, Set<string>>();
+  seenOriginsById.set(pluginId, origins);
+  return origins;
+}
+
+function addSeenOriginRoot(
+  originsForId: Map<PluginOrigin, Set<string>>,
+  origin: PluginOrigin,
+  rootKey: string,
+): Set<string> {
+  const existing = originsForId.get(origin);
+  if (existing) {
+    existing.add(rootKey);
+    return existing;
+  }
+  const roots = new Set([rootKey]);
+  originsForId.set(origin, roots);
+  return roots;
+}
+
+function promoteSeenOriginRoot(params: {
+  originsForId: Map<PluginOrigin, Set<string>>;
+  rootKey: string;
+  fromOrigin: PluginOrigin;
+  toOrigin: PluginOrigin;
+}): void {
+  params.originsForId.get(params.fromOrigin)?.delete(params.rootKey);
+  addSeenOriginRoot(params.originsForId, params.toOrigin, params.rootKey);
+}
+
 function matchesInstalledPluginRecord(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -498,34 +560,6 @@ function resolveDuplicatePrecedenceRank(params: {
   return 4;
 }
 
-function isIntentionalInstalledBundledDuplicate(params: {
-  pluginId: string;
-  left: PluginCandidate;
-  right: PluginCandidate;
-  config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  installRecords: Record<string, PluginInstallRecord>;
-}): boolean {
-  const leftIsInstalled = matchesInstalledPluginRecord({
-    pluginId: params.pluginId,
-    candidate: params.left,
-    config: params.config,
-    env: params.env,
-    installRecords: params.installRecords,
-  });
-  const rightIsInstalled = matchesInstalledPluginRecord({
-    pluginId: params.pluginId,
-    candidate: params.right,
-    config: params.config,
-    env: params.env,
-    installRecords: params.installRecords,
-  });
-  return (
-    (leftIsInstalled && params.right.origin === "bundled") ||
-    (rightIsInstalled && params.left.origin === "bundled")
-  );
-}
-
 export function loadPluginManifestRegistry(
   params: {
     config?: OpenClawConfig;
@@ -555,6 +589,8 @@ export function loadPluginManifestRegistry(
   const candidates: PluginCandidate[] = discovery.candidates;
   const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
+  const seenRootsById = new Map<string, Map<string, SeenRootEntry>>();
+  const seenOriginsById = new Map<string, Map<PluginOrigin, Set<string>>>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
   let installRecords = params.installRecords;
@@ -647,21 +683,43 @@ export function loadPluginManifestRegistry(
             : {}),
         });
 
+    const rootKey = resolvePluginRootKey(candidate, realpathCache);
+    const rootsForId = ensureSeenRootsForId(seenRootsById, manifest.id);
+    const originsForId = ensureSeenOriginsForId(seenOriginsById, manifest.id);
+    const existingSameRoot = rootsForId.get(rootKey);
+    if (existingSameRoot) {
+      // Same physical plugin discovered through multiple origins/sources.
+      // Keep one root bucket and use the most explicit effective origin.
+      if (
+        PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existingSameRoot.candidate.origin]
+      ) {
+        promoteSeenOriginRoot({
+          originsForId,
+          rootKey,
+          fromOrigin: existingSameRoot.candidate.origin,
+          toOrigin: candidate.origin,
+        });
+        rootsForId.set(rootKey, { candidate });
+      }
+    } else {
+      const rootsForOrigin = originsForId.get(candidate.origin);
+      const hadOriginRoot = Boolean(rootsForOrigin?.size);
+      addSeenOriginRoot(originsForId, candidate.origin, rootKey);
+      rootsForId.set(rootKey, { candidate });
+      if (hadOriginRoot) {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; ${candidate.origin} plugin root collides with another ${candidate.origin} plugin (${candidate.source})`,
+        });
+      }
+    }
+
     const existing = seenIds.get(manifest.id);
     if (existing) {
-      // Check whether both candidates point to the same physical directory
-      // (e.g. via symlinks or different path representations). If so, this
-      // is a false-positive duplicate and can be silently skipped.
-      const samePath = existing.candidate.rootDir === candidate.rootDir;
-      const samePlugin = (() => {
-        if (samePath) {
-          return true;
-        }
-        const existingReal = safeRealpathSync(existing.candidate.rootDir, realpathCache);
-        const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
-        return Boolean(existingReal && candidateReal && existingReal === candidateReal);
-      })();
-      if (samePlugin) {
+      const existingRootKey = resolvePluginRootKey(existing.candidate, realpathCache);
+      if (existingRootKey === rootKey) {
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
@@ -671,7 +729,6 @@ export function loadPluginManifestRegistry(
         }
         continue;
       }
-
       const candidateRank = resolveDuplicatePrecedenceRank({
         pluginId: manifest.id,
         candidate,
@@ -694,24 +751,14 @@ export function loadPluginManifestRegistry(
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
         pushManifestCompatibilityDiagnostics({ record, diagnostics });
       }
-      if (
-        isIntentionalInstalledBundledDuplicate({
+      if (winnerCandidate.origin !== overriddenCandidate.origin) {
+        diagnostics.push({
+          level: "warn",
           pluginId: manifest.id,
-          left: candidate,
-          right: existing.candidate,
-          config,
-          env,
-          installRecords: getInstallRecords(),
-        })
-      ) {
-        continue;
+          source: overriddenCandidate.source,
+          message: `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
+        });
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: overriddenCandidate.source,
-        message: `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
-      });
       continue;
     }
 
