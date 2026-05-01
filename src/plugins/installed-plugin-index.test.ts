@@ -791,6 +791,45 @@ describe("installed plugin index", () => {
     });
   });
 
+  it("discovers installed plugin packages from persisted install records", async () => {
+    const fixture = createRichPluginFixture();
+    const stateDir = makeTempDir();
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        demo: {
+          source: "git",
+          spec: "git:file:///tmp/demo.git@abc123",
+          installPath: fixture.rootDir,
+          gitUrl: "file:///tmp/demo.git",
+          gitCommit: "abc123",
+        },
+      },
+      { stateDir },
+    );
+
+    const index = loadInstalledPluginIndex({
+      env: hermeticEnv({
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        OPENCLAW_STATE_DIR: stateDir,
+      }),
+    });
+
+    expect(index.plugins).toHaveLength(1);
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "demo",
+      origin: "global",
+      rootDir: fs.realpathSync.native(fixture.rootDir),
+      installRecordHash: expect.stringMatching(/^[a-f0-9]{64}$/u),
+    });
+    expect(index.installRecords).toMatchObject({
+      demo: {
+        source: "git",
+        installPath: fixture.rootDir,
+        gitCommit: "abc123",
+      },
+    });
+  });
+
   it("indexes local fallback plugin index records written before a process reload", () => {
     const fixture = createRichPluginFixture();
     const cfg = recordPluginInstall(
