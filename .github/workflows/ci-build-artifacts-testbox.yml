@@ -175,6 +175,7 @@ jobs:
           name: control-ui-checksums
           path: .artifacts/control-ui/
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 7
 
       - name: Save dist build cache

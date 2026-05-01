@@ -139,6 +139,7 @@ jobs:
           name: control-ui-checksums-${{ inputs.tag }}
           path: .artifacts/control-ui/
           if-no-files-found: error
+          include-hidden-files: true
 
       - name: Validate release metadata
         if: ${{ inputs.preflight_run_id == '' }}
