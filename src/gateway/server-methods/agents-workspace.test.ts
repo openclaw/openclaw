@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   fsAccess: vi.fn(),
   fsMkdir: vi.fn(),
   fsRename: vi.fn(),
+  fsRm: vi.fn(),
   fsRealpath: vi.fn((p: string) => Promise.resolve(p)),
 
   // config mock
@@ -56,6 +57,7 @@ vi.mock("node:fs/promises", async () => {
     access: mocks.fsAccess,
     mkdir: mocks.fsMkdir,
     rename: mocks.fsRename,
+    rm: mocks.fsRm,
     realpath: mocks.fsRealpath,
   };
   return { ...patched, default: patched };
@@ -87,6 +89,7 @@ function restoreMockDefaults() {
   mocks.listAgentIds.mockReturnValue(["main"]);
   mocks.fsRealpath.mockImplementation((p: string) => Promise.resolve(p));
   mocks.fsAccess.mockResolvedValue(undefined);
+  mocks.fsRm.mockResolvedValue(undefined);
 }
 
 type RespondFn = (ok: boolean, result?: unknown, error?: unknown) => void;
