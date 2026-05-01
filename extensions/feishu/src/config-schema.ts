@@ -188,6 +188,12 @@ const FeishuSharedConfigShape = {
   dms: z.record(z.string(), DmConfigSchema).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
+  // Block-level streaming for non-Telegram channels. Documented in
+  // docs/channels/feishu.md and docs/gateway/config-agents.md, and consumed
+  // by the shared resolveChannelStreamingBlockEnabled() helper, but was
+  // missing from the strict schema so config.patch / config.apply rejected
+  // it as an unknown property. See #75555.
+  blockStreaming: z.boolean().optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),

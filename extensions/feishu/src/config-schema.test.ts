@@ -307,3 +307,36 @@ describe("FeishuConfigSchema defaultAccount", () => {
     }
   });
 });
+
+describe("FeishuConfigSchema blockStreaming (#75555)", () => {
+  it("accepts top-level blockStreaming as a boolean", () => {
+    const result = FeishuConfigSchema.safeParse({ blockStreaming: true });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.blockStreaming).toBe(true);
+    }
+  });
+
+  it("accepts blockStreaming inside an account config", () => {
+    const result = FeishuConfigSchema.safeParse({
+      accounts: {
+        primary: {
+          appId: "cli_p",
+          appSecret: "secret_p", // pragma: allowlist secret
+          blockStreaming: false,
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.primary?.blockStreaming).toBe(false);
+    }
+  });
+
+  it("rejects non-boolean blockStreaming values", () => {
+    const result = FeishuConfigSchema.safeParse({
+      blockStreaming: "yes" as unknown as boolean,
+    });
+    expect(result.success).toBe(false);
+  });
+});

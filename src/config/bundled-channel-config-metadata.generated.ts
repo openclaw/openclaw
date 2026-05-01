@@ -4134,6 +4134,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "string",
           enum: ["length", "newline"],
         },
+        blockStreaming: {
+          type: "boolean",
+        },
         blockStreamingCoalesce: {
           type: "object",
           properties: {
@@ -4761,6 +4764,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               chunkMode: {
                 type: "string",
                 enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
               },
               blockStreamingCoalesce: {
                 type: "object",
