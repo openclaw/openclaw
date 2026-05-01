@@ -139,6 +139,28 @@ describe("Slack status reaction lifecycle", () => {
     expect(active.has(DEFAULT_EMOJIS.thinking)).toBe(false);
   });
 
+  it("restoreInitial removes only tracked active reactions", async () => {
+    const { adapter, active } = createSlackMockAdapter();
+    const ctrl = createStatusReactionController({
+      enabled: true,
+      adapter,
+      initialEmoji: "eyes",
+      timing: { debounceMs: 0, stallSoftMs: 99999, stallHardMs: 99999 },
+    });
+
+    void ctrl.setQueued();
+    await vi.advanceTimersByTimeAsync(10);
+    await ctrl.setDone();
+
+    await ctrl.restoreInitial();
+
+    expect(active.has("eyes")).toBe(true);
+    expect(active.has(DEFAULT_EMOJIS.done)).toBe(false);
+    expect(adapter.removeReaction).toHaveBeenCalledTimes(1);
+    expect(adapter.removeReaction).toHaveBeenCalledWith(DEFAULT_EMOJIS.done);
+    expect(adapter.removeReaction).not.toHaveBeenCalledWith(DEFAULT_EMOJIS.thinking);
+  });
+
   it("restoreInitial still applies initial emoji when it is only debounced", async () => {
     const { adapter, active } = createSlackMockAdapter();
     const ctrl = createStatusReactionController({

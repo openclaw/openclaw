@@ -160,21 +160,6 @@ export function createStatusReactionController(params: {
   let chainPromise = Promise.resolve();
   const activeEmojis = new Set<string>();
 
-  // Known emojis for clear operation
-  const knownEmojis = new Set<string>([
-    initialEmoji,
-    emojis.queued,
-    emojis.thinking,
-    emojis.tool,
-    emojis.coding,
-    emojis.web,
-    emojis.done,
-    emojis.error,
-    emojis.stallSoft,
-    emojis.stallHard,
-    emojis.compacting,
-  ]);
-
   /**
    * Serialize async operations to prevent race conditions.
    */
@@ -231,12 +216,12 @@ export function createStatusReactionController(params: {
     }, timing.stallHardMs);
   }
 
-  async function removeKnownEmojis(options: { keepEmoji?: string } = {}): Promise<void> {
+  async function removeActiveEmojis(options: { keepEmoji?: string } = {}): Promise<void> {
     if (!adapter.removeReaction) {
       return;
     }
 
-    for (const emoji of knownEmojis) {
+    for (const emoji of Array.from(activeEmojis)) {
       if (emoji === options.keepEmoji) {
         continue;
       }
@@ -378,7 +363,7 @@ export function createStatusReactionController(params: {
 
     await enqueue(async () => {
       if (adapter.removeReaction) {
-        await removeKnownEmojis();
+        await removeActiveEmojis();
       } else {
         // For platforms without removeReaction, set empty or just skip
         // (Telegram handles this atomically on the next setReaction)
@@ -409,7 +394,7 @@ export function createStatusReactionController(params: {
 
     await enqueue(async () => {
       await applyEmoji(initialEmoji);
-      await removeKnownEmojis({ keepEmoji: initialEmoji });
+      await removeActiveEmojis({ keepEmoji: initialEmoji });
       pendingEmoji = "";
     });
   }
