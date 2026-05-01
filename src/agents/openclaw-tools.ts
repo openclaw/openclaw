@@ -68,6 +68,11 @@ type CapabilityContractKey =
   | "musicGenerationProviders"
   | "mediaUnderstandingProviders";
 
+type CapabilityProviderMetadataKey =
+  | "imageGenerationProviderMetadata"
+  | "videoGenerationProviderMetadata"
+  | "musicGenerationProviderMetadata";
+
 type OptionalMediaToolFactoryPlan = {
   imageGenerate: boolean;
   videoGenerate: boolean;
@@ -106,6 +111,69 @@ function hasNonEmptyEnvCandidate(envVars: readonly string[]): boolean {
   });
 }
 
+function metadataKeyForCapabilityContract(
+  key: CapabilityContractKey,
+): CapabilityProviderMetadataKey | undefined {
+  switch (key) {
+    case "imageGenerationProviders":
+      return "imageGenerationProviderMetadata";
+    case "videoGenerationProviders":
+      return "videoGenerationProviderMetadata";
+    case "musicGenerationProviders":
+      return "musicGenerationProviderMetadata";
+    case "mediaUnderstandingProviders":
+      return undefined;
+  }
+}
+
+function normalizeBaseUrlForManifestGuard(value: string): string {
+  return value.trim().replace(/\/+$/, "");
+}
+
+function providerBaseUrlGuardPasses(params: {
+  config?: OpenClawConfig;
+  guard: NonNullable<
+    NonNullable<PluginManifestRecord["imageGenerationProviderMetadata"]>[string]["authSignals"]
+  >[number]["providerBaseUrl"];
+}): boolean {
+  const guard = params.guard;
+  if (!guard) {
+    return true;
+  }
+  const providerConfig = params.config?.models?.providers?.[guard.provider];
+  const rawBaseUrl =
+    typeof providerConfig?.baseUrl === "string" && providerConfig.baseUrl.trim()
+      ? providerConfig.baseUrl
+      : guard.defaultBaseUrl;
+  if (!rawBaseUrl) {
+    return false;
+  }
+  const normalizedBaseUrl = normalizeBaseUrlForManifestGuard(rawBaseUrl);
+  return guard.allowedBaseUrls.some(
+    (allowedBaseUrl) => normalizeBaseUrlForManifestGuard(allowedBaseUrl) === normalizedBaseUrl,
+  );
+}
+
+function listCapabilityAuthSignals(params: {
+  plugin: PluginManifestRecord;
+  key: CapabilityContractKey;
+  providerId: string;
+}): Array<{
+  provider: string;
+  providerBaseUrl?: NonNullable<
+    NonNullable<PluginManifestRecord["imageGenerationProviderMetadata"]>[string]["authSignals"]
+  >[number]["providerBaseUrl"];
+}> {
+  const metadataKey = metadataKeyForCapabilityContract(params.key);
+  const metadata = metadataKey ? params.plugin[metadataKey]?.[params.providerId] : undefined;
+  if (metadata?.authSignals?.length) {
+    return metadata.authSignals;
+  }
+  return [params.providerId, ...(metadata?.aliases ?? []), ...(metadata?.authProviders ?? [])].map(
+    (provider) => ({ provider }),
+  );
+}
+
 function hasAuthSignalForSnapshotCapability(params: {
   snapshot: PluginMetadataSnapshot;
   authStore: AuthProfileStore;
@@ -123,11 +191,25 @@ function hasAuthSignalForSnapshotCapability(params: {
       continue;
     }
     for (const providerId of plugin.contracts?.[params.key] ?? []) {
-      if (listProfilesForProvider(params.authStore, providerId).length > 0) {
-        return true;
-      }
-      if (hasNonEmptyEnvCandidate(pluginSetupProviderEnvVars(plugin, providerId))) {
-        return true;
+      for (const signal of listCapabilityAuthSignals({
+        plugin,
+        key: params.key,
+        providerId,
+      })) {
+        if (
+          !providerBaseUrlGuardPasses({
+            config: params.config,
+            guard: signal.providerBaseUrl,
+          })
+        ) {
+          continue;
+        }
+        if (listProfilesForProvider(params.authStore, signal.provider).length > 0) {
+          return true;
+        }
+        if (hasNonEmptyEnvCandidate(pluginSetupProviderEnvVars(plugin, signal.provider))) {
+          return true;
+        }
       }
     }
   }

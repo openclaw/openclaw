@@ -30,6 +30,7 @@ function createPlugin(params: {
   id: string;
   origin?: PluginManifestRecord["origin"];
   contracts: NonNullable<PluginManifestRecord["contracts"]>;
+  imageGenerationProviderMetadata?: PluginManifestRecord["imageGenerationProviderMetadata"];
   setupProviders?: Array<{ id: string; envVars?: string[] }>;
 }): PluginManifestRecord {
   return {
@@ -44,6 +45,7 @@ function createPlugin(params: {
     skills: [],
     hooks: [],
     contracts: params.contracts,
+    imageGenerationProviderMetadata: params.imageGenerationProviderMetadata,
     setup: params.setupProviders ? { providers: params.setupProviders } : undefined,
   };
 }
@@ -274,6 +276,85 @@ describe("optional media tool factory planning", () => {
       videoGenerate: true,
       musicGenerate: true,
       pdf: true,
+    });
+  });
+
+  it("keeps manifest-declared image provider auth aliases on the factory path", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "openai",
+        contracts: { imageGenerationProviders: ["openai"] },
+        imageGenerationProviderMetadata: {
+          openai: {
+            aliases: ["openai-codex"],
+            authSignals: [
+              {
+                provider: "openai",
+              },
+              {
+                provider: "openai-codex",
+                providerBaseUrl: {
+                  provider: "openai",
+                  defaultBaseUrl: "https://api.openai.com/v1",
+                  allowedBaseUrls: ["https://api.openai.com/v1"],
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["openai-codex"]),
+      }),
+    ).toMatchObject({
+      imageGenerate: true,
+    });
+  });
+
+  it("honors manifest-declared image provider auth alias base-url guards", () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "http://localhost:11434/v1",
+          },
+        },
+      },
+    };
+    installSnapshot(config, [
+      createPlugin({
+        id: "openai",
+        contracts: { imageGenerationProviders: ["openai"] },
+        imageGenerationProviderMetadata: {
+          openai: {
+            aliases: ["openai-codex"],
+            authSignals: [
+              {
+                provider: "openai-codex",
+                providerBaseUrl: {
+                  provider: "openai",
+                  defaultBaseUrl: "https://api.openai.com/v1",
+                  allowedBaseUrls: ["https://api.openai.com/v1"],
+                },
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["openai-codex"]),
+      }),
+    ).toMatchObject({
+      imageGenerate: false,
     });
   });
 

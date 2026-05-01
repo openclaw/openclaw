@@ -1194,6 +1194,23 @@ describe("loadPluginManifestRegistry", () => {
       id: "openai",
       contracts: {
         mediaUnderstandingProviders: ["openai"],
+        imageGenerationProviders: ["openai"],
+      },
+      imageGenerationProviderMetadata: {
+        openai: {
+          aliases: ["openai-codex"],
+          authProviders: ["openai"],
+          authSignals: [
+            {
+              provider: "openai-codex",
+              providerBaseUrl: {
+                provider: "openai",
+                defaultBaseUrl: "https://api.openai.com/v1",
+                allowedBaseUrls: ["https://api.openai.com/v1"],
+              },
+            },
+          ],
+        },
       },
       mediaUnderstandingProviderMetadata: {
         openai: {
@@ -1220,6 +1237,22 @@ describe("loadPluginManifestRegistry", () => {
       origin: "bundled",
     });
 
+    expect(registry.plugins[0]?.imageGenerationProviderMetadata).toEqual({
+      openai: {
+        aliases: ["openai-codex"],
+        authProviders: ["openai"],
+        authSignals: [
+          {
+            provider: "openai-codex",
+            providerBaseUrl: {
+              provider: "openai",
+              defaultBaseUrl: "https://api.openai.com/v1",
+              allowedBaseUrls: ["https://api.openai.com/v1"],
+            },
+          },
+        ],
+      },
+    });
     expect(registry.plugins[0]?.mediaUnderstandingProviderMetadata).toEqual({
       openai: {
         capabilities: ["image", "audio"],

@@ -25,6 +25,7 @@ import {
   type PluginManifestActivation,
   type PluginManifestConfigContracts,
   type PluginManifest,
+  type PluginManifestCapabilityProviderMetadata,
   type PluginManifestChannelCommandDefaults,
   type PluginManifestChannelConfig,
   type PluginManifestContracts,
@@ -149,6 +150,9 @@ export type PluginManifestRecord = {
     string,
     PluginManifestMediaUnderstandingProviderMetadata
   >;
+  imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
@@ -330,6 +334,9 @@ function buildRecord(params: {
     configUiHints: params.manifest.uiHints,
     contracts: params.manifest.contracts,
     mediaUnderstandingProviderMetadata: params.manifest.mediaUnderstandingProviderMetadata,
+    imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
+    videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
+    musicGenerationProviderMetadata: params.manifest.musicGenerationProviderMetadata,
     configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id

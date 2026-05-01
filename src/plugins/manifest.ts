@@ -375,6 +375,12 @@ export type PluginManifest = {
     string,
     PluginManifestMediaUnderstandingProviderMetadata
   >;
+  /** Cheap image-generation provider auth metadata without importing plugin runtime. */
+  imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap video-generation provider auth metadata without importing plugin runtime. */
+  videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap music-generation provider auth metadata without importing plugin runtime. */
+  musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Manifest-owned config behavior consumed by generic core helpers. */
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
@@ -412,6 +418,23 @@ export type PluginManifestMediaUnderstandingProviderMetadata = {
   defaultModels?: Partial<Record<PluginManifestMediaUnderstandingCapability, string>>;
   autoPriority?: Partial<Record<PluginManifestMediaUnderstandingCapability, number>>;
   nativeDocumentInputs?: Array<"pdf">;
+};
+
+export type PluginManifestProviderBaseUrlGuard = {
+  provider: string;
+  defaultBaseUrl?: string;
+  allowedBaseUrls: string[];
+};
+
+export type PluginManifestCapabilityProviderAuthSignal = {
+  provider: string;
+  providerBaseUrl?: PluginManifestProviderBaseUrlGuard;
+};
+
+export type PluginManifestCapabilityProviderMetadata = {
+  aliases?: string[];
+  authProviders?: string[];
+  authSignals?: PluginManifestCapabilityProviderAuthSignal[];
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -567,6 +590,76 @@ function normalizeMediaUnderstandingProviderMetadata(
       ...(autoPriority ? { autoPriority } : {}),
       ...(nativeDocumentInputs ? { nativeDocumentInputs } : {}),
     } satisfies PluginManifestMediaUnderstandingProviderMetadata;
+    if (Object.keys(metadata).length > 0) {
+      normalized[providerId] = metadata;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
+function normalizeProviderBaseUrlGuard(
+  value: unknown,
+): PluginManifestProviderBaseUrlGuard | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const provider = normalizeOptionalString(value.provider);
+  const allowedBaseUrls = normalizeTrimmedStringList(value.allowedBaseUrls);
+  if (!provider || allowedBaseUrls.length === 0) {
+    return undefined;
+  }
+  const defaultBaseUrl = normalizeOptionalString(value.defaultBaseUrl);
+  return {
+    provider,
+    ...(defaultBaseUrl ? { defaultBaseUrl } : {}),
+    allowedBaseUrls,
+  };
+}
+
+function normalizeCapabilityProviderAuthSignals(
+  value: unknown,
+): PluginManifestCapabilityProviderAuthSignal[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const signals: PluginManifestCapabilityProviderAuthSignal[] = [];
+  for (const rawSignal of value) {
+    if (!isRecord(rawSignal)) {
+      continue;
+    }
+    const provider = normalizeOptionalString(rawSignal.provider);
+    if (!provider) {
+      continue;
+    }
+    const providerBaseUrl = normalizeProviderBaseUrlGuard(rawSignal.providerBaseUrl);
+    signals.push({
+      provider,
+      ...(providerBaseUrl ? { providerBaseUrl } : {}),
+    });
+  }
+  return signals.length > 0 ? signals : undefined;
+}
+
+function normalizeCapabilityProviderMetadata(
+  value: unknown,
+): Record<string, PluginManifestCapabilityProviderMetadata> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, PluginManifestCapabilityProviderMetadata> = Object.create(null);
+  for (const [rawProviderId, rawMetadata] of Object.entries(value)) {
+    const providerId = normalizeOptionalString(rawProviderId) ?? "";
+    if (!providerId || isBlockedObjectKey(providerId) || !isRecord(rawMetadata)) {
+      continue;
+    }
+    const aliases = normalizeTrimmedStringList(rawMetadata.aliases);
+    const authProviders = normalizeTrimmedStringList(rawMetadata.authProviders);
+    const authSignals = normalizeCapabilityProviderAuthSignals(rawMetadata.authSignals);
+    const metadata = {
+      ...(aliases.length > 0 ? { aliases } : {}),
+      ...(authProviders.length > 0 ? { authProviders } : {}),
+      ...(authSignals ? { authSignals } : {}),
+    } satisfies PluginManifestCapabilityProviderMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[providerId] = metadata;
     }
@@ -1393,6 +1486,15 @@ export function loadPluginManifest(
   const mediaUnderstandingProviderMetadata = normalizeMediaUnderstandingProviderMetadata(
     raw.mediaUnderstandingProviderMetadata,
   );
+  const imageGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.imageGenerationProviderMetadata,
+  );
+  const videoGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.videoGenerationProviderMetadata,
+  );
+  const musicGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
+    raw.musicGenerationProviderMetadata,
+  );
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
@@ -1439,6 +1541,9 @@ export function loadPluginManifest(
       uiHints,
       contracts,
       mediaUnderstandingProviderMetadata,
+      imageGenerationProviderMetadata,
+      videoGenerationProviderMetadata,
+      musicGenerationProviderMetadata,
       configContracts,
       channelConfigs,
     },

@@ -830,8 +830,11 @@ async function agentCommandInternal(
     }
 
     const catalogForThinking =
-      modelCatalog ??
-      (allowedModelCatalog.length > 0 ? allowedModelCatalog : configuredThinkingCatalog);
+      allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : modelCatalog && modelCatalog.length > 0
+          ? modelCatalog
+          : configuredThinkingCatalog;
     const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
       resolvedThinkLevel = resolveThinkingDefault({
