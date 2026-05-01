@@ -256,6 +256,15 @@ function writeDoctorStatus(status: ReturnType<GoogleMeetRuntime["status"]>): voi
     writeStdoutLine("state: %s", session.state);
     writeStdoutLine("transport: %s", session.transport);
     writeStdoutLine("mode: %s", session.mode);
+    if (session.twilio) {
+      writeStdoutLine("twilio dial-in: %s", session.twilio.dialInNumber);
+      writeStdoutLine("voice call id: %s", formatOptional(session.twilio.voiceCallId));
+      writeStdoutLine("dtmf sent: %s", formatBoolean(session.twilio.dtmfSent));
+      writeStdoutLine("intro sent: %s", formatBoolean(session.twilio.introSent));
+    }
+    if (!session.chrome) {
+      continue;
+    }
     writeStdoutLine("node: %s", session.chrome?.nodeId ?? "local/none");
     writeStdoutLine("audio bridge: %s", session.chrome?.audioBridge?.type ?? "none");
     writeStdoutLine(
