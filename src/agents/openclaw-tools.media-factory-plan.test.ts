@@ -28,12 +28,13 @@ function createAuthStore(providers: string[] = []): AuthProfileStore {
 
 function createPlugin(params: {
   id: string;
+  origin?: PluginManifestRecord["origin"];
   contracts: NonNullable<PluginManifestRecord["contracts"]>;
   setupProviders?: Array<{ id: string; envVars?: string[] }>;
 }): PluginManifestRecord {
   return {
     id: params.id,
-    origin: "bundled",
+    origin: params.origin ?? "bundled",
     rootDir: `/plugins/${params.id}`,
     source: `/plugins/${params.id}/index.js`,
     manifestPath: `/plugins/${params.id}/openclaw.plugin.json`,
@@ -47,10 +48,22 @@ function createPlugin(params: {
   };
 }
 
-function installSnapshot(config: OpenClawConfig, plugins: PluginManifestRecord[]) {
+function installSnapshot(
+  config: OpenClawConfig,
+  plugins: PluginManifestRecord[],
+  enabledPluginIds = plugins
+    .filter((plugin) => plugin.origin !== "bundled")
+    .map((plugin) => plugin.id),
+) {
   const snapshot = {
     policyHash: resolveInstalledPluginIndexPolicyHash(config),
-    index: { plugins: [] },
+    index: {
+      plugins: plugins.map((plugin) => ({
+        pluginId: plugin.id,
+        origin: plugin.origin,
+        enabled: plugin.origin === "bundled" || enabledPluginIds.includes(plugin.id),
+      })),
+    },
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
     plugins,
@@ -214,6 +227,81 @@ describe("optional media tool factory planning", () => {
       videoGenerate: true,
       musicGenerate: true,
       pdf: true,
+    });
+  });
+
+  it("keeps enabled external manifest capability providers on the factory path", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "external-image",
+        origin: "global",
+        contracts: { imageGenerationProviders: ["external-image"] },
+        setupProviders: [{ id: "external-image", envVars: ["EXTERNAL_IMAGE_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "external-video",
+        origin: "global",
+        contracts: { videoGenerationProviders: ["external-video"] },
+        setupProviders: [{ id: "external-video", envVars: ["EXTERNAL_VIDEO_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "external-music",
+        origin: "global",
+        contracts: { musicGenerationProviders: ["external-music"] },
+        setupProviders: [{ id: "external-music", envVars: ["EXTERNAL_MUSIC_API_KEY"] }],
+      }),
+      createPlugin({
+        id: "external-media",
+        origin: "global",
+        contracts: { mediaUnderstandingProviders: ["external-media"] },
+        setupProviders: [{ id: "external-media", envVars: ["EXTERNAL_MEDIA_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore([
+          "external-image",
+          "external-video",
+          "external-music",
+          "external-media",
+        ]),
+      }),
+    ).toEqual({
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
+      pdf: true,
+    });
+  });
+
+  it("ignores external manifest capability providers excluded by plugin policy", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        allow: ["other-plugin"],
+      },
+    };
+    installSnapshot(config, [
+      createPlugin({
+        id: "external-image",
+        origin: "global",
+        contracts: { imageGenerationProviders: ["external-image"] },
+        setupProviders: [{ id: "external-image", envVars: ["EXTERNAL_IMAGE_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["external-image"]),
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
     });
   });
 

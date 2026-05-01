@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { getDefaultLocalRoots } from "../../media/web-media.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
-import { resolveBundledCapabilityProviderIds } from "../../plugins/capability-provider-runtime.js";
+import { resolveManifestCapabilityProviderIds } from "../../plugins/capability-provider-runtime.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -317,7 +317,7 @@ export function hasGenerationToolAvailability(params: {
       }),
     );
   }
-  return resolveBundledCapabilityProviderIds({
+  return resolveManifestCapabilityProviderIds({
     key: params.providerKey,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,

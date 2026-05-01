@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
@@ -109,9 +110,16 @@ function hasAuthSignalForSnapshotCapability(params: {
   snapshot: PluginMetadataSnapshot;
   authStore: AuthProfileStore;
   key: CapabilityContractKey;
+  config?: OpenClawConfig;
 }): boolean {
   for (const plugin of params.snapshot.plugins) {
-    if (plugin.origin !== "bundled") {
+    if (
+      !isManifestPluginAvailableForControlPlane({
+        snapshot: params.snapshot,
+        plugin,
+        config: params.config,
+      })
+    ) {
       continue;
     }
     for (const providerId of plugin.contracts?.[params.key] ?? []) {
@@ -147,7 +155,13 @@ function hasConfiguredVisionModelAuthSignal(params: {
       return true;
     }
     for (const plugin of params.snapshot.plugins) {
-      if (plugin.origin !== "bundled") {
+      if (
+        !isManifestPluginAvailableForControlPlane({
+          snapshot: params.snapshot,
+          plugin,
+          config: params.config,
+        })
+      ) {
         continue;
       }
       if (hasNonEmptyEnvCandidate(pluginSetupProviderEnvVars(plugin, providerId))) {
@@ -208,6 +222,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
           snapshot,
           authStore: params.authStore,
           key: "imageGenerationProviders",
+          config: params.config,
         })),
     videoGenerate:
       allowVideoGenerate &&
@@ -216,6 +231,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
           snapshot,
           authStore: params.authStore,
           key: "videoGenerationProviders",
+          config: params.config,
         })),
     musicGenerate:
       allowMusicGenerate &&
@@ -224,6 +240,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
           snapshot,
           authStore: params.authStore,
           key: "musicGenerationProviders",
+          config: params.config,
         })),
     pdf:
       allowPdf &&
@@ -232,6 +249,7 @@ function resolveOptionalMediaToolFactoryPlan(params: {
           snapshot,
           authStore: params.authStore,
           key: "mediaUnderstandingProviders",
+          config: params.config,
         }) ||
         hasConfiguredVisionModelAuthSignal({
           config: params.config,
