@@ -2562,15 +2562,17 @@ describe("runAgentTurnWithFallback", () => {
   it("restarts the active prompt when a live model switch is requested", async () => {
     let fallbackInvocation = 0;
     state.runWithModelFallbackMock.mockImplementation(
-      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-        result: await params.run(
-          fallbackInvocation === 0 ? "anthropic" : "openai",
-          fallbackInvocation === 0 ? "claude" : "gpt-5.4",
-        ),
-        provider: fallbackInvocation === 0 ? "anthropic" : "openai",
-        model: fallbackInvocation++ === 0 ? "claude" : "gpt-5.4",
-        attempts: [],
-      }),
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        const invocation = fallbackInvocation++;
+        const provider = invocation === 0 ? "anthropic" : "openai";
+        const model = invocation === 0 ? "claude" : "gpt-5.4";
+        return {
+          result: await params.run(provider, model),
+          provider,
+          model,
+          attempts: [],
+        };
+      },
     );
     state.runEmbeddedPiAgentMock
       .mockImplementationOnce(async () => {
@@ -2620,6 +2622,20 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("success");
     expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        provider: "anthropic",
+        model: "claude",
+      }),
+    );
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    );
     expect(followupRun.run.provider).toBe("openai");
     expect(followupRun.run.model).toBe("gpt-5.4");
   });

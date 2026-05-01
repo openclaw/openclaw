@@ -449,6 +449,38 @@ describe("live model switch", () => {
       expect(result).toBeUndefined();
     });
 
+    it("does not switch caller-selected runs back to a different agent primary", async () => {
+      state.resolveDefaultModelForAgentMock.mockReturnValue({
+        provider: "openai",
+        model: "gpt-5.5",
+      });
+      state.loadSessionStoreMock.mockReturnValue({
+        main: {
+          liveModelSwitchPending: true,
+        },
+      });
+
+      const { shouldSwitchToLiveModel } = await loadModule();
+
+      const result = shouldSwitchToLiveModel(
+        makeShouldSwitchParams({
+          defaultProvider: "anthropic",
+          defaultModel: "claude-haiku-4-5",
+          currentProvider: "anthropic",
+          currentModel: "claude-haiku-4-5",
+        }),
+      );
+
+      expect(result).toBeUndefined();
+      expect(state.resolvePersistedSelectedModelRefMock).toHaveBeenCalledWith({
+        defaultProvider: "anthropic",
+        runtimeProvider: undefined,
+        runtimeModel: undefined,
+        overrideProvider: undefined,
+        overrideModel: undefined,
+      });
+    });
+
     it("clears the stale liveModelSwitchPending flag when models already match", async () => {
       const sessionEntry = {
         liveModelSwitchPending: true,
