@@ -535,7 +535,7 @@ jobs:
           case "${QA_PARITY_LANE}" in
             candidate)
               model="${OPENCLAW_CI_OPENAI_MODEL}"
-              alt_model="openai/gpt-5.5-alt"
+              alt_model="${OPENCLAW_CI_OPENAI_MODEL}-alt"
               ;;
             baseline)
               model="anthropic/claude-opus-4-7"

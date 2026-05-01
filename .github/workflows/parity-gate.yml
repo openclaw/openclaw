@@ -85,7 +85,7 @@ jobs:
             --parity-pack agentic \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model openai/gpt-5.5-alt \
+            --alt-model "${OPENCLAW_CI_OPENAI_MODEL}-alt" \
             --output-dir .artifacts/qa-e2e/openai-candidate
 
       - name: Run Opus 4.7 lane
