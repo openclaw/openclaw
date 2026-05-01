@@ -2617,7 +2617,7 @@ export type OpenClawPluginApi = {
    *
    * This surface is broader than hooks. Prefer hooks for third-party
    * automation/integration unless you need native registry integration.
-  */
+   */
   runtime: PluginRuntime;
   logger: PluginLogger;
   /**
