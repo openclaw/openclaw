@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { HEARTBEAT_TOKEN } from "../tokens.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 
 const baseParams = {
@@ -24,6 +25,63 @@ async function expectSameTargetRepliesSuppressed(params: { provider: string; to:
 
   expect(replyPayloads).toHaveLength(0);
 }
+
+describe("buildReplyPayloads heartbeat token sanitation", () => {
+  it("suppresses OK-only final payloads for heartbeat runs", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: HEARTBEAT_TOKEN }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("continues suppressing OK-only final payloads for non-heartbeat runs", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: HEARTBEAT_TOKEN }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("preserves real alert text for heartbeat runs", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: "SARS eFiling letter notification needs attention." }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("SARS eFiling letter notification needs attention.");
+  });
+
+  it("preserves media-bearing heartbeat payloads after stripping OK-only text", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text: HEARTBEAT_TOKEN, mediaUrl: "file:///tmp/heartbeat.png" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBeUndefined();
+    expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/heartbeat.png");
+  });
+
+  it("does not expand Bun socket error formatting to heartbeat runs", async () => {
+    const text = "TypeError: fetch failed: socket connection was closed unexpectedly";
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      isHeartbeat: true,
+      payloads: [{ text, isError: true }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe(text);
+  });
+});
 
 describe("buildReplyPayloads media filter integration", () => {
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
