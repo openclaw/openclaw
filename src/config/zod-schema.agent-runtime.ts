@@ -287,13 +287,11 @@ export const ToolPolicySchema = ToolPolicyBaseSchema.superRefine((value, ctx) =>
 }).optional();
 
 const TrimmedOptionalConfigStringSchema = z
-  .preprocess((value) => {
-    if (typeof value !== "string") {
-      return value;
-    }
+  .string()
+  .transform((value) => {
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : undefined;
-  }, z.string().optional())
+  })
   .optional();
 
 const CodexAllowedDomainsSchema = z
