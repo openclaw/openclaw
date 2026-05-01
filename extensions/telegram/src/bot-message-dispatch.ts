@@ -1234,14 +1234,19 @@ export const dispatchTelegramMessage = async ({
                           retainPreviewOnCleanupByLane.answer = false;
                         })
                     : undefined,
-                  onReasoningEnd: reasoningLane.stream
-                    ? () =>
-                        enqueueDraftLaneEvent(async () => {
-                          splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
-                          previewToolProgressSuppressed = false;
-                          previewToolProgressLines = [];
-                        })
-                    : undefined,
+                  onReasoningEnd:
+                    reasoningLane.stream || reasoningStreamSink
+                      ? () => {
+                          reasoningStreamSink?.onEnd();
+                          if (reasoningLane.stream) {
+                            void enqueueDraftLaneEvent(async () => {
+                              splitReasoningOnNextStream = reasoningLane.hasStreamedMessage;
+                              previewToolProgressSuppressed = false;
+                              previewToolProgressLines = [];
+                            });
+                          }
+                        }
+                      : undefined,
                   suppressDefaultToolProgressMessages:
                     !previewStreamingEnabled || Boolean(answerLane.stream),
                   onToolStart: async (payload) => {

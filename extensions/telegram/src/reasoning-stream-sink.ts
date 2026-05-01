@@ -79,6 +79,7 @@ export function createReasoningStreamSink(params: {
         init: { method: "POST", headers, body },
         timeoutMs,
         policy,
+        requireHttps: true,
       });
       release = result.release;
       if (!result.response.ok) {
@@ -127,6 +128,7 @@ export function createReasoningStreamSink(params: {
       if (!started) {
         return;
       }
+      started = false;
       enqueue({
         event: "reasoning_end",
         streamId,
