@@ -305,6 +305,7 @@ export async function ensureSandboxBrowser(params: {
       agentWorkspaceDir: params.agentWorkspaceDir,
       workdir: params.cfg.docker.workdir,
       workspaceAccess: params.cfg.workspaceAccess,
+      workspaceMountPropagation: browserDockerCfg.workspaceMountPropagation,
     });
     if (browserDockerCfg.binds?.length) {
       for (const bind of browserDockerCfg.binds) {

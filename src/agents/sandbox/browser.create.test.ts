@@ -379,8 +379,26 @@ describe("ensureSandboxBrowser create args", () => {
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
 
     expect(createArgs).toBeDefined();
-    expect(createArgs).toContain("/tmp/workspace:/workspace:z");
+    expect(createArgs).toContain("/tmp/workspace:/workspace:rw,z");
     expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro,z");
+  });
+
+  it("propagates docker.workspaceMountPropagation to the browser workspace mount", async () => {
+    const cfg = buildConfig(false);
+    cfg.workspaceAccess = "rw";
+    cfg.docker.workspaceMountPropagation = "rslave";
+
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg,
+    });
+
+    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+
+    expect(createArgs).toBeDefined();
+    expect(createArgs).toContain("/tmp/workspace:/workspace:rw,rslave,z");
   });
 
   it("stamps the mount format version label on browser containers", async () => {
