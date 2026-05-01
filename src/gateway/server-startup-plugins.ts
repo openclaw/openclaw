@@ -7,11 +7,8 @@ import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { registerBundledRuntimeDependencyJitiAliases } from "../plugins/bundled-runtime-deps-jiti-aliases.js";
 import {
-  createBundledRuntimeDepsInstallSpecs,
   pruneUnknownBundledRuntimeDepsRoots,
-  repairBundledRuntimeDepsInstallRootAsync,
-  resolveBundledRuntimeDependencyPackageInstallRoot,
-  scanBundledPluginRuntimeDeps,
+  repairBundledRuntimeDepsPackagePlanAsync,
 } from "../plugins/bundled-runtime-deps.js";
 import { prepareBundledPluginRuntimeLoadRoot } from "../plugins/bundled-runtime-root.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -79,29 +76,18 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
         env: process.env,
         warn: (message) => params.log.warn(message),
       });
-      const scan = scanBundledPluginRuntimeDeps({
+      const startedAt = Date.now();
+      const result = await repairBundledRuntimeDepsPackagePlanAsync({
         packageRoot,
         config: params.cfg,
         exactPluginIds: params.pluginIds,
         env: process.env,
+        warn: (message) => params.log.warn(message),
+        onProgress: (message) => params.log.info(message),
       });
-      const missingSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.missing });
-      if (missingSpecs.length > 0) {
-        const installSpecs = createBundledRuntimeDepsInstallSpecs({ deps: scan.deps });
-        const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, {
-          env: process.env,
-        });
-        const startedAt = Date.now();
-        const result = await repairBundledRuntimeDepsInstallRootAsync({
-          installRoot,
-          missingSpecs,
-          installSpecs,
-          env: process.env,
-          warn: (message) => params.log.warn(message),
-          onProgress: (message) => params.log.info(message),
-        });
+      if (result.repairedSpecs.length > 0) {
         params.log.info(
-          `[plugins] prepared bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.installSpecs.join(", ")}`,
+          `[plugins] prepared bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.repairedSpecs.join(", ")}`,
         );
       }
     } catch (error) {

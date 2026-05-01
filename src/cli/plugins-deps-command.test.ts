@@ -28,11 +28,23 @@ const mocks = vi.hoisted(() => {
         throw new Error(`__exit__:${code}`);
       }),
     },
-    createBundledRuntimeDepsInstallSpecs: vi.fn((params: { deps: readonly RuntimeDepFixture[] }) =>
-      params.deps.map((dep) => `${dep.name}@${dep.version}`),
-    ),
+    createBundledRuntimeDepsPackagePlan: vi.fn((params: { packageRoot: string }) => {
+      const scan = mocks.scanBundledPluginRuntimeDeps(params);
+      const installRootPlan = mocks.resolveBundledRuntimeDependencyPackageInstallRootPlan();
+      const specs = (deps: readonly RuntimeDepFixture[]) =>
+        deps.map((dep) => `${dep.name}@${dep.version}`);
+      return {
+        packageRoot: params.packageRoot,
+        installRootPlan,
+        deps: scan.deps,
+        missing: scan.missing,
+        conflicts: scan.conflicts,
+        installSpecs: specs(scan.deps),
+        missingSpecs: specs(scan.missing),
+      };
+    }),
     pruneUnknownBundledRuntimeDepsRoots: vi.fn(),
-    repairBundledRuntimeDepsInstallRootAsync: vi.fn(),
+    repairBundledRuntimeDepsPackagePlanAsync: vi.fn(),
     resolveBundledRuntimeDependencyPackageInstallRootPlan: vi.fn(),
     resolveOpenClawPackageRootSync: vi.fn(),
     scanBundledPluginRuntimeDeps: vi.fn(),
@@ -48,9 +60,9 @@ vi.mock("../infra/openclaw-root.js", () => ({
 }));
 
 vi.mock("../plugins/bundled-runtime-deps.js", () => ({
-  createBundledRuntimeDepsInstallSpecs: mocks.createBundledRuntimeDepsInstallSpecs,
+  createBundledRuntimeDepsPackagePlan: mocks.createBundledRuntimeDepsPackagePlan,
   pruneUnknownBundledRuntimeDepsRoots: mocks.pruneUnknownBundledRuntimeDepsRoots,
-  repairBundledRuntimeDepsInstallRootAsync: mocks.repairBundledRuntimeDepsInstallRootAsync,
+  repairBundledRuntimeDepsPackagePlanAsync: mocks.repairBundledRuntimeDepsPackagePlanAsync,
   resolveBundledRuntimeDependencyPackageInstallRootPlan:
     mocks.resolveBundledRuntimeDependencyPackageInstallRootPlan,
   scanBundledPluginRuntimeDeps: mocks.scanBundledPluginRuntimeDeps,
@@ -66,9 +78,9 @@ describe("plugins deps command", () => {
     mocks.defaultRuntime.writeStdout.mockClear();
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.defaultRuntime.exit.mockClear();
-    mocks.createBundledRuntimeDepsInstallSpecs.mockClear();
+    mocks.createBundledRuntimeDepsPackagePlan.mockClear();
     mocks.pruneUnknownBundledRuntimeDepsRoots.mockReset();
-    mocks.repairBundledRuntimeDepsInstallRootAsync.mockReset();
+    mocks.repairBundledRuntimeDepsPackagePlanAsync.mockReset();
     mocks.resolveBundledRuntimeDependencyPackageInstallRootPlan.mockReset();
     mocks.resolveOpenClawPackageRootSync.mockReset();
     mocks.scanBundledPluginRuntimeDeps.mockReset();
@@ -95,7 +107,7 @@ describe("plugins deps command", () => {
       },
     });
 
-    expect(mocks.repairBundledRuntimeDepsInstallRootAsync).not.toHaveBeenCalled();
+    expect(mocks.repairBundledRuntimeDepsPackagePlanAsync).not.toHaveBeenCalled();
     expect(JSON.parse(mocks.runtimeLogs[0] ?? "null")).toEqual(
       expect.objectContaining({
         packageRoot: "/openclaw-package",
@@ -119,9 +131,8 @@ describe("plugins deps command", () => {
         missing: [],
         conflicts: [],
       });
-    mocks.repairBundledRuntimeDepsInstallRootAsync.mockResolvedValue({
-      installSpecs: ["zod@4.0.0"],
-      skipped: false,
+    mocks.repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValue({
+      repairedSpecs: ["zod@4.0.0"],
     });
 
     await runPluginsDepsCommand({
@@ -133,11 +144,10 @@ describe("plugins deps command", () => {
       },
     });
 
-    expect(mocks.repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
+    expect(mocks.repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledWith(
       expect.objectContaining({
-        installRoot: "/runtime-deps",
-        installSpecs: ["zod@4.0.0"],
-        missingSpecs: ["zod@4.0.0"],
+        packageRoot: "/openclaw-package",
+        includeConfiguredChannels: true,
       }),
     );
     expect(JSON.parse(mocks.runtimeLogs[0] ?? "null")).toEqual(
@@ -163,11 +173,10 @@ describe("plugins deps command", () => {
         missing: [],
         conflicts: [],
       });
-    mocks.repairBundledRuntimeDepsInstallRootAsync.mockImplementation(async (params: unknown) => {
+    mocks.repairBundledRuntimeDepsPackagePlanAsync.mockImplementation(async (params: unknown) => {
       (params as { warn: (message: string) => void }).warn("low disk space");
       return {
-        installSpecs: ["zod@4.0.0"],
-        skipped: false,
+        repairedSpecs: ["zod@4.0.0"],
       };
     });
 
@@ -211,9 +220,8 @@ describe("plugins deps command", () => {
         missing: [],
         conflicts: [conflict],
       });
-    mocks.repairBundledRuntimeDepsInstallRootAsync.mockResolvedValue({
-      installSpecs: ["zod@4.0.0"],
-      skipped: false,
+    mocks.repairBundledRuntimeDepsPackagePlanAsync.mockResolvedValue({
+      repairedSpecs: ["zod@4.0.0"],
     });
 
     await runPluginsDepsCommand({
@@ -225,10 +233,10 @@ describe("plugins deps command", () => {
       },
     });
 
-    expect(mocks.repairBundledRuntimeDepsInstallRootAsync).toHaveBeenCalledWith(
+    expect(mocks.repairBundledRuntimeDepsPackagePlanAsync).toHaveBeenCalledWith(
       expect.objectContaining({
-        installSpecs: ["zod@4.0.0"],
-        missingSpecs: ["zod@4.0.0"],
+        packageRoot: "/openclaw-package",
+        includeConfiguredChannels: true,
       }),
     );
     expect(JSON.parse(mocks.runtimeLogs[0] ?? "null")).toEqual(

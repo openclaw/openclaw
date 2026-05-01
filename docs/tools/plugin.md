@@ -93,6 +93,8 @@ repair; explicit bundled channel enablement (`channels.<id>.enabled: true`) can
 still repair that channel's plugin dependencies.
 External plugins and custom load paths must still be installed through
 `openclaw plugins install`.
+See [Plugin dependency resolution](/plugins/dependency-resolution) for the full
+planning and staging lifecycle.
 
 ## Plugin types
 

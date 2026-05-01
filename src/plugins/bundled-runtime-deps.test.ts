@@ -20,11 +20,13 @@ import {
   createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
   createBundledRuntimeDepsInstallEnv,
+  createBundledRuntimeDepsPackagePlan,
   ensureBundledPluginRuntimeDeps,
   installBundledRuntimeDeps,
   installBundledRuntimeDepsAsync,
   isWritableDirectory,
   pruneUnknownBundledRuntimeDepsRoots,
+  repairBundledRuntimeDepsPackagePlanAsync,
   repairBundledRuntimeDepsInstallRootAsync,
   resolveBundledRuntimeDependencyPackageInstallRoot,
   resolveBundledRuntimeDependencyInstallRoot,
@@ -1374,6 +1376,49 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       "alpha-runtime@1.0.0",
     ]);
     expect(result.conflicts).toEqual([]);
+  });
+
+  it("creates a package-level runtime deps plan with install and missing specs", () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: makeTempDir() };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    writeInstalledPackage(installRoot, "alpha-runtime", "0.9.0");
+
+    const plan = createBundledRuntimeDepsPackagePlan({
+      packageRoot,
+      config: {},
+      env,
+    });
+
+    expect(plan.installRootPlan.installRoot).toBe(installRoot);
+    expect(plan.installSpecs).toEqual(["alpha-runtime@1.0.0"]);
+    expect(plan.missingSpecs).toEqual(["alpha-runtime@1.0.0"]);
+  });
+
+  it("repairs a package-level runtime deps plan through the shared materializer", async () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: makeTempDir() };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: {},
+      env,
+      installDeps: (params) => {
+        calls.push(params);
+        writeInstalledPackage(params.installRoot, "alpha-runtime", "1.0.0");
+      },
+    });
+
+    expect(result.repairedSpecs).toEqual(["alpha-runtime@1.0.0"]);
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["alpha-runtime@1.0.0"],
+        installSpecs: ["alpha-runtime@1.0.0"],
+      },
+    ]);
   });
 
   it("reads each bundled plugin manifest once per runtime-deps scan", () => {

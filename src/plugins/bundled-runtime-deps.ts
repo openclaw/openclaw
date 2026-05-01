@@ -127,6 +127,25 @@ export type BundledRuntimeDepsPlan = {
   installRootPlan: BundledRuntimeDepsInstallRootPlan;
 };
 
+export type BundledRuntimeDepsPackagePlan = BundledRuntimeDepsPlan & {
+  packageRoot: string;
+  missingSpecs: string[];
+};
+
+export type BundledRuntimeDepsPackagePlanParams = {
+  packageRoot: string;
+  config?: OpenClawConfig;
+  pluginIds?: readonly string[];
+  exactPluginIds?: readonly string[];
+  includeConfiguredChannels?: boolean;
+  env?: NodeJS.ProcessEnv;
+};
+
+export type RepairBundledRuntimeDepsPackagePlanResult = {
+  plan: BundledRuntimeDepsPackagePlan;
+  repairedSpecs: string[];
+};
+
 // Packaged bundled plugins (Docker image, npm global install) keep their
 // `package.json` next to their entry point; running `npm install <specs>` with
 // `cwd: pluginRoot` would make npm resolve the plugin's own `workspace:*`
@@ -309,6 +328,61 @@ export function scanBundledPluginRuntimeDeps(params: {
     installRootPlan,
   });
   return { deps: plan.deps, missing: plan.missing, conflicts: plan.conflicts };
+}
+
+export function createBundledRuntimeDepsPackagePlan(
+  params: BundledRuntimeDepsPackagePlanParams,
+): BundledRuntimeDepsPackagePlan {
+  const scan = scanBundledPluginRuntimeDeps(params);
+  const installRootPlan = resolveBundledRuntimeDependencyPackageInstallRootPlan(
+    params.packageRoot,
+    {
+      env: params.env,
+    },
+  );
+  const plan = createBundledRuntimeDepsPlan({
+    deps: scan.deps,
+    conflicts: scan.conflicts,
+    installRootPlan,
+  });
+  return {
+    ...plan,
+    packageRoot: params.packageRoot,
+    missingSpecs: createBundledRuntimeDepsInstallSpecs({ deps: plan.missing }),
+  };
+}
+
+export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
+  packageRoot: string;
+  config?: OpenClawConfig;
+  pluginIds?: readonly string[];
+  exactPluginIds?: readonly string[];
+  includeConfiguredChannels?: boolean;
+  env: NodeJS.ProcessEnv;
+  installDeps?: (params: BundledRuntimeDepsInstallParams) => Promise<void> | void;
+  onProgress?: (message: string) => void;
+  warn?: (message: string) => void;
+}): Promise<RepairBundledRuntimeDepsPackagePlanResult> {
+  const plan = createBundledRuntimeDepsPackagePlan(params);
+  if (plan.missingSpecs.length === 0) {
+    return { plan, repairedSpecs: [] };
+  }
+  const result = await repairBundledRuntimeDepsInstallRootAsync({
+    installRoot: plan.installRootPlan.installRoot,
+    missingSpecs: plan.missingSpecs,
+    installSpecs: plan.installSpecs,
+    env: params.env,
+    ...(params.installDeps
+      ? {
+          installDeps: async (installParams) => {
+            await params.installDeps?.(installParams);
+          },
+        }
+      : {}),
+    ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+    ...(params.warn ? { warn: params.warn } : {}),
+  });
+  return { plan, repairedSpecs: result.installSpecs };
 }
 
 export function createBundledRuntimeDependencyAliasMap(params: {

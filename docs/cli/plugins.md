@@ -270,6 +270,8 @@ openclaw plugins deps --json
 
 Use `--repair` when a packaged install reports missing bundled runtime dependencies during Gateway startup or `plugins doctor`. Repair installs only missing enabled bundled-plugin deps with lifecycle scripts disabled. Use `--prune` to remove stale unknown external runtime-dependency roots left behind by older packaged layouts.
 
+For the full plan, staging, and repair lifecycle, see [Plugin dependency resolution](/plugins/dependency-resolution).
+
 ### Uninstall
 
 ```bash
