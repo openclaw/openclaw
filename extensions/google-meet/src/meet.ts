@@ -10,7 +10,7 @@ const GOOGLE_MEET_MEDIA_SCOPE =
   "https://www.googleapis.com/auth/meetings.conference.media.readonly";
 const GOOGLE_MEET_SPACE_SCOPE = "https://www.googleapis.com/auth/meetings.space.readonly";
 
-export type GoogleMeetSpace = {
+type GoogleMeetSpace = {
   name: string;
   meetingCode?: string;
   meetingUri?: string;
@@ -18,7 +18,7 @@ export type GoogleMeetSpace = {
   config?: Record<string, unknown>;
 };
 
-export type GoogleMeetPreflightReport = {
+type GoogleMeetPreflightReport = {
   input: string;
   resolvedSpaceName: string;
   meetingCode?: string;
@@ -29,12 +29,12 @@ export type GoogleMeetPreflightReport = {
   blockers: string[];
 };
 
-export type GoogleMeetCreateSpaceResult = {
+type GoogleMeetCreateSpaceResult = {
   space: GoogleMeetSpace;
   meetingUri: string;
 };
 
-export type GoogleMeetConferenceRecord = {
+type GoogleMeetConferenceRecord = {
   name: string;
   space?: string;
   startTime?: string;
@@ -42,7 +42,7 @@ export type GoogleMeetConferenceRecord = {
   expireTime?: string;
 };
 
-export type GoogleMeetParticipant = {
+type GoogleMeetParticipant = {
   name: string;
   earliestStartTime?: string;
   latestEndTime?: string;
@@ -58,20 +58,20 @@ export type GoogleMeetParticipant = {
   };
 };
 
-export type GoogleMeetParticipantSession = {
+type GoogleMeetParticipantSession = {
   name: string;
   startTime?: string;
   endTime?: string;
 };
 
-export type GoogleMeetRecording = {
+type GoogleMeetRecording = {
   name: string;
   startTime?: string;
   endTime?: string;
   driveDestination?: Record<string, unknown>;
 };
 
-export type GoogleMeetTranscript = {
+type GoogleMeetTranscript = {
   name: string;
   startTime?: string;
   endTime?: string;
@@ -80,7 +80,7 @@ export type GoogleMeetTranscript = {
   documentTextError?: string;
 };
 
-export type GoogleMeetTranscriptEntry = {
+type GoogleMeetTranscriptEntry = {
   name: string;
   participant?: string;
   text?: string;
@@ -89,13 +89,13 @@ export type GoogleMeetTranscriptEntry = {
   endTime?: string;
 };
 
-export type GoogleMeetTranscriptEntries = {
+type GoogleMeetTranscriptEntries = {
   transcript: string;
   entries: GoogleMeetTranscriptEntry[];
   entriesError?: string;
 };
 
-export type GoogleMeetSmartNote = {
+type GoogleMeetSmartNote = {
   name: string;
   startTime?: string;
   endTime?: string;
@@ -104,7 +104,7 @@ export type GoogleMeetSmartNote = {
   documentTextError?: string;
 };
 
-export type GoogleMeetArtifactsEntry = {
+type GoogleMeetArtifactsEntry = {
   conferenceRecord: GoogleMeetConferenceRecord;
   participants: GoogleMeetParticipant[];
   recordings: GoogleMeetRecording[];
@@ -127,7 +127,7 @@ export type GoogleMeetLatestConferenceRecordResult = {
   conferenceRecord?: GoogleMeetConferenceRecord;
 };
 
-export type GoogleMeetAttendanceRow = {
+type GoogleMeetAttendanceRow = {
   conferenceRecord: string;
   participant: string;
   participants?: string[];
@@ -392,7 +392,7 @@ export async function createGoogleMeetSpace(params: {
   }
 }
 
-export async function fetchGoogleMeetConferenceRecord(params: {
+async function fetchGoogleMeetConferenceRecord(params: {
   accessToken: string;
   conferenceRecord: string;
 }): Promise<GoogleMeetConferenceRecord> {
@@ -409,7 +409,7 @@ export async function fetchGoogleMeetConferenceRecord(params: {
   return payload;
 }
 
-export async function listGoogleMeetConferenceRecords(params: {
+async function listGoogleMeetConferenceRecords(params: {
   accessToken: string;
   meeting?: string;
   pageSize?: number;
@@ -453,7 +453,7 @@ export async function fetchLatestGoogleMeetConferenceRecord(params: {
   };
 }
 
-export async function listGoogleMeetParticipants(params: {
+async function listGoogleMeetParticipants(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
@@ -469,7 +469,7 @@ export async function listGoogleMeetParticipants(params: {
   });
 }
 
-export async function listGoogleMeetParticipantSessions(params: {
+async function listGoogleMeetParticipantSessions(params: {
   accessToken: string;
   participant: string;
   pageSize?: number;
@@ -484,7 +484,7 @@ export async function listGoogleMeetParticipantSessions(params: {
   });
 }
 
-export async function listGoogleMeetRecordings(params: {
+async function listGoogleMeetRecordings(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
@@ -500,7 +500,7 @@ export async function listGoogleMeetRecordings(params: {
   });
 }
 
-export async function listGoogleMeetTranscripts(params: {
+async function listGoogleMeetTranscripts(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
@@ -516,7 +516,7 @@ export async function listGoogleMeetTranscripts(params: {
   });
 }
 
-export async function listGoogleMeetTranscriptEntries(params: {
+async function listGoogleMeetTranscriptEntries(params: {
   accessToken: string;
   transcript: string;
   pageSize?: number;
@@ -531,7 +531,7 @@ export async function listGoogleMeetTranscriptEntries(params: {
   });
 }
 
-export async function listGoogleMeetSmartNotes(params: {
+async function listGoogleMeetSmartNotes(params: {
   accessToken: string;
   conferenceRecord: string;
   pageSize?: number;
