@@ -4,7 +4,10 @@ import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { registerPluginSessionSchedulerJob } from "./host-hook-runtime.js";
+import {
+  deletePluginSessionSchedulerJob,
+  registerPluginSessionSchedulerJob,
+} from "./host-hook-runtime.js";
 import type {
   PluginSessionSchedulerJobHandle,
   PluginSessionTurnScheduleParams,
@@ -16,11 +19,13 @@ import type { PluginOrigin } from "./plugin-origin.types.js";
 const log = createSubsystemLogger("plugins/host-workflow");
 
 function resolveSchedule(params: PluginSessionTurnScheduleParams) {
-  if ("cron" in params) {
+  const cron = normalizeOptionalString((params as { cron?: unknown }).cron);
+  if (cron) {
+    const tz = normalizeOptionalString((params as { tz?: unknown }).tz);
     return {
       kind: "cron",
-      expr: params.cron,
-      ...(params.tz ? { tz: params.tz } : {}),
+      expr: cron,
+      ...(tz ? { tz } : {}),
     };
   }
   if ("delayMs" in params) {
@@ -37,7 +42,8 @@ function resolveSchedule(params: PluginSessionTurnScheduleParams) {
     }
     return { kind: "at", at: at.toISOString() };
   }
-  const at = params.at instanceof Date ? params.at : new Date(params.at);
+  const rawAt = (params as { at?: unknown }).at;
+  const at = rawAt instanceof Date ? rawAt : new Date(rawAt as string | number | Date);
   if (!Number.isFinite(at.getTime())) {
     return undefined;
   }
@@ -254,19 +260,12 @@ export async function schedulePluginSessionTurn(params: {
     return undefined;
   }
   const tag = normalizeOptionalString(params.schedule.tag);
-  const name =
-    tag !== undefined
-      ? buildPluginSchedulerCronName({
-          pluginId: params.pluginId,
-          sessionKey,
-          tag,
-          uniqueId: scheduleName,
-        })
-      : (scheduleName ??
-        buildPluginSchedulerCronName({
-          pluginId: params.pluginId,
-          sessionKey,
-        }));
+  const name = buildPluginSchedulerCronName({
+    pluginId: params.pluginId,
+    sessionKey,
+    ...(tag !== undefined ? { tag } : {}),
+    ...(scheduleName ? { uniqueId: scheduleName } : {}),
+  });
   const payload: Record<string, unknown> = {
     kind: "agentTurn",
     message,
@@ -317,7 +316,14 @@ export async function schedulePluginSessionTurn(params: {
       name,
     });
     if (!removed) {
-      throw new Error(`failed to remove stale scheduled session turn: ${jobId}`);
+      log.warn(
+        `plugin session turn scheduling rollback failed (${formatScheduleLogContext({
+          pluginId: params.pluginId,
+          sessionKey,
+          name,
+          jobId,
+        })}): failed to remove stale scheduled session turn`,
+      );
     }
     return undefined;
   }
@@ -384,6 +390,11 @@ export async function unschedulePluginSessionTurnsByTag(params: {
       const result = await callGatewayTool("cron.remove", {}, { id }, { scopes: [ADMIN_SCOPE] });
       if (didCronRemoveJob(result)) {
         removed += 1;
+        deletePluginSessionSchedulerJob({
+          pluginId: params.pluginId,
+          jobId: id,
+          sessionKey,
+        });
       } else {
         failed += 1;
       }

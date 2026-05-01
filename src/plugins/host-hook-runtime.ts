@@ -303,7 +303,7 @@ export function registerPluginSessionSchedulerJob(params: {
   return { id, pluginId: params.pluginId, sessionKey, kind };
 }
 
-function deletePluginSessionSchedulerJob(params: {
+export function deletePluginSessionSchedulerJob(params: {
   pluginId: string;
   jobId: string;
   sessionKey?: string;
