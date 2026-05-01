@@ -460,13 +460,20 @@ function parseClaudeLiveJsonLine(
   return isRecord(parsed) ? parsed : null;
 }
 
-function createResultError(
+export function createResultError(
   session: ClaudeLiveSession,
   parsed: Record<string, unknown>,
   raw: string,
 ): FailoverError {
   const result = typeof parsed.result === "string" ? parsed.result.trim() : "";
-  const message = extractCliErrorMessage(raw) ?? (result || "Claude CLI failed.");
+  const errorsArray = Array.isArray(parsed.errors)
+    ? parsed.errors
+        .filter((x): x is string => typeof x === "string")
+        .map((x) => x.trim())
+        .filter((x) => x.length > 0)
+        .join("\n")
+    : "";
+  const message = extractCliErrorMessage(raw) ?? (errorsArray || result || "Claude CLI failed.");
   const reason = classifyFailoverReason(message, { provider: session.providerId }) ?? "unknown";
   return new FailoverError(message, {
     reason,
