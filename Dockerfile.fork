@@ -34,7 +34,7 @@ ARG OPENCLAW_GH_VERSION="2.92.0"
 ARG OPENCLAW_LARK_CLI_VERSION="1.0.21"
 RUN set -eux; \
     apt-get update; \
-    apt-get install -y --no-install-recommends gnupg; \
+    apt-get install -y --no-install-recommends ca-certificates gnupg; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
       amd64|arm64) gh_arch="$arch";; \
@@ -67,6 +67,15 @@ FROM ${BASE_IMAGE}
 LABEL org.opencontainers.image.source="https://github.com/1aboveio/openclaw" \
   org.opencontainers.image.title="openclaw-fork" \
   org.opencontainers.image.description="OpenClaw fork image with gh, lark-cli, and gcloud baked in."
+
+# Upstream's slim variant ships curl/openssl but not ca-certificates, so any
+# HTTPS call from the final image (gh, gcloud, openclaw runtime) fails with
+# curl error 77 / TLS errors. Smallest possible apt run to fix it.
+USER root
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+USER node
 
 COPY --from=source /usr/local/bin/gh /usr/local/bin/gh
 COPY --from=source /usr/local/bin/lark-cli /usr/local/bin/lark-cli
