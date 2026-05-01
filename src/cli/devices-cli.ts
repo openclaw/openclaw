@@ -1,5 +1,9 @@
 import type { Command } from "commander";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import {
+  buildGatewayConnectionDetails,
+  callGateway,
+  isGatewayTransportError,
+} from "../gateway/call.js";
 import { isLoopbackHost } from "../gateway/net.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { readConnectPairingRequiredMessage } from "../gateway/protocol/connect-error-details.js";
@@ -120,11 +124,7 @@ function normalizeErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  if (!readConnectPairingRequiredMessage(message)) {
-    return false;
-  }
+function isDefaultLoopbackGatewayTarget(opts: DevicesRpcOpts): boolean {
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
     // Explicit --url might point at a remote/tunneled gateway; never silently
     // switch to local pairing files in that case.
@@ -139,6 +139,31 @@ function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): bo
   } catch {
     return false;
   }
+}
+
+function isLoopbackGatewayTransportFailure(error: unknown): boolean {
+  if (isGatewayTransportError(error)) {
+    if (error.kind === "timeout") {
+      return true;
+    }
+    if (error.kind === "closed") {
+      const code = error.code;
+      return code === 1000 || code === 1006;
+    }
+  }
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
+  return message.includes("gateway timeout");
+}
+
+function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
+  if (!isDefaultLoopbackGatewayTarget(opts)) {
+    return false;
+  }
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
+  if (readConnectPairingRequiredMessage(message)) {
+    return true;
+  }
+  return isLoopbackGatewayTransportFailure(error);
 }
 
 function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {

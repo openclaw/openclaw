@@ -642,6 +642,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       password,
       tlsFingerprint,
       preauthHandshakeTimeoutMs,
+      requestTimeoutMs: timeoutMs,
       instanceId: opts.instanceId ?? randomUUID(),
       clientName: opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
       clientDisplayName: resolveGatewayClientDisplayName(opts),

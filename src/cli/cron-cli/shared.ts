@@ -2,6 +2,7 @@ import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
 import type { CronDeliveryPreview, CronJob, CronSchedule } from "../../cron/types.js";
+import { readConnectPairingRequiredMessage } from "../../gateway/protocol/connect-error-details.js";
 import { danger } from "../../globals.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.ts";
 import {
@@ -30,7 +31,24 @@ export function printCronJson(value: unknown) {
 }
 
 export function handleCronCliError(err: unknown) {
-  defaultRuntime.error(danger(String(err)));
+  const parts: string[] = [];
+  let cur: unknown = err;
+  while (cur instanceof Error && parts.length < 6) {
+    parts.push(cur.message);
+    cur = cur.cause;
+  }
+  if (parts.length === 0) {
+    parts.push(String(err));
+  }
+  const text = parts.join("\n");
+  const lines = [danger(text)];
+  const pairing = readConnectPairingRequiredMessage(text);
+  if (pairing?.requestId) {
+    lines.push(
+      `${theme.muted("Device pairing required — approve with:")} ${theme.command(`openclaw devices approve ${pairing.requestId}`)}`,
+    );
+  }
+  defaultRuntime.error(lines.join("\n"));
   defaultRuntime.exit(1);
 }
 

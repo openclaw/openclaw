@@ -10,6 +10,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/gateway: align `GatewayClient` `requestTimeoutMs` with the outer `callGateway` handshake budget, widen loopback `devices approve` fallback when the gateway WebSocket times out or closes ambiguously (1000/1006), and surface `openclaw devices approve <requestId>` hints from `cron` CLI errors (including `error.cause` chains).
+- Build: place local heavy-check lock files under `$TMPDIR` when `.git` is not a directory (linked worktrees / rsynced trees), avoiding `ENOTDIR` during remote `pnpm build` / `run-tsgo`.
 - Agents/Codex: stop prompting message-tool-only source turns to finish with `NO_REPLY`, so quiet turns are represented by not calling the visible message tool instead of conflicting final-text instructions. Thanks @pashpashpash.
 - Gateway/config: report failed backup restores as failed in logs and config observe audit records instead of marking them valid. (#70515) Thanks @davidangularme.
 - Compaction: use the active session model fallback chain for implicit summarization failures without persisting fallback model selection, so Azure content-filter 400s can recover. Fixes #64960. (#74470) Thanks @jalehman and @OpenCodeEngineer.
