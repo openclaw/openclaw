@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
 import type { CommitmentRecord, CommitmentStoreFile } from "../commitments/types.js";
@@ -153,7 +154,7 @@ describe("runHeartbeatOnce commitments", () => {
     });
   }
 
-  it("keeps due heartbeat tasks tool-capable when commitments are also due", async () => {
+  it("runs due commitments after tool-capable heartbeat tasks", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
         vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
@@ -176,7 +177,7 @@ describe("runHeartbeatOnce commitments", () => {
           path.join(tmpDir, "HEARTBEAT.md"),
           `tasks:
   - name: deployment-status
-    interval: 5m
+    interval: 0
     prompt: Check deployment status with the normal tools
 `,
           "utf-8",
@@ -200,14 +201,23 @@ describe("runHeartbeatOnce commitments", () => {
             ctx: { Body?: string; OriginatingChannel?: string; OriginatingTo?: string },
             opts?: { disableTools?: boolean; skillFilter?: string[] },
           ) => {
-            expect(ctx.Body).toContain("Run the following periodic tasks");
-            expect(ctx.Body).toContain("- deployment-status: Check deployment status");
-            expect(ctx.Body).not.toContain("Due inferred follow-up commitments");
+            if (replySpy.mock.calls.length === 1) {
+              expect(ctx.Body).toContain("Run the following periodic tasks");
+              expect(ctx.Body).toContain("- deployment-status: Check deployment status");
+              expect(ctx.Body).not.toContain("Due inferred follow-up commitments");
+              expect(ctx.OriginatingChannel).toBe("telegram");
+              expect(ctx.OriginatingTo).toBe("stale-target");
+              expect(opts?.disableTools).toBeUndefined();
+              expect(opts?.skillFilter).toBeUndefined();
+              return { text: "Deployment status checked" };
+            }
+            expect(ctx.Body).toContain("Due inferred follow-up commitments");
+            expect(ctx.Body).toContain("How did the interview go?");
             expect(ctx.OriginatingChannel).toBe("telegram");
-            expect(ctx.OriginatingTo).toBe("stale-target");
-            expect(opts?.disableTools).toBeUndefined();
-            expect(opts?.skillFilter).toBeUndefined();
-            return { text: "Deployment status checked" };
+            expect(ctx.OriginatingTo).toBe("155462274");
+            expect(opts?.disableTools).toBe(true);
+            expect(opts?.skillFilter).toEqual([]);
+            return { text: "How did the interview go?" };
           },
         );
 
@@ -232,11 +242,131 @@ describe("runHeartbeatOnce commitments", () => {
     );
 
     expect(result.status).toBe("ran");
-    expect(sendTelegram).toHaveBeenCalled();
+    expect(sendTelegram).toHaveBeenCalledTimes(2);
+    expect(sendTelegram).toHaveBeenNthCalledWith(
+      1,
+      "stale-target",
+      "Deployment status checked",
+      expect.any(Object),
+    );
+    expect(sendTelegram).toHaveBeenNthCalledWith(
+      2,
+      "155462274",
+      "How did the interview go?",
+      expect.any(Object),
+    );
     expect(store.commitments[0]).toMatchObject({
       id: "cm_interview",
-      status: "pending",
-      attempts: 0,
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("runs due commitments after a heartbeat task returns a quiet tool ack", async () => {
+    const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
+      async ({ tmpDir, storePath, replySpy }) => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+        const sessionKey = "agent:main:telegram:user-155462274";
+        const cfg: OpenClawConfig = {
+          agents: {
+            defaults: {
+              workspace: tmpDir,
+              heartbeat: {
+                every: "5m",
+                target: "last",
+              },
+            },
+          },
+          channels: { telegram: { allowFrom: ["*"] } },
+          session: { store: storePath },
+          commitments: { enabled: true },
+        };
+        await fs.writeFile(
+          path.join(tmpDir, "HEARTBEAT.md"),
+          `tasks:
+  - name: deployment-status
+    interval: 0
+    prompt: Check deployment status with the normal tools
+`,
+          "utf-8",
+        );
+        await seedSessionStore(storePath, sessionKey, {
+          lastChannel: "telegram",
+          lastProvider: "telegram",
+          lastTo: "stale-target",
+        });
+        await saveCommitmentStore(undefined, {
+          version: 1,
+          commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
+        });
+
+        const sendTelegram = vi.fn().mockResolvedValue({
+          messageId: "m1",
+          chatId: "155462274",
+        });
+        replySpy.mockImplementation(
+          async (
+            ctx: { Body?: string; OriginatingChannel?: string; OriginatingTo?: string },
+            opts?: { disableTools?: boolean; skillFilter?: string[] },
+          ) => {
+            if (replySpy.mock.calls.length === 1) {
+              expect(ctx.Body).toContain("Run the following periodic tasks");
+              expect(ctx.Body).toContain("- deployment-status: Check deployment status");
+              expect(ctx.Body).not.toContain("Due inferred follow-up commitments");
+              expect(ctx.Body).toContain("heartbeat_respond");
+              expect(ctx.OriginatingChannel).toBe("telegram");
+              expect(ctx.OriginatingTo).toBe("stale-target");
+              expect(opts?.disableTools).toBeUndefined();
+              expect(opts?.skillFilter).toBeUndefined();
+              return createHeartbeatToolResponsePayload({
+                outcome: "no_change",
+                notify: false,
+                summary: "Deployment status checked.",
+              });
+            }
+            expect(ctx.Body).toContain("Due inferred follow-up commitments");
+            expect(ctx.Body).toContain("How did the interview go?");
+            expect(ctx.OriginatingChannel).toBe("telegram");
+            expect(ctx.OriginatingTo).toBe("155462274");
+            expect(opts?.disableTools).toBe(true);
+            expect(opts?.skillFilter).toEqual([]);
+            return { text: "How did the interview go?" };
+          },
+        );
+
+        const result = await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          deps: {
+            getReplyFromConfig: replySpy,
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => nowMs,
+          },
+        });
+
+        return {
+          result,
+          sendTelegram,
+          store: await loadCommitmentStore(),
+        };
+      },
+    );
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalledTimes(1);
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "155462274",
+      "How did the interview go?",
+      expect.any(Object),
+    );
+    expect(store.commitments[0]).toMatchObject({
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
     });
   });
 
@@ -360,6 +490,65 @@ describe("runHeartbeatOnce commitments", () => {
         }),
       );
       expect(runOnce.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey", dueSessionKey);
+    });
+  });
+
+  it("runs the scheduler commitment pass for the default session after the normal tick", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(nowMs);
+
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+      const sessionKey = "agent:main:main";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        session: { store: storePath },
+        commitments: { enabled: true },
+      };
+      await saveCommitmentStore(undefined, {
+        version: 1,
+        commitments: [buildCommitment({ id: "cm_default", sessionKey, to: "1" })],
+      });
+      const runOnce = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+      const runner = startHeartbeatRunner({
+        cfg,
+        runOnce,
+        stableSchedulerSeed: "commitment-default-session",
+      });
+
+      requestHeartbeatNow({ reason: "manual", coalesceMs: 0 });
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.waitFor(() => {
+        expect(runOnce).toHaveBeenCalledTimes(2);
+      });
+      runner.stop();
+
+      expect(runOnce).toHaveBeenCalledTimes(2);
+      expect(runOnce).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          agentId: "main",
+          heartbeat: expect.objectContaining({ target: "last" }),
+          reason: "manual",
+        }),
+      );
+      expect(runOnce).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          agentId: "main",
+          commitmentOnly: true,
+          reason: "commitment",
+          sessionKey,
+        }),
+      );
     });
   });
 
