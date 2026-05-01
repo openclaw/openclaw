@@ -535,6 +535,7 @@ export async function runCodexAppServerAttempt(
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
+      config: params.config,
       runId: params.runId,
       signal: runAbortController.signal,
     });
@@ -1376,6 +1377,7 @@ function createCodexNativeHookRelay(params: {
   agentId: string | undefined;
   sessionId: string;
   sessionKey: string | undefined;
+  config: EmbeddedRunAttemptParams["config"];
   runId: string;
   signal: AbortSignal;
 }): NativeHookRelayRegistrationHandle | undefined {
@@ -1392,6 +1394,7 @@ function createCodexNativeHookRelay(params: {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.config ? { config: params.config } : {}),
     runId: params.runId,
     allowedEvents: params.options?.events ?? CODEX_NATIVE_HOOK_RELAY_EVENTS,
     ttlMs: params.options?.ttlMs,
