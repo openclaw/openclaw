@@ -277,10 +277,14 @@ function resolvePluginRegistrationCapabilities(
 
 export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const registry = createEmptyPluginRegistry();
-  const coreGatewayMethods = new Set([
-    ...(registryParams.coreGatewayMethodNames ?? []),
-    ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
-  ]);
+  const coreGatewayMethodNames = Array.from(
+    new Set([
+      ...(registryParams.coreGatewayMethodNames ?? []),
+      ...Object.keys(registryParams.coreGatewayHandlers ?? {}),
+    ]),
+  ).toSorted();
+  registry.coreGatewayMethodNames = coreGatewayMethodNames;
+  const coreGatewayMethods = new Set(coreGatewayMethodNames);
   const pluginHookRollback = new Map<string, HookRollbackEntry[]>();
   const pluginsWithChannelRegistrationConflict = new Set<string>();
 

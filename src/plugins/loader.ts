@@ -347,6 +347,7 @@ type PluginRegistrySnapshot = {
   };
   gatewayHandlers: PluginRegistry["gatewayHandlers"];
   gatewayMethodScopes: NonNullable<PluginRegistry["gatewayMethodScopes"]>;
+  coreGatewayMethodNames: NonNullable<PluginRegistry["coreGatewayMethodNames"]>;
 };
 
 function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapshot {
@@ -387,6 +388,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
     },
     gatewayHandlers: { ...registry.gatewayHandlers },
     gatewayMethodScopes: { ...registry.gatewayMethodScopes },
+    coreGatewayMethodNames: [...(registry.coreGatewayMethodNames ?? [])],
   };
 }
 
@@ -426,6 +428,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.diagnostics = snapshot.arrays.diagnostics;
   registry.gatewayHandlers = snapshot.gatewayHandlers;
   registry.gatewayMethodScopes = snapshot.gatewayMethodScopes;
+  registry.coreGatewayMethodNames = snapshot.coreGatewayMethodNames;
 }
 
 function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
@@ -1036,6 +1039,51 @@ function getCompatibleActivePluginRegistry(
       };
       if (pluginLoadOptionsMatchCacheKey(activatingGatewayBindableOptions, activeCacheKey)) {
         return activeRegistry;
+      }
+    }
+  }
+  if (loadContext.onlyPluginIds === undefined) {
+    const scopedOptions = {
+      ...options,
+      onlyPluginIds: activeRegistry.plugins.map((entry) => entry.id).toSorted(),
+      coreGatewayMethodNames: activeRegistry.coreGatewayMethodNames ?? [],
+    };
+    if (pluginLoadOptionsMatchCacheKey(scopedOptions, activeCacheKey)) {
+      return activeRegistry;
+    }
+    if (!loadContext.shouldActivate) {
+      const activatingScopedOptions = {
+        ...scopedOptions,
+        activate: true,
+      };
+      if (pluginLoadOptionsMatchCacheKey(activatingScopedOptions, activeCacheKey)) {
+        return activeRegistry;
+      }
+    }
+    if (
+      loadContext.runtimeSubagentMode === "default" &&
+      getActivePluginRuntimeSubagentMode() === "gateway-bindable"
+    ) {
+      const gatewayBindableScopedOptions = {
+        ...scopedOptions,
+        runtimeOptions: {
+          ...options.runtimeOptions,
+          allowGatewaySubagentBinding: true,
+        },
+      };
+      if (pluginLoadOptionsMatchCacheKey(gatewayBindableScopedOptions, activeCacheKey)) {
+        return activeRegistry;
+      }
+      if (!loadContext.shouldActivate) {
+        const activatingGatewayBindableScopedOptions = {
+          ...gatewayBindableScopedOptions,
+          activate: true,
+        };
+        if (
+          pluginLoadOptionsMatchCacheKey(activatingGatewayBindableScopedOptions, activeCacheKey)
+        ) {
+          return activeRegistry;
+        }
       }
     }
   }

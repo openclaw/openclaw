@@ -164,6 +164,154 @@ describe("getCompatibleActivePluginRegistry", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("reuses a scoped gateway-bindable registry for an unscoped default-mode request", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "acpx" } as (typeof registry.plugins)[number],
+      { id: "telegram" } as (typeof registry.plugins)[number],
+    );
+    const startupOptions = {
+      config: {
+        plugins: {
+          allow: ["acpx", "telegram"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["acpx", "telegram"],
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: startupOptions.config,
+        workspaceDir: "/tmp/workspace-a",
+      }),
+    ).toBe(registry);
+  });
+
+  it("reuses a scoped gateway-bindable registry for an unscoped snapshot-mode request", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "acpx" } as (typeof registry.plugins)[number],
+      { id: "telegram" } as (typeof registry.plugins)[number],
+    );
+    const startupOptions = {
+      config: {
+        plugins: {
+          allow: ["acpx", "telegram"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["acpx", "telegram"],
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: startupOptions.config,
+        workspaceDir: "/tmp/workspace-a",
+        activate: false,
+      }),
+    ).toBe(registry);
+  });
+
+  it("does not reuse a scoped registry when plugin IDs differ", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push({ id: "acpx" } as (typeof registry.plugins)[number]);
+    const startupOptions = {
+      config: {
+        plugins: {
+          allow: ["acpx", "telegram"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["acpx", "telegram"],
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: startupOptions.config,
+        workspaceDir: "/tmp/workspace-a",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not reuse a scoped gateway-bindable registry for an explicit subagent request", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "acpx" } as (typeof registry.plugins)[number],
+      { id: "telegram" } as (typeof registry.plugins)[number],
+    );
+    const startupOptions = {
+      config: {
+        plugins: {
+          allow: ["acpx", "telegram"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["acpx", "telegram"],
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: startupOptions.config,
+        workspaceDir: "/tmp/workspace-a",
+        runtimeOptions: {
+          subagent: {} as CreatePluginRuntimeOptions["subagent"],
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("reuses a scoped startup registry when only the request omits gateway methods", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "acpx" } as (typeof registry.plugins)[number],
+      { id: "telegram" } as (typeof registry.plugins)[number],
+    );
+    registry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
+    const startupOptions = {
+      config: {
+        plugins: {
+          allow: ["acpx", "telegram"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["acpx", "telegram"],
+      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    };
+    const { cacheKey } = __testing.resolvePluginLoadCacheContext(startupOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      __testing.getCompatibleActivePluginRegistry({
+        config: startupOptions.config,
+        workspaceDir: "/tmp/workspace-a",
+      }),
+    ).toBe(registry);
+  });
 });
 
 describe("resolveRuntimePluginRegistry", () => {
