@@ -76,8 +76,17 @@ function hasRuntimeDepEntryFile(packageDir: string, rawEntry: string): boolean {
   if (entryPath !== packageDir && !entryPath.startsWith(`${packageDir}${path.sep}`)) {
     return false;
   }
-  if (fs.existsSync(entryPath)) {
-    return true;
+  try {
+    const stat = fs.statSync(entryPath);
+    if (stat.isFile()) {
+      return true;
+    }
+    if (!stat.isDirectory()) {
+      return false;
+    }
+  } catch {
+    // Missing or unreadable entry paths can still be satisfied by extension
+    // fallbacks below; otherwise the dependency is treated as incomplete.
   }
   return (
     fs.existsSync(`${entryPath}.js`) ||

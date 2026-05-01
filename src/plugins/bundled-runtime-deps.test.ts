@@ -1579,6 +1579,27 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     );
   });
 
+  it("reports staged runtime deps as missing when a declared entry directory has no entry file", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "alpha-runtime");
+    fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({
+        name: "alpha-runtime",
+        version: "1.0.0",
+        main: "lib",
+      }),
+      "utf8",
+    );
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0"]);
+
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(false);
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["alpha-runtime@1.0.0"])).toThrow(
+      /alpha-runtime@1\.0\.0/,
+    );
+  });
+
   it("reports a previous incomplete package-level install as missing", () => {
     const packageRoot = setupPolicyPackageRoot();
     const env = { OPENCLAW_PLUGIN_STAGE_DIR: makeTempDir() };
