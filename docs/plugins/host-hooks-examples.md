@@ -135,10 +135,10 @@ export type PluginSessionExtensionProjectionContext = {
 // PluginHostCleanupReason = "disable" | "reset" | "delete" | "restart"
 ```
 
-`project()` is optional — if you don't pass one, the host returns the raw
-stored state under `pluginExtensions[<pluginId>][<namespace>]`. Pass `project()`
-when you want to _transform_ what clients see (for example, hide secrets, or
-return a different shape than what you persist).
+`project()` is optional — if you don't pass one, the host projects the raw
+stored value as a `pluginExtensions` row entry with `{ pluginId, namespace,
+value }`. Pass `project()` when you want to _transform_ what clients see (for
+example, hide secrets, or return a different shape than what you persist).
 
 **Minimal example**
 
@@ -182,9 +182,9 @@ sequenceDiagram
   UI->>GW: sessions.pluginPatch({pluginId, namespace, value: {...}})
   GW->>Reg: lookup (pluginId, namespace) — reject if unknown
   Reg->>Store: write namespaced state
-  Store->>Plugin: invoke project({sessionKey, sessionId, state})
-  Plugin-->>Store: projection JSON
-  Store-->>GW: session row with pluginExtensions[pluginId][namespace] = projection
+  Store-->>GW: raw state saved
+  GW->>Plugin: build session row, invoke project({sessionKey, sessionId, state})
+  Plugin-->>GW: pluginExtensions[] projection entry
   GW-->>UI: live row update
 ```
 
@@ -260,9 +260,9 @@ export default definePluginEntry({
 
 **What it does**
 
-Lets Control UI / mobile / desktop / internal clients update plugin-owned
-session state through the Gateway, with namespace-and-plugin-id validation
-at the wire.
+Lets privileged Control UI / mobile / desktop / internal clients update
+plugin-owned session state through the Gateway, with namespace-and-plugin-id
+validation at the wire. The Gateway method requires `operator.admin` scope.
 
 **Contract**
 
@@ -378,7 +378,6 @@ export type PluginNextTurnInjection = {
   idempotencyKey?: string;
   placement?: PluginNextTurnInjectionPlacement;
   ttlMs?: number;
-  priority?: number;
   metadata?: PluginJsonValue;
 };
 
@@ -503,10 +502,10 @@ idempotencyKey)`.
 Receives the drained next-turn injections and lets you fold them into prompt
 context **before** the ordinary `before_prompt_build` hook fires. Use this
 when the queued context needs plugin-side shaping before it becomes part of
-the prompt. If no plugin handles `agent_turn_prepare`, the host applies the
-default fold for queued injections: `prepend_context` items go before the
-turn prompt, `append_context` items go after it, and priority decides ordering
-within each placement.
+the prompt. The host always applies the default fold for queued injections:
+`prepend_context` items go before the turn prompt, `append_context` items go
+after it, and drained records keep chronological ordering. `agent_turn_prepare`
+handlers can add plugin-shaped context alongside that default fold.
 
 **Contract**
 
@@ -541,12 +540,13 @@ api.on("agent_turn_prepare", (event) => {
 ```mermaid
 flowchart LR
   Drain["drainPluginNextTurnInjections(sessionKey)"]
-  Drain --> Sort["sort by createdAt"]
+  Drain --> Sort["sort chronologically by createdAt"]
   Sort --> ATP["agent_turn_prepare hooks (priority order)"]
-  ATP --> Defaults["host default fold\nfor queued injections"]
-  ATP --> Custom["plugin-custom fold"]
-  Defaults --> PB["before_prompt_build"]
-  Custom --> PB
+  Sort --> Defaults["host default fold\nfor queued injections"]
+  ATP --> Custom["plugin-added context"]
+  Defaults --> Merge["merge prompt context"]
+  Custom --> Merge
+  Merge --> PB["before_prompt_build"]
   PB --> Build["prompt build"]
 ```
 
@@ -586,8 +586,9 @@ api.on(
 - **Don't drop other plugins' injections.** Filter to your own `pluginId`
   before consuming. The host defaults already handle every plugin's items —
   if you replace the default, do it for _your_ injections only.
-- **`agent_turn_prepare` runs only on user-initiated turns.** For
-  background-only context use `heartbeat_prompt_contribution` instead.
+- **`agent_turn_prepare` runs during prompt builds, including heartbeat runs.**
+  Use `heartbeat_prompt_contribution` for context that should apply only to
+  heartbeat-triggered turns.
 - **`allowPromptInjection=false` disables this hook per-plugin.** Operators
   can opt out of any prompt-mutating plugin individually.
 
@@ -2446,7 +2447,7 @@ async function summarizeFailure(_event: unknown): Promise<string> {
 
 ## Patterns and pitfalls
 
-## Compose, do not subclass
+### Compose, do not subclass
 
 Each contract is independent. Don't try to wrap `registerSessionExtension`
 or `registerCommand` into a higher-level abstraction inside your plugin —
@@ -2454,27 +2455,27 @@ the SDK already provides the right granularity. Two contracts that always
 appear together (session extension + UI descriptor) are still better as
 two separate registrations than one fused helper.
 
-## Keep handlers cheap
+### Keep handlers cheap
 
 `heartbeat_prompt_contribution`, `agent_turn_prepare`, and event-subscription
 `handle` callbacks all run on hot paths. Cache pre-computed values in
 your closure or in run/session context; avoid synchronous I/O.
 
-## Prefer projection over duplication
+### Prefer projection over duplication
 
 If clients need to read plugin state, use `registerSessionExtension({project})`
 rather than copying the same data into a custom Gateway method. Two
 plugins reading the same row see the same projection; clients only need to
-learn `pluginExtensions[<id>][<namespace>]`.
+learn the `pluginExtensions[]` projection entries.
 
-## Prefer next-turn injection over `before_prompt_build`
+### Prefer next-turn injection over `before_prompt_build`
 
 For one-shot context (post-approval continuation, post-failure diagnosis,
 operator-triggered events), use `enqueueNextTurnInjection`. Reserve
 `before_prompt_build` for context that genuinely belongs in **every**
 turn (memory adjuncts, capability hints, tool documentation).
 
-## Pair every `register*` that opens a resource with a `registerRuntimeLifecycle`
+### Pair every `register*` that opens a resource with a `registerRuntimeLifecycle`
 
 Event subscriptions, session extensions, and scheduler jobs are torn down by
 the host. Sockets, polling timers, file watchers, telemetry buffers, and
@@ -2482,7 +2483,7 @@ external clients **are not**. If you opened it, register a lifecycle
 cleanup for it. The host calls cleanup on disable / reset / delete /
 restart — write idempotently.
 
-## Test against the contract suite
+### Test against the contract suite
 
 `src/plugins/contracts/host-hooks.contract.test.ts` is the authoritative
 behavior spec. When you add a new plugin that exercises a host-hook surface,
