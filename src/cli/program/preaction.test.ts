@@ -512,7 +512,6 @@ describe("registerPreActionHooks", () => {
 
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
       scope: "configured-channels",
-      installBundledRuntimeDeps: false,
     });
     expect(stderrDuringPluginLoad).toBe(true);
     // Flag must be restored after plugin loading completes

@@ -45,25 +45,43 @@ describe("command-path-policy", () => {
   it("applies exact overrides after broader channel plugin rules", () => {
     expectResolvedPolicy(["channels", "send"], {
       loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
+    });
+    expectResolvedPolicy(["channels", "login"], {
+      loadPlugins: "always",
+      pluginRegistry: { scope: "configured-channels" },
+    });
+    expectResolvedPolicy(["channels", "capabilities"], {
+      loadPlugins: "always",
+      pluginRegistry: { scope: "configured-channels" },
     });
     expectResolvedPolicy(["channels", "add"], {
       loadPlugins: "never",
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
     });
     expectResolvedPolicy(["channels", "status"], {
       loadPlugins: "never",
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
       networkProxy: expect.any(Function),
     });
     expectResolvedPolicy(["channels", "list"], {
       loadPlugins: "never",
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
       networkProxy: "bypass",
     });
     expectResolvedPolicy(["channels", "logs"], {
       loadPlugins: "never",
+      pluginRegistry: { scope: "configured-channels" },
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["channels", "remove"], {
+      loadPlugins: "always",
+      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      networkProxy: "bypass",
+    });
+    expectResolvedPolicy(["channels", "resolve"], {
+      loadPlugins: "always",
       pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
       networkProxy: "bypass",
     });

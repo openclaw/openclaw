@@ -67,7 +67,7 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["channels"],
     policy: {
       loadPlugins: "always",
-      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      pluginRegistry: { scope: "configured-channels" },
     },
   },
   { commandPath: ["directory"], policy: { loadPlugins: "always" } },
@@ -321,12 +321,18 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   {
     commandPath: ["channels", "remove"],
     exact: true,
-    policy: { networkProxy: "bypass" },
+    policy: {
+      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      networkProxy: "bypass",
+    },
   },
   {
     commandPath: ["channels", "resolve"],
     exact: true,
-    policy: { networkProxy: "bypass" },
+    policy: {
+      pluginRegistry: { scope: "configured-channels", installBundledRuntimeDeps: false },
+      networkProxy: "bypass",
+    },
   },
   {
     commandPath: ["channels", "status"],

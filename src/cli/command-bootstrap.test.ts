@@ -60,10 +60,23 @@ describe("ensureCliCommandBootstrap", () => {
     });
   });
 
-  it("loads configured channel plugins without repairing runtime deps for channel commands", async () => {
+  it("loads configured channel plugins with repair enabled for operational channel commands", async () => {
     await ensureCliCommandBootstrap({
       runtime: {} as never,
       commandPath: ["channels", "send"],
+      loadPlugins: true,
+    });
+
+    expect(ensureCliPluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      routeLogsToStderr: undefined,
+    });
+  });
+
+  it("loads configured channel plugins without repairing runtime deps for read-only channel commands", async () => {
+    await ensureCliCommandBootstrap({
+      runtime: {} as never,
+      commandPath: ["channels", "resolve"],
       loadPlugins: true,
     });
 
