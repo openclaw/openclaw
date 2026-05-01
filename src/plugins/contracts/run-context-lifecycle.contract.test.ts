@@ -23,6 +23,7 @@ import {
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
+import type { OpenClawPluginApi } from "../types.js";
 
 async function waitForPluginEventHandlers(): Promise<void> {
   await new Promise<void>((resolve) => {
@@ -36,6 +37,52 @@ describe("plugin run context lifecycle", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginHostRuntimeState();
     resetAgentEventsForTest();
+  });
+
+  it("blocks stale plugin API run-context mutations after registry replacement", () => {
+    const { config, registry } = createPluginRegistryFixture();
+    let capturedApi: OpenClawPluginApi | undefined;
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "stale-run-context-plugin",
+        name: "Stale Run Context Plugin",
+      }),
+      register(api) {
+        capturedApi = api;
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+
+    expect(
+      capturedApi?.setRunContext({
+        runId: "stale-run",
+        namespace: "state",
+        value: { stale: true },
+      }),
+    ).toBe(false);
+    expect(
+      getPluginRunContext({
+        pluginId: "stale-run-context-plugin",
+        get: { runId: "stale-run", namespace: "state" },
+      }),
+    ).toBeUndefined();
+
+    expect(
+      setPluginRunContext({
+        pluginId: "stale-run-context-plugin",
+        patch: { runId: "stale-run", namespace: "state", value: { live: true } },
+      }),
+    ).toBe(true);
+    capturedApi?.clearRunContext({ runId: "stale-run", namespace: "state" });
+    expect(
+      getPluginRunContext({
+        pluginId: "stale-run-context-plugin",
+        get: { runId: "stale-run", namespace: "state" },
+      }),
+    ).toEqual({ live: true });
   });
 
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
