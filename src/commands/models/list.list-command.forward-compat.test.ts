@@ -308,6 +308,46 @@ describe("modelsListCommand forward-compat", () => {
       ]);
     });
 
+    it("keeps catalog metadata when provider-filtered configured entries overlap", async () => {
+      mocks.resolveConfiguredEntries.mockReturnValueOnce({
+        entries: [
+          {
+            key: "moonshot/kimi-k2.6",
+            ref: { provider: "moonshot", model: "kimi-k2.6" },
+            tags: new Set(["configured"]),
+            aliases: [],
+          },
+        ],
+      });
+      mocks.loadStaticManifestCatalogRowsForList.mockReturnValueOnce([
+        {
+          provider: "moonshot",
+          id: "kimi-k2.6",
+          ref: "moonshot/kimi-k2.6",
+          mergeKey: "moonshot::kimi-k2.6",
+          name: "Kimi K2.6",
+          source: "manifest",
+          input: ["text", "image"],
+          reasoning: false,
+          status: "available",
+          baseUrl: "https://api.moonshot.ai/v1",
+          contextWindow: 262_144,
+        },
+      ]);
+      const runtime = createRuntime();
+
+      await modelsListCommand({ json: true, provider: "moonshot" }, runtime as never);
+
+      expect(mocks.loadModelRegistry).not.toHaveBeenCalled();
+      expect(lastPrintedRows<{ key: string; name: string; tags: string[] }>()).toEqual([
+        expect.objectContaining({
+          key: "moonshot/kimi-k2.6",
+          name: "Kimi K2.6",
+          tags: ["configured"],
+        }),
+      ]);
+    });
+
     it("falls back to registry rows for unknown provider filters without --all (issue #75517)", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.loadModelRegistry.mockResolvedValueOnce({

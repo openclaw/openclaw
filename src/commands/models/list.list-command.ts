@@ -97,11 +97,12 @@ export async function modelsListCommand(
   // it surfaces manifest/provider-index/static-catalog/registry rows for
   // providers the user hasn't configured (issue #75517). The plan is registry-
   // free unless the cascade settles on a registry-backed kind.
-  const useSourcePlan = Boolean(opts.all) || Boolean(providerFilter);
-  const sourcePlanModule = useSourcePlan ? await loadSourcePlanModule() : undefined;
+  const enableSourcePlanCascade = Boolean(opts.all) || Boolean(providerFilter);
+  const sourcePlanModule = enableSourcePlanCascade ? await loadSourcePlanModule() : undefined;
   const sourcePlan = sourcePlanModule
     ? await sourcePlanModule.planAllModelListSources({
-        all: useSourcePlan,
+        all: opts.all,
+        enableCascade: enableSourcePlanCascade,
         providerFilter,
         cfg,
       })
@@ -157,7 +158,7 @@ export async function modelsListCommand(
   });
   const rows: ModelRow[] = [];
 
-  if (useSourcePlan) {
+  if (enableSourcePlanCascade) {
     const { appendAllModelRowSources } = await loadRowSourcesModule();
     if (!sourcePlan || !sourcePlanModule) {
       throw new Error("models list source plan was not initialized");

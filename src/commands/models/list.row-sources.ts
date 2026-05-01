@@ -30,22 +30,6 @@ export async function appendAllModelRowSources(
 ): Promise<AppendAllModelRowSourcesResult> {
   if (params.context.filter.provider && params.sourcePlan.kind !== "registry") {
     const seenKeys = new Set<string>();
-    if (params.entries && params.entries.length > 0) {
-      await appendConfiguredRows({
-        rows: params.rows,
-        entries: params.entries,
-        modelRegistry: params.modelRegistry,
-        context: params.context,
-      });
-      for (const row of params.rows) {
-        seenKeys.add(row.key);
-      }
-    }
-    await appendConfiguredProviderRows({
-      rows: params.rows,
-      context: params.context,
-      seenKeys,
-    });
     let catalogRows = 0;
     if (params.sourcePlan.kind === "manifest") {
       catalogRows = await appendManifestCatalogRows({
@@ -75,6 +59,25 @@ export async function appendAllModelRowSources(
         staticOnly: params.sourcePlan.kind === "provider-runtime-static",
       });
     }
+    if (params.entries && params.entries.length > 0) {
+      const missingEntries = params.entries.filter((entry) => !seenKeys.has(entry.key));
+      if (missingEntries.length > 0) {
+        await appendConfiguredRows({
+          rows: params.rows,
+          entries: missingEntries,
+          modelRegistry: params.modelRegistry,
+          context: params.context,
+        });
+        for (const row of params.rows) {
+          seenKeys.add(row.key);
+        }
+      }
+    }
+    await appendConfiguredProviderRows({
+      rows: params.rows,
+      context: params.context,
+      seenKeys,
+    });
     // Only fall back to the registry when no other source produced rows.
     // Configured-provider rows alone (e.g. ollama) keep the path registry-free.
     if (
