@@ -19,7 +19,12 @@ import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
 const workflowMocks = vi.hoisted(() => ({
+  getChannelPlugin: vi.fn(),
   sendMessage: vi.fn(),
+}));
+
+vi.mock("../../channels/plugins/index.js", () => ({
+  getChannelPlugin: workflowMocks.getChannelPlugin,
 }));
 
 vi.mock("../../infra/outbound/message.js", () => ({
@@ -63,6 +68,7 @@ async function withSessionStore(
 
 describe("plugin session attachments", () => {
   afterEach(() => {
+    workflowMocks.getChannelPlugin.mockReset();
     workflowMocks.sendMessage.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
@@ -553,6 +559,12 @@ describe("plugin session attachments", () => {
         } as unknown as SessionEntry;
         return undefined;
       });
+      workflowMocks.getChannelPlugin.mockReturnValue(
+        createOutboundTestPlugin({
+          id: "telegram",
+          outbound: { deliveryMode: "gateway" },
+        }),
+      );
       setActivePluginRegistry(
         createTestRegistry([
           {
@@ -576,6 +588,43 @@ describe("plugin session attachments", () => {
         ok: false,
         error:
           "session attachments require direct outbound delivery for channel telegram; " +
+          "channel uses gateway delivery",
+      });
+      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects unloaded bundled gateway-mode channels before attachment delivery", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      workflowMocks.getChannelPlugin.mockReturnValue(
+        createOutboundTestPlugin({
+          id: "whatsapp",
+          outbound: { deliveryMode: "gateway" },
+        }),
+      );
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          "session attachments require direct outbound delivery for channel whatsapp; " +
           "channel uses gateway delivery",
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();

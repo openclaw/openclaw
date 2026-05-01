@@ -26,9 +26,8 @@ async function loadSendMessage(): Promise<SendMessage> {
   return sendMessagePromise;
 }
 
-type GetLoadedChannelPluginById =
-  typeof import("../channels/plugins/registry-loaded.js").getLoadedChannelPluginById;
-let getLoadedChannelPluginByIdPromise: Promise<GetLoadedChannelPluginById> | undefined;
+type GetChannelPlugin = typeof import("../channels/plugins/index.js").getChannelPlugin;
+let getChannelPluginPromise: Promise<GetChannelPlugin> | undefined;
 
 type AttachmentDeliveryChannelPlugin = {
   outbound?: {
@@ -36,11 +35,11 @@ type AttachmentDeliveryChannelPlugin = {
   };
 };
 
-async function loadGetLoadedChannelPluginById(): Promise<GetLoadedChannelPluginById> {
-  getLoadedChannelPluginByIdPromise ??= import("../channels/plugins/registry-loaded.js").then(
-    (module) => module.getLoadedChannelPluginById,
+async function loadGetChannelPlugin(): Promise<GetChannelPlugin> {
+  getChannelPluginPromise ??= import("../channels/plugins/index.js").then(
+    (module) => module.getChannelPlugin,
   );
-  return getLoadedChannelPluginByIdPromise;
+  return getChannelPluginPromise;
 }
 
 type ResolvedAttachmentDelivery = {
@@ -210,7 +209,7 @@ export async function sendPluginSessionAttachment(
   const normalizedChannel = normalizeMessageChannel(deliveryContext.channel);
   const deliveryPlugin =
     normalizedChannel && isDeliverableMessageChannel(normalizedChannel)
-      ? ((await loadGetLoadedChannelPluginById())(normalizedChannel) as
+      ? ((await loadGetChannelPlugin())(normalizedChannel) as
           | AttachmentDeliveryChannelPlugin
           | undefined)
       : undefined;
