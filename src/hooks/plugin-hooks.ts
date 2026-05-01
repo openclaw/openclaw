@@ -13,7 +13,7 @@ import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
 const log = createSubsystemLogger("hooks");
 
-export type PluginHookDirEntry = {
+type PluginHookDirEntry = {
   dir: string;
   pluginId: string;
 };
