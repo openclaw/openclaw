@@ -125,9 +125,14 @@ describe("bundled plugin postinstall", () => {
   it("clears global npm config before nested installs", () => {
     expect(
       createNestedNpmInstallEnv({
+        NPM_CONFIG_WORKSPACES: "true",
         npm_config_global: "true",
+        npm_config_include_workspace_root: "true",
+        npm_config_ignore_scripts: "false",
         npm_config_location: "global",
         npm_config_prefix: "/opt/homebrew",
+        npm_config_workspace: "extensions/telegram",
+        npm_config_workspaces: "true",
         HOME: "/tmp/home",
       }),
     ).toEqual({
@@ -139,13 +144,17 @@ describe("bundled plugin postinstall", () => {
     expect(createBundledRuntimeDependencyInstallArgs(["acpx@0.4.1"])).toEqual([
       "install",
       "--ignore-scripts",
+      "--workspaces=false",
       "acpx@0.4.1",
     ]);
     expect(
       createBundledRuntimeDependencyInstallEnv({
         HOME: "/tmp/home",
+        NPM_CONFIG_IGNORE_SCRIPTS: "false",
         npm_config_dry_run: "true",
+        npm_config_ignore_scripts: "false",
         npm_config_prefix: "/opt/homebrew",
+        npm_config_workspaces: "true",
       }),
     ).toEqual({
       HOME: "/tmp/home",
@@ -154,9 +163,11 @@ describe("bundled plugin postinstall", () => {
       npm_config_fetch_retry_maxtimeout: "120000",
       npm_config_fetch_retry_mintimeout: "10000",
       npm_config_fetch_timeout: "300000",
+      npm_config_ignore_scripts: "true",
       npm_config_legacy_peer_deps: "true",
       npm_config_package_lock: "false",
       npm_config_save: "false",
+      npm_config_workspaces: "false",
     });
   });
 

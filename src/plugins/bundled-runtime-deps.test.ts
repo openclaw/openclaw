@@ -108,10 +108,11 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
   it("uses package-manager-neutral install args with npm config env", () => {
     expect(createBundledRuntimeDepsInstallArgs()).toEqual([
       "install",
+      "--omit=dev",
       "--ignore-scripts",
+      "--workspaces=false",
       "--no-audit",
       "--no-fund",
-      "--omit=dev",
     ]);
     expect(
       createBundledRuntimeDepsInstallEnv(
@@ -119,13 +120,18 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
           PATH: "/usr/bin:/bin",
           NPM_CONFIG_CACHE: "/Users/alice/.npm-uppercase",
           NPM_CONFIG_GLOBAL: "true",
+          NPM_CONFIG_IGNORE_SCRIPTS: "false",
           NPM_CONFIG_LOCATION: "global",
           NPM_CONFIG_PREFIX: "/Users/alice",
           npm_config_cache: "/Users/alice/.npm",
           npm_config_dry_run: "true",
           npm_config_global: "true",
+          npm_config_include_workspace_root: "true",
+          npm_config_ignore_scripts: "false",
           npm_config_location: "global",
           npm_config_prefix: "/opt/homebrew",
+          npm_config_workspace: "extensions/telegram",
+          npm_config_workspaces: "true",
           npm_execpath: "/repo/evil/npm-cli.js",
           NPM_EXECPATH: "/repo/evil-uppercase/npm-cli.js",
         },
@@ -144,10 +150,12 @@ describe("resolveBundledRuntimeDepsNpmRunner", () => {
       npm_config_fetch_timeout: "300000",
       npm_config_fund: "false",
       npm_config_global: "false",
+      npm_config_ignore_scripts: "true",
       npm_config_legacy_peer_deps: "true",
       npm_config_location: "project",
       npm_config_package_lock: "true",
       npm_config_save: "false",
+      npm_config_workspaces: "false",
     });
   });
 
@@ -325,15 +333,25 @@ describe("installBundledRuntimeDeps", () => {
 
     expect(spawnSyncMock).toHaveBeenCalledWith(
       expect.any(String),
-      [safeNpmCliPath, "install", "--ignore-scripts", "--no-audit", "--no-fund", "--omit=dev"],
+      [
+        safeNpmCliPath,
+        "install",
+        "--omit=dev",
+        "--ignore-scripts",
+        "--workspaces=false",
+        "--no-audit",
+        "--no-fund",
+      ],
       expect.objectContaining({
         cwd: installRoot,
         windowsHide: true,
         env: expect.objectContaining({
           npm_config_dry_run: "false",
+          npm_config_ignore_scripts: "true",
           npm_config_legacy_peer_deps: "true",
           npm_config_package_lock: "true",
           npm_config_save: "false",
+          npm_config_workspaces: "false",
         }),
       }),
     );

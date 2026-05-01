@@ -125,9 +125,9 @@ pnpm install \
 ```
 
 The `npm` fallback uses the safe npm install wrapper with production
-dependencies, lifecycle scripts disabled, audit disabled, fund output disabled,
-legacy peer dependency behavior, and package-lock output enabled for the
-generated install root.
+dependencies, lifecycle scripts disabled, workspace mode disabled, audit
+disabled, fund output disabled, legacy peer dependency behavior, and package-lock
+output enabled for the generated install root.
 
 After install, OpenClaw validates the staged dependency tree before making it
 visible to the runtime dependency root. Isolated staging is copied into the
