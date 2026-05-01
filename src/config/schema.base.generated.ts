@@ -21081,30 +21081,51 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             properties: {
               enabled: {
                 type: "boolean",
+                title: "Cron Maintenance Enabled",
+                description:
+                  "Enables maintenance-window phase isolation. When enabled, only maintenanceAgents run during the configured window, and those agents are blocked outside it.",
               },
               window: {
                 type: "object",
                 properties: {
                   start: {
                     type: "string",
+                    title: "Cron Maintenance Start",
+                    description:
+                      "Sets the inclusive maintenance window start time in `HH:MM` 24-hour format. Use values such as `02:00` to begin maintenance gating at a predictable local time.",
                   },
                   end: {
                     type: "string",
+                    title: "Cron Maintenance End",
+                    description:
+                      "Sets the exclusive maintenance window end time in `HH:MM` 24-hour format. Use `24:00` only for end-of-day windows that should run until midnight.",
                   },
                   timezone: {
                     type: "string",
+                    title: "Cron Maintenance Timezone",
+                    description:
+                      'Timezone for maintenance window evaluation. Use "user" (default), "local", or an IANA timezone such as `America/Los_Angeles`.',
                   },
                 },
                 additionalProperties: false,
+                title: "Cron Maintenance Window",
+                description:
+                  "Defines the daily maintenance window with start/end 24-hour times and timezone. Use cross-midnight windows such as `23:00` to `02:00` for overnight maintenance.",
               },
               maintenanceAgents: {
                 type: "array",
                 items: {
                   type: "string",
                 },
+                title: "Cron Maintenance Agents",
+                description:
+                  "Use this explicit agent-id allowlist to reserve maintenance-only workers for the maintenance window. Example: [`ops-maint`, `cleanup-bot`]. Listed agents are blocked during normal runtime.",
               },
             },
             additionalProperties: false,
+            title: "Cron Maintenance",
+            description:
+              "Maintenance-window scheduler controls for role isolation between normal agents and dedicated maintenance agents across cron and heartbeat flows.",
           },
           failureAlert: {
             type: "object",
