@@ -404,12 +404,12 @@ Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif` (i
 
 ## Embedding cache
 
-| Key                | Type      | Default | Description                      |
-| ------------------ | --------- | ------- | -------------------------------- |
-| `cache.enabled`    | `boolean` | `false` | Cache chunk embeddings in SQLite |
-| `cache.maxEntries` | `number`  | `50000` | Max cached embeddings            |
+| Key                | Type      | Default | Description                                   |
+| ------------------ | --------- | ------- | --------------------------------------------- |
+| `cache.enabled`    | `boolean` | `true`  | Cache chunk embeddings in SQLite              |
+| `cache.maxEntries` | `number`  | unset   | Optional best-effort cap on cached embeddings |
 
-Prevents re-embedding unchanged text during reindex or transcript updates.
+Prevents re-embedding unchanged text during reindex or transcript updates. Set `cache.maxEntries` when you need to bound disk growth; when unset, OpenClaw keeps cached embeddings until normal cache invalidation or manual cleanup removes them.
 
 ---
 
