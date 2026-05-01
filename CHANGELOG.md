@@ -147,6 +147,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TUI/perf: cache `normalizeDiscoveredPiModel` results per `(agentDir, provider, modelId)` so `registry.getAvailable()` no longer re-traverses every plugin manifest for every model on every call. Without this, ~50 models × 3 plugin-resolution hooks × ~50 plugin manifests = ~7,500 `openSync`+`fstatSync`+`closeSync` cycles per call (invoked from `ensureContextWindowCacheLoaded` at TUI startup); steady-state CPU on `openclaw tui` drops from sustained 100% to 0% with the cache. Identity-keyed so registry refresh that returns new model objects still invalidates correctly; bounded at 1024 entries with FIFO eviction. (#75137) Thanks @hexsprite.
 - fix: block workspace CLOUDSDK_PYTHON override and always set trusted interpreter for gcloud. (#74492) Thanks @pgondhi987.
 - Providers/Z.AI: move the bundled GLM catalog and auth env metadata into the plugin manifest, so `models list --all --provider zai` shows the full known catalog without duplicated runtime seed data. Thanks @shakkernerd.
 - Providers/Qianfan and Providers/Stepfun: declare setup auth metadata (`api-key` method, `QIANFAN_API_KEY`, `STEPFUN_API_KEY`) in the plugin manifest so onboarding and `models setup` surface the expected env var without falling back to legacy `providerAuthEnvVars` runtime seed data. Thanks @shakkernerd.
