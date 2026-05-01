@@ -847,7 +847,7 @@ function applyManifestSnapshotMetadata(
     ...(manifestRecord.cliBackends ?? []),
     ...(manifestRecord.setup?.cliBackends ?? []),
   ];
-  record.commands = [...(manifestRecord.commandAliases ?? []).map((alias) => alias.name)];
+  record.commands = (manifestRecord.commandAliases ?? []).map((alias) => alias.name);
 }
 
 function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
