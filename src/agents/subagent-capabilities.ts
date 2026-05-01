@@ -120,7 +120,7 @@ export function resolveSubagentCapabilityStore(
   return readSessionStore(storePath);
 }
 
-export function resolveSubagentRoleForDepth(params: {
+function resolveSubagentRoleForDepth(params: {
   depth: number;
   maxSpawnDepth?: number;
 }): SubagentSessionRole {
@@ -135,9 +135,7 @@ export function resolveSubagentRoleForDepth(params: {
   return depth < maxSpawnDepth ? "orchestrator" : "leaf";
 }
 
-export function resolveSubagentControlScopeForRole(
-  role: SubagentSessionRole,
-): SubagentControlScope {
+function resolveSubagentControlScopeForRole(role: SubagentSessionRole): SubagentControlScope {
   return role === "leaf" ? "none" : "children";
 }
 
