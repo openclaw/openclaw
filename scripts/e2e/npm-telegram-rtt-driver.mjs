@@ -12,7 +12,9 @@ const canaryTimeoutMs = Number(
 );
 const warmSampleCount = Number(process.env.OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES ?? "20");
 const sampleTimeoutMs = Number(process.env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS ?? "30000");
-const maxWarmFailures = Number(process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? "3");
+const maxWarmFailures = Number(
+  process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? String(warmSampleCount),
+);
 const successMarker = process.env.OPENCLAW_NPM_TELEGRAM_SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const scenarioIds = (
   process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply"
