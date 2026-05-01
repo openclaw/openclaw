@@ -129,7 +129,20 @@ export function loadSessionStore(
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (migrated || normalized) {
-    serializedFromDisk = undefined;
+    // PATCH: Write normalized/migrated store back to disk so the on-disk
+    // sessions.json stays compact and the serialized cache is populated.
+    // Without this, every load re-normalizes entries and the cache
+    // operates without a serialized copy (clone via JSON.stringify).
+    try {
+      const compacted = JSON.stringify(store);
+      fs.writeFileSync(storePath, compacted, "utf-8");
+      serializedFromDisk = compacted;
+      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
+      mtimeMs = fileStat?.mtimeMs;
+    } catch (err) {
+      serializedFromDisk = undefined;
+      log.warn(`session store normalization write-back failed: ${String(err)}`);
+    }
   }
   const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
   const beforeCount = Object.keys(store).length;
@@ -144,7 +157,21 @@ export function loadSessionStore(
       : 0;
     const afterCount = Object.keys(store).length;
     if (pruned > 0 || capped > 0) {
-      serializedFromDisk = undefined;
+      // PATCH: Persist maintenance results back to disk so the on-disk
+      // sessions.json does not grow unbounded. Without this write-back,
+      // every cache miss re-reads the original oversized file, triggering
+      // expensive parsing and maintenance on every load (see GH issues
+      // #64867, #52231, #65517).
+      try {
+        const compacted = JSON.stringify(store);
+        fs.writeFileSync(storePath, compacted, "utf-8");
+        serializedFromDisk = compacted;
+        fileStat = getFileStatSnapshot(storePath) ?? fileStat;
+        mtimeMs = fileStat?.mtimeMs;
+      } catch (err) {
+        serializedFromDisk = undefined;
+        log.warn(`session store maintenance write-back failed: ${String(err)}`);
+      }
       log.info("applied load-time maintenance to oversized session store", {
         storePath,
         before: beforeCount,
