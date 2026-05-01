@@ -11,7 +11,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { PaymentManager } from "../payments.js";
 import { CardUnavailableError } from "../providers/base.js";
-import type { CardSecrets } from "../providers/base.js";
+import type { BuyerProfile, CardSecrets, CredentialFillData } from "../providers/base.js";
 import { handleMap } from "../store.js";
 import { handleBrowserBeforeToolCall } from "./fill-hook.js";
 import type { FillHookOptions } from "./fill-hook.js";
@@ -27,12 +27,23 @@ const MOCK_SECRETS: CardSecrets = {
   expYear: "2030",
   expMmYy: "12/30",
   expMmYyyy: "12/2030",
+};
+
+const MOCK_PROFILE: BuyerProfile = {
   holderName: "Mock Holder",
-  billingLine1: "510 Townsend St",
-  billingCity: "San Francisco",
-  billingState: "CA",
-  billingPostalCode: "94103",
-  billingCountry: "US",
+  billing: {
+    line1: "510 Townsend St",
+    city: "San Francisco",
+    state: "CA",
+    postalCode: "94103",
+    country: "US",
+  },
+  extras: {},
+};
+
+const MOCK_DATA: CredentialFillData = {
+  secrets: MOCK_SECRETS,
+  profile: MOCK_PROFILE,
 };
 
 const HANDLE_ID = "test-handle-001";
@@ -41,15 +52,19 @@ const SPEND_REQ_ID = "spreq-001";
 const SPEND_REQ_ID_B = "spreq-002";
 
 function makeMockManager(
-  secretsOverride?: Partial<CardSecrets> | (() => Promise<CardSecrets>),
+  dataOverride?: Partial<CredentialFillData> | (() => Promise<CredentialFillData>),
 ): PaymentManager {
-  const resolveSecrets =
-    typeof secretsOverride === "function"
-      ? secretsOverride
-      : () => Promise.resolve({ ...MOCK_SECRETS, ...secretsOverride });
+  const resolveData =
+    typeof dataOverride === "function"
+      ? dataOverride
+      : () =>
+          Promise.resolve({
+            secrets: { ...MOCK_DATA.secrets, ...(dataOverride?.secrets ?? {}) },
+            profile: { ...MOCK_DATA.profile, ...(dataOverride?.profile ?? {}) },
+          });
 
   return {
-    retrieveCardSecretsForHook: vi.fn().mockImplementation(resolveSecrets),
+    retrieveCardSecretsForHook: vi.fn().mockImplementation(resolveData),
     getSetupStatus: vi.fn(),
     listFundingSources: vi.fn(),
     issueVirtualCard: vi.fn(),
@@ -455,7 +470,7 @@ describe("fill hook — substitution in rewritten params", () => {
     const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
     expect(fields[0]!.value).toBe(MOCK_SECRETS.expMonth);
     expect(fields[1]!.value).toBe(MOCK_SECRETS.expYear);
-    expect(fields[2]!.value).toBe(MOCK_SECRETS.holderName);
+    expect(fields[2]!.value).toBe(MOCK_PROFILE.holderName);
   });
 
   it("rewritten field contains exp_mm_yy (combined 2-digit year format)", async () => {
@@ -526,11 +541,11 @@ describe("fill hook — substitution in rewritten params", () => {
       makeOpts(manager),
     );
     const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
-    expect(fields[0]!.value).toBe(MOCK_SECRETS.billingLine1);
-    expect(fields[1]!.value).toBe(MOCK_SECRETS.billingCity);
-    expect(fields[2]!.value).toBe(MOCK_SECRETS.billingState);
-    expect(fields[3]!.value).toBe(MOCK_SECRETS.billingPostalCode);
-    expect(fields[4]!.value).toBe(MOCK_SECRETS.billingCountry);
+    expect(fields[0]!.value).toBe(MOCK_PROFILE.billing!.line1);
+    expect(fields[1]!.value).toBe(MOCK_PROFILE.billing!.city);
+    expect(fields[2]!.value).toBe(MOCK_PROFILE.billing!.state);
+    expect(fields[3]!.value).toBe(MOCK_PROFILE.billing!.postalCode);
+    expect(fields[4]!.value).toBe(MOCK_PROFILE.billing!.country);
   });
 });
 
@@ -586,25 +601,32 @@ describe("fill hook — multiple handles", () => {
   });
 
   it("substitutes values from both handles correctly", async () => {
-    const secretsB: CardSecrets = {
-      pan: "5555 5555 5555 4444",
-      cvv: "456",
-      expMonth: "06",
-      expYear: "2031",
-      expMmYy: "06/31",
-      expMmYyyy: "06/2031",
-      holderName: "Second Holder",
-      billingLine1: "1 Infinite Loop",
-      billingCity: "Cupertino",
-      billingState: "CA",
-      billingPostalCode: "95014",
-      billingCountry: "US",
+    const dataB: CredentialFillData = {
+      secrets: {
+        pan: "5555 5555 5555 4444",
+        cvv: "456",
+        expMonth: "06",
+        expYear: "2031",
+        expMmYy: "06/31",
+        expMmYyyy: "06/2031",
+      },
+      profile: {
+        holderName: "Second Holder",
+        billing: {
+          line1: "1 Infinite Loop",
+          city: "Cupertino",
+          state: "CA",
+          postalCode: "95014",
+          country: "US",
+        },
+        extras: {},
+      },
     };
     const manager = {
       retrieveCardSecretsForHook: vi
         .fn()
-        .mockResolvedValueOnce(MOCK_SECRETS)
-        .mockResolvedValueOnce(secretsB),
+        .mockResolvedValueOnce(MOCK_DATA)
+        .mockResolvedValueOnce(dataB),
       getSetupStatus: vi.fn(),
       listFundingSources: vi.fn(),
       issueVirtualCard: vi.fn(),
@@ -621,7 +643,7 @@ describe("fill hook — multiple handles", () => {
     );
     const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
     expect(fields[0]!.value).toBe(MOCK_SECRETS.pan);
-    expect(fields[1]!.value).toBe(secretsB.pan);
+    expect(fields[1]!.value).toBe(dataB.secrets.pan);
   });
 
   it("same handle on multiple fields — retrieved only once, both substituted", async () => {
@@ -698,25 +720,32 @@ describe("fill hook — secret clear on error path", () => {
     seedHandle(HANDLE_ID, SPEND_REQ_ID);
     seedHandle(HANDLE_ID_B, SPEND_REQ_ID_B);
 
-    const secretsA: CardSecrets = {
-      pan: "4242424242424242",
-      cvv: "111",
-      expMonth: "12",
-      expYear: "2030",
-      expMmYy: "12/30",
-      expMmYyyy: "12/2030",
-      holderName: "Alice Holder",
-      billingLine1: "123 Main St",
-      billingCity: "Springfield",
-      billingState: "IL",
-      billingPostalCode: "62701",
-      billingCountry: "US",
+    const dataA: CredentialFillData = {
+      secrets: {
+        pan: "4242424242424242",
+        cvv: "111",
+        expMonth: "12",
+        expYear: "2030",
+        expMmYy: "12/30",
+        expMmYyyy: "12/2030",
+      },
+      profile: {
+        holderName: "Alice Holder",
+        billing: {
+          line1: "123 Main St",
+          city: "Springfield",
+          state: "IL",
+          postalCode: "62701",
+          country: "US",
+        },
+        extras: {},
+      },
     };
 
     const manager = {
       retrieveCardSecretsForHook: vi
         .fn()
-        .mockResolvedValueOnce(secretsA)
+        .mockResolvedValueOnce(dataA)
         .mockRejectedValueOnce(new CardUnavailableError(HANDLE_ID_B, "consumed", "mock")),
       getSetupStatus: vi.fn(),
       listFundingSources: vi.fn(),
@@ -812,6 +841,253 @@ describe("fill hook — memory hygiene", () => {
     );
     // Two calls produce distinct params objects (no shared reference)
     expect(result1!.params).not.toBe(result2!.params);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Memory hygiene — extras values are cleared like card secrets
+// ---------------------------------------------------------------------------
+
+describe("fill hook — memory hygiene for extras", () => {
+  it("does not leak extras values into block-result error path", async () => {
+    seedHandle(HANDLE_ID, SPEND_REQ_ID);
+    seedHandle(HANDLE_ID_B, SPEND_REQ_ID_B);
+
+    const dataA: CredentialFillData = {
+      secrets: {
+        pan: "4242424242424242",
+        cvv: "111",
+        expMonth: "12",
+        expYear: "2030",
+        expMmYy: "12/30",
+        expMmYyyy: "12/2030",
+      },
+      profile: {
+        // include an extras value that should NOT leak in any error
+        extras: { email: "alice@private.example" },
+      },
+    };
+
+    const manager = {
+      retrieveCardSecretsForHook: vi
+        .fn()
+        .mockResolvedValueOnce(dataA)
+        .mockRejectedValueOnce(new CardUnavailableError(HANDLE_ID_B, "consumed", "mock")),
+      getSetupStatus: vi.fn(),
+      listFundingSources: vi.fn(),
+      issueVirtualCard: vi.fn(),
+      executeMachinePayment: vi.fn(),
+      getStatus: vi.fn(),
+    } as unknown as PaymentManager;
+
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        { ref: "email", type: "text", value: makeSentinel(HANDLE_ID, "email") },
+        { ref: "pan-b", type: "text", value: makeSentinel(HANDLE_ID_B, "pan") },
+      ]),
+      makeOpts(manager),
+    );
+
+    expect(result).toMatchObject({ block: true });
+    const json = JSON.stringify(result);
+    // Extras VALUE must not appear anywhere in the block result
+    expect(json).not.toContain("alice@private.example");
+    // Card-secret values from dataA must not leak either
+    expect(json).not.toContain("4242424242424242");
+    expect(json).not.toContain("111");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Forward-compat: BuyerProfile.extras passthrough
+// ---------------------------------------------------------------------------
+
+describe("fill hook — forward-compat passthrough via BuyerProfile.extras", () => {
+  beforeEach(() => {
+    seedHandle(HANDLE_ID, SPEND_REQ_ID, { last4: "4242" });
+  });
+
+  it("resolves a sentinel field that is exposed via extras (e.g. 'email')", async () => {
+    const data: CredentialFillData = {
+      secrets: { ...MOCK_SECRETS },
+      profile: {
+        ...MOCK_PROFILE,
+        extras: { email: "buyer@example.com", phone: "+15555551234" },
+      },
+    };
+    const manager = makeMockManager(async () => data);
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([{ ref: "email", type: "email", value: makeSentinel(HANDLE_ID, "email") }]),
+      makeOpts(manager),
+    );
+    expect(result!.requireApproval).toBeDefined();
+    const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
+    expect(fields[0]!.value).toBe("buyer@example.com");
+  });
+
+  it("resolves multiple extras alongside well-known sentinels (mixed fields)", async () => {
+    const data: CredentialFillData = {
+      secrets: { ...MOCK_SECRETS },
+      profile: {
+        ...MOCK_PROFILE,
+        extras: { email: "buyer@example.com", phone: "+15555551234" },
+      },
+    };
+    const manager = makeMockManager(async () => data);
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        { ref: "pan", type: "text", value: makeSentinel(HANDLE_ID, "pan") },
+        { ref: "email", type: "email", value: makeSentinel(HANDLE_ID, "email") },
+        { ref: "phone", type: "tel", value: makeSentinel(HANDLE_ID, "phone") },
+      ]),
+      makeOpts(manager),
+    );
+    const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
+    expect(fields[0]!.value).toBe(MOCK_SECRETS.pan);
+    expect(fields[1]!.value).toBe("buyer@example.com");
+    expect(fields[2]!.value).toBe("+15555551234");
+  });
+
+  it("extras CANNOT shadow Tier 1 secret fields (resolution priority)", async () => {
+    // Defense-in-depth: a malicious or buggy adapter that put a fake "pan" key in
+    // extras must not be able to override the real CardSecrets.pan value.
+    const data: CredentialFillData = {
+      secrets: { ...MOCK_SECRETS, pan: "REAL_PAN_VALUE" },
+      profile: {
+        ...MOCK_PROFILE,
+        // Adversarial: extras claims to be "pan" — must be ignored.
+        extras: { pan: "FAKE_PAN_VIA_EXTRAS" },
+      },
+    };
+    const manager = makeMockManager(async () => data);
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([{ ref: "pan", type: "text", value: makeSentinel(HANDLE_ID, "pan") }]),
+      makeOpts(manager),
+    );
+    const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
+    expect(fields[0]!.value).toBe("REAL_PAN_VALUE");
+    expect(fields[0]!.value).not.toBe("FAKE_PAN_VIA_EXTRAS");
+  });
+
+  it("extras CANNOT shadow Tier 2 buyer-profile fields when populated", async () => {
+    const data: CredentialFillData = {
+      secrets: { ...MOCK_SECRETS },
+      profile: {
+        holderName: "REAL HOLDER",
+        billing: { line1: "REAL LINE 1", extras: undefined as never } as never,
+        // Adversarial: extras claims to be holder_name and billing_line1.
+        extras: { holder_name: "FAKE HOLDER", billing_line1: "FAKE LINE 1" },
+      },
+    };
+    const manager = makeMockManager(async () => data);
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        { ref: "holder", type: "text", value: makeSentinel(HANDLE_ID, "holder_name") },
+        { ref: "line1", type: "text", value: makeSentinel(HANDLE_ID, "billing_line1") },
+      ]),
+      makeOpts(manager),
+    );
+    const fields = (result!.params as any).request.fields as Array<{ value: unknown }>;
+    expect(fields[0]!.value).toBe("REAL HOLDER");
+    expect(fields[1]!.value).toBe("REAL LINE 1");
+  });
+
+  it("approval description includes well-known + extras field names (alphabetized)", async () => {
+    const data: CredentialFillData = {
+      secrets: { ...MOCK_SECRETS },
+      profile: {
+        ...MOCK_PROFILE,
+        extras: { email: "buyer@example.com" },
+      },
+    };
+    const manager = makeMockManager(async () => data);
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        { ref: "pan", type: "text", value: makeSentinel(HANDLE_ID, "pan") },
+        { ref: "email", type: "email", value: makeSentinel(HANDLE_ID, "email") },
+        { ref: "cvv", type: "password", value: makeSentinel(HANDLE_ID, "cvv") },
+      ]),
+      makeOpts(manager),
+    );
+    const desc = result!.requireApproval!.description;
+    // Field NAMES included (alphabetized: cvv, email, pan)
+    expect(desc).toContain("Fields: cvv, email, pan");
+    // Field VALUES never included
+    expect(desc).not.toContain("buyer@example.com");
+    expect(desc).not.toContain("4242 4242 4242 4242");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unknown field — fail fast with clear error
+// ---------------------------------------------------------------------------
+
+describe("fill hook — unknown field fails fast", () => {
+  beforeEach(() => {
+    seedHandle(HANDLE_ID, SPEND_REQ_ID);
+  });
+
+  it("returns block: true when sentinel field is not available for this credential", async () => {
+    const manager = makeMockManager(); // default profile, no 'ssn' in extras
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([{ ref: "ssn", type: "text", value: makeSentinel(HANDLE_ID, "ssn") }]),
+      makeOpts(manager),
+    );
+    expect(result!.block).toBe(true);
+    expect(result!.requireApproval).toBeUndefined();
+    expect(result!.blockReason).toContain('field "ssn" is not available');
+  });
+
+  it("error message lists available fields", async () => {
+    const manager = makeMockManager();
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([{ ref: "ssn", type: "text", value: makeSentinel(HANDLE_ID, "ssn") }]),
+      makeOpts(manager),
+    );
+    const reason = result!.blockReason!;
+    expect(reason).toContain("Available fields:");
+    // All Tier 1 fields present
+    expect(reason).toContain("pan");
+    expect(reason).toContain("cvv");
+    // Tier 2 fields present (mock has full default profile)
+    expect(reason).toContain("holder_name");
+    expect(reason).toContain("billing_line1");
+  });
+
+  it("error message includes extras when forward-compat fields are exposed", async () => {
+    const data: CredentialFillData = {
+      secrets: { ...MOCK_SECRETS },
+      profile: {
+        ...MOCK_PROFILE,
+        extras: { email: "x@y.com" },
+      },
+    };
+    const manager = makeMockManager(async () => data);
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([{ ref: "ssn", type: "text", value: makeSentinel(HANDLE_ID, "ssn") }]),
+      makeOpts(manager),
+    );
+    expect(result!.blockReason).toContain("email");
+  });
+
+  it("missing buyer-profile field (e.g. holder_name when undefined) fails with clear error", async () => {
+    // Profile with NO holderName — provider didn't populate it for this card.
+    const data: CredentialFillData = {
+      secrets: { ...MOCK_SECRETS },
+      profile: { extras: {} },
+    };
+    const manager = makeMockManager(async () => data);
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        { ref: "holder", type: "text", value: makeSentinel(HANDLE_ID, "holder_name") },
+      ]),
+      makeOpts(manager),
+    );
+    expect(result!.block).toBe(true);
+    expect(result!.blockReason).toContain('field "holder_name" is not available');
+    // Available fields list should include card secrets but NOT holder_name (since undefined)
+    expect(result!.blockReason).toContain("pan");
+    expect(result!.blockReason).not.toMatch(/Available fields:[^.]*holder_name/);
   });
 });
 

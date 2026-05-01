@@ -238,22 +238,66 @@ describe("mockPaymentAdapter.retrieveCardSecrets", () => {
       purchaseIntent: VALID_PURCHASE_INTENT,
     });
 
-    const secrets = await mockPaymentAdapter.retrieveCardSecrets(handle.providerRequestId!);
+    const data = await mockPaymentAdapter.retrieveCardSecrets(handle.providerRequestId!);
 
-    // Assert individual fields with literals — avoid stringifying into a snapshot
-    expect(secrets.pan).toBe("4242 4242 4242 4242");
-    expect(secrets.cvv).toBe("123");
-    expect(secrets.expMonth).toBe("12");
-    expect(secrets.expYear).toBe("2030");
-    expect(secrets.expMmYy).toBe("12/30");
-    expect(secrets.expMmYyyy).toBe("12/2030");
-    expect(secrets.holderName).toBe("Mock Holder");
-    // Billing address fields
-    expect(secrets.billingLine1).toBe("510 Townsend St");
-    expect(secrets.billingCity).toBe("San Francisco");
-    expect(secrets.billingState).toBe("CA");
-    expect(secrets.billingPostalCode).toBe("94103");
-    expect(secrets.billingCountry).toBe("US");
+    // Tier 1 — card secrets
+    expect(data.secrets.pan).toBe("4242 4242 4242 4242");
+    expect(data.secrets.cvv).toBe("123");
+    expect(data.secrets.expMonth).toBe("12");
+    expect(data.secrets.expYear).toBe("2030");
+    expect(data.secrets.expMmYy).toBe("12/30");
+    expect(data.secrets.expMmYyyy).toBe("12/2030");
+    // Tier 2 — buyer profile
+    expect(data.profile.holderName).toBe("Mock Holder");
+    expect(data.profile.billing?.line1).toBe("510 Townsend St");
+    expect(data.profile.billing?.city).toBe("San Francisco");
+    expect(data.profile.billing?.state).toBe("CA");
+    expect(data.profile.billing?.postalCode).toBe("94103");
+    expect(data.profile.billing?.country).toBe("US");
+    // Tier 3 — extras (empty by default)
+    expect(data.profile.extras).toEqual({});
+  });
+
+  it("forward-compat: extras override is exposed to fill resolution", async () => {
+    __resetMockState({
+      extras: {
+        email: "buyer@example.com",
+        phone: "+15555551234",
+      },
+    });
+    const handle = await mockPaymentAdapter.issueVirtualCard({
+      fundingSourceId: "mock-fs-card-001",
+      amount: BASE_AMOUNT,
+      merchant: BASE_MERCHANT,
+      purchaseIntent: VALID_PURCHASE_INTENT,
+    });
+    const data = await mockPaymentAdapter.retrieveCardSecrets(handle.providerRequestId!);
+    expect(data.profile.extras).toEqual({
+      email: "buyer@example.com",
+      phone: "+15555551234",
+    });
+    // Tier 1/2 still populated alongside the extras
+    expect(data.secrets.pan).toBe("4242 4242 4242 4242");
+    expect(data.profile.holderName).toBe("Mock Holder");
+  });
+
+  it("forward-compat: profile override replaces the entire BuyerProfile", async () => {
+    __resetMockState({
+      profile: {
+        // No holderName, no billing — exercises the "field not available" path.
+        extras: { email: "x@y.com" },
+      },
+    });
+    const handle = await mockPaymentAdapter.issueVirtualCard({
+      fundingSourceId: "mock-fs-card-001",
+      amount: BASE_AMOUNT,
+      merchant: BASE_MERCHANT,
+      purchaseIntent: VALID_PURCHASE_INTENT,
+    });
+    const data = await mockPaymentAdapter.retrieveCardSecrets(handle.providerRequestId!);
+    expect(data.profile.holderName).toBeUndefined();
+    expect(data.profile.billing).toBeUndefined();
+    expect(data.profile.extras).toEqual({ email: "x@y.com" });
   });
 
   it("throws CardUnavailableError for unknown spend request id", async () => {

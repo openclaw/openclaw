@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { PaymentConfig } from "./config.js";
 import { canRail } from "./policy.js";
 import type {
-  CardSecrets,
+  CredentialFillData,
   ExecuteMachinePaymentParams,
   IssueVirtualCardParams,
   ListFundingSourcesParams,
@@ -40,7 +40,7 @@ export type PaymentManager = {
   retrieveCardSecretsForHook(
     providerId: PaymentProviderId,
     spendRequestId: string,
-  ): Promise<CardSecrets>;
+  ): Promise<CredentialFillData>;
 };
 
 export function createPaymentManager(opts: {
@@ -141,7 +141,7 @@ export function createPaymentManager(opts: {
     async retrieveCardSecretsForHook(
       providerId: PaymentProviderId,
       spendRequestId: string,
-    ): Promise<CardSecrets> {
+    ): Promise<CredentialFillData> {
       return requireAdapter(providerId).retrieveCardSecrets(spendRequestId);
     },
   };

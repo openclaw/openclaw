@@ -732,33 +732,33 @@ describe("issueVirtualCard", () => {
 // ---------------------------------------------------------------------------
 
 describe("retrieveCardSecrets", () => {
-  it("happy path: returns CardSecrets with pan, cvv, expMonth, expYear, holderName", async () => {
+  it("happy path: returns CredentialFillData with secrets and profile", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    const secrets = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
-    // Stripe test PAN — Luhn-valid, documented test value
-    expect(secrets.pan).toBe("4242424242424242");
-    expect(secrets.cvv).toBe("123");
-    expect(secrets.expMonth).toBe("12");
-    expect(secrets.expYear).toBe("2030");
-    // holderName from card.billing_address.name in 0.4.0
-    expect(secrets.holderName).toBe("Jane Doe");
+    const data = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
+    // Tier 1 — card secrets
+    expect(data.secrets.pan).toBe("4242424242424242");
+    expect(data.secrets.cvv).toBe("123");
+    expect(data.secrets.expMonth).toBe("12");
+    expect(data.secrets.expYear).toBe("2030");
+    // Tier 2 — buyer profile (holderName from card.billing_address.name in 0.4.0)
+    expect(data.profile.holderName).toBe("Jane Doe");
   });
 
   it("derives expMmYy ('12/30') from exp_month=12 and exp_year=2030", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    const secrets = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
+    const data = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     // Combined 2-digit-year format used by Stripe Elements single-field exp-date
-    expect(secrets.expMmYy).toBe("12/30");
+    expect(data.secrets.expMmYy).toBe("12/30");
   });
 
   it("derives expMmYyyy ('12/2030') from exp_month=12 and exp_year=2030", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    const secrets = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
+    const data = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     // Combined 4-digit-year format
-    expect(secrets.expMmYyyy).toBe("12/2030");
+    expect(data.secrets.expMmYyyy).toBe("12/2030");
   });
 
   it("edge case: legacy 2-digit exp_year (e.g. 99) produces expMmYy='12/99' verbatim", async () => {
@@ -783,12 +783,12 @@ describe("retrieveCardSecrets", () => {
     ];
     const { runner } = makeFixtureRunner(fixtureOk(twoDigitYearFixture));
     const adapter = makeAdapter({ runner });
-    const secrets = await adapter.retrieveCardSecrets("lsrq_legacy");
-    expect(secrets.expYear).toBe("99");
+    const data = await adapter.retrieveCardSecrets("lsrq_legacy");
+    expect(data.secrets.expYear).toBe("99");
     // expMmYy: last 2 chars of "99" = "99"
-    expect(secrets.expMmYy).toBe("12/99");
+    expect(data.secrets.expMmYy).toBe("12/99");
     // expMmYyyy: expMonth/expYear — same as expMmYy when expYear is already 2 digits
-    expect(secrets.expMmYyyy).toBe("12/99");
+    expect(data.secrets.expMmYyyy).toBe("12/99");
   });
 
   it("DOES include --include card as TWO separate args (security invariant: ONLY here)", async () => {
@@ -895,22 +895,23 @@ describe("retrieveCardSecrets", () => {
     expect(args).not.toContain("--test");
   });
 
-  it("extracts billing_line1, billing_city, billing_state, billing_postal_code, billing_country from card.billing_address", async () => {
+  it("extracts billing fields from card.billing_address into BuyerProfile.billing", async () => {
     const { runner } = makeFixtureRunner(fixtureOk(spendRequestRetrieveWithCard));
     const adapter = makeAdapter({ runner });
-    const secrets = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
+    const data = await adapter.retrieveCardSecrets("lsrq_test_approved_001");
     // Fixture has billing_address: { name, line1, city, state, postal_code, country }
-    expect(secrets.billingLine1).toBe("510 Townsend St");
-    expect(secrets.billingCity).toBe("San Francisco");
-    expect(secrets.billingState).toBe("CA");
-    expect(secrets.billingPostalCode).toBe("94103");
-    expect(secrets.billingCountry).toBe("US");
+    expect(data.profile.billing?.line1).toBe("510 Townsend St");
+    expect(data.profile.billing?.city).toBe("San Francisco");
+    expect(data.profile.billing?.state).toBe("CA");
+    expect(data.profile.billing?.postalCode).toBe("94103");
+    expect(data.profile.billing?.country).toBe("US");
   });
 
-  it("billing fields fall back to empty strings when card.billing_address is absent (defensive)", async () => {
-    // When billing_address is missing, the adapter should not throw — instead it returns
-    // empty strings for all billing fields. This allows the fill hook to proceed without
-    // crashing; the agent will receive empty values for those fields.
+  it("billing/holderName are undefined when card.billing_address is absent (no silent empty strings)", async () => {
+    // When billing_address is missing, the adapter leaves holderName/billing undefined
+    // rather than substituting empty strings. The fill-hook resolver will then return
+    // a clear "field not available" error for those fields rather than silently
+    // filling an empty value into a checkout form.
     const noBillingAddressFixture = [
       {
         id: "lsrq_no_billing",
@@ -929,15 +930,122 @@ describe("retrieveCardSecrets", () => {
     ];
     const { runner } = makeFixtureRunner(fixtureOk(noBillingAddressFixture));
     const adapter = makeAdapter({ runner });
-    const secrets = await adapter.retrieveCardSecrets("lsrq_no_billing");
-    // holderName falls back to "OPENCLAW VIRTUAL" when billing_address is absent
-    expect(secrets.holderName).toBe("OPENCLAW VIRTUAL");
-    // All billing fields fall back to empty strings — no throw
-    expect(secrets.billingLine1).toBe("");
-    expect(secrets.billingCity).toBe("");
-    expect(secrets.billingState).toBe("");
-    expect(secrets.billingPostalCode).toBe("");
-    expect(secrets.billingCountry).toBe("");
+    const data = await adapter.retrieveCardSecrets("lsrq_no_billing");
+    // No silent fallback strings; the resolver surfaces a clear error instead.
+    expect(data.profile.holderName).toBeUndefined();
+    expect(data.profile.billing).toBeUndefined();
+    // Card secrets still populated.
+    expect(data.secrets.pan).toBe("4242424242424242");
+  });
+
+  // -------------------------------------------------------------------------
+  // Forward-compat passthrough — extras
+  // -------------------------------------------------------------------------
+
+  it("extras: passes through unknown string-typed top-level card fields (forward-compat)", async () => {
+    // Simulate a future link-cli adding an `email` field at the top level of `card`.
+    const futureFixture = [
+      {
+        id: "lsrq_future",
+        status: "approved",
+        card: {
+          id: "ic_future",
+          number: "4242424242424242",
+          cvc: "123",
+          brand: "visa",
+          exp_month: 12,
+          exp_year: 2030,
+          email: "buyer@example.com", // future field
+          phone: "+15555551234", // future field
+          billing_address: { name: "Jane Doe" },
+          valid_until: "2026-05-01T05:29:51Z",
+        },
+      },
+    ];
+    const { runner } = makeFixtureRunner(fixtureOk(futureFixture));
+    const adapter = makeAdapter({ runner });
+    const data = await adapter.retrieveCardSecrets("lsrq_future");
+    expect(data.profile.extras["email"]).toBe("buyer@example.com");
+    expect(data.profile.extras["phone"]).toBe("+15555551234");
+  });
+
+  it("extras: passes through unknown string-typed billing_address sub-fields with billing_ prefix", async () => {
+    const fixture = [
+      {
+        id: "lsrq_more_billing",
+        status: "approved",
+        card: {
+          id: "ic_x",
+          number: "4242424242424242",
+          cvc: "123",
+          brand: "visa",
+          exp_month: 12,
+          exp_year: 2030,
+          billing_address: {
+            name: "Jane Doe",
+            line1: "510 Townsend St",
+            line2: "Apt 4", // future sub-field
+            phone: "+15551234567", // future sub-field
+          },
+          valid_until: "2026-05-01T05:29:51Z",
+        },
+      },
+    ];
+    const { runner } = makeFixtureRunner(fixtureOk(fixture));
+    const adapter = makeAdapter({ runner });
+    const data = await adapter.retrieveCardSecrets("lsrq_more_billing");
+    // Unknown billing sub-fields exposed under `billing_` prefix.
+    expect(data.profile.extras["billing_line2"]).toBe("Apt 4");
+    expect(data.profile.extras["billing_phone"]).toBe("+15551234567");
+    // Known billing fields remain in the structured tier (not duplicated in extras).
+    expect(data.profile.extras["billing_line1"]).toBeUndefined();
+    expect(data.profile.billing?.line1).toBe("510 Townsend St");
+  });
+
+  it("extras: defense-in-depth — non-string fields are NOT passed through", async () => {
+    // If Stripe ever returns nested objects, numbers, or booleans we don't recognize,
+    // the adapter MUST exclude them from extras. Otherwise an unintended secret-shaped
+    // value (e.g. card.tokenization_metadata: { token: "..." }) could leak.
+    const adversarialFixture = [
+      {
+        id: "lsrq_adversarial",
+        status: "approved",
+        card: {
+          id: "ic_x",
+          number: "4242424242424242",
+          cvc: "123",
+          brand: "visa",
+          exp_month: 12,
+          exp_year: 2030,
+          metadata: { hidden: "secret_object_value" }, // object — must NOT pass through
+          extra_count: 42, // number — must NOT pass through
+          enabled: true, // boolean — must NOT pass through
+          ok_string: "this passes through",
+          billing_address: {
+            name: "Jane Doe",
+            // sub-field as object/array/number must be excluded
+            geo: { lat: 37.0, lng: -122.0 },
+          },
+          valid_until: "2026-05-01T05:29:51Z",
+        },
+      },
+    ];
+    const { runner } = makeFixtureRunner(fixtureOk(adversarialFixture));
+    const adapter = makeAdapter({ runner });
+    const data = await adapter.retrieveCardSecrets("lsrq_adversarial");
+    // Object NOT in extras
+    expect(data.profile.extras["metadata"]).toBeUndefined();
+    // Number NOT in extras
+    expect(data.profile.extras["extra_count"]).toBeUndefined();
+    // Boolean NOT in extras
+    expect(data.profile.extras["enabled"]).toBeUndefined();
+    // String IS in extras
+    expect(data.profile.extras["ok_string"]).toBe("this passes through");
+    // Nested billing sub-object NOT in extras
+    expect(data.profile.extras["billing_geo"]).toBeUndefined();
+    // Defense-in-depth: serialize and ensure the secret_object_value didn't leak
+    const serialized = JSON.stringify(data.profile.extras);
+    expect(serialized).not.toContain("secret_object_value");
   });
 });
 

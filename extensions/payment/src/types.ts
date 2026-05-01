@@ -30,19 +30,22 @@ export type FundingSource = {
 
 export type FillSentinel = {
   $paymentHandle: string;
-  field:
-    | "pan"
-    | "cvv"
-    | "exp_month"
-    | "exp_year"
-    | "exp_mm_yy"
-    | "exp_mm_yyyy"
-    | "holder_name"
-    | "billing_line1"
-    | "billing_city"
-    | "billing_state"
-    | "billing_postal_code"
-    | "billing_country";
+  /**
+   * Sentinel field name. Resolved at fill time by the payment plugin's
+   * before_tool_call hook against the adapter's CredentialFillData.
+   *
+   * Well-known values (always supported by stripe-link and mock adapters):
+   *   - Card secrets: "pan", "cvv", "exp_month", "exp_year", "exp_mm_yy", "exp_mm_yyyy"
+   *   - Buyer profile: "holder_name", "billing_line1", "billing_city",
+   *                    "billing_state", "billing_postal_code", "billing_country"
+   *
+   * Forward-compat: if the underlying provider exposes additional fields
+   * (e.g., link-cli adds `email`, `phone`, `shipping_*`), the adapter
+   * passes them through via BuyerProfile.extras and the agent can use the
+   * field name immediately. Unknown fields fail fast with a clear
+   * "field not available for this credential" error.
+   */
+  field: string;
 };
 
 export type CredentialHandle = {
@@ -58,21 +61,13 @@ export type CredentialHandle = {
     expMonth?: string;
     expYear?: string;
   };
-  fillSentinels?: Record<
-    | "pan"
-    | "cvv"
-    | "exp_month"
-    | "exp_year"
-    | "exp_mm_yy"
-    | "exp_mm_yyyy"
-    | "holder_name"
-    | "billing_line1"
-    | "billing_city"
-    | "billing_state"
-    | "billing_postal_code"
-    | "billing_country",
-    FillSentinel
-  >;
+  /**
+   * Map of sentinel field name → sentinel object. Adapters always populate the
+   * 12 well-known keys. Future fields exposed by the provider (via
+   * BuyerProfile.extras) are not pre-listed here; agents may reference them
+   * directly by passing `{ $paymentHandle, field: "<name>" }` in a fill call.
+   */
+  fillSentinels?: Record<string, FillSentinel>;
 };
 
 export type Receipt = {

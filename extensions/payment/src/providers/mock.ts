@@ -1,7 +1,8 @@
 import { handleMap } from "../store.js";
 import type { CredentialHandle, FundingSource, MachinePaymentResult } from "../types.js";
 import type {
-  CardSecrets,
+  BuyerProfile,
+  CredentialFillData,
   ExecuteMachinePaymentParams,
   IssueVirtualCardParams,
   ListFundingSourcesParams,
@@ -20,12 +21,42 @@ const issuedSpendRequestIds = new Set<string>();
 const issuedHandles = new Map<string, CredentialHandle>();
 
 /**
- * Resets all module-scoped mock state. Call in beforeEach to avoid cross-test pollution.
+ * Optional override for the BuyerProfile.extras returned by retrieveCardSecrets.
+ * Use to test forward-compat behavior (e.g., a hypothetical `email` field that
+ * link-cli might expose later).
+ *
+ * SECURITY: Tests MUST NOT inject card-secret-shaped strings (PAN, CVV) here.
+ * In production, adapters filter strings-only at the top level; the mock relies
+ * on test discipline.
  */
-export function __resetMockState(): void {
+let extrasOverride: Record<string, string> = {};
+
+/**
+ * Optional override for the entire BuyerProfile returned by retrieveCardSecrets.
+ * If provided, replaces the default mock buyer profile entirely. Useful for tests
+ * that need to verify behavior when known buyer-profile fields are missing.
+ */
+let profileOverride: BuyerProfile | null = null;
+
+/**
+ * Resets all module-scoped mock state. Call in beforeEach to avoid cross-test pollution.
+ *
+ * Optionally accepts a config object to inject behavior:
+ *   - extras: override BuyerProfile.extras returned by retrieveCardSecrets.
+ *   - profile: replace the entire BuyerProfile returned by retrieveCardSecrets.
+ *
+ * Example (forward-compat smoke test):
+ *   __resetMockState({ extras: { email: "buyer@example.com", phone: "+15555551234" } });
+ */
+export function __resetMockState(config?: {
+  extras?: Record<string, string>;
+  profile?: BuyerProfile;
+}): void {
   counter = 0;
   issuedSpendRequestIds.clear();
   issuedHandles.clear();
+  extrasOverride = config?.extras ? { ...config.extras } : {};
+  profileOverride = config?.profile ?? null;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,25 +169,34 @@ export const mockPaymentAdapter: PaymentProviderAdapter = {
     return handle;
   },
 
-  async retrieveCardSecrets(spendRequestId: string): Promise<CardSecrets> {
+  async retrieveCardSecrets(spendRequestId: string): Promise<CredentialFillData> {
     if (!issuedSpendRequestIds.has(spendRequestId)) {
       throw new CardUnavailableError(undefined, "spend_request not found", "mock");
     }
     // MUST NOT be persisted, logged, or returned from any tool path.
     // The before_tool_call fill hook in U6 is the ONLY consumer.
-    return {
-      pan: "4242 4242 4242 4242",
-      cvv: "123",
-      expMonth: "12",
-      expYear: "2030",
-      expMmYy: "12/30",
-      expMmYyyy: "12/2030",
+    const profile: BuyerProfile = profileOverride ?? {
       holderName: "Mock Holder",
-      billingLine1: "510 Townsend St",
-      billingCity: "San Francisco",
-      billingState: "CA",
-      billingPostalCode: "94103",
-      billingCountry: "US",
+      billing: {
+        line1: "510 Townsend St",
+        city: "San Francisco",
+        state: "CA",
+        postalCode: "94103",
+        country: "US",
+      },
+      // Tests can override via __resetMockState({ extras: { email: "..." } }).
+      extras: { ...extrasOverride },
+    };
+    return {
+      secrets: {
+        pan: "4242 4242 4242 4242",
+        cvv: "123",
+        expMonth: "12",
+        expYear: "2030",
+        expMmYy: "12/30",
+        expMmYyyy: "12/2030",
+      },
+      profile,
     };
   },
 

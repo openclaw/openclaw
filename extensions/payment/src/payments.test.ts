@@ -488,14 +488,15 @@ describe("retrieveCardSecretsForHook", () => {
       purchaseIntent: VALID_PURCHASE_INTENT,
     });
 
-    const secrets = await manager.retrieveCardSecretsForHook("mock", handle.providerRequestId!);
+    const data = await manager.retrieveCardSecretsForHook("mock", handle.providerRequestId!);
 
-    // Assert individual fields with literals — avoid stringifying the object
-    expect(secrets.pan).toBe("4242 4242 4242 4242");
-    expect(secrets.cvv).toBe("123");
-    expect(secrets.expMonth).toBe("12");
-    expect(secrets.expYear).toBe("2030");
-    expect(secrets.holderName).toBe("Mock Holder");
+    // Tier 1 — card secrets
+    expect(data.secrets.pan).toBe("4242 4242 4242 4242");
+    expect(data.secrets.cvv).toBe("123");
+    expect(data.secrets.expMonth).toBe("12");
+    expect(data.secrets.expYear).toBe("2030");
+    // Tier 2 — buyer profile
+    expect(data.profile.holderName).toBe("Mock Holder");
   });
 
   it("throws CardUnavailableError for nonexistent spend request id", async () => {

@@ -126,6 +126,43 @@ describe("redactHandle", () => {
     expect(display["expYear"]).toBe("2028");
   });
 
+  it("preserves all 12 well-known fillSentinels keys via the closed allow-list", () => {
+    // CredentialHandle.fillSentinels is now Record<string, FillSentinel> (open key
+    // set, to support forward-compat field references). The redactor's allow-list
+    // remains closed at the 12 well-known keys — adapters today only populate
+    // these keys; future fields are referenced by name via BuyerProfile.extras and
+    // never appear in fillSentinels. If we ever want to expose extras as sentinel
+    // entries in `fillSentinels`, the redactor will need updating; this test pins
+    // current behavior so that change is intentional.
+    const handle = {
+      id: "h-fwdcompat",
+      provider: "stripe-link" as const,
+      rail: "virtual_card" as const,
+      status: "approved" as const,
+      fillSentinels: {
+        pan: { $paymentHandle: "h-fwdcompat", field: "pan" },
+        cvv: { $paymentHandle: "h-fwdcompat", field: "cvv" },
+        exp_month: { $paymentHandle: "h-fwdcompat", field: "exp_month" },
+        exp_year: { $paymentHandle: "h-fwdcompat", field: "exp_year" },
+        exp_mm_yy: { $paymentHandle: "h-fwdcompat", field: "exp_mm_yy" },
+        exp_mm_yyyy: { $paymentHandle: "h-fwdcompat", field: "exp_mm_yyyy" },
+        holder_name: { $paymentHandle: "h-fwdcompat", field: "holder_name" },
+        billing_line1: { $paymentHandle: "h-fwdcompat", field: "billing_line1" },
+        billing_city: { $paymentHandle: "h-fwdcompat", field: "billing_city" },
+        billing_state: { $paymentHandle: "h-fwdcompat", field: "billing_state" },
+        billing_postal_code: { $paymentHandle: "h-fwdcompat", field: "billing_postal_code" },
+        billing_country: { $paymentHandle: "h-fwdcompat", field: "billing_country" },
+      },
+    };
+    const redacted = redactHandle(handle as never) as Record<string, unknown>;
+    const sentinels = redacted["fillSentinels"] as Record<string, unknown>;
+    expect(Object.keys(sentinels)).toHaveLength(12);
+    for (const key of Object.keys(sentinels)) {
+      const s = sentinels[key] as { $paymentHandle?: string };
+      expect(s.$paymentHandle).toBe("h-fwdcompat");
+    }
+  });
+
   it("strips a smuggled providerSessionToken at the top level", () => {
     const handle = {
       id: "h6",

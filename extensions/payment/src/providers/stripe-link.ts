@@ -60,7 +60,8 @@ import { enforceMaxAmount } from "../policy.js";
 import { handleMap } from "../store.js";
 import type { CredentialHandle, FundingSource, MachinePaymentResult } from "../types.js";
 import type {
-  CardSecrets,
+  BuyerProfile,
+  CredentialFillData,
   ExecuteMachinePaymentParams,
   IssueVirtualCardParams,
   ListFundingSourcesParams,
@@ -533,7 +534,7 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
   // Do not add --include card to any other method.
   // ---------------------------------------------------------------------------
 
-  async function retrieveCardSecrets(spendRequestId: string): Promise<CardSecrets> {
+  async function retrieveCardSecrets(spendRequestId: string): Promise<CredentialFillData> {
     // SECURITY: --include card is intentional here and ONLY here.
     // Note: "card" is a separate arg (not --include=card): ["--include", "card"]
     const args: string[] = [
@@ -613,39 +614,101 @@ export function createStripeLinkAdapter(opts: StripeLinkAdapterOptions): Payment
     const expMmYyyy = `${expMonth}/${expYear}`;
 
     // Billing address fields from billing_address (link-cli 0.4.0 shape E).
-    // Defensive: if billing_address is absent, fall back to empty strings so the
-    // sentinel substitution still succeeds (the form field will receive an empty
-    // string rather than crashing). Agents should not rely on these fields when
-    // billing_address is missing — but we prefer a graceful degradation over a
-    // CardUnavailableError that would block the entire fill.
+    // We extract structurally into BuyerProfile.billing — leaving them undefined when
+    // absent rather than empty strings, so the fill-hook resolver can give a clear
+    // "field not available" error instead of substituting an empty string silently.
     const billingAddress = card["billing_address"] as Record<string, unknown> | undefined;
     const holderName =
-      typeof billingAddress?.["name"] === "string" ? billingAddress["name"] : "OPENCLAW VIRTUAL";
-    const billingLine1 =
-      typeof billingAddress?.["line1"] === "string" ? billingAddress["line1"] : "";
-    const billingCity = typeof billingAddress?.["city"] === "string" ? billingAddress["city"] : "";
-    const billingState =
-      typeof billingAddress?.["state"] === "string" ? billingAddress["state"] : "";
-    const billingPostalCode =
-      typeof billingAddress?.["postal_code"] === "string" ? billingAddress["postal_code"] : "";
-    const billingCountry =
-      typeof billingAddress?.["country"] === "string" ? billingAddress["country"] : "";
+      typeof billingAddress?.["name"] === "string" ? billingAddress["name"] : undefined;
 
-    // SECURITY: Return the secrets. Do NOT log. Do NOT cache in module scope.
+    // Forward-compat passthrough for additional non-secret fields the provider may
+    // expose. Stripe team has indicated link-cli will soon return email, phone,
+    // shipping_*. When that lands, the agent can use those field names immediately
+    // without any code changes here.
+    //
+    // SECURITY: We only pass through STRING values at the top level. Nested objects,
+    // numbers, booleans are excluded — defense-in-depth against accidental
+    // pass-through of object-typed secrets we don't recognize (e.g., a hypothetical
+    // `card.tokenization_metadata: { token: "secret" }`). Adapters are also
+    // responsible for excluding any string fields that are themselves card-secret;
+    // the KNOWN_CARD_FIELDS allow-list below enumerates fields we extract structurally.
+    const KNOWN_CARD_FIELDS = new Set([
+      "id",
+      "number",
+      "cvc",
+      "brand",
+      "exp_month",
+      "exp_year",
+      "billing_address",
+      "valid_until",
+      "cardholder_name",
+    ]);
+    const KNOWN_BILLING_FIELDS = new Set([
+      "name",
+      "line1",
+      "city",
+      "state",
+      "postal_code",
+      "country",
+    ]);
+
+    const extras: Record<string, string> = {};
+
+    // Top-level card fields not captured structurally — strings only.
+    for (const [k, v] of Object.entries(card)) {
+      if (KNOWN_CARD_FIELDS.has(k)) continue;
+      if (typeof v === "string") {
+        extras[k] = v;
+      }
+      // Non-string values are intentionally dropped (defense-in-depth).
+    }
+
+    // billing_address sub-fields not captured structurally — strings only,
+    // namespaced with `billing_` prefix to match the FillSentinel field convention.
+    if (billingAddress) {
+      for (const [k, v] of Object.entries(billingAddress)) {
+        if (KNOWN_BILLING_FIELDS.has(k)) continue;
+        if (typeof v === "string") {
+          extras[`billing_${k}`] = v;
+        }
+      }
+    }
+
+    const billing =
+      billingAddress !== undefined
+        ? {
+            line1:
+              typeof billingAddress["line1"] === "string" ? billingAddress["line1"] : undefined,
+            city: typeof billingAddress["city"] === "string" ? billingAddress["city"] : undefined,
+            state:
+              typeof billingAddress["state"] === "string" ? billingAddress["state"] : undefined,
+            postalCode:
+              typeof billingAddress["postal_code"] === "string"
+                ? billingAddress["postal_code"]
+                : undefined,
+            country:
+              typeof billingAddress["country"] === "string" ? billingAddress["country"] : undefined,
+          }
+        : undefined;
+
+    const profile: BuyerProfile = {
+      holderName,
+      billing,
+      extras,
+    };
+
+    // SECURITY: Return the secrets + profile. Do NOT log. Do NOT cache in module scope.
     // The caller (U6 fill hook) must drop the reference after substitution.
     return {
-      pan,
-      cvv,
-      expMonth,
-      expYear,
-      expMmYy,
-      expMmYyyy,
-      holderName,
-      billingLine1,
-      billingCity,
-      billingState,
-      billingPostalCode,
-      billingCountry,
+      secrets: {
+        pan,
+        cvv,
+        expMonth,
+        expYear,
+        expMmYy,
+        expMmYyyy,
+      },
+      profile,
     };
   }
 

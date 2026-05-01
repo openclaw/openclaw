@@ -1,13 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { isFillSentinel, findSentinelsInFields, FILL_SENTINEL_FIELDS } from "./sentinel.js";
+import { isFillSentinel, findSentinelsInFields, WELL_KNOWN_FIELDS } from "./sentinel.js";
 
 // ---------------------------------------------------------------------------
-// isFillSentinel — valid sentinels
+// isFillSentinel — well-known field values still detect as sentinels
 // ---------------------------------------------------------------------------
 
-describe("isFillSentinel — valid field values", () => {
-  it.each(FILL_SENTINEL_FIELDS)('returns true for field "%s"', (field) => {
+describe("isFillSentinel — well-known field values", () => {
+  it.each(WELL_KNOWN_FIELDS)('returns true for well-known field "%s"', (field) => {
     expect(isFillSentinel({ $paymentHandle: "handle-abc", field })).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isFillSentinel — open string union: any non-empty string field is accepted.
+// Resolution is deferred to the fill-hook so forward-compat fields exposed via
+// BuyerProfile.extras (e.g., a future "email" sentinel) flow through naturally.
+// ---------------------------------------------------------------------------
+
+describe("isFillSentinel — open string field (forward-compat)", () => {
+  it("returns true for hypothetical 'email' field (forward-compat extras)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "email" })).toBe(true);
+  });
+
+  it("returns true for hypothetical 'phone' field (forward-compat extras)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "phone" })).toBe(true);
+  });
+
+  it("returns true for hypothetical 'shipping_line1' field (forward-compat extras)", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "shipping_line1" })).toBe(true);
+  });
+
+  it("returns true for any non-empty string — resolution happens at fill time", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "anything_at_all" })).toBe(true);
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_zip" })).toBe(true);
   });
 });
 
@@ -38,78 +63,12 @@ describe("isFillSentinel — $paymentHandle constraints", () => {
 });
 
 // ---------------------------------------------------------------------------
-// isFillSentinel — missing or wrong field
+// isFillSentinel — field constraints (only structural now: non-empty string)
 // ---------------------------------------------------------------------------
 
-describe("isFillSentinel — field constraints", () => {
+describe("isFillSentinel — field structural constraints", () => {
   it("returns false when field is missing (partial sentinel)", () => {
     expect(isFillSentinel({ $paymentHandle: "handle-abc" })).toBe(false);
-  });
-
-  it("returns true for field 'exp_mm_yy'", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mm_yy" })).toBe(true);
-  });
-
-  it("returns true for field 'exp_mm_yyyy'", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mm_yyyy" })).toBe(true);
-  });
-
-  it("returns true for field 'billing_line1'", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_line1" })).toBe(true);
-  });
-
-  it("returns true for field 'billing_city'", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_city" })).toBe(true);
-  });
-
-  it("returns true for field 'billing_state'", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_state" })).toBe(true);
-  });
-
-  it("returns true for field 'billing_postal_code'", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_postal_code" })).toBe(
-      true,
-    );
-  });
-
-  it("returns true for field 'billing_country'", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_country" })).toBe(true);
-  });
-
-  it("returns false for field value 'billing-line-1' (hyphens — wrong separator)", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing-line-1" })).toBe(false);
-  });
-
-  it("returns false for field value 'billingLine1' (camelCase — wrong form)", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billingLine1" })).toBe(false);
-  });
-
-  it("returns false for field value 'billingCity' (camelCase — wrong form)", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billingCity" })).toBe(false);
-  });
-
-  it("returns false for field value 'billing_zip' (unknown billing sub-field)", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "billing_zip" })).toBe(false);
-  });
-
-  it("returns false for field value 'exp_mmyy' (no slash — wrong variant)", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mmyy" })).toBe(false);
-  });
-
-  it("returns false for field value 'exp_mm_y' (truncated variant)", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "exp_mm_y" })).toBe(false);
-  });
-
-  it("returns false for field value 'foo'", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "foo" })).toBe(false);
-  });
-
-  it("returns false for field value 'PAN' (wrong case)", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "PAN" })).toBe(false);
-  });
-
-  it("returns false for field value 'CVV' (wrong case)", () => {
-    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: "CVV" })).toBe(false);
   });
 
   it("returns false for field value '' (empty string)", () => {
@@ -118,6 +77,18 @@ describe("isFillSentinel — field constraints", () => {
 
   it("returns false when field is a number", () => {
     expect(isFillSentinel({ $paymentHandle: "handle-abc", field: 1 })).toBe(false);
+  });
+
+  it("returns false when field is null", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: null })).toBe(false);
+  });
+
+  it("returns false when field is undefined", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: undefined })).toBe(false);
+  });
+
+  it("returns false when field is a boolean", () => {
+    expect(isFillSentinel({ $paymentHandle: "handle-abc", field: true })).toBe(false);
   });
 });
 
@@ -169,7 +140,7 @@ describe("findSentinelsInFields", () => {
   });
 
   it("returns the sentinel index and value for a single sentinel", () => {
-    const sentinel = { $paymentHandle: "h1", field: "pan" as const };
+    const sentinel = { $paymentHandle: "h1", field: "pan" };
     const fields = [{ ref: "pan-field", type: "text", value: sentinel }];
     const result = findSentinelsInFields(fields);
     expect(result).toHaveLength(1);
@@ -178,8 +149,8 @@ describe("findSentinelsInFields", () => {
   });
 
   it("returns only the sentinel indices from a mixed array", () => {
-    const sentinelA = { $paymentHandle: "h1", field: "pan" as const };
-    const sentinelB = { $paymentHandle: "h1", field: "cvv" as const };
+    const sentinelA = { $paymentHandle: "h1", field: "pan" };
+    const sentinelB = { $paymentHandle: "h1", field: "cvv" };
     const fields = [
       { ref: "name", type: "text", value: "John Doe" },
       { ref: "pan-field", type: "text", value: sentinelA },
@@ -194,8 +165,8 @@ describe("findSentinelsInFields", () => {
     expect(result[1]!.sentinel).toBe(sentinelB);
   });
 
-  it("returns all 12 sentinels when all fields are sentinels", () => {
-    const fields = FILL_SENTINEL_FIELDS.map((field) => ({
+  it("returns all 12 sentinels when all fields are well-known sentinels", () => {
+    const fields = WELL_KNOWN_FIELDS.map((field) => ({
       ref: field,
       type: "text",
       value: { $paymentHandle: "h-multi", field },
@@ -205,6 +176,16 @@ describe("findSentinelsInFields", () => {
     result.forEach((r, i) => {
       expect(r.index).toBe(i);
     });
+  });
+
+  it("detects forward-compat sentinels alongside well-known ones (e.g. 'email')", () => {
+    const fields = [
+      { ref: "pan", type: "text", value: { $paymentHandle: "h1", field: "pan" } },
+      { ref: "email", type: "text", value: { $paymentHandle: "h1", field: "email" } },
+    ];
+    const result = findSentinelsInFields(fields);
+    expect(result).toHaveLength(2);
+    expect(result[1]!.sentinel.field).toBe("email");
   });
 
   it("handles fields with no value property", () => {

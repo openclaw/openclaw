@@ -18,15 +18,28 @@
  *
  * This is NOT a two-phase re-call pattern. The hook is NOT called again after
  * approval. The substitution always happens eagerly, before returning.
+ *
+ * Sentinel resolution — 3-tier lookup
+ * -----------------------------------
+ * `resolveSentinel` resolves a sentinel `field` against the adapter's
+ * `CredentialFillData`:
+ *
+ *   Tier 1 — card secrets (closed type-safe switch): pan, cvv, exp_*
+ *   Tier 2 — known buyer profile fields (closed type-safe checks): holder_name,
+ *            billing_*. Returns "not available" when the profile lacks the value.
+ *   Tier 3 — forward-compat extras (open Record<string, string>): any field
+ *            the provider exposed that isn't in tiers 1/2.
+ *
+ * Unknown fields fail fast with a `block: true` and a description of the
+ * available fields for this credential.
  */
 
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { PaymentManager } from "../payments.js";
 import { CardUnavailableError } from "../providers/base.js";
-import type { CardSecrets } from "../providers/base.js";
+import type { CredentialFillData } from "../providers/base.js";
 import { handleMap } from "../store.js";
 import { findSentinelsInFields, isFillSentinel } from "./sentinel.js";
-import type { FillSentinelField } from "./sentinel.js";
 
 // ---------------------------------------------------------------------------
 // Types — mirrored from SDK hook-types.ts for local use
@@ -130,33 +143,53 @@ export async function handleBrowserBeforeToolCall(
   // The try/finally guarantees secretsByHandle.clear() runs on EVERY exit path
   // (success, CardUnavailableError, unexpected throw). The clear-then-null pattern
   // enforces "drop the reference immediately" as an invariant, not happy-path-only.
-  let secretsByHandle: Map<string, CardSecrets> | null = new Map();
+  let secretsByHandle: Map<string, CredentialFillData> | null = new Map();
   try {
     for (const hid of handleIds) {
       const meta = handleMap.get(hid)!; // checked above
-      const secrets = await opts.manager.retrieveCardSecretsForHook(
+      const data = await opts.manager.retrieveCardSecretsForHook(
         meta.providerId,
         meta.spendRequestId,
       );
-      secretsByHandle.set(hid, secrets);
+      secretsByHandle.set(hid, data);
     }
 
     // 5. Substitute sentinel values with real card values.
     //    realValue is captured into rewrittenFields (plain strings) before finally runs.
+    //    If any sentinel cannot be resolved, return block: true with a clear error
+    //    (do not silently substitute an empty string).
+    const fieldNames = new Set<string>();
+    let resolutionError: string | null = null;
     const rewrittenFields = (
       fields as Array<{ value?: unknown; ref?: string; type?: string; [k: string]: unknown }>
     ).map((f) => {
+      if (resolutionError !== null) return f;
       if (!isFillSentinel(f.value)) return f;
-      const secrets = secretsByHandle!.get(f.value.$paymentHandle);
-      if (!secrets) return f; // defense: shouldn't happen
-      const realValue = pickSecretValue(secrets, f.value.field as FillSentinelField);
-      return { ...f, value: realValue };
+      const data = secretsByHandle!.get(f.value.$paymentHandle);
+      if (!data) return f; // defense: shouldn't happen
+      const resolved = resolveSentinel(data, f.value.field);
+      if ("error" in resolved) {
+        resolutionError = resolved.error;
+        return f;
+      }
+      fieldNames.add(f.value.field);
+      return { ...f, value: resolved.value };
     });
 
-    // 6. Build approval description (non-secret display only)
+    if (resolutionError !== null) {
+      return {
+        block: true,
+        blockReason: resolutionError,
+      };
+    }
+
+    // 6. Build approval description (non-secret display only).
+    //    Includes alphabetized field-name list so the user sees exactly which
+    //    fields are being filled (including any forward-compat extras).
     const description = buildApprovalDescription({
       handleIds,
       sentinelCount: sentinels.length,
+      fieldNames: [...fieldNames].sort(),
       targetId: typeof request.targetId === "string" ? request.targetId : undefined,
     });
 
@@ -197,38 +230,90 @@ export async function handleBrowserBeforeToolCall(
 // Helpers
 // ---------------------------------------------------------------------------
 
-function pickSecretValue(secrets: CardSecrets, field: FillSentinelField): string {
+/**
+ * Resolves a sentinel `field` name against the credential's CredentialFillData
+ * via a 3-tier lookup. Returns `{ value }` on hit or `{ error }` on miss.
+ *
+ * Tier 1 — card secrets (closed, type-safe switch).
+ * Tier 2 — known buyer-profile fields (closed, type-safe checks). Treats
+ *          `undefined` profile values as misses so the resolver can describe
+ *          available fields rather than substituting empty strings.
+ * Tier 3 — forward-compat passthrough via `profile.extras`.
+ *
+ * On miss, the error includes the list of fields available for THIS credential
+ * (the agent may have requested an unknown field or a field the provider didn't
+ * populate for this card).
+ */
+function resolveSentinel(
+  data: CredentialFillData,
+  field: string,
+): { value: string } | { error: string } {
+  // Tier 1: card secrets
   switch (field) {
     case "pan":
-      return secrets.pan;
+      return { value: data.secrets.pan };
     case "cvv":
-      return secrets.cvv;
+      return { value: data.secrets.cvv };
     case "exp_month":
-      return secrets.expMonth;
+      return { value: data.secrets.expMonth };
     case "exp_year":
-      return secrets.expYear;
+      return { value: data.secrets.expYear };
     case "exp_mm_yy":
-      return secrets.expMmYy;
+      return { value: data.secrets.expMmYy };
     case "exp_mm_yyyy":
-      return secrets.expMmYyyy;
-    case "holder_name":
-      return secrets.holderName;
-    case "billing_line1":
-      return secrets.billingLine1;
-    case "billing_city":
-      return secrets.billingCity;
-    case "billing_state":
-      return secrets.billingState;
-    case "billing_postal_code":
-      return secrets.billingPostalCode;
-    case "billing_country":
-      return secrets.billingCountry;
+      return { value: data.secrets.expMmYyyy };
   }
+
+  // Tier 2: known buyer-profile fields
+  if (field === "holder_name" && data.profile.holderName !== undefined) {
+    return { value: data.profile.holderName };
+  }
+  if (data.profile.billing) {
+    const b = data.profile.billing;
+    if (field === "billing_line1" && b.line1 !== undefined) return { value: b.line1 };
+    if (field === "billing_city" && b.city !== undefined) return { value: b.city };
+    if (field === "billing_state" && b.state !== undefined) return { value: b.state };
+    if (field === "billing_postal_code" && b.postalCode !== undefined) {
+      return { value: b.postalCode };
+    }
+    if (field === "billing_country" && b.country !== undefined) return { value: b.country };
+  }
+
+  // Tier 3: forward-compat extras
+  if (Object.prototype.hasOwnProperty.call(data.profile.extras, field)) {
+    return { value: data.profile.extras[field]! };
+  }
+
+  return {
+    error: `payment fill: field "${field}" is not available for this credential. Available fields: ${describeAvailableFields(data)}`,
+  };
+}
+
+/**
+ * Returns a comma-separated, alphabetized list of field names that ARE available
+ * for the given CredentialFillData. Used for the "field not available" error
+ * message so the agent can recover by selecting a valid field.
+ */
+function describeAvailableFields(data: CredentialFillData): string {
+  const fields: string[] = [];
+  // Tier 1 is always available (closed shape, all fields populated by adapters).
+  fields.push("pan", "cvv", "exp_month", "exp_year", "exp_mm_yy", "exp_mm_yyyy");
+  // Tier 2 — only include if the value is defined for this credential.
+  if (data.profile.holderName !== undefined) fields.push("holder_name");
+  if (data.profile.billing?.line1 !== undefined) fields.push("billing_line1");
+  if (data.profile.billing?.city !== undefined) fields.push("billing_city");
+  if (data.profile.billing?.state !== undefined) fields.push("billing_state");
+  if (data.profile.billing?.postalCode !== undefined) fields.push("billing_postal_code");
+  if (data.profile.billing?.country !== undefined) fields.push("billing_country");
+  // Tier 3 — forward-compat extras the provider populated.
+  fields.push(...Object.keys(data.profile.extras));
+  return [...new Set(fields)].sort().join(", ");
 }
 
 function buildApprovalDescription(args: {
   handleIds: string[];
   sentinelCount: number;
+  fieldNames: string[];
   targetId?: string;
 }): string {
   // Look up display info from handleMap — non-secret data only.
@@ -240,9 +325,13 @@ function buildApprovalDescription(args: {
     return meta.targetMerchantName ? `${last4Display} (${meta.targetMerchantName})` : last4Display;
   });
   const targetDisplay = args.targetId ?? "the open browser tab";
+  // Field NAMES (not values) — the user needs to see what's being filled. Field
+  // names are non-secret. Values are not included anywhere in the description.
+  const fieldsDisplay = args.fieldNames.length > 0 ? args.fieldNames.join(", ") : "(no fields)";
   return (
     `Substitute card values into ${args.sentinelCount} field(s) on ${targetDisplay}. ` +
     `Cards: ${cardSummaries.join(", ")}. ` +
+    `Fields: ${fieldsDisplay}. ` +
     `The model will not see the values.`
   );
 }

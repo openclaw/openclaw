@@ -223,7 +223,33 @@ Use the billing address sentinels when the checkout form asks for the cardholder
 
 Available billing address fields: `billing_line1`, `billing_city`, `billing_state`, `billing_postal_code`, `billing_country`. These correspond to the fields returned by `link-cli spend-request retrieve --include card` under `card.billing_address`.
 
-> **Email is NOT available as a sentinel.** The `link-cli` CLI does not expose the cardholder's email address in any command output. Do not attempt to use an `email` sentinel — it does not exist. If a checkout form requires an email address, the user must supply it separately.
+### Sentinel resolution model (two tiers + forward-compat passthrough)
+
+The fill-hook resolves each sentinel `field` by name against a two-tier data model populated by the adapter:
+
+- **Tier 1 — card secrets** (always present): `pan`, `cvv`, `exp_month`, `exp_year`, `exp_mm_yy`, `exp_mm_yyyy`. These are strictly card-secret and never persisted; the redaction-hook scans for them by pattern.
+- **Tier 2 — buyer profile** (provider-dependent): `holder_name`, `billing_line1`, `billing_city`, `billing_state`, `billing_postal_code`, `billing_country`. Populated when the provider response includes `card.billing_address`. Skipped silently when missing — the fill-hook reports a clear "field not available" error rather than silently filling an empty string.
+- **Tier 3 — forward-compat extras**: any string-typed top-level field on the provider response that isn't structurally captured by Tier 1/2. Adapters auto-pass-through these so agents can use new field names the moment the provider exposes them.
+
+**Forward-compat passthrough — example.** If link-cli starts exposing `card.email`, you can use `field: "email"` in a fill call right away with no plugin update:
+
+```json
+{
+  "ref": "input[name='email']",
+  "type": "email",
+  "value": { "$paymentHandle": "<handle-id>", "field": "email" }
+}
+```
+
+If the provider has populated the field, the value substitutes normally. If not, the fill-hook fails fast with `block: true` and an error message that lists the fields that ARE available for this credential — for example:
+
+```
+payment fill: field "email" is not available for this credential. Available fields: billing_city, billing_country, billing_line1, billing_postal_code, billing_state, cvv, exp_mm_yy, exp_mm_yyyy, exp_month, exp_year, holder_name, pan
+```
+
+When you see that error, treat it as ground truth: the listed fields are the complete set this credential can fill. Pick a different field, or tell the user which form field can't be auto-filled.
+
+> **Today's Stripe Link surface (link-cli 0.4.0):** the provider currently only populates the 12 well-known fields above. `email`, `phone`, `shipping_*`, etc. are NOT yet exposed and will fail with the message above. The Stripe team has indicated `email`, `phone`, and `shipping_address` are coming; once they ship, no plugin update is required — the agent can simply start using the field names.
 
 ### Common mistakes
 
