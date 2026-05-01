@@ -1009,6 +1009,22 @@ export async function runEmbeddedPiAgent(
             startupStages.mark("attempt-dispatch");
             emitStartupStageSummary("attempt-dispatch");
             startupStagesEmitted = true;
+            // Emit startup-stage timings to Langfuse (fire-and-forget)
+            try {
+              const traceMod = await import("../../infra/langfuse-stage-traces.js").catch(
+                () => null,
+              );
+              traceMod?.traceStartupStages({
+                runId: params.runId,
+                sessionId: activeSessionId,
+                agentId: workspaceResolution.agentId,
+                provider,
+                model: modelId,
+                summary: startupStages.snapshot(),
+              });
+            } catch {
+              // Never let tracing break the gateway
+            }
           }
 
           const rawAttempt = await runEmbeddedAttemptWithBackend({

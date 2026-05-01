@@ -1884,6 +1884,22 @@ export async function runEmbeddedAttempt(
       }
       prepStages.mark("stream-setup");
       emitPrepStageSummary("stream-ready");
+      // Emit prep-stage timings to Langfuse (fire-and-forget)
+      try {
+        const traceMod = await import("../../../infra/langfuse-stage-traces.js").catch(
+          () => null,
+        );
+        traceMod?.tracePrepStages({
+          runId: params.runId,
+          sessionId: params.sessionId,
+          agentId: sessionAgentId,
+          provider: params.provider,
+          model: params.modelId,
+          summary: prepStages.snapshot(),
+        });
+      } catch {
+        // Never let tracing break the gateway
+      }
 
       const cacheObservabilityEnabled = Boolean(cacheTrace) || log.isEnabled("debug");
       const promptCacheToolNames = collectPromptCacheToolNames(
