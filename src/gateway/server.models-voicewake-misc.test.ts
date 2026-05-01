@@ -850,43 +850,62 @@ describe("gateway server misc", () => {
     if (!configPath) {
       throw new Error("Missing OPENCLAW_CONFIG_PATH");
     }
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(
-      configPath,
-      JSON.stringify(
-        {
-          channels: {
-            discord: {
-              token: "token-123",
+    let previousConfig: string | undefined;
+    try {
+      previousConfig = await fs.readFile(configPath, "utf-8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw err;
+      }
+    }
+
+    try {
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            channels: {
+              discord: {
+                token: "token-123",
+              },
             },
           },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      await withEnvAsync(
+        {
+          OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
         },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+        async () => {
+          const autoPort = await getFreePort();
+          const autoServer = await startGatewayServer(autoPort);
+          await autoServer.close();
+        },
+      );
 
-    await withEnvAsync(
-      {
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
-        OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-      },
-      async () => {
-        const autoPort = await getFreePort();
-        const autoServer = await startGatewayServer(autoPort);
-        await autoServer.close();
-      },
-    );
-
-    const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-    const channels = updated.channels as Record<string, unknown> | undefined;
-    const discord = channels?.discord as Record<string, unknown> | undefined;
-    expect(discord).toMatchObject({
-      token: "token-123",
-      enabled: true,
-    });
+      const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+      const channels = updated.channels as Record<string, unknown> | undefined;
+      const discord = channels?.discord as Record<string, unknown> | undefined;
+      expect(discord).toMatchObject({
+        token: "token-123",
+        enabled: true,
+      });
+    } finally {
+      if (previousConfig === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+      clearRuntimeConfigSnapshot();
+      clearConfigCache();
+    }
   });
 
   test("releases port after close", async () => {

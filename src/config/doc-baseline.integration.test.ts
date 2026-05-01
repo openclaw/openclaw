@@ -29,8 +29,8 @@ describe("config doc baseline integration", () => {
   }
 
   it("is deterministic across repeated runs", async () => {
-    const { baseline } = await getSharedRendered();
-    const first = await renderConfigDocBaselineArtifacts(baseline);
+    const first = await getSharedRendered();
+    const { baseline } = first;
     const second = await renderConfigDocBaselineArtifacts(baseline);
 
     expect(second.json.combined).toBe(first.json.combined);

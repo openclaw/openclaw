@@ -325,6 +325,9 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (authOverride === "aws-sdk") {
     return true;
   }
+  if (authOverride === undefined && provider === "amazon-bedrock") {
+    return true;
+  }
   if (
     resolveEnvApiKey(provider, params.env, {
       config: params.cfg,
@@ -336,10 +339,10 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
     return true;
   }
-  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
+  if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
     return true;
   }
-  if (authOverride === undefined && provider === "amazon-bedrock") {
+  if (resolveSyntheticLocalProviderAuth({ cfg: params.cfg, provider })) {
     return true;
   }
   return false;

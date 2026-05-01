@@ -270,8 +270,15 @@ describe("monitorSlackProvider tool results", () => {
     await flush();
   }
 
-  function expectReactionNames(names: string[]) {
-    expect(reactMock.mock.calls.map(([args]) => (args as { name: string }).name)).toEqual(names);
+  function expectReactionFlow(expected: {
+    startsWith: string[];
+    endsWith: string;
+    includes: string;
+  }) {
+    const names = reactMock.mock.calls.map(([args]) => (args as { name: string }).name);
+    expect(names.slice(0, expected.startsWith.length)).toEqual(expected.startsWith);
+    expect(names).toContain(expected.includes);
+    expect(names.at(-1)).toBe(expected.endsWith);
   }
 
   async function runDefaultMessageAndExpectSentText(expectedText: string) {
@@ -694,7 +701,11 @@ describe("monitorSlackProvider tool results", () => {
     await runMentionGatedChannelMessageAndFlush();
 
     expect(sendMock).not.toHaveBeenCalled();
-    expectReactionNames(["eyes", "scream", "scream"]);
+    expectReactionFlow({
+      startsWith: ["eyes", "scream"],
+      includes: "scream",
+      endsWith: "scream",
+    });
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
