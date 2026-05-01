@@ -8,7 +8,14 @@ import {
 import {
   isToolAllowedByPolicies,
   resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicyForSession,
 } from "../../agents/pi-tools.policy.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import {
+  isSubagentEnvelopeSession,
+  resolveSubagentCapabilityStore,
+} from "../../agents/subagent-capabilities.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../agents/tool-policy.js";
 import {
   resolveConversationBindingRecord,
@@ -617,6 +624,34 @@ export async function dispatchReplyFromConfig(
     resolveToolProfilePolicy(providerProfile),
     providerProfileAlsoAllow,
   );
+  const groupPolicy = resolveGroupToolPolicy({
+    config: cfg,
+    sessionKey: acpDispatchSessionKey,
+    messageProvider: deliveryChannel,
+    groupId,
+    groupChannel: ctx.GroupChannel,
+    groupSpace: ctx.GroupSpace,
+    accountId: replyRoute.accountId ?? ctx.AccountId,
+    senderId: ctx.SenderId,
+    senderName: ctx.SenderName,
+    senderUsername: ctx.SenderUsername,
+    senderE164: ctx.SenderE164,
+  });
+  const sandboxRuntime = resolveSandboxRuntimeStatus({
+    cfg,
+    sessionKey: acpDispatchSessionKey,
+  });
+  const subagentStore = resolveSubagentCapabilityStore(acpDispatchSessionKey, { cfg });
+  const subagentPolicy =
+    acpDispatchSessionKey &&
+    isSubagentEnvelopeSession(acpDispatchSessionKey, {
+      cfg,
+      store: subagentStore,
+    })
+      ? resolveSubagentToolPolicyForSession(cfg, acpDispatchSessionKey, {
+          store: subagentStore,
+        })
+      : undefined;
   const messageToolAvailable = isToolAllowedByPolicies("message", [
     profilePolicy,
     providerProfilePolicy,
@@ -624,6 +659,9 @@ export async function dispatchReplyFromConfig(
     agentProviderPolicy,
     globalPolicy,
     agentPolicy,
+    groupPolicy,
+    sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined,
+    subagentPolicy,
   ]);
   const sourceReplyPolicy = resolveSourceReplyVisibilityPolicy({
     cfg,
