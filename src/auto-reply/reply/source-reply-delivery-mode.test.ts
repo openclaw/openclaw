@@ -119,6 +119,20 @@ describe("resolveSourceReplyDeliveryMode", () => {
       }),
     ).toBe("message_tool_only");
   });
+
+  it("keeps configured channel turns private when the message tool is available", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: {
+          channels: {
+            slack: {},
+          },
+        } as OpenClawConfig,
+        ctx: { ChatType: "channel" },
+        messageToolAvailable: true,
+      }),
+    ).toBe("message_tool_only");
+  });
 });
 
 describe("resolveSourceReplyVisibilityPolicy", () => {
