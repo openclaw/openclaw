@@ -13,8 +13,6 @@ import {
   normalizeAllowedToolNames,
 } from "./tool-call-shared.js";
 
-export { isRedactedSessionsSpawnAttachment } from "./tool-call-shared.js";
-
 type RawToolCallBlock = {
   type?: unknown;
   id?: unknown;
@@ -285,7 +283,7 @@ export function stripToolResultDetails(messages: AgentMessage[]): AgentMessage[]
   return touched ? out : messages;
 }
 
-export function repairToolCallInputs(
+function repairToolCallInputs(
   messages: AgentMessage[],
   options?: ToolCallInputRepairOptions,
 ): ToolCallInputRepairReport {
