@@ -59,6 +59,8 @@ export class ConfigEditor extends LitElement {
   private view?: EditorView;
   private readonlyCompartment = new Compartment();
   private themeCompartment = new Compartment();
+  /** Guard flag: suppress external value update while the user is actively editing */
+  private _userIsEditing = false;
 
   // ---------------------------------------------------------------------------
   // Styles
@@ -176,7 +178,7 @@ export class ConfigEditor extends LitElement {
   }
 
   override updated(changed: Map<string, unknown>): void {
-    if (changed.has("value") && this.view) {
+    if (changed.has("value") && this.view && !this._userIsEditing) {
       const current = this.view.state.doc.toString();
       if (current !== this.value) {
         this.view.dispatch({
@@ -246,12 +248,15 @@ export class ConfigEditor extends LitElement {
         } catch (e) {
           if (e instanceof SyntaxError) {
             const pos = this.errorOffset(docText, e.message);
-            diagnostics.push({
-              from: Math.min(pos, docText.length),
-              to: Math.min(pos + 1, docText.length),
-              severity: "error",
-              message: e.message,
-            });
+            // -1 sentinel means unrecognized error format — skip marker silently
+            if (pos >= 0) {
+              diagnostics.push({
+                from: Math.min(pos, docText.length),
+                to: Math.min(pos + 1, docText.length),
+                severity: "error",
+                message: e.message,
+              });
+            }
           }
         }
         return diagnostics;
@@ -260,9 +265,10 @@ export class ConfigEditor extends LitElement {
       // Keymaps (includes indentWithTab for Tab-key indentation)
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab, ...foldKeymap]),
 
-      // Dispatch on change
+      // Dispatch on change — set guard flag so updated() knows user is typing
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
+          this._userIsEditing = true;
           const newValue = update.state.doc.toString();
           this.dispatchEvent(
             new CustomEvent("change", {
@@ -271,6 +277,8 @@ export class ConfigEditor extends LitElement {
               composed: true,
             }),
           );
+          // Reset guard after a short debounce so the next external value update isn't blocked
+          setTimeout(() => { this._userIsEditing = false; }, 500);
         }
       }),
 
@@ -286,7 +294,9 @@ export class ConfigEditor extends LitElement {
 
   /**
    * Convert a JSON5 SyntaxError message to a character offset in the document.
-   * JSON5 errors use "at line:column" format; JSON errors use "position N".
+   * Returns -1 if the error format is not recognized (sentinel for "don't show marker").
+   * Note: column positions use UTF-16 code units (JS string indices), which match
+   * CodeMirror's internal representation.
    */
   private errorOffset(doc: string, message: string): number {
     // JSON5 format: "... at 3:5"
@@ -294,12 +304,18 @@ export class ConfigEditor extends LitElement {
     if (lc) {
       const line = Number.parseInt(lc[1], 10);
       const col = Number.parseInt(lc[2], 10);
+      if (col <= 0) return -1;
       const lines = doc.split("\n");
+      const targetLine = line - 1;
+      if (targetLine < 0 || targetLine >= lines.length) return -1;
+      // Accumulate prior lines by their actual string length (UTF-16 code units)
       let offset = 0;
-      for (let i = 0; i < Math.min(line - 1, lines.length); i++) {
+      for (let i = 0; i < targetLine; i++) {
         offset += lines[i].length + 1; // +1 for newline
       }
-      return offset + col - 1;
+      // Clamp column to actual line length (1-indexed)
+      const clampedCol = Math.min(col, lines[targetLine].length);
+      return offset + clampedCol - 1;
     }
 
     // JSON format: "... at position 42"
@@ -308,7 +324,8 @@ export class ConfigEditor extends LitElement {
       return Number.parseInt(pos[1], 10);
     }
 
-    return 0;
+    // Unrecognized format — return sentinel so the linter skips the marker
+    return -1;
   }
 
   // ---------------------------------------------------------------------------
@@ -327,7 +344,9 @@ export class ConfigEditor extends LitElement {
 
     try {
       const parsed = JSON5.parse(doc);
-      const formatted = JSON.stringify(parsed, null, 2);
+      // Use JSON5.stringify so that unquoted keys, trailing commas, and
+      // other JSON5-only features round-trip correctly.
+      const formatted = JSON5.stringify(parsed, null, 2);
       this.view.dispatch({
         changes: { from: 0, to: rawDoc.length, insert: formatted },
       });
