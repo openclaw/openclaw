@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { detectMime, FILE_TYPE_SNIFF_MAX_BYTES, normalizeMimeType } from "../media/mime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import type {
   PluginAttachmentChannelHints,
   PluginSessionAttachmentCaptionFormat,
@@ -25,15 +26,21 @@ async function loadSendMessage(): Promise<SendMessage> {
   return sendMessagePromise;
 }
 
-type ResolveOutboundChannelPlugin =
-  typeof import("../infra/outbound/channel-resolution.js").resolveOutboundChannelPlugin;
-let resolveOutboundChannelPluginPromise: Promise<ResolveOutboundChannelPlugin> | undefined;
+type GetLoadedChannelPluginById =
+  typeof import("../channels/plugins/registry-loaded.js").getLoadedChannelPluginById;
+let getLoadedChannelPluginByIdPromise: Promise<GetLoadedChannelPluginById> | undefined;
 
-async function loadResolveOutboundChannelPlugin(): Promise<ResolveOutboundChannelPlugin> {
-  resolveOutboundChannelPluginPromise ??= import("../infra/outbound/channel-resolution.js").then(
-    (module) => module.resolveOutboundChannelPlugin,
+type AttachmentDeliveryChannelPlugin = {
+  outbound?: {
+    deliveryMode?: string;
+  };
+};
+
+async function loadGetLoadedChannelPluginById(): Promise<GetLoadedChannelPluginById> {
+  getLoadedChannelPluginByIdPromise ??= import("../channels/plugins/registry-loaded.js").then(
+    (module) => module.getLoadedChannelPluginById,
   );
-  return resolveOutboundChannelPluginPromise;
+  return getLoadedChannelPluginByIdPromise;
 }
 
 type ResolvedAttachmentDelivery = {
@@ -200,11 +207,13 @@ export async function sendPluginSessionAttachment(
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
   }
-  const resolveOutboundChannelPlugin = await loadResolveOutboundChannelPlugin();
-  const deliveryPlugin = resolveOutboundChannelPlugin({
-    channel: deliveryContext.channel,
-    cfg: params.config,
-  });
+  const normalizedChannel = normalizeMessageChannel(deliveryContext.channel);
+  const deliveryPlugin =
+    normalizedChannel && isDeliverableMessageChannel(normalizedChannel)
+      ? ((await loadGetLoadedChannelPluginById())(normalizedChannel) as
+          | AttachmentDeliveryChannelPlugin
+          | undefined)
+      : undefined;
   if (deliveryPlugin?.outbound?.deliveryMode === "gateway") {
     return {
       ok: false,
