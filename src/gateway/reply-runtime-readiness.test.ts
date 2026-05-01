@@ -46,6 +46,13 @@ const hoisted = vi.hoisted(() => ({
   resolveOwningPluginIdsForProvider: vi.fn(() => ["mock-provider-plugin"]),
   resolveStorePath: vi.fn(() => "/tmp/openclaw-agent/sessions/sessions.json"),
   loadSessionStore: vi.fn(() => ({})),
+  listAgentIds: vi.fn(() => ["default"]),
+  resolveAgentWorkspaceDir: vi.fn((_: OpenClawConfig, agentId?: string) =>
+    agentId === "worker" ? "/tmp/openclaw-workspace-worker" : "/tmp/openclaw-workspace",
+  ),
+  resolveAgentDir: vi.fn((_: OpenClawConfig, agentId?: string) =>
+    agentId === "worker" ? "/tmp/openclaw-agent-worker" : "/tmp/openclaw-agent",
+  ),
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
@@ -104,7 +111,9 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
   return {
     ...actual,
-    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/openclaw-workspace"),
+    listAgentIds: hoisted.listAgentIds,
+    resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
+    resolveAgentDir: hoisted.resolveAgentDir,
     resolveSessionAgentIds: vi.fn(() => ({ sessionAgentId: "default" })),
   };
 });
@@ -268,6 +277,17 @@ describe("reply-runtime readiness", () => {
     hoisted.resolveOwningPluginIdsForProvider.mockClear();
     hoisted.resolveStorePath.mockClear();
     hoisted.loadSessionStore.mockClear();
+    hoisted.listAgentIds.mockReset().mockReturnValue(["default"]);
+    hoisted.resolveAgentWorkspaceDir
+      .mockReset()
+      .mockImplementation((_, agentId?: string) =>
+        agentId === "worker" ? "/tmp/openclaw-workspace-worker" : "/tmp/openclaw-workspace",
+      );
+    hoisted.resolveAgentDir
+      .mockReset()
+      .mockImplementation((_, agentId?: string) =>
+        agentId === "worker" ? "/tmp/openclaw-agent-worker" : "/tmp/openclaw-agent",
+      );
     vi.unstubAllEnvs();
   });
 
@@ -312,6 +332,62 @@ describe("reply-runtime readiness", () => {
       expect.objectContaining({
         provider: "amazon-bedrock",
         modelId: "us.anthropic.claude-opus-4-6-v1:0",
+        workspaceDir: "/tmp/openclaw-workspace",
+        primeReplyRuntimeCache: true,
+      }),
+    );
+  });
+
+  it("warms all configured agents instead of only the default agent", async () => {
+    hoisted.listAgentIds.mockReturnValue(["default", "worker"]);
+    hoisted.resolveStorePath.mockImplementation((_, params?: { agentId?: string }) =>
+      params?.agentId === "worker"
+        ? "/tmp/openclaw-agent-worker/sessions/sessions.json"
+        : "/tmp/openclaw-agent/sessions/sessions.json",
+    );
+    hoisted.loadSessionStore.mockImplementation((storePath: string) =>
+      storePath.includes("worker")
+        ? {
+            "agent:worker:main": {
+              providerOverride: "google",
+              modelOverride: "gemini-2.5-pro",
+            },
+          }
+        : {},
+    );
+
+    const result = await prepareReplyRuntimeForChannels({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+          },
+          list: [
+            {
+              id: "worker",
+              model: { primary: "google/gemini-2.5-pro" },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(hoisted.prepareSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.4",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+        primeReplyRuntimeCache: true,
+      }),
+    );
+    expect(hoisted.prepareSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "google",
+        modelId: "gemini-2.5-pro",
+        agentDir: "/tmp/openclaw-agent-worker",
         workspaceDir: "/tmp/openclaw-workspace",
         primeReplyRuntimeCache: true,
       }),

@@ -1,5 +1,7 @@
 import {
+  listAgentIds,
   resolveAgentDir,
+  resolveAgentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
@@ -15,11 +17,16 @@ import {
   buildModelAliasIndex,
   resolveModelRefFromString,
 } from "../agents/model-selection-shared.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
+  resolvePersistedSelectedModelRef,
+} from "../agents/model-selection.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
 import { prepareSimpleCompletionModel } from "../agents/simple-completion-runtime.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -107,21 +114,78 @@ function collectReplyRuntimeWarmTargets(params: {
   cfg: OpenClawConfig;
   defaultProvider: string;
   defaultAgentId: string;
-}): Array<{ provider: string; model: string }> {
-  const targets = new Map<string, { provider: string; model: string }>();
+  defaultWorkspaceDir?: string;
+}): Array<{
+  agentId: string;
+  agentDir: string;
+  workspaceDir: string;
+  sessionKey: string;
+  provider: string;
+  model: string;
+}> {
+  const targets = new Map<
+    string,
+    {
+      agentId: string;
+      agentDir: string;
+      workspaceDir: string;
+      sessionKey: string;
+      provider: string;
+      model: string;
+    }
+  >();
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
   });
-  const addTarget = (provider: string, model: string) => {
+  const configuredProviderModels: string[] = [];
+  const addConfiguredProviderModels = () => {
+    const configuredProviders = params.cfg.models?.providers;
+    if (!configuredProviders || typeof configuredProviders !== "object") {
+      return;
+    }
+    for (const [provider, config] of Object.entries(configuredProviders)) {
+      if (!Array.isArray(config?.models)) {
+        continue;
+      }
+      for (const model of config.models) {
+        if (typeof model?.id === "string" && model.id.trim()) {
+          configuredProviderModels.push(`${provider}/${model.id}`);
+        }
+      }
+    }
+  };
+  addConfiguredProviderModels();
+  const addTarget = (
+    agentId: string,
+    agentDir: string,
+    workspaceDir: string,
+    sessionKey: string,
+    provider: string,
+    model: string,
+  ) => {
     const providerId = provider.trim();
     const modelId = model.trim();
     if (!providerId || !modelId) {
       return;
     }
-    targets.set(`${providerId}/${modelId}`, { provider: providerId, model: modelId });
+    targets.set(`${agentId}::${providerId}/${modelId}`, {
+      agentId,
+      agentDir,
+      workspaceDir,
+      sessionKey,
+      provider: providerId,
+      model: modelId,
+    });
   };
-  const addRawRef = (raw: string | undefined, providerOverride?: string) => {
+  const addRawRef = (
+    agentId: string,
+    agentDir: string,
+    workspaceDir: string,
+    sessionKey: string,
+    raw: string | undefined,
+    providerOverride?: string,
+  ) => {
     const trimmed = raw?.trim();
     if (!trimmed) {
       return;
@@ -133,45 +197,51 @@ function collectReplyRuntimeWarmTargets(params: {
       aliasIndex,
     });
     if (parsed?.ref) {
-      addTarget(parsed.ref.provider, parsed.ref.model);
+      addTarget(agentId, agentDir, workspaceDir, sessionKey, parsed.ref.provider, parsed.ref.model);
     }
   };
 
-  const selected = resolveConfiguredModelRef({
-    cfg: params.cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  addTarget(selected.provider, selected.model);
+  for (const agentId of listAgentIds(params.cfg)) {
+    const agentDir = resolveAgentDir(params.cfg, agentId);
+    const workspaceDir =
+      agentId === params.defaultAgentId && params.defaultWorkspaceDir
+        ? params.defaultWorkspaceDir
+        : resolveAgentWorkspaceDir(params.cfg, agentId);
+    const sessionKey = buildAgentMainSessionKey({
+      agentId,
+      mainKey: params.cfg.session?.mainKey,
+    });
+    const selected = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId,
+    });
+    addTarget(agentId, agentDir, workspaceDir, sessionKey, selected.provider, selected.model);
 
-  const fallbackModels =
-    typeof params.cfg.agents?.defaults?.model === "object"
-      ? params.cfg.agents?.defaults?.model?.fallbacks
-      : undefined;
-  for (const fallback of Array.isArray(fallbackModels) ? fallbackModels : []) {
-    addRawRef(fallback);
-  }
+    const fallbackModels =
+      resolveAgentModelFallbacksOverride(params.cfg, agentId) ??
+      resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
+    for (const fallback of fallbackModels) {
+      addRawRef(agentId, agentDir, workspaceDir, sessionKey, fallback);
+    }
+    for (const configuredProviderModel of configuredProviderModels) {
+      addRawRef(agentId, agentDir, workspaceDir, sessionKey, configuredProviderModel);
+    }
 
-  const configuredProviders = params.cfg.models?.providers;
-  if (configuredProviders && typeof configuredProviders === "object") {
-    for (const [provider, config] of Object.entries(configuredProviders)) {
-      if (!Array.isArray(config?.models)) {
-        continue;
-      }
-      for (const model of config.models) {
-        if (typeof model?.id === "string" && model.id.trim()) {
-          addTarget(provider, model.id);
-        }
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
+    const store = loadSessionStore(storePath);
+    for (const entry of Object.values(store)) {
+      const persisted = resolvePersistedSelectedModelRef({
+        defaultProvider: params.defaultProvider,
+        runtimeProvider: entry.modelProvider,
+        runtimeModel: entry.model,
+        overrideProvider: entry.providerOverride,
+        overrideModel: entry.modelOverride,
+        allowPluginNormalization: true,
+      });
+      if (persisted) {
+        addTarget(agentId, agentDir, workspaceDir, sessionKey, persisted.provider, persisted.model);
       }
     }
-  }
-
-  const storePath = resolveStorePath(params.cfg.session?.store, {
-    agentId: params.defaultAgentId,
-  });
-  const store = loadSessionStore(storePath);
-  for (const entry of Object.values(store)) {
-    addRawRef(entry.modelOverride, entry.providerOverride);
   }
 
   return [...targets.values()];
@@ -231,8 +301,6 @@ export async function prepareReplyRuntimeForChannels(params: {
   startupTrace?: StartupTrace;
 }): Promise<ReplyRuntimeReadinessResult> {
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const workspaceDir = params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, defaultAgentId);
-  const agentDir = resolveAgentDir(params.cfg, defaultAgentId);
   const phases: ReplyRuntimeReadinessPhaseResult[] = [];
   const reasons: string[] = [];
   const selected = resolveConfiguredModelRef({
@@ -244,7 +312,19 @@ export async function prepareReplyRuntimeForChannels(params: {
     cfg: params.cfg,
     defaultProvider: selected.provider,
     defaultAgentId,
+    defaultWorkspaceDir: params.workspaceDir,
   });
+  const warmAgents = new Map<
+    string,
+    { agentDir: string; workspaceDir: string; sessionKey: string }
+  >();
+  for (const target of warmTargets) {
+    warmAgents.set(target.agentId, {
+      agentDir: target.agentDir,
+      workspaceDir: target.workspaceDir,
+      sessionKey: target.sessionKey,
+    });
+  }
 
   const runPhase = async (
     phase: ReplyRuntimeReadinessPhaseName,
@@ -276,11 +356,13 @@ export async function prepareReplyRuntimeForChannels(params: {
 
   if (
     !(await runPhase("runtime-plugin-registry", "loaded runtime plugin registry", async () => {
-      ensureRuntimePluginsLoaded({
-        config: params.cfg,
-        workspaceDir,
-        source: "gateway.reply-runtime-readiness.runtime-plugin-registry",
-      });
+      for (const warmAgent of warmAgents.values()) {
+        ensureRuntimePluginsLoaded({
+          config: params.cfg,
+          workspaceDir: warmAgent.workspaceDir,
+          source: "gateway.reply-runtime-readiness.runtime-plugin-registry",
+        });
+      }
       markReplyRuntimePluginRegistryPrepared();
     }))
   ) {
@@ -295,7 +377,7 @@ export async function prepareReplyRuntimeForChannels(params: {
   if (
     !(await runPhase(
       "selected-model-metadata",
-      `prepared metadata for ${warmTargets.length} reply model target(s)`,
+      `prepared metadata for ${warmTargets.length} reply model target(s) across ${warmAgents.size} agent(s)`,
       async () => {
         const catalog = await prepareReplyRuntimeModelCatalog({ config: params.cfg });
         for (const target of warmTargets) {
@@ -324,29 +406,29 @@ export async function prepareReplyRuntimeForChannels(params: {
   if (
     !(await runPhase(
       "selected-provider-runtime",
-      `activated provider runtimes for ${new Set(warmTargets.map((target) => target.provider)).size} provider(s)`,
+      `activated provider runtimes for ${new Set(warmTargets.map((target) => `${target.workspaceDir}::${target.provider}`)).size} workspace/provider target(s) across ${warmAgents.size} agent(s)`,
       async () => {
-        for (const provider of new Set(warmTargets.map((target) => target.provider))) {
+        for (const target of warmTargets) {
           const ownerPluginIds =
             resolveOwningPluginIdsForProvider({
-              provider,
+              provider: target.provider,
               config: params.cfg,
-              workspaceDir,
+              workspaceDir: target.workspaceDir,
               env: process.env,
             }) ?? [];
           if (ownerPluginIds.length === 0) {
             continue;
           }
           const plugin = resolveProviderRuntimePlugin({
-            provider,
+            provider: target.provider,
             config: params.cfg,
-            workspaceDir,
+            workspaceDir: target.workspaceDir,
             env: process.env,
           });
           if (!plugin) {
-            throw new Error(`No provider runtime resolved for ${provider}.`);
+            throw new Error(`No provider runtime resolved for ${target.provider}.`);
           }
-          markReplyRuntimeProviderPrepared(provider);
+          markReplyRuntimeProviderPrepared(target.provider);
         }
       },
     ))
@@ -363,14 +445,14 @@ export async function prepareReplyRuntimeForChannels(params: {
   if (
     !(await runPhase(
       "selected-provider-auth",
-      `prepared runtime auth for ${warmTargets.length} reply model target(s)`,
+      `prepared runtime auth for ${warmTargets.length} reply model target(s) across ${warmAgents.size} agent(s)`,
       async () => {
         for (const target of warmTargets) {
           const selectedHarness = selectAgentHarness({
             provider: target.provider,
             modelId: target.model,
             config: params.cfg,
-            agentId: defaultAgentId,
+            agentId: target.agentId,
           });
           if (!selectedHarness) {
             throw new Error(`No harness selected for ${target.provider}/${target.model}.`);
@@ -378,16 +460,16 @@ export async function prepareReplyRuntimeForChannels(params: {
           if (selectedHarness.id !== "pi") {
             const authProfileId = resolveSelectedHarnessAuthProfileId({
               cfg: params.cfg,
-              agentDir,
+              agentDir: target.agentDir,
               provider: target.provider,
-              workspaceDir,
+              workspaceDir: target.workspaceDir,
               harnessId: selectedHarness.id,
             });
             if (selectedHarness.prepareReplyRuntime) {
               await selectedHarness.prepareReplyRuntime({
                 config: params.cfg,
-                agentDir,
-                workspaceDir,
+                agentDir: target.agentDir,
+                workspaceDir: target.workspaceDir,
                 provider: target.provider,
                 modelId: target.model,
                 ...(authProfileId ? { authProfileId } : {}),
@@ -400,8 +482,8 @@ export async function prepareReplyRuntimeForChannels(params: {
             cfg: params.cfg,
             provider: target.provider,
             modelId: target.model,
-            agentDir,
-            workspaceDir,
+            agentDir: target.agentDir,
+            workspaceDir: target.workspaceDir,
             allowMissingApiKeyModes: ["aws-sdk"],
             primeReplyRuntimeCache: true,
           });
@@ -410,8 +492,8 @@ export async function prepareReplyRuntimeForChannels(params: {
           }
           for (const profileId of resolvePiReplyRuntimeProfileCandidates({
             cfg: params.cfg,
-            agentDir,
-            workspaceDir,
+            agentDir: target.agentDir,
+            workspaceDir: target.workspaceDir,
             provider: target.provider,
             modelId: target.model,
           })) {
@@ -419,8 +501,8 @@ export async function prepareReplyRuntimeForChannels(params: {
               cfg: params.cfg,
               provider: target.provider,
               modelId: target.model,
-              agentDir,
-              workspaceDir,
+              agentDir: target.agentDir,
+              workspaceDir: target.workspaceDir,
               ...(profileId ? { profileId } : {}),
               allowMissingApiKeyModes: ["aws-sdk"],
               primeReplyRuntimeCache: true,
@@ -446,17 +528,17 @@ export async function prepareReplyRuntimeForChannels(params: {
   if (
     !(await runPhase(
       "tool-contracts",
-      "prepared stable core and plugin tool contracts",
+      `prepared stable core and plugin tool contracts for ${warmAgents.size} agent(s)`,
       async () => {
-        createOpenClawTools({
-          config: params.cfg,
-          workspaceDir,
-          agentDir,
-          agentSessionKey: buildAgentMainSessionKey({
-            agentId: defaultAgentId,
-            mainKey: params.cfg.session?.mainKey,
-          }),
-        });
+        for (const [agentId, warmAgent] of warmAgents) {
+          createOpenClawTools({
+            config: params.cfg,
+            workspaceDir: warmAgent.workspaceDir,
+            agentDir: warmAgent.agentDir,
+            agentSessionKey: warmAgent.sessionKey,
+            requesterAgentIdOverride: agentId,
+          });
+        }
       },
     ))
   ) {
