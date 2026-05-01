@@ -2,8 +2,10 @@ import { formatDurationSeconds, warn, type RuntimeEnv } from "openclaw/plugin-sd
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Client, overwriteApplicationCommands, type RequestClient } from "../internal/discord.js";
 import {
+  attachDiscordDeployRestContext,
   attachDiscordDeployRequestBody,
   formatDiscordDeployErrorDetails,
+  formatDiscordDeployErrorMessage,
   formatDiscordDeployRateLimitDetails,
   formatDiscordDeployRateLimitWarning,
   isDiscordDeployDailyCreateLimit,
@@ -27,6 +29,7 @@ function wrapDeployRestMethod(params: {
   runtime: RuntimeEnv;
   accountId: string;
   startupStartedAt: number;
+  timeoutMs?: number;
   shouldLogVerbose: () => boolean;
 }) {
   return async (path: string, data?: never, query?: never) => {
@@ -51,20 +54,27 @@ function wrapDeployRestMethod(params: {
       }
       return result;
     } catch (err) {
+      const requestMs = Date.now() - startedAt;
       attachDiscordDeployRequestBody(err, body);
+      attachDiscordDeployRestContext(err, {
+        method: params.method,
+        path,
+        requestMs,
+        timeoutMs: params.timeoutMs,
+      });
       const rateLimitDetails = formatDiscordDeployRateLimitDetails(err);
       if (rateLimitDetails) {
         if (params.shouldLogVerbose()) {
           params.runtime.log?.(
             warn(
-              `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:rate-limited ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt}${rateLimitDetails}`,
+              `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:rate-limited ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs}${rateLimitDetails}`,
             ),
           );
         }
       } else {
         const details = formatDiscordDeployErrorDetails(err);
         params.runtime.error?.(
-          `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${Date.now() - startedAt} error=${formatErrorMessage(err)}${details}`,
+          `discord startup [${params.accountId}] native-slash-command-deploy-rest:${params.method}:error ${Math.max(0, Date.now() - params.startupStartedAt)}ms path=${path} requestMs=${requestMs} error=${formatDiscordDeployErrorMessage(err)}${details}`,
         );
       }
       throw err;
@@ -87,12 +97,14 @@ function installDeployRestLogging(params: {
     delete: params.rest.delete.bind(params.rest),
   };
   for (const method of Object.keys(original) as RestMethodName[]) {
+    const timeout = (params.rest as { options?: { timeout?: unknown } }).options?.timeout;
     params.rest[method] = wrapDeployRestMethod({
       method,
       original,
       runtime: params.runtime,
       accountId: params.accountId,
       startupStartedAt: params.startupStartedAt,
+      timeoutMs: typeof timeout === "number" ? timeout : undefined,
       shouldLogVerbose: params.shouldLogVerbose,
     }) as RequestClient[typeof method];
   }
@@ -168,7 +180,7 @@ export async function deployDiscordCommands(params: {
     params.runtime.log?.(
       warn(
         rateLimitWarning ??
-          `discord: native slash command deploy warning (not message send): ${formatErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
+          `discord: native slash command deploy warning (not message send): ${formatDiscordDeployErrorMessage(err)}${formatDiscordDeployErrorDetails(err)}`,
       ),
     );
   } finally {

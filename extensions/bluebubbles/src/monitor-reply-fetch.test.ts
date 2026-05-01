@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BlueBubblesClient, createBlueBubblesClientFromParts } from "./client.js";
 import {
   _resetBlueBubblesShortIdState,
+  getShortIdForUuid,
   resolveReplyContextFromCache,
 } from "./monitor-reply-cache.js";
 import {
@@ -136,6 +137,53 @@ describe("fetchBlueBubblesReplyContext", () => {
     });
     expect(result?.body).toBe("hi");
     expect(requestCalls[0]?.path).toBe("/api/v1/message/msg-bare-guid");
+  });
+
+  it("populates the reply cache for the original prefixed reply id", async () => {
+    const { factory } = makeFakeClient([
+      jsonResponse({ data: { text: "cached prefix", handle: { address: "+15551112222" } } }),
+    ]);
+    await fetchBlueBubblesReplyContext({
+      ...baseParams,
+      replyToId: "p:0/msg-prefixed-cache",
+      chatGuid: "iMessage;-;+15551112222",
+      clientFactory: factory,
+    });
+    const cached = resolveReplyContextFromCache({
+      accountId: "default",
+      replyToId: "p:0/msg-prefixed-cache",
+      chatGuid: "iMessage;-;+15551112222",
+    });
+    expect(cached?.body).toBe("cached prefix");
+    expect(cached?.senderLabel).toBe("+15551112222");
+  });
+
+  it("does not cache non-part-index slash prefixes as aliases", async () => {
+    const { factory, requestCalls } = makeFakeClient([
+      jsonResponse({ data: { text: "cached bare only", handle: { address: "+15551112222" } } }),
+    ]);
+    await fetchBlueBubblesReplyContext({
+      ...baseParams,
+      replyToId: "../etc/passwd",
+      chatGuid: "iMessage;-;+15551112222",
+      clientFactory: factory,
+    });
+    expect(requestCalls[0]?.path).toBe("/api/v1/message/passwd");
+    expect(
+      resolveReplyContextFromCache({
+        accountId: "default",
+        replyToId: "passwd",
+        chatGuid: "iMessage;-;+15551112222",
+      })?.body,
+    ).toBe("cached bare only");
+    expect(
+      resolveReplyContextFromCache({
+        accountId: "default",
+        replyToId: "../etc/passwd",
+        chatGuid: "iMessage;-;+15551112222",
+      }),
+    ).toBeNull();
+    expect(getShortIdForUuid("../etc/passwd")).toBeUndefined();
   });
 
   it("fetches the BB API and returns body + normalized sender on success", async () => {
