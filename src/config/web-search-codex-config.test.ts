@@ -1,10 +1,12 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { validateConfigObjectRaw } from "./validation.js";
 
 describe("web search Codex native config validation", () => {
   it("accepts tools.web.search.openaiCodex", async () => {
-    const { OpenClawSchema: freshOpenClawSchema } =
-      await import("./zod-schema.js?scope=web-search-codex");
+    const { OpenClawSchema: freshOpenClawSchema } = await importFreshModule<
+      typeof import("./zod-schema.js")
+    >(import.meta.url, "./zod-schema.js?scope=web-search-codex");
     const result = freshOpenClawSchema.safeParse({
       tools: {
         web: {
