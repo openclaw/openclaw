@@ -9,12 +9,20 @@ import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
 import type { PluginJsonValue } from "./host-hooks.js";
 import { getActivePluginRegistry } from "./runtime.js";
 
+function normalizeDerivedEventFields(
+  value: Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> | undefined,
+): Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> {
+  return Array.isArray(value?.derivedPaths) ? { derivedPaths: value.derivedPaths } : {};
+}
+
 export async function runTrustedToolPolicies(
   event: PluginHookBeforeToolCallEvent,
   ctx: PluginHookToolContext,
   options?: {
     config?: OpenClawConfig;
-    deriveEvent?: (params: Record<string, unknown>) => Partial<PluginHookBeforeToolCallEvent>;
+    deriveEvent?: (
+      params: Record<string, unknown>,
+    ) => Pick<PluginHookBeforeToolCallEvent, "derivedPaths">;
   },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
   const policies = getActivePluginRegistry()?.trustedToolPolicies ?? [];
@@ -35,13 +43,15 @@ export async function runTrustedToolPolicies(
     }
     return resolvedSessionConfig;
   };
-  const { derivedPaths: _derivedPaths, ...eventWithoutDerivedPaths } = event;
-  const buildEvent = (params: Record<string, unknown>): PluginHookBeforeToolCallEvent => {
-    const derived = options?.deriveEvent?.(params) ?? {};
+  const { derivedPaths, ...eventWithoutDerivedPaths } = event;
+  let currentDerivedEvent: Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> = derivedPaths
+    ? { derivedPaths }
+    : {};
+  const buildEvent = (): PluginHookBeforeToolCallEvent => {
     return {
       ...eventWithoutDerivedPaths,
-      params,
-      ...derived,
+      params: adjustedParams,
+      ...currentDerivedEvent,
     };
   };
   for (const registration of policies) {
@@ -71,7 +81,7 @@ export async function runTrustedToolPolicies(
         return pluginState[normalizedNamespace] as T | undefined;
       },
     };
-    const decision = await registration.policy.evaluate(buildEvent(adjustedParams), policyCtx);
+    const decision = await registration.policy.evaluate(buildEvent(), policyCtx);
     if (!decision) {
       continue;
     }
@@ -96,6 +106,7 @@ export async function runTrustedToolPolicies(
     if ("params" in decision && decision.params) {
       adjustedParams = decision.params;
       hasAdjustedParams = true;
+      currentDerivedEvent = normalizeDerivedEventFields(options?.deriveEvent?.(adjustedParams));
     }
     if ("requireApproval" in decision && decision.requireApproval && !approval) {
       approval = decision.requireApproval;
