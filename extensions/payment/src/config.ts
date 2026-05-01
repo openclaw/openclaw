@@ -13,6 +13,7 @@ const stripeLinkProviderSchema = z
       .number()
       .int("maxAmountCents must be an integer")
       .positive("maxAmountCents must be greater than 0")
+      .max(50000, "maxAmountCents must not exceed Stripe Link's hard cap of 50000")
       .default(50000),
   })
   .strict();

@@ -102,6 +102,11 @@ describe("parsePaymentConfig — maxAmountCents enforcement", () => {
     expect(parsed.providers["stripe-link"].maxAmountCents).toBe(1);
   });
 
+  it("rejects maxAmountCents above Stripe Link's hard cap of 50000", () => {
+    expect(() => parsePaymentConfig(buildConfig(50001))).toThrow(/50000|hard cap/i);
+    expect(() => parsePaymentConfig(buildConfig(100000))).toThrow();
+  });
+
   it("rejects unknown top-level keys (.strict() semantics)", () => {
     expect(() => parsePaymentConfig({ provider: "mock", unknownKey: true })).toThrow();
   });
