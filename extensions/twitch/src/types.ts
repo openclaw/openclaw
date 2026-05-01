@@ -66,16 +66,6 @@ export interface TwitchAccountConfig {
 }
 
 /**
- * Message target for Twitch
- */
-export interface TwitchTarget {
-  /** Account ID */
-  accountId: string;
-  /** Channel name (defaults to account's channel) */
-  channel?: string;
-}
-
-/**
  * Twitch message from chat
  */
 export interface TwitchChatMessage {
@@ -131,11 +121,6 @@ export type {
   ChannelOutboundContext,
   OutboundDeliveryResult,
 };
-
-import type { z } from "openclaw/plugin-sdk/zod";
-// Import and re-export the schema type
-import type { TwitchConfigSchema } from "./config-schema.js";
-export type TwitchConfig = z.infer<typeof TwitchConfigSchema>;
 
 export type { OpenClawConfig };
 export type { RuntimeEnv };

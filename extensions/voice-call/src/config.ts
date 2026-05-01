@@ -39,7 +39,6 @@ export const E164Schema = z
  * - "open": Accept all inbound calls (dangerous!)
  */
 export const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
-export type InboundPolicy = z.infer<typeof InboundPolicySchema>;
 
 // -----------------------------------------------------------------------------
 // Provider-Specific Configuration
@@ -67,9 +66,6 @@ export const TwilioConfigSchema = z
     authToken: SecretInputSchema.optional(),
   })
   .strict();
-export type TwilioConfig = Omit<z.infer<typeof TwilioConfigSchema>, "authToken"> & {
-  authToken?: SecretInput;
-};
 
 export const PlivoConfigSchema = z
   .object({
@@ -99,7 +95,6 @@ export const VoiceCallServeConfigSchema = z
   })
   .strict()
   .default({ port: 3334, bind: "127.0.0.1", path: "/voice/webhook" });
-export type VoiceCallServeConfig = z.infer<typeof VoiceCallServeConfigSchema>;
 
 export const VoiceCallTailscaleConfigSchema = z
   .object({
