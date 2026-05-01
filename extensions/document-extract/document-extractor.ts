@@ -214,22 +214,14 @@ async function renderPageWithCanvas(
   return canvas.toBuffer("image/png");
 }
 
-async function extractPdfContent(
-  request: DocumentExtractionRequest,
-): Promise<DocumentExtractionResult> {
-  const pdfJsModule = await loadPdfJsModule();
-  const pdf = (await pdfJsModule.getDocument({
-    data: new Uint8Array(request.buffer),
-    disableWorker: true,
-    standardFontDataUrl: resolvePdfJsStandardFontDataPath(),
-  }).promise) as PdfDocument;
-
-  const effectivePages: number[] = request.pageNumbers
-    ? request.pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, request.maxPages)
-    : Array.from({ length: Math.min(pdf.numPages, request.maxPages) }, (_, i) => i + 1);
-
+async function extractTextFromPages(
+  pdf: PdfDocument,
+  effectivePages: number[],
+  minTextChars: number,
+): Promise<string> {
   const textParts: string[] = [];
   let extractedTextLength = 0;
+
   for (const pageNum of effectivePages) {
     const page = await pdf.getPage(pageNum);
     const textContent = await page.getTextContent();
@@ -246,31 +238,21 @@ async function extractPdfContent(
   }
 
   const text = textParts.join("\n\n");
-  if (text.trim().length >= request.minTextChars) {
-    return { text, images: [] };
-  }
+  return extractedTextLength >= minTextChars ? text.trimEnd() : "";
+}
 
-  let canvasModule: CanvasModule | undefined;
-  let usePdftoppmFallback = false;
-  try {
-    canvasModule = await loadCanvasModule();
-  } catch (err) {
-    if (isPdftoppmAvailable()) {
-      usePdftoppmFallback = true;
-    } else {
-      request.onImageExtractionError?.(err);
-      return { text, images: [] };
-    }
-  }
-
+async function extractImagesFromPages(
+  pdf: PdfDocument,
+  effectivePages: number[],
+  maxPixels: number,
+  usePdftoppmFallback: boolean,
+  canvasModule: CanvasModule | undefined,
+  pdfBuffer: Buffer,
+): Promise<DocumentExtractedImage[]> {
   const images: DocumentExtractedImage[] = [];
-  let remainingPixels = Math.max(1, Math.floor(request.maxPixels));
+  let remainingPixels = Math.max(1, Math.floor(maxPixels));
 
   for (const pageNum of effectivePages) {
-    if (remainingPixels <= 0) {
-      break;
-    }
-
     const page = await pdf.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1 });
     const plan = resolveRenderPlan(viewport, remainingPixels);
@@ -281,7 +263,7 @@ async function extractPdfContent(
     let pngBuffer: Buffer | null = null;
 
     if (usePdftoppmFallback) {
-      pngBuffer = renderPageWithPdftoppm(request.buffer, pageNum, plan.scale, remainingPixels, viewport);
+      pngBuffer = renderPageWithPdftoppm(pdfBuffer, pageNum, plan.scale, remainingPixels, viewport);
     } else {
       pngBuffer = await renderPageWithCanvas(page, canvasModule!, plan);
     }
@@ -293,6 +275,51 @@ async function extractPdfContent(
     images.push({ type: "image", data: pngBuffer.toString("base64"), mimeType: "image/png" });
     remainingPixels -= plan.pixels;
   }
+
+  return images;
+}
+
+async function extractPdfContent(
+  request: DocumentExtractionRequest,
+): Promise<DocumentExtractionResult> {
+  const pdfJsModule = await loadPdfJsModule();
+  const pdf = (await pdfJsModule.getDocument({
+    data: new Uint8Array(request.buffer),
+    disableWorker: true,
+    standardFontDataUrl: resolvePdfJsStandardFontDataPath(),
+  }).promise) as PdfDocument;
+
+  const effectivePages: number[] = request.pageNumbers
+    ? request.pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, request.maxPages)
+    : Array.from({ length: Math.min(pdf.numPages, request.maxPages) }, (_, i) => i + 1);
+
+  const text = await extractTextFromPages(pdf, effectivePages, request.minTextChars);
+  if (text) {
+    return { text, images: [] };
+  }
+
+  let canvasModule: CanvasModule | undefined;
+  let usePdftoppmFallback = false;
+
+  try {
+    canvasModule = await loadCanvasModule();
+  } catch (err) {
+    if (isPdftoppmAvailable()) {
+      usePdftoppmFallback = true;
+    } else {
+      request.onImageExtractionError?.(err);
+      return { text: "", images: [] };
+    }
+  }
+
+  const images = await extractImagesFromPages(
+    pdf,
+    effectivePages,
+    request.maxPixels,
+    usePdftoppmFallback,
+    canvasModule,
+    request.buffer,
+  );
 
   return { text, images };
 }
