@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { callGatewayTool } from "../agents/tools/gateway.js";
 import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   deletePluginSessionSchedulerJob,
+  getPluginSessionSchedulerJobGeneration,
   registerPluginSessionSchedulerJob,
 } from "./host-hook-runtime.js";
 import type {
@@ -17,8 +17,34 @@ import type {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const log = createSubsystemLogger("plugins/host-workflow");
+const ONE_SHOT_SCHEDULER_RECORD_PRUNE_GRACE_MS = 60_000;
 
-function resolveSchedule(params: PluginSessionTurnScheduleParams) {
+type CallGatewayTool = typeof import("../agents/tools/gateway.js").callGatewayTool;
+let callGatewayToolPromise: Promise<CallGatewayTool> | undefined;
+type ResolvedSessionTurnSchedule =
+  | {
+      kind: "cron";
+      expr: string;
+      tz?: string;
+    }
+  | {
+      kind: "at";
+      at: string;
+    };
+
+async function callGatewayToolLazy(
+  ...args: Parameters<CallGatewayTool>
+): Promise<Awaited<ReturnType<CallGatewayTool>>> {
+  callGatewayToolPromise ??= import("../agents/tools/gateway.js").then(
+    (module) => module.callGatewayTool,
+  );
+  const callGatewayTool = await callGatewayToolPromise;
+  return callGatewayTool(...args);
+}
+
+function resolveSchedule(
+  params: PluginSessionTurnScheduleParams,
+): ResolvedSessionTurnSchedule | undefined {
   const cron = normalizeOptionalString((params as { cron?: unknown }).cron);
   if (cron) {
     const tz = normalizeOptionalString((params as { tz?: unknown }).tz);
@@ -86,7 +112,7 @@ async function removeScheduledSessionTurn(params: {
   name?: string;
 }): Promise<boolean> {
   try {
-    const result = await callGatewayTool(
+    const result = await callGatewayToolLazy(
       "cron.remove",
       {},
       { id: params.jobId },
@@ -206,7 +232,7 @@ async function listAllCronJobsForPluginTagCleanup(
   const jobs: Record<string, unknown>[] = [];
   let offset = 0;
   for (;;) {
-    const listResult = await callGatewayTool(
+    const listResult = await callGatewayToolLazy(
       "cron.list",
       {},
       {
@@ -279,7 +305,7 @@ export async function schedulePluginSessionTurn(params: {
   };
   let result: unknown;
   try {
-    result = await callGatewayTool(
+    result = await callGatewayToolLazy(
       "cron.add",
       {},
       {
@@ -334,7 +360,7 @@ export async function schedulePluginSessionTurn(params: {
     }
     return undefined;
   }
-  return registerPluginSessionSchedulerJob({
+  const handle = registerPluginSessionSchedulerJob({
     pluginId: params.pluginId,
     pluginName: params.pluginName,
     job: {
@@ -354,6 +380,49 @@ export async function schedulePluginSessionTurn(params: {
       },
     },
   });
+  if (
+    handle &&
+    (params.schedule.deleteAfterRun ?? schedule.kind === "at") &&
+    schedule.kind === "at"
+  ) {
+    pruneOneShotSchedulerRecordAfterRun({
+      pluginId: params.pluginId,
+      jobId,
+      sessionKey,
+      runAt: schedule.at,
+    });
+  }
+  return handle;
+}
+
+function pruneOneShotSchedulerRecordAfterRun(params: {
+  pluginId: string;
+  jobId: string;
+  sessionKey: string;
+  runAt: string;
+}): void {
+  const runAtMs = Date.parse(params.runAt);
+  if (!Number.isFinite(runAtMs)) {
+    return;
+  }
+  const expectedGeneration = getPluginSessionSchedulerJobGeneration({
+    pluginId: params.pluginId,
+    jobId: params.jobId,
+    sessionKey: params.sessionKey,
+  });
+  if (expectedGeneration === undefined) {
+    return;
+  }
+  const delayMs = Math.max(0, runAtMs - Date.now()) + ONE_SHOT_SCHEDULER_RECORD_PRUNE_GRACE_MS;
+  const timer = setTimeout(() => {
+    deletePluginSessionSchedulerJob({
+      pluginId: params.pluginId,
+      jobId: params.jobId,
+      sessionKey: params.sessionKey,
+      expectedGeneration,
+    });
+  }, delayMs);
+  timer.unref?.();
 }
 
 export async function unschedulePluginSessionTurnsByTag(params: {
@@ -394,7 +463,12 @@ export async function unschedulePluginSessionTurnsByTag(params: {
       continue;
     }
     try {
-      const result = await callGatewayTool("cron.remove", {}, { id }, { scopes: [ADMIN_SCOPE] });
+      const result = await callGatewayToolLazy(
+        "cron.remove",
+        {},
+        { id },
+        { scopes: [ADMIN_SCOPE] },
+      );
       if (didCronRemoveJob(result)) {
         removed += 1;
         deletePluginSessionSchedulerJob({
