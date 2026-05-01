@@ -600,6 +600,12 @@ describe("failover-error", () => {
         message: "LLM error: monthly limit reached",
       }),
     ).toBe("quota_exhausted");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        message: "429 monthly limit reached",
+      }),
+    ).toBe("quota_exhausted");
   });
 
   it("treats Chinese provider network/server errors as timeout for failover", () => {

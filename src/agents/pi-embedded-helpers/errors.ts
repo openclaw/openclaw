@@ -647,6 +647,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    if (messageReason === "quota_exhausted") {
+      return toReasonClassification("quota_exhausted");
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {

@@ -223,6 +223,24 @@ describe("resolveProfilesUnavailableReason", () => {
     ).toBe("billing");
   });
 
+  it("returns quota_exhausted for active quota disabled profiles", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + 60_000,
+        disabledReason: "quota_exhausted",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("quota_exhausted");
+  });
+
   it("returns auth_permanent for active permanent auth disables", () => {
     const now = Date.now();
     const store = makeStore({
