@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Compaction: use the active session model fallback chain for implicit summarization failures without persisting fallback model selection, so Azure content-filter 400s can recover. Fixes #64960. (#74470) Thanks @jalehman and @OpenCodeEngineer.
 - Gateway/config: allow `gateway config.patch` to update documented subagent thinking defaults. Fixes #75764. (#75802) Thanks @kAIborg24.
 - Plugins/CLI: keep git plugin install paths credential-free, preserve existing git checkouts until replacement succeeds, honor duplicate npm install mode, and remove managed git repos on uninstall. Thanks @vincentkoc.
+- Plugins/CLI: redact authenticated git URLs from git install command failure details, so failed clone or checkout output cannot leak credentials during plugin installs. Thanks @vincentkoc.
 - Channels/status reactions: remove stale non-terminal lifecycle reactions when a run reaches done or error, so Discord does not leave a permanent thinking emoji after completion. Fixes #75458. Thanks @davelutztx.
 - Discord/doctor: migrate unsupported per-channel `agentId` entries under guild channel config into top-level `bindings[]` routes, so `openclaw doctor --fix` preserves the intended agent route instead of stripping it as an unknown key. Fixes #62455. Thanks @lobster-biscuit.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
