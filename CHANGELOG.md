@@ -12,7 +12,10 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/commitments: keep inferred follow-ups internal when heartbeat target is none, strip raw source text from stored commitments, disable tools during due-commitment heartbeat turns, bound hidden extraction queue growth, expire stale commitments, and add QA/Docker safety coverage. Thanks @vignesh07.
-- Plugins/runtime-deps: accept already materialized package-level runtime-deps supersets as converged, so later lazy plugin activation no longer prunes and relaunches `pnpm install` after gateway startup pre-staging. Fixes #75283. Thanks @brokemac79.
+- Agents/commitments: run hidden follow-up extraction on the configured agent/default model instead of falling back to direct OpenAI, so OpenAI Codex OAuth-only gateways no longer spam background API-key failures. Fixes #75334. Thanks @sene1337.
+- Security/config-audit: redact CLI argv and execArgv secrets before persisting config audit records, covering write, observe, and recovery paths. Fixes #60826. Thanks @koshaji.
+- Plugins/runtime-deps: accept already materialized package-level runtime-deps supersets as converged, so later lazy plugin activation no longer prunes and relaunches `pnpm install` after gateway startup pre-staging, reducing event-loop pressure from repeated runtime-deps repair on packaged installs. Fixes #75283; refs #75297 and #72338. Thanks @brokemac79, @lisandromachado, and @midhunmonachan.
+- Discord: retry queued REST 429s against learned bucket/global cooldowns and reacquire fresh voice upload URLs after CDN upload rate limits, so outbound sends recover without reusing stale single-use upload URLs. Thanks @discord.
 - TTS/providers: keep bundled speech-provider compat fallback available when plugins are globally disabled, so cold gateway and CLI startup can still resolve fallback speech providers instead of leaving explicit TTS provider selection with no registered providers. Refs #75265. Thanks @sliekens.
 - Discord: collapse repeated native slash-command deploy rate-limit startup logs into one non-fatal warning while keeping per-request REST timing in verbose output. Thanks @discord.
 - Providers/OpenAI Codex: preserve existing wrapped Codex streams during OpenAI attribution so PI OAuth bearer injection reaches ChatGPT/Codex Responses, and strip native Codex-only unsupported payload fields without touching custom compatible endpoints. (#75111) Thanks @keshavbotagent.
@@ -43,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - Agents/compaction: add an opt-in `agents.defaults.compaction.midTurnPrecheck` mid-turn precheck that detects tool-loop context pressure and triggers compaction before the next tool call instead of waiting for end-of-turn. (#73499) Thanks @marchpure and @haoxingjun.
 - Gateway/approvals: let loopback token/password-backed native approval clients resolve exec approvals without attaching stale paired Gateway identities, while remote and unauthenticated approval clients keep normal device identity behavior. (#74472)
 - Gateway/config: include rejected validation paths in foreground and service last-known-good recovery logs plus main-agent notices, so unsupported direct edits explain which key caused restore instead of looking like silent reversion. Fixes #75060. Thanks @amknight.
+- Plugins/runtime-deps: hash the OS-canonical `packageRoot` via `fs.realpathSync.native` (with `path.resolve` fallback) when computing the bundled runtime-deps stage key, so loader and channel `bundled-root` callers no longer derive divergent stage directories under `~/.openclaw/plugin-runtime-deps/openclaw-<version>-<hash>/` and bundled channels stop failing with `ENOENT` on shared dist chunks under Windows npm symlinks, junctions, or PM2 multi-instance worker layouts. Fixes #74963. (#75048) Thanks @openperf and @vincentkoc.
 
 ## 2026.4.29
 

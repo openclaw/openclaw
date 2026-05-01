@@ -918,13 +918,25 @@ describe("bundledRuntimeDependencySentinelCandidates", () => {
         "playwright-core",
         { HOME: homeRoot } as NodeJS.ProcessEnv,
       );
+      const realRootCandidates = bundledRuntimeDependencySentinelCandidates(
+        packageRoot,
+        "browser",
+        "playwright-core",
+        { HOME: homeRoot } as NodeJS.ProcessEnv,
+      );
       const externalCandidates = candidates.filter(
         (candidate) =>
           candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
           candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
       );
+      const realRootExternalCandidates = realRootCandidates.filter(
+        (candidate) =>
+          candidate.startsWith(join(homeRoot, ".openclaw", "plugin-runtime-deps")) &&
+          candidate.endsWith(join("node_modules", "playwright-core", "package.json")),
+      );
 
-      expect(externalCandidates.length).toBeGreaterThanOrEqual(2);
+      expect(externalCandidates).toEqual(realRootExternalCandidates);
+      expect(externalCandidates).toHaveLength(1);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
