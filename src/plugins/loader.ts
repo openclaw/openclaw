@@ -1339,6 +1339,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           workspaceDir: options.workspaceDir,
           extraPaths: normalized.loadPaths,
           env,
+          installRecords,
         });
     const manifestRegistry =
       suppliedManifestRegistry ??
@@ -2165,6 +2166,7 @@ export async function loadOpenClawPluginCliRegistry(
     workspaceDir: options.workspaceDir,
     extraPaths: normalized.loadPaths,
     env,
+    installRecords,
   });
   const manifestRegistry = loadPluginManifestRegistry({
     config: cfg,
