@@ -26,15 +26,6 @@ import { renderWorkspacePanel } from "./agents-panels-workspace.ts";
 import { agentBadgeText, buildAgentContext, normalizeAgentLabel } from "./agents-utils.ts";
 import type { AgentsPanel } from "./agents.types.ts";
 
-export type AgentsPanel =
-  | "overview"
-  | "files"
-  | "workspace"
-  | "tools"
-  | "skills"
-  | "channels"
-  | "cron";
-
 export type ConfigState = {
   form: Record<string, unknown> | null;
   loading: boolean;
