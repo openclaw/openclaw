@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/compaction: submit a non-empty placeholder to the provider for runtime-only turns whose transcript prompt is intentionally blank, keeping the flush instructions in the injected system context and the transcript hygiene boundary intact, so pre-compaction memory flush turns no longer produce Anthropic API 400 rejections when sessions approach the context limit. Fixes #75305. Thanks @hclsys.
 - Agents/commitments: keep inferred follow-ups internal when heartbeat target is none, strip raw source text from stored commitments, disable tools during due-commitment heartbeat turns, bound hidden extraction queue growth, expire stale commitments, and add QA/Docker safety coverage. Thanks @vignesh07.
 - Telegram/agents: keep typing indicators and optional generation tools off the reply critical path, so fresh Telegram replies no longer stall while provider catalogs and media models load. (#75360) Thanks @obviyus.
 - Agents/commitments: run hidden follow-up extraction on the configured agent/default model instead of falling back to direct OpenAI, so OpenAI Codex OAuth-only gateways no longer spam background API-key failures. Fixes #75334. Thanks @sene1337.

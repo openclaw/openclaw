@@ -263,7 +263,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toBe("");
+    // The provider receives a non-empty placeholder (U+00A0) to avoid Anthropic 400 on blank user turns.
+    // The transcript-side prompt and the trajectory event still record the original "" value.
+    expect(seenPrompt).toBe(" ");
     expect(result.finalPromptText).toBe("");
     expect(result.messagesSnapshot).not.toEqual(
       expect.arrayContaining([

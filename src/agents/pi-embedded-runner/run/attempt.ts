@@ -2877,7 +2877,12 @@ export async function runEmbeddedAttempt(
               inFlightPrompt: promptSubmission.prompt,
             });
             if (promptSubmission.runtimeOnly) {
-              await abortable(activeSession.prompt(promptSubmission.prompt));
+              // Some providers (e.g. Anthropic) reject empty user messages. Submit a
+              // non-visible placeholder when the runtime-only transcript prompt is blank
+              // so the turn round-trips without a 400, while keeping the actual flush
+              // instructions in the system context injected above (line ~2635).
+              const runtimeOnlyPrompt = promptSubmission.prompt || " ";
+              await abortable(activeSession.prompt(runtimeOnlyPrompt));
             } else {
               const runtimeContext = promptSubmission.runtimeContext?.trim();
               const runtimeSystemPrompt = runtimeContext
