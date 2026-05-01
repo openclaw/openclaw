@@ -4,6 +4,30 @@ import { installDiscordSessionKeyNormalizerFixture, makeCtx } from "./session-ke
 
 installDiscordSessionKeyNormalizerFixture();
 
+describe("resolveSessionKey default agent resolution", () => {
+  it("uses DEFAULT_AGENT_ID when no agentId and no env override", () => {
+    const ctx = makeCtx({ From: "+15550001111" });
+    const key = resolveSessionKey("per-sender", ctx, undefined, undefined, {});
+    expect(key).toBe("agent:main:main");
+  });
+
+  it("uses OPENCLAW_DEFAULT_AGENT_ID from env when no agentId provided", () => {
+    const ctx = makeCtx({ From: "+15550001111" });
+    const key = resolveSessionKey("per-sender", ctx, undefined, undefined, {
+      OPENCLAW_DEFAULT_AGENT_ID: "ops",
+    });
+    expect(key).toBe("agent:ops:main");
+  });
+
+  it("explicit agentId param takes precedence over OPENCLAW_DEFAULT_AGENT_ID env", () => {
+    const ctx = makeCtx({ From: "+15550001111" });
+    const key = resolveSessionKey("per-sender", ctx, undefined, "beta", {
+      OPENCLAW_DEFAULT_AGENT_ID: "ops",
+    });
+    expect(key).toBe("agent:beta:main");
+  });
+});
+
 describe("resolveSessionKey", () => {
   it("uses an explicit agent id for canonical direct-chat keys", () => {
     const ctx = makeCtx({
