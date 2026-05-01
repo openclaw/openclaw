@@ -37,8 +37,10 @@ openclaw proxy purge
 `--proxy-url`, config, or `OPENCLAW_PROXY_URL`. It reports a config problem when
 no proxy is enabled and configured; use `--proxy-url` for a one-off preflight
 before changing config. By default it verifies that a public destination succeeds
-through the proxy and loopback or metadata-style destinations are blocked by the
-proxy.
+through the proxy and that the proxy cannot reach a temporary loopback canary.
+Custom denied destinations are fail-closed: HTTP responses and ambiguous
+transport failures both fail unless you can verify a deployment-specific denial
+signal separately.
 
 Options:
 

@@ -1,14 +1,14 @@
+import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
 import { createHttp1ProxyAgent } from "../undici-runtime.js";
 
 export const DEFAULT_PROXY_VALIDATION_ALLOWED_URLS = ["https://example.com/"] as const;
-export const DEFAULT_PROXY_VALIDATION_DENIED_URLS = [
-  "http://127.0.0.1/",
-  "http://169.254.169.254/",
-] as const;
+export const DEFAULT_PROXY_VALIDATION_DENIED_URLS = ["http://127.0.0.1/"] as const;
 
 export const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
+const DENIED_CANARY_HEADER = "x-openclaw-proxy-validation-canary";
 
 export type ProxyValidationConfigSource = "override" | "config" | "env" | "missing" | "disabled";
 
@@ -44,6 +44,7 @@ export type ProxyValidationFetchCheckParams = {
 export type ProxyValidationFetchCheckResult = {
   ok: boolean;
   status: number;
+  deniedCanaryToken?: string;
 };
 
 export type ProxyValidationFetchCheck = (
@@ -166,7 +167,11 @@ async function defaultProxyValidationFetchCheck({
       redirect: "manual",
     });
     void response.body?.cancel();
-    return { ok: response.ok, status: response.status };
+    return {
+      ok: response.ok,
+      status: response.status,
+      deniedCanaryToken: response.headers.get(DENIED_CANARY_HEADER) ?? undefined,
+    };
   } finally {
     await dispatcher.close();
   }
@@ -186,6 +191,83 @@ function isValidHttpTargetUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+type ProxyValidationDeniedTarget = {
+  url: string;
+  expectedCanaryToken?: string;
+  transportErrorMeansBlocked: boolean;
+};
+
+type DeniedCanary = {
+  target: ProxyValidationDeniedTarget;
+  close: () => Promise<void>;
+};
+
+function closeServer(server: Server): Promise<void> {
+  return new Promise((resolve, reject) => {
+    server.close((err) => {
+      if (err) {
+        reject(err);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+async function createLoopbackDeniedCanary(): Promise<DeniedCanary> {
+  const token = randomUUID();
+  const server = createServer((_request, response) => {
+    response.writeHead(204, {
+      [DENIED_CANARY_HEADER]: token,
+      "cache-control": "no-store",
+    });
+    response.end();
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (typeof address === "string" || address === null) {
+    await closeServer(server);
+    throw new Error("Unable to start loopback proxy validation canary");
+  }
+
+  return {
+    target: {
+      url: `http://127.0.0.1:${address.port}/`,
+      expectedCanaryToken: token,
+      transportErrorMeansBlocked: true,
+    },
+    close: () => closeServer(server),
+  };
+}
+
+async function resolveDeniedTargets(
+  deniedUrls: readonly string[] | undefined,
+): Promise<{ targets: ProxyValidationDeniedTarget[]; close: () => Promise<void> }> {
+  if (deniedUrls !== undefined) {
+    return {
+      targets: deniedUrls.map((url) => ({
+        url,
+        transportErrorMeansBlocked: false,
+      })),
+      close: async () => undefined,
+    };
+  }
+
+  const canary = await createLoopbackDeniedCanary();
+  return {
+    targets: [canary.target],
+    close: canary.close,
+  };
 }
 
 async function runAllowedCheck(params: {
@@ -230,15 +312,15 @@ async function runAllowedCheck(params: {
 }
 
 async function runDeniedCheck(params: {
-  url: string;
+  target: ProxyValidationDeniedTarget;
   proxyUrl: string;
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
-  if (!isValidHttpTargetUrl(params.url)) {
+  if (!isValidHttpTargetUrl(params.target.url)) {
     return {
       kind: "denied",
-      url: params.url,
+      url: params.target.url,
       ok: false,
       error: "Invalid denied destination URL",
     };
@@ -247,22 +329,54 @@ async function runDeniedCheck(params: {
   try {
     const result = await params.fetchCheck({
       proxyUrl: params.proxyUrl,
-      targetUrl: params.url,
+      targetUrl: params.target.url,
       timeoutMs: params.timeoutMs,
     });
+    if (
+      params.target.expectedCanaryToken !== undefined &&
+      result.deniedCanaryToken !== params.target.expectedCanaryToken
+    ) {
+      if (result.ok) {
+        return {
+          kind: "denied",
+          url: params.target.url,
+          ok: false,
+          status: result.status,
+          error: `Denied loopback canary returned HTTP ${result.status} without the validation token`,
+        };
+      }
+      return {
+        kind: "denied",
+        url: params.target.url,
+        ok: true,
+        status: result.status,
+      };
+    }
     return {
       kind: "denied",
-      url: params.url,
+      url: params.target.url,
       ok: false,
       status: result.status,
-      error: `Denied destination returned HTTP ${result.status}; expected the proxy to block the connection`,
+      error:
+        params.target.expectedCanaryToken === undefined
+          ? `Denied destination returned HTTP ${result.status}; expected the proxy to block the connection`
+          : `Denied loopback canary was reachable through the proxy with HTTP ${result.status}`,
     };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (params.target.transportErrorMeansBlocked) {
+      return {
+        kind: "denied",
+        url: params.target.url,
+        ok: true,
+        error: message,
+      };
+    }
     return {
       kind: "denied",
-      url: params.url,
-      ok: true,
-      error: err instanceof Error ? err.message : String(err),
+      url: params.target.url,
+      ok: false,
+      error: `Denied destination failed without a verifiable proxy-deny signal: ${message}`,
     };
   }
 }
@@ -293,14 +407,20 @@ export async function runProxyValidation(
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
   const fetchCheck = options.fetchCheck ?? defaultProxyValidationFetchCheck;
   const allowedUrls = options.allowedUrls ?? DEFAULT_PROXY_VALIDATION_ALLOWED_URLS;
-  const deniedUrls = options.deniedUrls ?? DEFAULT_PROXY_VALIDATION_DENIED_URLS;
+  const deniedTargets = await resolveDeniedTargets(options.deniedUrls);
   const checks: ProxyValidationCheck[] = [];
 
-  for (const url of allowedUrls) {
-    checks.push(await runAllowedCheck({ url, proxyUrl: config.proxyUrl, timeoutMs, fetchCheck }));
-  }
-  for (const url of deniedUrls) {
-    checks.push(await runDeniedCheck({ url, proxyUrl: config.proxyUrl, timeoutMs, fetchCheck }));
+  try {
+    for (const url of allowedUrls) {
+      checks.push(await runAllowedCheck({ url, proxyUrl: config.proxyUrl, timeoutMs, fetchCheck }));
+    }
+    for (const target of deniedTargets.targets) {
+      checks.push(
+        await runDeniedCheck({ target, proxyUrl: config.proxyUrl, timeoutMs, fetchCheck }),
+      );
+    }
+  } finally {
+    await deniedTargets.close();
   }
 
   return {

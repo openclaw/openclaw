@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PROXY_VALIDATION_ALLOWED_URLS,
-  DEFAULT_PROXY_VALIDATION_DENIED_URLS,
   resolveProxyValidationConfig,
   runProxyValidation,
 } from "./proxy-validation.js";
@@ -112,10 +111,7 @@ describe("proxy validation", () => {
   });
 
   it("allows explicit proxy URL overrides even when config proxy routing is disabled", async () => {
-    const fetchCheck = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockRejectedValueOnce(new Error("blocked"));
+    const fetchCheck = vi.fn().mockResolvedValueOnce({ ok: true, status: 200 });
 
     const result = await runProxyValidation({
       proxyUrlOverride: "http://override-proxy.example:3128",
@@ -125,7 +121,7 @@ describe("proxy validation", () => {
       },
       env: {},
       allowedUrls: ["https://example.com/"],
-      deniedUrls: ["http://127.0.0.1/"],
+      deniedUrls: [],
       fetchCheck,
     });
 
@@ -186,8 +182,7 @@ describe("proxy validation", () => {
     const fetchCheck = vi
       .fn()
       .mockResolvedValueOnce({ ok: true, status: 200 })
-      .mockRejectedValueOnce(new Error("loopback blocked"))
-      .mockRejectedValueOnce(new Error("metadata blocked"));
+      .mockRejectedValueOnce(new Error("loopback blocked"));
 
     const result = await runProxyValidation({
       config: {
@@ -198,18 +193,79 @@ describe("proxy validation", () => {
       fetchCheck,
     });
 
-    expect(fetchCheck).toHaveBeenCalledTimes(3);
+    expect(fetchCheck).toHaveBeenCalledTimes(2);
     expect(fetchCheck).toHaveBeenNthCalledWith(1, {
       proxyUrl: "http://127.0.0.1:3128",
       targetUrl: DEFAULT_PROXY_VALIDATION_ALLOWED_URLS[0],
       timeoutMs: 5000,
     });
+    const deniedCall = fetchCheck.mock.calls[1]?.[0];
+    expect(deniedCall).toMatchObject({
+      proxyUrl: "http://127.0.0.1:3128",
+      timeoutMs: 5000,
+    });
+    expect(deniedCall?.targetUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
     expect(result.ok).toBe(true);
-    expect(result.checks.map((check) => [check.kind, check.url, check.ok])).toEqual([
-      ["allowed", DEFAULT_PROXY_VALIDATION_ALLOWED_URLS[0], true],
-      ["denied", DEFAULT_PROXY_VALIDATION_DENIED_URLS[0], true],
-      ["denied", DEFAULT_PROXY_VALIDATION_DENIED_URLS[1], true],
-    ]);
+    expect(result.checks[0]).toMatchObject({
+      kind: "allowed",
+      url: DEFAULT_PROXY_VALIDATION_ALLOWED_URLS[0],
+      ok: true,
+    });
+    expect(result.checks[1]).toMatchObject({
+      kind: "denied",
+      ok: true,
+      error: "loopback blocked",
+    });
+    expect(result.checks[1]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+  });
+
+  it("fails the default loopback denied canary on successful ambiguous responses", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      fetchCheck: vi.fn().mockImplementation(async ({ targetUrl }) => {
+        return {
+          ok: true,
+          status: 204,
+          deniedCanaryToken: targetUrl.includes("127.0.0.1:") ? undefined : "unexpected",
+        };
+      }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.checks).toHaveLength(1);
+    expect(result.checks[0]).toMatchObject({
+      kind: "denied",
+      ok: false,
+      status: 204,
+      error: "Denied loopback canary returned HTTP 204 without the validation token",
+    });
+    expect(result.checks[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
+  });
+
+  it("passes the default loopback denied canary when the proxy returns a denial response", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      fetchCheck: vi.fn().mockResolvedValue({ ok: false, status: 403 }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks).toHaveLength(1);
+    expect(result.checks[0]).toMatchObject({
+      kind: "denied",
+      ok: true,
+      status: 403,
+    });
+    expect(result.checks[0]?.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
   });
 
   it("fails denied checks when the destination returns HTTP 403", async () => {
@@ -256,6 +312,29 @@ describe("proxy validation", () => {
         ok: false,
         status: 404,
         error: "Denied destination returned HTTP 404; expected the proxy to block the connection",
+      },
+    ]);
+  });
+
+  it("fails custom denied checks on ambiguous transport errors", async () => {
+    const result = await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "http://127.0.0.1:3128",
+      },
+      env: {},
+      allowedUrls: [],
+      deniedUrls: ["https://example.com/closed"],
+      fetchCheck: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.checks).toEqual([
+      {
+        kind: "denied",
+        url: "https://example.com/closed",
+        ok: false,
+        error: "Denied destination failed without a verifiable proxy-deny signal: ECONNREFUSED",
       },
     ]);
   });

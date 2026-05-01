@@ -139,7 +139,7 @@ Validate the proxy from the same host, container, or service account that runs O
 openclaw proxy validate --proxy-url http://127.0.0.1:3128
 ```
 
-By default, when no custom destinations are provided, the command checks that `https://example.com/` succeeds and that loopback and metadata-style destinations such as `http://127.0.0.1/` and `http://169.254.169.254/` are blocked by the proxy. If no proxy is enabled and configured, validation reports a config problem; use `--proxy-url` for a one-off preflight before changing config. A denied destination passes only when the proxy blocks it with a connection or transport failure. Any HTTP response, including 403, means the destination was reachable through the proxy and fails validation. Use `--allowed-url` and `--denied-url` to test deployment-specific expectations. On validation failure, the command exits with code 1.
+By default, when no custom destinations are provided, the command checks that `https://example.com/` succeeds and starts a temporary loopback canary that the proxy must not reach. The default denied check passes when the proxy returns a non-2xx denial response or blocks the canary with a transport failure; it fails if a successful response reaches the canary. If no proxy is enabled and configured, validation reports a config problem; use `--proxy-url` for a one-off preflight before changing config. Use `--allowed-url` and `--denied-url` to test deployment-specific expectations. Custom denied destinations are fail-closed: any HTTP response means the destination was reachable through the proxy, and any transport error is reported as inconclusive because OpenClaw cannot prove the proxy blocked a reachable origin. On validation failure, the command exits with code 1.
 
 Use `--json` for automation. The JSON output contains the overall result, the effective proxy config source, any config errors, and each destination check. Proxy URL credentials are redacted in text and JSON output:
 
@@ -171,7 +171,7 @@ curl -x http://127.0.0.1:3128 http://127.0.0.1/
 curl -x http://127.0.0.1:3128 http://169.254.169.254/
 ```
 
-The public request should succeed. The loopback and metadata requests should be blocked by the proxy. For `openclaw proxy validate`, blocking must appear as a connection or transport failure; any HTTP response, including 403, means the denied destination was reachable through the proxy and should be treated as a validation failure.
+The public request should succeed. The loopback and metadata requests should be blocked by the proxy. For `openclaw proxy validate`, the built-in loopback canary can distinguish a proxy denial from a reachable origin. Custom `--denied-url` checks do not have that canary, so treat both HTTP responses and ambiguous transport failures as validation failures unless your proxy exposes a deployment-specific denial signal you can verify separately.
 
 Then enable OpenClaw proxy routing:
 
