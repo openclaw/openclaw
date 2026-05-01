@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS } from "./config.js";
 import {
   configureCommitmentExtractionRuntime,
   drainCommitmentExtractionQueue,
@@ -10,7 +11,7 @@ import {
   resetCommitmentExtractionRuntimeForTests,
 } from "./runtime.js";
 import { loadCommitmentStore } from "./store.js";
-import type { CommitmentExtractionItem } from "./types.js";
+import type { CommitmentExtractionBatchResult, CommitmentExtractionItem } from "./types.js";
 
 describe("commitment extraction runtime", () => {
   const tmpDirs: string[] = [];
@@ -140,5 +141,63 @@ describe("commitment extraction runtime", () => {
       "event:1",
       "event:2",
     ]);
+    expect(store.commitments[0]).not.toHaveProperty("sourceUserText");
+    expect(store.commitments[0]).not.toHaveProperty("sourceAssistantText");
+  });
+
+  it("bounds hidden extraction queue growth before spending extractor tokens", async () => {
+    const cfg = await createConfig();
+    const extractBatch = vi.fn(
+      async (_params: {
+        items: CommitmentExtractionItem[];
+      }): Promise<CommitmentExtractionBatchResult> => ({
+        candidates: [],
+      }),
+    );
+    configureCommitmentExtractionRuntime({
+      forceInTests: true,
+      extractBatch,
+      setTimer: () => ({ unref() {} }) as ReturnType<typeof setTimeout>,
+      clearTimer: () => undefined,
+    });
+
+    for (let index = 0; index < DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS; index += 1) {
+      expect(
+        enqueueCommitmentExtraction({
+          cfg,
+          nowMs: nowMs + index,
+          agentId: "main",
+          sessionKey: "agent:main:telegram:user-1",
+          channel: "telegram",
+          to: "15551234567",
+          sourceMessageId: `m${index}`,
+          userText: `Commitment candidate ${index}`,
+          assistantText: "I will follow up.",
+        }),
+      ).toBe(true);
+    }
+
+    expect(
+      enqueueCommitmentExtraction({
+        cfg,
+        nowMs: nowMs + DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS,
+        agentId: "main",
+        sessionKey: "agent:main:telegram:user-1",
+        channel: "telegram",
+        to: "15551234567",
+        sourceMessageId: "overflow",
+        userText: "Overflow candidate",
+        assistantText: "I will follow up.",
+      }),
+    ).toBe(false);
+
+    await expect(drainCommitmentExtractionQueue()).resolves.toBe(
+      DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS,
+    );
+    const processed = extractBatch.mock.calls.reduce(
+      (count, call) => count + (call[0]?.items.length ?? 0),
+      0,
+    );
+    expect(processed).toBe(DEFAULT_COMMITMENT_EXTRACTION_QUEUE_MAX_ITEMS);
   });
 });

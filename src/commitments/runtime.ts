@@ -46,6 +46,7 @@ let runtime: CommitmentExtractionRuntime = {};
 let queue: Array<Omit<CommitmentExtractionItem, "existingPending"> & { cfg?: OpenClawConfig }> = [];
 let timer: TimerHandle | null = null;
 let draining = false;
+let queueOverflowWarned = false;
 
 function shouldDisableBackgroundExtractionForTests(): boolean {
   if (runtime.forceInTests) {
@@ -80,6 +81,7 @@ export function resetCommitmentExtractionRuntimeForTests(): void {
   queue = [];
   timer = null;
   draining = false;
+  queueOverflowWarned = false;
 }
 
 function buildItemId(params: CommitmentExtractionEnqueueInput, nowMs: number): string {
@@ -102,6 +104,16 @@ export function enqueueCommitmentExtraction(input: CommitmentExtractionEnqueueIn
     !input.sessionKey.trim() ||
     !input.channel.trim()
   ) {
+    return false;
+  }
+  if (queue.length >= resolved.extraction.queueMaxItems) {
+    if (!queueOverflowWarned) {
+      log.warn("commitment extraction queue full; dropping hidden extraction request", {
+        queued: queue.length,
+        max: resolved.extraction.queueMaxItems,
+      });
+      queueOverflowWarned = true;
+    }
     return false;
   }
   const nowMs = input.nowMs ?? Date.now();

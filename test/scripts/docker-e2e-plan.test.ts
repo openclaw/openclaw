@@ -45,6 +45,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-openai");
     expect(plan.lanes.map((lane) => lane.name)).toContain("install-e2e-anthropic");
     expect(plan.lanes.map((lane) => lane.name)).toContain("mcp-channels");
+    expect(plan.lanes.map((lane) => lane.name)).toContain("commitments-safety");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-feishu");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-channel-update-acpx");
     expect(plan.lanes.map((lane) => lane.name)).toContain("bundled-plugin-install-uninstall-0");
@@ -403,6 +404,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "bundled-channel-deps-compat",
         "bundled-channel-setup-entry",
         "bundled-plugin-install-uninstall-0",
+        "commitments-safety",
         "update-channel-switch",
         "upgrade-survivor",
       ],
@@ -479,6 +481,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       }),
       expect.objectContaining({
         name: "bundled-plugin-install-uninstall-0",
+        stateScenario: "empty",
+      }),
+      expect.objectContaining({
+        name: "commitments-safety",
         stateScenario: "empty",
       }),
       expect.objectContaining({

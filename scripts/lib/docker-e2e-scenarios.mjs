@@ -336,6 +336,9 @@ export const mainLanes = [
     "session-runtime-context",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
   ),
+  lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
+    stateScenario: "empty",
+  }),
   lane("qr", "pnpm test:docker:qr"),
 ];
 
@@ -575,6 +578,9 @@ const primaryReleasePathChunks = {
       "session-runtime-context",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
     ),
+    lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
+      stateScenario: "empty",
+    }),
     lane(
       "pi-bundle-mcp-tools",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:pi-bundle-mcp-tools",

@@ -49,6 +49,7 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   replyOperation?: ReplyOperation;
