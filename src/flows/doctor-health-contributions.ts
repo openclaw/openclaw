@@ -284,7 +284,9 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyCronStore } = await import("../commands/doctor-cron.js");
+  const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
+    await import("../commands/doctor-cron.js");
+  await noteLegacyWhatsAppCrontabHealthCheck();
   await maybeRepairLegacyCronStore({
     cfg: ctx.cfg,
     options: ctx.options,

@@ -553,6 +553,14 @@ Behavior notes:
     openclaw logs --follow
     ```
 
+    If `~/.openclaw/logs/whatsapp-health.log` says `Gateway inactive` but
+    `openclaw gateway status` and `openclaw channels status --probe` show the
+    gateway and WhatsApp are healthy, run `openclaw doctor`. On Linux, doctor
+    warns about legacy crontab entries that still invoke
+    `~/.openclaw/bin/ensure-whatsapp.sh`; remove those stale entries with
+    `crontab -e` because cron can lack the systemd user-bus environment and
+    make that old script misreport gateway health.
+
     If needed, re-link with `channels login`.
 
   </Accordion>
