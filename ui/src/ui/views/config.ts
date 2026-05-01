@@ -1795,10 +1795,9 @@ export function renderConfig(props: ConfigProps) {
                               ></config-editor>
                             `}
                       </div>
-                    `}
-                    </div>
-                  `;
+                    `;
                 })()}
+
         </div>
 
         ${props.issues.length > 0
