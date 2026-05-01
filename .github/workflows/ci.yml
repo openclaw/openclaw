@@ -743,6 +743,14 @@ jobs:
               ;;
           esac
 
+      - name: Upload Android APK
+        if: matrix.task == 'build-play'
+        uses: actions/upload-artifact@v4
+        with:
+          name: openclaw-android-apk
+          path: apps/android/app/build/outputs/apk/**/*.apk
+          retention-days: 14
+
   checks-fast-plugin-contracts-shard:
     permissions:
       contents: read
