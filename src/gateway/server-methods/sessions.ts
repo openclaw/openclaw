@@ -77,6 +77,9 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  readRecentSessionMessagesWithStats,
+  readRecentSessionTranscriptLines,
+  readSessionMessageCount,
   readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
@@ -87,7 +90,6 @@ import {
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
-  readSessionMessages,
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -569,7 +571,7 @@ async function handleSessionSend(params: {
     interruptedActiveRun = interruptResult.interrupted;
   }
 
-  const messageSeq = readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length + 1;
+  const messageSeq = readSessionMessageCount(entry.sessionId, storePath, entry.sessionFile) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -983,8 +985,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? readSessionMessages(createdEntry.sessionId, target.storePath, createdEntry.sessionFile)
-          .length + 1
+      ? readSessionMessageCount(
+          createdEntry.sessionId,
+          target.storePath,
+          createdEntry.sessionFile,
+        ) + 1
       : undefined;
 
     if (initialMessage) {
@@ -1690,8 +1695,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { messages: [] }, undefined);
       return;
     }
-    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
-    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    const { messages } = readRecentSessionMessagesWithStats(
+      entry.sessionId,
+      storePath,
+      entry.sessionFile,
+      {
+        maxMessages: limit,
+        maxLines: limit * 20 + 20,
+      },
+    );
     respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
@@ -1847,16 +1859,23 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const lines = raw.split(/\r?\n/).filter((l) => Boolean(normalizeOptionalString(l)));
-    if (lines.length <= maxLines) {
+    const tail = readRecentSessionTranscriptLines({
+      sessionId,
+      storePath,
+      sessionFile: entry?.sessionFile,
+      agentId: target.agentId,
+      maxLines,
+    });
+    const lines = tail?.lines ?? [];
+    const totalLines = tail?.totalLines ?? 0;
+    if (totalLines <= maxLines) {
       respond(
         true,
         {
           ok: true,
           key: target.canonicalKey,
           compacted: false,
-          kept: lines.length,
+          kept: totalLines,
         },
         undefined,
       );
@@ -1864,8 +1883,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const archived = archiveFileOnDisk(filePath, "bak");
-    const keptLines = lines.slice(-maxLines);
-    fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
+    fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf-8");
 
     await updateSessionStore(storePath, (store) => {
       const entryKey = compactTarget.primaryKey;
@@ -1887,7 +1905,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         key: target.canonicalKey,
         compacted: true,
         archived,
-        kept: keptLines.length,
+        kept: lines.length,
       },
       undefined,
     );

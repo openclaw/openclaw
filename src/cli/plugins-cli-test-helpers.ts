@@ -607,9 +607,11 @@ export function resetPluginsCliTestState() {
     ok: false,
     error: "marketplace install failed",
   });
-  enablePluginInConfig.mockImplementation(((cfg: OpenClawConfig) => ({ config: cfg })) as (
-    ...args: unknown[]
-  ) => unknown);
+  enablePluginInConfig.mockImplementation(((cfg: OpenClawConfig, pluginId: string) => ({
+    config: cfg,
+    enabled: true,
+    pluginId,
+  })) as (...args: unknown[]) => unknown);
   recordPluginInstall.mockImplementation(
     ((cfg: OpenClawConfig) => cfg) as (...args: unknown[]) => unknown,
   );

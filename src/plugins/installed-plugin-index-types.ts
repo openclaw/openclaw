@@ -125,4 +125,5 @@ export type LoadInstalledPluginIndexParams = {
 
 export type RefreshInstalledPluginIndexParams = LoadInstalledPluginIndexParams & {
   reason: InstalledPluginIndexRefreshReason;
+  policyPluginIds?: readonly string[];
 };

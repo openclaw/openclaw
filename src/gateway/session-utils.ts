@@ -106,11 +106,15 @@ export {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
-  readRecentSessionUsageFromTranscript,
   readRecentSessionMessages,
+  readRecentSessionMessagesWithStats,
+  readRecentSessionTranscriptLines,
+  readRecentSessionUsageFromTranscript,
+  readSessionMessageCount,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   readSessionMessages,
+  visitSessionMessages,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
 export { canonicalizeSpawnedByForAgent, resolveSessionStoreKey } from "./session-store-key.js";

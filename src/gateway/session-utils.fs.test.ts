@@ -10,6 +10,9 @@ import {
   readLatestSessionUsageFromTranscript,
   readRecentSessionUsageFromTranscript,
   readRecentSessionMessages,
+  readRecentSessionMessagesWithStats,
+  readRecentSessionTranscriptLines,
+  readSessionMessageCount,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -557,6 +560,84 @@ describe("readSessionMessages", () => {
       });
       expect(out).toHaveLength(1);
       expect(out[0]).toMatchObject({ role: "assistant", content: "tail" });
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  test("preserves real sequence metadata for bounded recent-message reads", () => {
+    const sessionId = "test-session-recent-seq";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "old" } },
+      { message: { role: "assistant", content: "middle" } },
+      { message: { role: "user", content: "recent" } },
+      { message: { role: "assistant", content: "latest" } },
+    ]);
+
+    const result = readRecentSessionMessagesWithStats(sessionId, storePath, undefined, {
+      maxMessages: 2,
+      maxBytes: 256,
+    });
+
+    expect(result.totalMessages).toBe(4);
+    expect(result.messages).toEqual([
+      expect.objectContaining({
+        content: "recent",
+        __openclaw: expect.objectContaining({ seq: 3 }),
+      }),
+      expect.objectContaining({
+        content: "latest",
+        __openclaw: expect.objectContaining({ seq: 4 }),
+      }),
+    ]);
+  });
+
+  test("counts transcript messages without loading the whole file", () => {
+    const sessionId = "test-session-count-large";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 2500 }, (_, index) =>
+        JSON.stringify({ message: { role: "user", content: `message ${index}` } }),
+      ),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      expect(readSessionMessageCount(sessionId, storePath)).toBe(2500);
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
+  });
+
+  test("tails transcript lines for manual compaction without loading the whole file", () => {
+    const sessionId = "test-session-line-tail";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 10 }, (_, index) =>
+        JSON.stringify({ message: { role: "user", content: `message ${index}` } }),
+      ),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      const result = readRecentSessionTranscriptLines({
+        sessionId,
+        storePath,
+        maxLines: 3,
+      });
+      expect(result?.totalLines).toBe(11);
+      expect(result?.lines.map((line) => JSON.parse(line).message?.content)).toEqual([
+        "message 7",
+        "message 8",
+        "message 9",
+      ]);
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       readFileSpy.mockRestore();
