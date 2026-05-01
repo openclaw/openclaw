@@ -125,6 +125,8 @@ export function resolveToolEmoji(
  * - Debouncing (intermediate states debounce, terminal states are immediate)
  * - Stall timers (soft/hard warnings on inactivity)
  * - Terminal state protection (done/error mark finished, subsequent updates ignored)
+ * - Defers reaction removals until final cleanup to avoid visible flicker on
+ *   platforms without atomic reaction replacement
  */
 export function createStatusReactionController(params: {
   enabled: boolean;
@@ -156,6 +158,7 @@ export function createStatusReactionController(params: {
   let stallHardTimer: NodeJS.Timeout | null = null;
   let finished = false;
   let chainPromise = Promise.resolve();
+  const activeEmojis = new Set<string>();
 
   // Known emojis for clear operation
   const knownEmojis = new Set<string>([
@@ -228,8 +231,29 @@ export function createStatusReactionController(params: {
     }, timing.stallHardMs);
   }
 
+  async function removeKnownEmojis(options: { keepEmoji?: string } = {}): Promise<void> {
+    if (!adapter.removeReaction) {
+      return;
+    }
+
+    for (const emoji of knownEmojis) {
+      if (emoji === options.keepEmoji) {
+        continue;
+      }
+      try {
+        await adapter.removeReaction(emoji);
+      } catch (err) {
+        if (onError) {
+          onError(err);
+        }
+      } finally {
+        activeEmojis.delete(emoji);
+      }
+    }
+  }
+
   /**
-   * Apply an emoji: set new reaction and optionally remove old one.
+   * Apply an emoji while keeping previous active-loop reactions visible.
    */
   async function applyEmoji(newEmoji: string): Promise<void> {
     if (!enabled) {
@@ -237,14 +261,11 @@ export function createStatusReactionController(params: {
     }
 
     try {
-      const previousEmoji = currentEmoji;
-      await adapter.setReaction(newEmoji);
-
-      // If adapter supports removeReaction and there's a different previous emoji, remove it
-      if (adapter.removeReaction && previousEmoji && previousEmoji !== newEmoji) {
-        await adapter.removeReaction(previousEmoji);
+      if (!adapter.removeReaction || !activeEmojis.has(newEmoji)) {
+        await adapter.setReaction(newEmoji);
       }
 
+      activeEmojis.add(newEmoji);
       currentEmoji = newEmoji;
     } catch (err) {
       if (onError) {
@@ -357,17 +378,7 @@ export function createStatusReactionController(params: {
 
     await enqueue(async () => {
       if (adapter.removeReaction) {
-        // Remove all known emojis (Discord-style)
-        const emojisToRemove = Array.from(knownEmojis);
-        for (const emoji of emojisToRemove) {
-          try {
-            await adapter.removeReaction(emoji);
-          } catch (err) {
-            if (onError) {
-              onError(err);
-            }
-          }
-        }
+        await removeKnownEmojis();
       } else {
         // For platforms without removeReaction, set empty or just skip
         // (Telegram handles this atomically on the next setReaction)
@@ -385,8 +396,9 @@ export function createStatusReactionController(params: {
     const alreadyInitial = currentEmoji === initialEmoji;
     const pendingBeforeClear = pendingEmoji;
     const hadDebouncedPending = debounceTimer !== null;
+    const hasExtraActiveEmoji = Array.from(activeEmojis).some((emoji) => emoji !== initialEmoji);
     clearAllTimers();
-    if (alreadyInitial && (!pendingBeforeClear || hadDebouncedPending)) {
+    if (alreadyInitial && (!pendingBeforeClear || hadDebouncedPending) && !hasExtraActiveEmoji) {
       pendingEmoji = "";
       return;
     }
@@ -397,6 +409,7 @@ export function createStatusReactionController(params: {
 
     await enqueue(async () => {
       await applyEmoji(initialEmoji);
+      await removeKnownEmojis({ keepEmoji: initialEmoji });
       pendingEmoji = "";
     });
   }
