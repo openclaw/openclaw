@@ -340,6 +340,51 @@ describe("installToolResultContextGuard", () => {
       expect((err as MidTurnPrecheckSignal).request.route).toBe("compact_only");
     }
   });
+  it("does not count tool-result details toward the context budget", async () => {
+    // Regression: tool-result `details` payloads are stripped before
+    // messages reach the model (see stripToolResultDetails in
+    // src/agents/compaction.ts), so the guard's char estimate must ignore
+    // them. Before this fix, a modest content string paired with a verbose
+    // `details` payload (typical for process/exec/gateway tool outputs)
+    // would mis-inflate the estimate and trip the preemptive overflow guard
+    // inside long tool loops even when the real prompt was nowhere near the
+    // model's context window.
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeToolResultWithDetails("call_small_text", "x".repeat(100), "d".repeat(50_000)),
+      makeToolResultWithDetails("call_another", "y".repeat(120), "e".repeat(80_000)),
+    ];
+
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+
+    // No preemptive overflow thrown, and the small content is preserved
+    // untouched because it already fits under the per-result budget.
+    expect(transformed).toBe(contextForNextCall);
+    expect(getToolResultText(transformed[0])).toBe("x".repeat(100));
+    expect(getToolResultText(transformed[1])).toBe("y".repeat(120));
+    // Details stay on the original messages since no truncation was needed.
+    expect((contextForNextCall[0] as { details?: unknown }).details).toBeDefined();
+    expect((contextForNextCall[1] as { details?: unknown }).details).toBeDefined();
+  });
+
+  it("ignores large tool-result details when deciding preemptive overflow", async () => {
+    // A second regression guard: even with many tool results whose details
+    // payloads aggregate to far more than the context window, the guard must
+    // not throw a preemptive overflow as long as the LLM-facing content is
+    // within budget.
+    const agent = makeGuardableAgent();
+    const contextForNextCall = [
+      makeUser("small user prompt"),
+      makeToolResultWithDetails("call_1", "a".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_2", "b".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_3", "c".repeat(50), "d".repeat(30_000)),
+      makeToolResultWithDetails("call_4", "e".repeat(50), "d".repeat(30_000)),
+    ];
+
+    const transformed = (await applyGuardToContext(agent, contextForNextCall)) as AgentMessage[];
+
+    expect(transformed).toBe(contextForNextCall);
+  });
 });
 
 type MockedEngine = ContextEngine & {
