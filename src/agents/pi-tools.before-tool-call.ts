@@ -538,9 +538,10 @@ export async function runBeforeToolCallHook(args: {
       });
     }
     const policyAdjustedParams = trustedPolicyResult?.params ?? params;
-    const policyAdjustedDerivedToolParams = isPlainObject(policyAdjustedParams)
-      ? deriveToolParams(toolName, policyAdjustedParams)
-      : {};
+    const policyAdjustedDerivedToolParams =
+      trustedPolicyResult?.params && isPlainObject(policyAdjustedParams)
+        ? deriveToolParams(toolName, policyAdjustedParams)
+        : derivedToolParams;
     if (!hookRunner?.hasHooks("before_tool_call")) {
       return { blocked: false, params: policyAdjustedParams };
     }
