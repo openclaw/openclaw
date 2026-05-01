@@ -372,6 +372,42 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual(["/tmp/song.mp3"]);
   });
 
+  it("keeps structured trusted local media for workspace tools", () => {
+    const result = {
+      details: {
+        media: {
+          mediaUrl: "/tmp/comfy-output.png",
+          trustedLocalMedia: true,
+        },
+      },
+    };
+
+    expect(
+      filterToolResultMediaUrls(
+        "comfy_run_workflow",
+        ["/tmp/comfy-output.png"],
+        result,
+        new Set(["exec"]),
+      ),
+    ).toEqual(["/tmp/comfy-output.png"]);
+  });
+
+  it("does not trust structured local media markers from external tool results", () => {
+    const result = {
+      details: {
+        mcpServer: "external",
+        media: {
+          mediaUrl: "/tmp/external-output.png",
+          trustedLocalMedia: true,
+        },
+      },
+    };
+
+    expect(
+      filterToolResultMediaUrls("external_tool", ["/tmp/external-output.png"], result),
+    ).toEqual([]);
+  });
+
   it("strips local media for plugin-name collisions when the plugin is not registered", () => {
     expect(
       filterToolResultMediaUrls(
