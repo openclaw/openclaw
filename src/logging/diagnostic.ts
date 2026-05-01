@@ -216,19 +216,9 @@ function classifySessionAttention(params: {
     };
   }
 
-  if (params.queueDepth > 0) {
-    return {
-      eventType: "session.long_running",
-      reason: "queued_work_without_active_run",
-      classification: "long_running",
-      activeWorkKind: "queued_work",
-      recoveryEligible: false,
-    };
-  }
-
   return {
     eventType: "session.stuck",
-    reason: "stale_session_state",
+    reason: params.queueDepth > 0 ? "queued_work_without_active_run" : "stale_session_state",
     classification: "stale_session_state",
     recoveryEligible: true,
   };
