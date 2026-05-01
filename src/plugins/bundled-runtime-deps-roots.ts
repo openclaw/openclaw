@@ -12,6 +12,7 @@ import {
 
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_ROOTS_TO_KEEP = 20;
 const DEFAULT_UNKNOWN_RUNTIME_DEPS_MIN_AGE_MS = 10 * 60_000;
+const PACKAGE_KEY_PATH_HASH_RE = /^openclaw-.+-([0-9a-f]{12})$/u;
 
 export type BundledRuntimeDepsInstallRootPlan = {
   installRoot: string;
@@ -186,6 +187,68 @@ export function pruneUnknownBundledRuntimeDepsRoots(
   }
 
   return { scanned, removed, skippedLocked };
+}
+
+export function listSiblingExternalBundledRuntimeDepsRoots(params: {
+  installRoot: string;
+  env?: NodeJS.ProcessEnv;
+}): string[] {
+  const env = params.env ?? process.env;
+  const installRoot = path.resolve(params.installRoot);
+  const installRootHash = readPackageKeyPathHash(path.basename(installRoot));
+  if (!installRootHash) {
+    return [];
+  }
+  const candidateParents = resolveBundledRuntimeDepsExternalBaseDirs(env);
+  const seenParents = new Set<string>();
+  const candidates: { root: string; mtimeMs: number; name: string }[] = [];
+
+  for (const parentDir of candidateParents) {
+    const resolvedParent = path.resolve(parentDir);
+    if (seenParents.has(resolvedParent)) {
+      continue;
+    }
+    seenParents.add(resolvedParent);
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(parentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (
+        !entry.isDirectory() ||
+        !entry.name.startsWith("openclaw-") ||
+        readPackageKeyPathHash(entry.name) !== installRootHash
+      ) {
+        continue;
+      }
+      const root = path.join(parentDir, entry.name);
+      if (path.resolve(root) === installRoot) {
+        continue;
+      }
+      try {
+        candidates.push({
+          root,
+          mtimeMs: fs.statSync(root).mtimeMs,
+          name: entry.name,
+        });
+      } catch {
+        // Ignore roots that disappear while we are scanning for reusable deps.
+      }
+    }
+  }
+
+  return candidates
+    .toSorted((left, right) => {
+      const timeOrder = right.mtimeMs - left.mtimeMs;
+      return timeOrder === 0 ? left.name.localeCompare(right.name) : timeOrder;
+    })
+    .map((entry) => entry.root);
+}
+
+function readPackageKeyPathHash(packageKey: string): string | null {
+  return PACKAGE_KEY_PATH_HASH_RE.exec(packageKey)?.[1] ?? null;
 }
 
 function resolveExternalBundledRuntimeDepsInstallRoots(params: {

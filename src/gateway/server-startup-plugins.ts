@@ -92,6 +92,10 @@ async function prestageGatewayBundledRuntimeDepsImpl(params: {
         params.log.info(
           `[plugins] prepared bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.repairedSpecs.join(", ")}`,
         );
+      } else if (result.reusedSpecs && result.reusedSpecs.length > 0) {
+        params.log.info(
+          `[plugins] reused bundled runtime dependencies before gateway startup in ${Date.now() - startedAt}ms: ${result.reusedSpecs.join(", ")}`,
+        );
       }
     } catch (error) {
       repairError = error;

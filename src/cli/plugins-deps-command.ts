@@ -83,6 +83,8 @@ export async function runPluginsDepsCommand(params: {
     });
   let plan = createRuntimeDepsPlan();
   let repairedSpecs: string[] = [];
+  let reusedSpecs: string[] = [];
+  let reusedFromRoot: string | undefined;
 
   if (params.options.repair && plan.missingSpecs.length > 0) {
     const result = await repairBundledRuntimeDepsPackagePlanAsync({
@@ -98,6 +100,8 @@ export async function runPluginsDepsCommand(params: {
       },
     });
     repairedSpecs = result.repairedSpecs;
+    reusedSpecs = result.reusedSpecs ?? [];
+    reusedFromRoot = result.reusedFromRoot;
     plan = createRuntimeDepsPlan();
   }
 
@@ -113,6 +117,8 @@ export async function runPluginsDepsCommand(params: {
       installSpecs: plan.installSpecs,
       missingSpecs: plan.missingSpecs,
       repairedSpecs,
+      ...(reusedSpecs.length > 0 ? { reusedSpecs } : {}),
+      ...(reusedFromRoot ? { reusedFromRoot } : {}),
       warnings,
       ...(pruned ? { pruned } : {}),
     });
@@ -158,6 +164,8 @@ export async function runPluginsDepsCommand(params: {
   );
   if (repairedSpecs.length > 0) {
     lines.push(`${theme.muted("Repaired:")} ${repairedSpecs.join(", ")}`);
+  } else if (reusedSpecs.length > 0) {
+    lines.push(`${theme.muted("Reused:")} ${reusedSpecs.join(", ")}`);
   } else if (params.options.repair && plan.conflicts.length > 0) {
     lines.push(theme.warn("Repair skipped because runtime dependency versions conflict."));
   }

@@ -17,10 +17,13 @@ import {
   ensureNpmInstallExecutionManifest,
   isRuntimeDepSatisfiedInAnyRoot,
   isRuntimeDepsPlanMaterialized,
+  linkRuntimeDepsNodeModulesFromRoot,
   removeLegacyRuntimeDepsManifest,
+  removeRuntimeDepsNodeModulesSymlink,
 } from "./bundled-runtime-deps-materialization.js";
 import {
   isSourceCheckoutRoot,
+  listSiblingExternalBundledRuntimeDepsRoots,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
@@ -89,6 +92,8 @@ export type BundledRuntimeDepsPackagePlanParams = {
 export type RepairBundledRuntimeDepsPackagePlanResult = {
   plan: BundledRuntimeDepsPackagePlan;
   repairedSpecs: string[];
+  reusedSpecs?: string[];
+  reusedFromRoot?: string;
 };
 
 // Packaged bundled plugins (Docker image, npm global install) keep their
@@ -198,6 +203,81 @@ function hasPreviousIncompleteInstall(
   );
 }
 
+function findReusableBundledRuntimeDepsRoot(params: {
+  installRootPlan: BundledRuntimeDepsInstallRootPlan;
+  installSpecs: readonly string[];
+  env: NodeJS.ProcessEnv;
+}): string | null {
+  if (!params.installRootPlan.external || params.installSpecs.length === 0) {
+    return null;
+  }
+  for (const root of listSiblingExternalBundledRuntimeDepsRoots({
+    installRoot: params.installRootPlan.installRoot,
+    env: params.env,
+  })) {
+    if (
+      hasConcreteBundledRuntimeDepsNodeModules(root) &&
+      isRuntimeDepsPlanMaterialized(root, params.installSpecs)
+    ) {
+      return root;
+    }
+  }
+  return null;
+}
+
+function hasConcreteBundledRuntimeDepsNodeModules(root: string): boolean {
+  try {
+    const stat = fs.lstatSync(path.join(root, "node_modules"));
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+type RuntimeDepsReuseResult = { status: "materialized" } | { status: "reused"; sourceRoot: string };
+
+function tryReuseBundledRuntimeDepsRoot(params: {
+  installRootPlan: BundledRuntimeDepsInstallRootPlan;
+  installSpecs: readonly string[];
+  env: NodeJS.ProcessEnv;
+  onProgress?: (message: string) => void;
+}): RuntimeDepsReuseResult | null {
+  const installRoot = params.installRootPlan.installRoot;
+  if (isRuntimeDepsPlanMaterialized(installRoot, params.installSpecs)) {
+    removeLegacyRuntimeDepsManifest(installRoot);
+    return { status: "materialized" };
+  }
+  const reusableRoot = findReusableBundledRuntimeDepsRoot(params);
+  if (!reusableRoot) {
+    return null;
+  }
+  const nodeModulesPath = path.join(installRoot, "node_modules");
+  try {
+    fs.lstatSync(nodeModulesPath);
+    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+
+  ensureNpmInstallExecutionManifest(installRoot, params.installSpecs);
+  if (
+    !linkRuntimeDepsNodeModulesFromRoot({
+      sourceRoot: reusableRoot,
+      targetRoot: installRoot,
+    })
+  ) {
+    return null;
+  }
+  if (!isRuntimeDepsPlanMaterialized(installRoot, params.installSpecs)) {
+    removeRuntimeDepsNodeModulesSymlink(installRoot);
+    return null;
+  }
+  params.onProgress?.(`Reusing bundled plugin runtime deps from ${reusableRoot}`);
+  return { status: "reused", sourceRoot: reusableRoot };
+}
+
 export function createBundledRuntimeDepsPackagePlan(
   params: BundledRuntimeDepsPackagePlanParams,
 ): BundledRuntimeDepsPackagePlan {
@@ -279,6 +359,27 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
   const plan = createBundledRuntimeDepsPackagePlan(params);
   if (plan.missingSpecs.length === 0) {
     return { plan, repairedSpecs: [] };
+  }
+  const reuseResult = withBundledRuntimeDepsInstallRootLock(plan.installRootPlan.installRoot, () =>
+    tryReuseBundledRuntimeDepsRoot({
+      installRootPlan: plan.installRootPlan,
+      installSpecs: plan.installSpecs,
+      env: params.env,
+      ...(params.onProgress ? { onProgress: params.onProgress } : {}),
+    }),
+  );
+  if (reuseResult) {
+    const refreshedPlan = createBundledRuntimeDepsPackagePlan(params);
+    return {
+      plan: refreshedPlan,
+      repairedSpecs: [],
+      ...(reuseResult.status === "reused"
+        ? {
+            reusedSpecs: refreshedPlan.installSpecs,
+            reusedFromRoot: reuseResult.sourceRoot,
+          }
+        : {}),
+    };
   }
   const result = await repairBundledRuntimeDepsInstallRootAsync({
     installRoot: plan.installRootPlan.installRoot,
@@ -416,6 +517,15 @@ export function ensureBundledPluginRuntimeDeps(params: {
     const installSpecs = plan.installSpecs;
     if (isRuntimeDepsPlanMaterialized(installRoot, installSpecs)) {
       removeLegacyRuntimeDepsManifest(installRoot);
+      return createBundledRuntimeDepsEnsureResult([]);
+    }
+    if (
+      tryReuseBundledRuntimeDepsRoot({
+        installRootPlan: plan.installRootPlan,
+        installSpecs,
+        env: params.env,
+      })
+    ) {
       return createBundledRuntimeDepsEnsureResult([]);
     }
     if (params.installMissingDeps === false) {

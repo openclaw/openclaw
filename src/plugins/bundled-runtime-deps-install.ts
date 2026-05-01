@@ -13,6 +13,7 @@ import {
   ensureNpmInstallExecutionManifest,
   isRuntimeDepsPlanMaterialized,
   removeLegacyRuntimeDepsManifest,
+  removeRuntimeDepsNodeModulesSymlink,
 } from "./bundled-runtime-deps-materialization.js";
 import {
   createBundledRuntimeDepsInstallArgs,
@@ -159,6 +160,9 @@ function createBundledRuntimeDepsInstallContext(params: {
   const installEnv = createBundledRuntimeDepsInstallEnv(params.env, {
     cacheDir: path.join(installExecutionRoot, ".openclaw-npm-cache"),
   });
+  if (!isolatedExecutionRoot) {
+    removeRuntimeDepsNodeModulesSymlink(params.installRoot);
+  }
   const runner = resolveBundledRuntimeDepsPackageManagerRunner({
     installExecutionRoot,
     env: installEnv,

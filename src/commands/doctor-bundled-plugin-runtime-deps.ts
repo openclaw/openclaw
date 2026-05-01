@@ -137,9 +137,16 @@ export async function maybeRepairBundledPluginRuntimeDeps(params: {
     });
     logRuntimeDepsInstallProgress(
       params.runtime,
-      `Installed bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.repairedSpecs.join(", ")}`,
+      result.reusedSpecs && result.reusedSpecs.length > 0
+        ? `Reused bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.reusedSpecs.join(", ")}`
+        : `Installed bundled plugin runtime deps in ${formatElapsedMs(Date.now() - installStartedAt)}: ${result.repairedSpecs.join(", ")}`,
     );
-    note(`Installed bundled plugin deps: ${result.repairedSpecs.join(", ")}`, "Bundled plugins");
+    note(
+      result.reusedSpecs && result.reusedSpecs.length > 0
+        ? `Reused bundled plugin deps: ${result.reusedSpecs.join(", ")}`
+        : `Installed bundled plugin deps: ${result.repairedSpecs.join(", ")}`,
+      "Bundled plugins",
+    );
   } catch (error) {
     params.runtime.error(`Failed to install bundled plugin runtime deps: ${String(error)}`);
     throw error instanceof Error ? error : new Error(String(error));

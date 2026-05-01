@@ -147,6 +147,13 @@ dependencies to a writable stage such as:
 The writable root is the final materialization target. Older read-only roots are
 kept as compatibility layers only when needed.
 
+When a packaged OpenClaw update changes the versioned writable root but the
+selected bundled-plugin dependency plan is still satisfied by a previous staged
+root, repair reuses that previous `node_modules` tree instead of running the
+package manager again. The new versioned root still gets its own current package
+runtime mirror, so plugin code comes from the current OpenClaw package while
+unchanged dependency trees are shared across updates.
+
 ## Doctor and CLI commands
 
 Use `plugins deps` to inspect or repair bundled plugin runtime dependency

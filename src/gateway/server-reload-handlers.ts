@@ -95,6 +95,10 @@ async function planPluginRuntimeDepsForHotReload(params: {
       params.logReload.info(
         `config hot reload prepared bundled runtime dependencies in ${Date.now() - startedAt}ms: ${result.repairedSpecs.join(", ")}`,
       );
+    } else if (result.reusedSpecs && result.reusedSpecs.length > 0) {
+      params.logReload.info(
+        `config hot reload reused bundled runtime dependencies in ${Date.now() - startedAt}ms: ${result.reusedSpecs.join(", ")}`,
+      );
     }
   } catch (error) {
     params.logReload.warn(

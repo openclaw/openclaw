@@ -23,6 +23,7 @@ import {
 import {
   assertBundledRuntimeDepsInstalled,
   ensureNpmInstallExecutionManifest,
+  isRuntimeDepsPlanMaterialized,
 } from "./bundled-runtime-deps-materialization.js";
 import {
   createBundledRuntimeDepsInstallArgs,
@@ -423,6 +424,44 @@ describe("installBundledRuntimeDeps", () => {
         cwd: installRoot,
       }),
     );
+  });
+
+  it("removes reused node_modules symlinks before package-manager repair", () => {
+    const parentRoot = makeTempDir();
+    const sourceRoot = path.join(parentRoot, "openclaw-2026.4.28-source");
+    const installRoot = path.join(parentRoot, "openclaw-2026.4.29-target");
+    fs.mkdirSync(installRoot, { recursive: true });
+    writeInstalledPackage(sourceRoot, "alpha-runtime", "1.0.0");
+    fs.symlinkSync(
+      path.join(sourceRoot, "node_modules"),
+      path.join(installRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      writeInstalledPackage(String(options?.cwd ?? ""), "beta-runtime", "2.0.0");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["beta-runtime@2.0.0"],
+      env: {},
+    });
+
+    expect(
+      fs.existsSync(path.join(sourceRoot, "node_modules", "beta-runtime", "package.json")),
+    ).toBe(false);
+    expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(false);
+    expect(
+      fs.existsSync(path.join(installRoot, "node_modules", "beta-runtime", "package.json")),
+    ).toBe(true);
   });
 
   it("hides async npm child windows for startup repair installs", async () => {
@@ -1525,6 +1564,147 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     ]);
   });
 
+  it("reuses a compatible previous external runtime deps root during package repair", async () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const stageDir = makeTempDir();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    const previousRoot = path.join(
+      stageDir,
+      path.basename(installRoot).replace("openclaw-unknown-", "openclaw-2026.4.28-"),
+    );
+    const progress: string[] = [];
+    writeInstalledPackage(previousRoot, "alpha-runtime", "1.0.0");
+    writeGeneratedRuntimeDepsManifest(previousRoot, ["alpha-runtime@1.0.0"]);
+
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: {},
+      env,
+      installDeps: () => {
+        throw new Error("compatible staged deps should be reused");
+      },
+      onProgress: (message) => progress.push(message),
+    });
+
+    expect(result.repairedSpecs).toEqual([]);
+    expect(result.reusedSpecs).toEqual(["alpha-runtime@1.0.0"]);
+    expect(result.reusedFromRoot).toBe(previousRoot);
+    expect(result.plan.missingSpecs).toEqual([]);
+    expect(progress).toEqual([
+      expect.stringContaining(`Reusing bundled plugin runtime deps from ${previousRoot}`),
+    ]);
+    expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(true);
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["alpha-runtime@1.0.0"])).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8"))).toEqual({
+      name: "openclaw-runtime-deps-install",
+      private: true,
+      dependencies: {
+        "alpha-runtime": "1.0.0",
+      },
+    });
+  });
+
+  it("does not create a reuse symlink when an earlier configured layer already satisfies the plan", async () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const readOnlyStageDir = makeTempDir();
+    const writableStageDir = makeTempDir();
+    const env = {
+      OPENCLAW_PLUGIN_STAGE_DIR: `${readOnlyStageDir}${path.delimiter}${writableStageDir}`,
+    };
+    const plan = createBundledRuntimeDepsPackagePlan({
+      packageRoot,
+      config: {},
+      env,
+    });
+    const readOnlyRoot = plan.installRootPlan.searchRoots[0];
+    writeInstalledPackage(readOnlyRoot, "alpha-runtime", "1.0.0");
+    writeGeneratedRuntimeDepsManifest(readOnlyRoot, ["alpha-runtime@1.0.0"]);
+    const completedPlan = createBundledRuntimeDepsPackagePlan({
+      packageRoot,
+      config: {},
+      env,
+    });
+
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: {},
+      env,
+      installDeps: () => {
+        throw new Error("satisfied layered deps should not install");
+      },
+    });
+
+    expect(completedPlan.missingSpecs).toEqual([]);
+    expect(result.repairedSpecs).toEqual([]);
+    expect(result.reusedSpecs).toBeUndefined();
+    expect(fs.existsSync(path.join(plan.installRootPlan.installRoot, "node_modules"))).toBe(false);
+  });
+
+  it("does not reuse a previous external runtime deps root for a changed dependency plan", async () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const stageDir = makeTempDir();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    const previousRoot = path.join(
+      stageDir,
+      path.basename(installRoot).replace("openclaw-unknown-", "openclaw-2026.4.28-"),
+    );
+    writeInstalledPackage(previousRoot, "alpha-runtime", "0.9.0");
+    writeGeneratedRuntimeDepsManifest(previousRoot, ["alpha-runtime@0.9.0"]);
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: {},
+      env,
+      installDeps: (params) => {
+        calls.push(params);
+        writeInstalledPackage(params.installRoot, "alpha-runtime", "1.0.0");
+      },
+    });
+
+    expect(result.repairedSpecs).toEqual(["alpha-runtime@1.0.0"]);
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["alpha-runtime@1.0.0"],
+        installSpecs: ["alpha-runtime@1.0.0"],
+      },
+    ]);
+    expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(false);
+  });
+
+  it("does not reuse a compatible external runtime deps root from a different package key", async () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const stageDir = makeTempDir();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    const previousRoot = path.join(
+      stageDir,
+      path.basename(installRoot).replace(/-[0-9a-f]{12}$/u, "-ffffffffffff"),
+    );
+    writeInstalledPackage(previousRoot, "alpha-runtime", "1.0.0");
+    writeGeneratedRuntimeDepsManifest(previousRoot, ["alpha-runtime@1.0.0"]);
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: {},
+      env,
+      installDeps: (params) => {
+        calls.push(params);
+        writeInstalledPackage(params.installRoot, "alpha-runtime", "1.0.0");
+      },
+    });
+
+    expect(result.reusedSpecs).toBeUndefined();
+    expect(result.reusedFromRoot).toBeUndefined();
+    expect(result.repairedSpecs).toEqual(["alpha-runtime@1.0.0"]);
+    expect(calls).toHaveLength(1);
+    expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(false);
+  });
+
   it("reads each bundled plugin manifest once per runtime-deps scan", () => {
     const packageRoot = makeTempDir();
     const pluginRoot = writeBundledPluginPackage({
@@ -2187,6 +2367,46 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       pluginRoot,
     });
     expect(second).toEqual({ installedSpecs: [] });
+  });
+
+  it("reuses compatible sibling staged deps during plugin runtime prep", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.29" }),
+    );
+    const pluginRoot = path.join(packageRoot, "dist", "extensions", "slack");
+    fs.mkdirSync(pluginRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginRoot, "package.json"),
+      JSON.stringify({
+        dependencies: {
+          "@slack/web-api": "7.15.1",
+        },
+      }),
+    );
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(pluginRoot, { env });
+    const previousRoot = path.join(
+      stageDir,
+      path.basename(installRoot).replace("openclaw-2026.4.29-", "openclaw-2026.4.28-"),
+    );
+    writeInstalledPackage(previousRoot, "@slack/web-api", "7.15.1");
+    writeGeneratedRuntimeDepsManifest(previousRoot, ["@slack/web-api@7.15.1"]);
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      installDeps: () => {
+        throw new Error("compatible sibling staged deps should not reinstall");
+      },
+      pluginId: "slack",
+      pluginRoot,
+    });
+
+    expect(result).toEqual({ installedSpecs: [] });
+    expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(true);
+    expect(isRuntimeDepsPlanMaterialized(installRoot, ["@slack/web-api@7.15.1"])).toBe(true);
   });
 
   it("installs the complete plan into the final layered stage dir", () => {
