@@ -1226,6 +1226,9 @@ importers:
       '@slack/bolt':
         specifier: ^4.7.2
         version: 4.7.2(@types/express@5.0.6)
+      '@slack/types':
+        specifier: ^2.20.1
+        version: 2.20.1
       '@slack/web-api':
         specifier: ^7.15.1
         version: 7.15.1
