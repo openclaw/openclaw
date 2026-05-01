@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -7,6 +8,11 @@ import {
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getMasterKey } from "./encryption.js";
+
+const ENCRYPTION_ALGORITHM = "aes-256-gcm";
+const IV_LENGTH = 16;
+const ENCRYPTION_MAGIC = "OPENCLAW_ENCRYPTED_V1\n";
 import {
   deliveryContextFromSession,
   mergeDeliveryContext,
@@ -522,7 +528,50 @@ async function writeSessionStoreAtomic(params: {
   store: Record<string, SessionEntry>;
   serialized: string;
 }): Promise<void> {
-  await writeTextAtomic(params.storePath, params.serialized, { mode: 0o600 });
+  // Check if file exists and is plaintext (for migration backup)
+  const fileExists = fs.existsSync(params.storePath);
+  let shouldBackup = false;
+  
+  if (fileExists) {
+    try {
+      const content = fs.readFileSync(params.storePath, "utf8");
+      // If it's plaintext (not encrypted), create backup before encrypting
+      if (!content.startsWith(ENCRYPTION_MAGIC)) {
+        shouldBackup = true;
+      }
+    } catch {
+      // ignore read errors
+    }
+  }
+  
+  // Create backup if needed
+  if (shouldBackup) {
+    const backupPath = `${params.storePath}.backup-${Date.now()}`;
+    try {
+      fs.copyFileSync(params.storePath, backupPath);
+      console.log(`Created backup of plaintext sessions.json: ${backupPath}`);
+    } catch (error) {
+      console.error("Failed to create backup:", error);
+      // Continue anyway
+    }
+  }
+  
+  // Encrypt the content
+  const key = getMasterKey();
+  const iv = crypto.randomBytes(IV_LENGTH);
+  const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
+  
+  const encrypted = Buffer.concat([
+    cipher.update(params.serialized, "utf8"),
+    cipher.final(),
+  ]);
+  const authTag = cipher.getAuthTag();
+  
+  const encryptedContent = `${ENCRYPTION_MAGIC}${iv.toString("base64")}:${authTag.toString("base64")}:${encrypted.toString("base64")}`;
+  
+  // Write encrypted content atomically using existing utility
+  await writeTextAtomic(params.storePath, encryptedContent, { mode: 0o600 });
+  
   updateSessionStoreWriteCaches({
     storePath: params.storePath,
     store: params.store,

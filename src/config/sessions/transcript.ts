@@ -14,6 +14,7 @@ import { resolveAndPersistSessionFile } from "./session-file.js";
 import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import { EncryptedSessionManager } from "./encrypted-session-manager.js";
 import type { SessionEntry } from "./types.js";
 
 let piCodingAgentModulePromise: Promise<typeof import("@mariozechner/pi-coding-agent")> | null =
@@ -275,8 +276,9 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     ...params.message,
     ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
   } as Parameters<SessionManager["appendMessage"]>[0];
-  const { SessionManager } = await loadPiCodingAgentModule();
-  const sessionManager = SessionManager.open(sessionFile);
+  
+  // Use EncryptedSessionManager which handles transparent per-line encryption
+  const sessionManager = EncryptedSessionManager.open(sessionFile);
   const messageId = sessionManager.appendMessage(message);
 
   switch (params.updateMode ?? "inline") {

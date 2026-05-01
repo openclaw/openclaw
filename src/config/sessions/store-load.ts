@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { readEncryptedFile } from "./file-encryption.js";
 import {
   cloneSessionStoreRecord,
   isSessionStoreCacheEnabled,
@@ -105,7 +106,7 @@ export function loadSessionStore(
   const retryBuf = maxReadAttempts > 1 ? new Int32Array(new SharedArrayBuffer(4)) : undefined;
   for (let attempt = 0; attempt < maxReadAttempts; attempt += 1) {
     try {
-      const raw = fs.readFileSync(storePath, "utf-8");
+      const raw = readEncryptedFile(storePath);
       if (raw.length === 0 && attempt < maxReadAttempts - 1) {
         Atomics.wait(retryBuf!, 0, 0, 50);
         continue;

@@ -103,7 +103,10 @@ export function readSessionMessages(
     return [];
   }
 
-  const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
+  // Use transcript-reader to handle encryption transparently
+  const { readTranscriptLines } = require("../../config/sessions/transcript-reader.js");
+  const lines = readTranscriptLines(filePath);
+  
   const hasTreeEntries = lines.some((line) => {
     if (!line.trim()) {
       return false;
@@ -118,7 +121,10 @@ export function readSessionMessages(
   let branchEntries: SessionEntry[] | null = null;
   if (hasTreeEntries) {
     try {
-      branchEntries = SessionManager.open(filePath).getBranch();
+      // Use EncryptedSessionManager to handle encrypted files
+      const { EncryptedSessionManager } = require("../../config/sessions/encrypted-session-manager.js");
+      const sessionManager = EncryptedSessionManager.open(filePath);
+      branchEntries = sessionManager.getBranch();
     } catch {
       branchEntries = null;
     }
@@ -160,10 +166,12 @@ export function readSessionMessages(
 
   const messages: unknown[] = [];
   let messageSeq = 0;
+  
   for (const line of lines) {
     if (!line.trim()) {
       continue;
     }
+    
     try {
       const parsed = JSON.parse(line);
       if (parsed?.message) {
@@ -334,7 +342,12 @@ function readTranscriptHeadChunk(fd: number, maxBytes = 8192): string | null {
   if (bytesRead <= 0) {
     return null;
   }
-  return buf.toString("utf-8", 0, bytesRead);
+  
+  const chunk = buf.toString("utf-8", 0, bytesRead);
+  
+  // Check if the chunk contains encrypted lines and decrypt if needed
+  // Note: Decryption happens lazily in extractFirstUserMessageFromTranscriptChunk
+  return chunk;
 }
 
 function extractFirstUserMessageFromTranscriptChunk(
@@ -342,12 +355,41 @@ function extractFirstUserMessageFromTranscriptChunk(
   opts?: { includeInterSession?: boolean },
 ): string | null {
   const lines = chunk.split(/\r?\n/).slice(0, MAX_LINES_TO_SCAN);
+  
+  // Lazy load decryption utilities only if needed
+  let decryptionUtils: { isLineEncrypted: (line: string) => boolean; decryptLine: (line: string) => string } | undefined;
+  
   for (const line of lines) {
     if (!line.trim()) {
       continue;
     }
+    
+    let lineToParse = line;
+    
+    // Check if line is encrypted
+    if (line.startsWith("ENCRYPTED:")) {
+      // Lazy load decryption utilities
+      if (!decryptionUtils) {
+        try {
+          decryptionUtils = require("../../config/sessions/line-encryption.js");
+        } catch {
+          // If decryption module not available, skip encrypted lines
+          continue;
+        }
+      }
+      
+      try {
+        if (decryptionUtils.isLineEncrypted(line)) {
+          lineToParse = decryptionUtils.decryptLine(line);
+        }
+      } catch (error) {
+        console.error("Failed to decrypt line:", error);
+        continue; // Skip this line if decryption fails
+      }
+    }
+    
     try {
-      const parsed = JSON.parse(line);
+      const parsed = JSON.parse(lineToParse);
       const msg = parsed?.message as TranscriptMessage | undefined;
       if (msg?.role !== "user") {
         continue;
@@ -427,9 +469,23 @@ function readLastMessagePreviewFromOpenTranscript(params: {
   const chunk = buf.toString("utf-8");
   const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
   const tailLines = lines.slice(-LAST_MSG_MAX_LINES);
+  
+  // Import decryption utilities
+  const { isLineEncrypted, decryptLine } = await import("../../config/sessions/line-encryption.js");
 
   for (let i = tailLines.length - 1; i >= 0; i--) {
-    const line = tailLines[i];
+    let line = tailLines[i];
+    
+    // Decrypt if encrypted
+    try {
+      if (isLineEncrypted(line)) {
+        line = decryptLine(line);
+      }
+    } catch (error) {
+      console.error("Failed to decrypt line:", error);
+      continue; // Skip this line if decryption fails
+    }
+    
     try {
       const parsed = JSON.parse(line);
       const msg = parsed?.message as TranscriptMessage | undefined;
@@ -637,7 +693,33 @@ export function readLatestSessionUsageFromTranscript(
       return null;
     }
     const chunk = fs.readFileSync(fd, "utf-8");
-    return extractLatestUsageFromTranscriptChunk(chunk);
+    
+    // Decrypt the chunk if it contains encrypted lines
+    const { isLineEncrypted, decryptLine } = require("../../config/sessions/line-encryption.js");
+    const lines = chunk.split(/\r?\n/);
+    const decryptedLines: string[] = [];
+    
+    for (const line of lines) {
+      if (!line.trim()) {
+        decryptedLines.push(line);
+        continue;
+      }
+      
+      try {
+        if (isLineEncrypted(line)) {
+          const decrypted = decryptLine(line);
+          decryptedLines.push(decrypted);
+        } else {
+          decryptedLines.push(line);
+        }
+      } catch (error) {
+        console.error("Failed to decrypt line:", error);
+        decryptedLines.push(line); // Keep as-is if decryption fails
+      }
+    }
+    
+    const decryptedChunk = decryptedLines.join("\n");
+    return extractLatestUsageFromTranscriptChunk(decryptedChunk);
   });
 }
 
@@ -805,10 +887,24 @@ function readRecentMessagesFromTranscript(
     const chunk = buf.toString("utf-8");
     const lines = chunk.split(/\r?\n/).filter((l) => l.trim());
     const tailLines = lines.slice(-PREVIEW_MAX_LINES);
+    
+    // Import decryption utilities
+    const { isLineEncrypted, decryptLine } = require("../../config/sessions/line-encryption.js");
 
     const collected: TranscriptPreviewMessage[] = [];
     for (let i = tailLines.length - 1; i >= 0; i--) {
-      const line = tailLines[i];
+      let line = tailLines[i];
+      
+      // Decrypt if encrypted
+      try {
+        if (isLineEncrypted(line)) {
+          line = decryptLine(line);
+        }
+      } catch (error) {
+        console.error("Failed to decrypt line:", error);
+        continue; // Skip this line if decryption fails
+      }
+      
       try {
         const parsed = JSON.parse(line);
         const msg = parsed?.message as TranscriptPreviewMessage | undefined;
