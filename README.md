@@ -1,3 +1,11 @@
+# ZekeBot — OpenClaw Fork for Zeke
+
+ZekeBot is the Zeke-operated fork of [OpenClaw](https://github.com/openclaw/openclaw). This repository preserves upstream OpenClaw attribution and MIT licensing while adding Zeke-specific governance, image publication, and native Zeke tool/plugin work under OCL-FORK-001.
+
+Fork governance lives in this repo's [CONTRACT.md](CONTRACT.md), [AGENTS.md](AGENTS.md), [CONTRIBUTING.md](CONTRIBUTING.md), and [LICENSE-ZEKEBOT-NOTICE.md](LICENSE-ZEKEBOT-NOTICE.md). The controlling Zeke implementation brief and checkpoints remain in `zeke-repo`.
+
+---
+
 # 🦞 OpenClaw — Personal AI Assistant
 
 <p align="center">

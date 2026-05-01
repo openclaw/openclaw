@@ -1,0 +1,25 @@
+{
+  "name": "zekebot",
+  "owner": "openzeke",
+  "upstream": {
+    "name": "openclaw/openclaw",
+    "url": "https://github.com/openclaw/openclaw",
+    "default_branch": "main",
+    "fork_base_sha": "58f2d17e9e05f76c382c47e8a533af3595df0231",
+    "fork_base_commit": "refactor: trim gateway server type exports",
+    "license": "MIT"
+  },
+  "fork": {
+    "name": "openzeke/zekebot",
+    "url": "https://github.com/openzeke/zekebot",
+    "default_branch": "main",
+    "visibility": "public",
+    "created_for": "OCL-FORK-001/S1"
+  },
+  "governance": {
+    "contract": "CONTRACT.md",
+    "agents": "AGENTS.md",
+    "notice": "LICENSE-ZEKEBOT-NOTICE.md",
+    "zeke_brief": "zeke-repo/docs/briefs/OCL-FORK-001-ZekeBot-OpenClaw-Fork-FINAL.md"
+  }
+}

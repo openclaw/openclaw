@@ -1,5 +1,14 @@
 # AGENTS.MD
 
+## ZekeBot Fork Overlay
+
+- Repo: `https://github.com/openzeke/zekebot`.
+- Upstream: `https://github.com/openclaw/openclaw`.
+- This fork is governed by root `CONTRACT.md`, `LICENSE-ZEKEBOT-NOTICE.md`, and the OCL-FORK-001 brief/checkpoints in `zeke-repo`.
+- Preserve upstream instructions below unless they conflict with the fork contract. On conflict, root `CONTRACT.md` wins for Zeke-specific image publishing, native Zeke tools, profile exposure, and ZekeFlow authority boundaries.
+- Keep `CLAUDE.md` as the sibling symlink to this file.
+- Do not push to the upstream remote. Fetch/cherry-pick/merge from upstream only after recording the fork-base and risk notes in the active checkpoint.
+
 Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 
 ## Start

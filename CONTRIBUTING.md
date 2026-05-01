@@ -2,6 +2,18 @@
 
 Welcome to the lobster tank! 🦞
 
+## ZekeBot Fork Overlay
+
+This repository is `openzeke/zekebot`, the Zeke-operated fork of upstream `openclaw/openclaw`.
+
+- `origin` is `https://github.com/openzeke/zekebot.git`.
+- `upstream` should be `https://github.com/openclaw/openclaw.git` for fetch only.
+- Preserve upstream MIT licensing and keep `LICENSE` byte-for-byte aligned unless upstream changes it.
+- Record fork-specific licensing and attribution changes in `LICENSE-ZEKEBOT-NOTICE.md`.
+- Zeke-specific governance, image publishing, native Zeke tools, and profile policy are governed by root `CONTRACT.md` and the OCL-FORK-001 brief in `zeke-repo`.
+- Pull upstream changes by fetching `upstream main`, reviewing conflicts against `CONTRACT.md`, and committing a normal merge or cherry-pick only after ZekeBot tests pass.
+- Do not push to `upstream`. Local checkouts should disable the upstream push URL.
+
 ## Quick Links
 
 - **GitHub:** https://github.com/openclaw/openclaw
