@@ -14,7 +14,7 @@ vi.mock("../config/io.js", () => ({
 }));
 
 vi.mock("./server-model-catalog.js", () => ({
-  loadGatewayModelCatalog: () => loadGatewayModelCatalogMock(),
+  loadGatewayModelCatalog: (params?: unknown) => loadGatewayModelCatalogMock(params),
 }));
 
 import { resolveOpenAiCompatModelOverride } from "./http-utils.js";
@@ -50,5 +50,33 @@ describe("resolveOpenAiCompatModelOverride", () => {
     ).resolves.toEqual({
       errorMessage: "Model 'claude-cli/opus' is not allowed for agent 'main'.",
     });
+  });
+
+  it("loads runtime discovery for allowlisted model override validation", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.4" },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig);
+    loadGatewayModelCatalogMock.mockResolvedValue([
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+    ]);
+
+    await expect(
+      resolveOpenAiCompatModelOverride({
+        req: createReq({ "x-openclaw-model": "anthropic/claude-sonnet-4-6" }),
+        agentId: "main",
+        model: "openclaw",
+      }),
+    ).resolves.toEqual({
+      modelOverride: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(loadGatewayModelCatalogMock).toHaveBeenCalledWith({ mode: "runtimeDiscovery" });
   });
 });

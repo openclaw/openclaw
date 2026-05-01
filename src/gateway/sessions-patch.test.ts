@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import type { GatewayModelCatalogMode } from "./server-model-catalog.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
 
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
@@ -341,6 +342,26 @@ describe("gateway sessions patch", () => {
     );
     expect(entry.providerOverride).toBe("anthropic");
     expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+  });
+
+  test("uses runtime discovery for explicit model validation", async () => {
+    const loadGatewayModelCatalog = vi.fn(async (params?: { mode?: GatewayModelCatalogMode }) =>
+      params?.mode === "runtimeDiscovery"
+        ? [{ provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" }]
+        : [{ provider: "openai", id: "gpt-5.4", name: "GPT 5.4" }],
+    );
+
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: createAllowlistedAnthropicModelCfg(),
+        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
+        loadGatewayModelCatalog,
+      }),
+    );
+
+    expect(entry.providerOverride).toBe("anthropic");
+    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ mode: "runtimeDiscovery" });
   });
 
   test("sets spawnDepth for subagent sessions", async () => {

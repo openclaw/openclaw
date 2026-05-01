@@ -45,6 +45,7 @@ import {
   errorShape,
   type SessionsPatchParams,
 } from "./protocol/index.js";
+import type { GatewayModelCatalogMode } from "./server-model-catalog.js";
 
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
@@ -91,7 +92,9 @@ export async function applySessionsPatchToStore(params: {
   store: Record<string, SessionEntry>;
   storeKey: string;
   patch: SessionsPatchParams;
-  loadGatewayModelCatalog?: () => Promise<ModelCatalogEntry[]>;
+  loadGatewayModelCatalog?: (params?: {
+    mode?: GatewayModelCatalogMode;
+  }) => Promise<ModelCatalogEntry[]>;
 }): Promise<{ ok: true; entry: SessionEntry } | { ok: false; error: ErrorShape }> {
   const { cfg, store, storeKey, patch } = params;
   const now = Date.now();
@@ -101,17 +104,19 @@ export async function applySessionsPatchToStore(params: {
   const subagentModelHint = isSubagentSessionKey(storeKey)
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
-  let loadedModelCatalog: ModelCatalogEntry[] | undefined;
-  const loadModelCatalogForPatch = async () => {
-    if (loadedModelCatalog) {
-      return loadedModelCatalog;
+  const loadedModelCatalogByMode = new Map<GatewayModelCatalogMode, ModelCatalogEntry[]>();
+  const loadModelCatalogForPatch = async (mode: GatewayModelCatalogMode = "cacheOnly") => {
+    const cached = loadedModelCatalogByMode.get(mode);
+    if (cached) {
+      return cached;
     }
     if (!params.loadGatewayModelCatalog) {
       return undefined;
     }
-    const catalog = await params.loadGatewayModelCatalog();
-    loadedModelCatalog = Array.isArray(catalog) ? catalog : [];
-    return loadedModelCatalog;
+    const catalog = await params.loadGatewayModelCatalog({ mode });
+    const normalizedCatalog = Array.isArray(catalog) ? catalog : [];
+    loadedModelCatalogByMode.set(mode, normalizedCatalog);
+    return normalizedCatalog;
   };
 
   const existing = store[storeKey];
@@ -421,7 +426,7 @@ export async function applySessionsPatchToStore(params: {
           error: errorShape(ErrorCodes.UNAVAILABLE, "model catalog unavailable"),
         };
       }
-      const catalog = await loadModelCatalogForPatch();
+      const catalog = await loadModelCatalogForPatch("runtimeDiscovery");
       if (!catalog) {
         return {
           ok: false,
