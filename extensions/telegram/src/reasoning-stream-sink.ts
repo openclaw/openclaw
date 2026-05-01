@@ -1,9 +1,6 @@
 import crypto from "node:crypto";
 import type { ReasoningStreamSinkConfig } from "openclaw/plugin-sdk/config-types";
-import {
-  fetchWithSsrFGuard,
-  ssrfPolicyFromHttpBaseUrlAllowedHostname,
-} from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 const DEFAULT_TIMEOUT_MS = 5_000;
 
@@ -57,7 +54,6 @@ export function createReasoningStreamSink(params: {
   const { config, context, resolvedSecret, resolvedHeaders, warn } = params;
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const streamId = crypto.randomBytes(4).toString("hex");
-  const policy = ssrfPolicyFromHttpBaseUrlAllowedHostname(config.url);
   let started = false;
   let lastSnapshot = "";
   let chain: Promise<void> = Promise.resolve();
@@ -78,7 +74,6 @@ export function createReasoningStreamSink(params: {
         url: config.url,
         init: { method: "POST", headers, body },
         timeoutMs,
-        policy,
         requireHttps: true,
       });
       release = result.release;
