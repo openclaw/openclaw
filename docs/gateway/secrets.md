@@ -370,6 +370,7 @@ Runtime-minted or rotating credentials and OAuth refresh material are intentiona
 - Field with a ref: required on active surfaces during activation.
 - If both plaintext and ref are present, ref takes precedence on supported precedence paths.
 - The redaction sentinel `__OPENCLAW_REDACTED__` is reserved for internal config redaction/restore and is rejected as literal submitted config data.
+- Write paths that round-trip redacted config (`config.set` / `config.apply` / `config.patch`, plus the macOS app's local config-file fallback) restore the original secret when that sentinel appears on an existing field instead of persisting the placeholder.
 
 Warning and audit signals:
 

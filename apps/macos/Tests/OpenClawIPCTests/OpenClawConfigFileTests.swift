@@ -232,4 +232,128 @@ struct OpenClawConfigFileTests {
             }
         }
     }
+
+    @MainActor
+    @Test
+    func `save dict restores redacted sentinel from previous config`() async {
+        let override = self.makeConfigOverridePath()
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": [
+                        "mode": "token",
+                        "token": "real-token",
+                    ],
+                ],
+            ])
+
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": [
+                        "mode": "token",
+                        "token": "__OPENCLAW_REDACTED__",
+                    ],
+                ],
+            ])
+
+            let root = OpenClawConfigFile.loadDict()
+            let auth = ((root["gateway"] as? [String: Any])?["auth"] as? [String: Any]) ?? [:]
+            #expect(auth["token"] as? String == "real-token")
+        }
+    }
+
+    @MainActor
+    @Test
+    func `save dict restores redacted sentinel inside arrays from previous config`() async {
+        let override = self.makeConfigOverridePath()
+
+        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+            OpenClawConfigFile.saveDict([
+                "channels": [
+                    "slack": [
+                        "accounts": [
+                            [
+                                "botToken": "first-token",
+                                "name": "first",
+                            ],
+                            [
+                                "botToken": "second-token",
+                                "name": "second",
+                            ],
+                        ],
+                    ],
+                ],
+            ])
+
+            OpenClawConfigFile.saveDict([
+                "channels": [
+                    "slack": [
+                        "accounts": [
+                            [
+                                "botToken": "__OPENCLAW_REDACTED__",
+                                "name": "first-updated",
+                            ],
+                            [
+                                "botToken": "replacement-token",
+                                "name": "second-updated",
+                            ],
+                        ],
+                    ],
+                ],
+            ])
+
+            let root = OpenClawConfigFile.loadDict()
+            let channels = root["channels"] as? [String: Any]
+            let slack = channels?["slack"] as? [String: Any]
+            let accounts = slack?["accounts"] as? [[String: Any]] ?? []
+            #expect(accounts.count == 2)
+            #expect(accounts[0]["botToken"] as? String == "first-token")
+            #expect(accounts[0]["name"] as? String == "first-updated")
+            #expect(accounts[1]["botToken"] as? String == "replacement-token")
+            #expect(accounts[1]["name"] as? String == "second-updated")
+        }
+    }
+
+    @MainActor
+    @Test
+    func `save dict rejects orphan redacted sentinel`() async throws {
+        let stateDir = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
+        let configPath = stateDir.appendingPathComponent("openclaw.json")
+        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+
+        defer { try? FileManager().removeItem(at: stateDir) }
+
+        try await TestIsolation.withEnvValues([
+            "OPENCLAW_STATE_DIR": stateDir.path,
+            "OPENCLAW_CONFIG_PATH": configPath.path,
+        ]) {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "local",
+                    "auth": [
+                        "mode": "token",
+                        "token": "__OPENCLAW_REDACTED__",
+                    ],
+                ],
+            ])
+
+            #expect(!FileManager().fileExists(atPath: configPath.path))
+
+            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
+            let lines = rawAudit
+                .split(whereSeparator: \.isNewline)
+                .map(String.init)
+            guard let last = lines.last else {
+                Issue.record("Missing failed config.write audit line")
+                return
+            }
+            let auditRoot = try JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any]
+            #expect(auditRoot?["result"] as? String == "failed")
+            #expect((auditRoot?["error"] as? String)?.contains("reserved redaction sentinel") == true)
+        }
+    }
 }

@@ -633,6 +633,13 @@ Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods when a
 config already exists.
 
+Write-side secret safety:
+
+- `config.get` redacts sensitive values with the reserved sentinel `__OPENCLAW_REDACTED__`.
+- `config.set`, `config.apply`, and `config.patch` restore those redacted placeholders from the current on-disk config before validation/write.
+- Literal submissions of `__OPENCLAW_REDACTED__` are rejected when there is no original value to restore.
+- The macOS app's local-file fallback follows the same rule so an offline or degraded gateway save cannot clobber secrets in `openclaw.json`.
+
 ## Environment variables
 
 OpenClaw reads env vars from the parent process plus:
