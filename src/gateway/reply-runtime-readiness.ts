@@ -24,6 +24,7 @@ import {
 } from "../agents/model-selection.js";
 import { createOpenClawTools } from "../agents/openclaw-tools.js";
 import { prepareOpenClawToolsRuntime } from "../agents/openclaw-tools.runtime.js";
+import { createBundleLspToolRuntime } from "../agents/pi-bundle-lsp-runtime.js";
 import { preparePreparedPiRunBootstrapState } from "../agents/pi-embedded-runner/prepared-bootstrap-state.js";
 import { buildAgentRuntimeAuthPlan } from "../agents/runtime-plan/auth.js";
 import { ensureRuntimePluginsLoaded } from "../agents/runtime-plugins.js";
@@ -42,8 +43,8 @@ import { resolveOwningPluginIdsForProvider } from "../plugins/providers.js";
 import { buildAgentMainSessionKey } from "../routing/session-key.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
 import { prepareWebContentExtractors } from "../web-fetch/content-extractors.runtime.js";
-import { prepareWebFetchDefinition } from "../web-fetch/runtime.js";
-import { prepareWebSearchDefinition } from "../web-search/runtime.js";
+import { listWebFetchProviders, prepareWebFetchDefinition } from "../web-fetch/runtime.js";
+import { listWebSearchProviders, prepareWebSearchDefinition } from "../web-search/runtime.js";
 import {
   markReplyRuntimePluginRegistryPrepared,
   markReplyRuntimeProviderAuthPrepared,
@@ -77,6 +78,24 @@ export type ReplyRuntimeReadinessResult = {
   phases: ReplyRuntimeReadinessPhaseResult[];
   reasons: string[];
 };
+
+function collectOrderedProviderIds(params: {
+  listedIds: string[];
+  preferredIds?: Array<string | undefined>;
+}): string[] {
+  const ordered = new Set<string>();
+  const listed = new Set(params.listedIds.map((value) => value.trim()).filter(Boolean));
+  for (const preferredId of params.preferredIds ?? []) {
+    const normalized = preferredId?.trim();
+    if (normalized && listed.has(normalized)) {
+      ordered.add(normalized);
+    }
+  }
+  for (const listedId of listed) {
+    ordered.add(listedId);
+  }
+  return [...ordered];
+}
 
 async function measurePhase<T>(
   startupTrace: StartupTrace | undefined,
@@ -145,7 +164,7 @@ function collectReplyRuntimeWarmTargets(params: {
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
   });
-  const configuredProviderModels: string[] = [];
+  const configuredSwitchModelRefs = new Set<string>();
   const addConfiguredProviderModels = () => {
     const configuredProviders = params.cfg.models?.providers;
     if (!configuredProviders || typeof configuredProviders !== "object") {
@@ -157,12 +176,18 @@ function collectReplyRuntimeWarmTargets(params: {
       }
       for (const model of config.models) {
         if (typeof model?.id === "string" && model.id.trim()) {
-          configuredProviderModels.push(`${provider}/${model.id}`);
+          const ref = `${provider}/${model.id}`;
+          configuredSwitchModelRefs.add(ref);
         }
       }
     }
   };
   addConfiguredProviderModels();
+  for (const rawModelRef of Object.keys(params.cfg.agents?.defaults?.models ?? {})) {
+    if (rawModelRef.trim()) {
+      configuredSwitchModelRefs.add(rawModelRef);
+    }
+  }
   const addTarget = (
     agentId: string,
     agentDir: string,
@@ -230,8 +255,8 @@ function collectReplyRuntimeWarmTargets(params: {
     for (const fallback of fallbackModels) {
       addRawRef(agentId, agentDir, workspaceDir, sessionKey, fallback);
     }
-    for (const configuredProviderModel of configuredProviderModels) {
-      addRawRef(agentId, agentDir, workspaceDir, sessionKey, configuredProviderModel);
+    for (const configuredSwitchModelRef of configuredSwitchModelRefs) {
+      addRawRef(agentId, agentDir, workspaceDir, sessionKey, configuredSwitchModelRef);
     }
 
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId });
@@ -299,21 +324,52 @@ function resolvePiReplyRuntimeProfileCandidates(params: {
           ...profileOrder.filter((profileId) => profileId !== providerPreferredProfileId),
         ]
       : profileOrder;
-  return orderedProfiles;
+  return [...new Set(orderedProfiles.map((profileId) => profileId.trim()).filter(Boolean))];
 }
 
 async function warmPreparedReplyRuntimeWebSurfaces(config: OpenClawConfig): Promise<void> {
   const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
+  const searchProviderIds = collectOrderedProviderIds({
+    listedIds: listWebSearchProviders({ config }).map((provider) => provider.id),
+    preferredIds: [
+      runtimeWebTools?.search?.selectedProvider,
+      runtimeWebTools?.search?.providerConfigured,
+    ],
+  });
   prepareWebSearchDefinition({
     config,
     runtimeWebSearch: runtimeWebTools?.search,
     preferRuntimeProviders: true,
+  });
+  for (const providerId of searchProviderIds) {
+    prepareWebSearchDefinition({
+      config,
+      providerId,
+      runtimeWebSearch: runtimeWebTools?.search,
+      preferRuntimeProviders: true,
+    });
+  }
+
+  const fetchProviderIds = collectOrderedProviderIds({
+    listedIds: listWebFetchProviders({ config }).map((provider) => provider.id),
+    preferredIds: [
+      runtimeWebTools?.fetch?.selectedProvider,
+      runtimeWebTools?.fetch?.providerConfigured,
+    ],
   });
   prepareWebFetchDefinition({
     config,
     runtimeWebFetch: runtimeWebTools?.fetch,
     preferRuntimeProviders: true,
   });
+  for (const providerId of fetchProviderIds) {
+    prepareWebFetchDefinition({
+      config,
+      providerId,
+      runtimeWebFetch: runtimeWebTools?.fetch,
+      preferRuntimeProviders: true,
+    });
+  }
   await prepareWebContentExtractors({ config });
 }
 
@@ -582,6 +638,12 @@ export async function prepareReplyRuntimeForChannels(params: {
             agentSessionKey: warmAgent.sessionKey,
             requesterAgentIdOverride: agentId,
           });
+          const warmedBundleLspRuntime = await createBundleLspToolRuntime({
+            sessionKey: warmAgent.sessionKey,
+            workspaceDir: warmAgent.workspaceDir,
+            cfg: params.cfg,
+          });
+          await warmedBundleLspRuntime.dispose();
         }
         await warmPreparedReplyRuntimeWebSurfaces(params.cfg);
       },

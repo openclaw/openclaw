@@ -182,6 +182,14 @@ describe("createEmbeddedRunAuthController", () => {
         workspaceDir: "/tmp/workspace",
       }),
     );
+    expect(mocks.prepareProviderRuntimeAuth).toHaveBeenCalledWith(
+      expect.objectContaining({
+        primeReplyRuntimeCache: true,
+        context: expect.objectContaining({
+          profileId: "default",
+        }),
+      }),
+    );
     expect(harness.runtimeModel.baseUrl).toBe("https://runtime.example.com/v1");
     expect(harness.runtimeModel.headers).toEqual({
       "api-key": "runtime-header-token",
@@ -341,10 +349,28 @@ describe("createEmbeddedRunAuthController", () => {
 
       await controller.initializeAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("default");
+      expect(mocks.prepareProviderRuntimeAuth).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({
+          primeReplyRuntimeCache: true,
+          context: expect.objectContaining({
+            profileId: "default",
+          }),
+        }),
+      );
 
       vi.advanceTimersByTime(5_000);
       await Promise.resolve();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).toBeTruthy();
+      expect(mocks.prepareProviderRuntimeAuth).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({
+          primeReplyRuntimeCache: true,
+          context: expect.objectContaining({
+            profileId: "default",
+          }),
+        }),
+      );
 
       await controller.advanceAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");

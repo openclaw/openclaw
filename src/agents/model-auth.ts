@@ -621,6 +621,31 @@ export async function resolveApiKeyForProvider(params: {
   primeReplyRuntimeCache?: boolean;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
+  let defaultScopedStore: AuthProfileStore | undefined;
+  let replyRuntimeScopedStore: AuthProfileStore | undefined;
+  const getDefaultScopedStore = () =>
+    (defaultScopedStore ??= resolveScopedAuthProfileStore({
+      agentDir: params.agentDir,
+      cfg,
+      provider,
+      profileId,
+      preferredProfile,
+    }));
+  const getReplyRuntimeScopedStore = () =>
+    (replyRuntimeScopedStore ??= ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+      externalCli: externalCliDiscoveryForProviderAuth({
+        cfg,
+        provider,
+        profileId,
+        preferredProfile,
+      }),
+    }));
+  const shouldPrimeReplyRuntimeCache =
+    params.primeReplyRuntimeCache === true ||
+    (params.store
+      ? params.store === getDefaultScopedStore() || params.store === getReplyRuntimeScopedStore()
+      : true);
   const replyRuntimeCacheKey = buildReplyRuntimeProviderAuthCacheKey({
     provider,
     profileId,
@@ -638,7 +663,7 @@ export async function resolveApiKeyForProvider(params: {
     throw cached.error;
   }
   const cacheResolved = (value: ResolvedProviderAuth): ResolvedProviderAuth => {
-    if (params.primeReplyRuntimeCache === true) {
+    if (shouldPrimeReplyRuntimeCache) {
       getReplyRuntimeProviderAuthCache().set(replyRuntimeCacheKey, {
         ok: true,
         value: cloneResolvedProviderAuth(value),
@@ -647,22 +672,14 @@ export async function resolveApiKeyForProvider(params: {
     return value;
   };
   const cacheError = (error: Error): never => {
-    if (params.primeReplyRuntimeCache === true) {
+    if (shouldPrimeReplyRuntimeCache) {
       getReplyRuntimeProviderAuthCache().set(replyRuntimeCacheKey, { ok: false, error });
     }
     throw error;
   };
 
   if (profileId) {
-    const store =
-      params.store ??
-      resolveScopedAuthProfileStore({
-        agentDir: params.agentDir,
-        cfg,
-        provider,
-        profileId,
-        preferredProfile,
-      });
+    const store = params.store ?? getDefaultScopedStore();
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
@@ -749,14 +766,7 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     });
   }
-  const store =
-    params.store ??
-    resolveScopedAuthProfileStore({
-      agentDir: params.agentDir,
-      cfg,
-      provider,
-      preferredProfile,
-    });
+  const store = params.store ?? getDefaultScopedStore();
   const order = resolvePreparedAuthProfileOrder({
     cfg,
     store,
@@ -764,7 +774,7 @@ export async function resolveApiKeyForProvider(params: {
     preferredProfile,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
-    primeReplyRuntimeCache: params.primeReplyRuntimeCache,
+    primeReplyRuntimeCache: shouldPrimeReplyRuntimeCache,
   });
   let deferredAuthProfileResult: ResolvedProviderAuth | null = null;
   for (const candidate of order) {

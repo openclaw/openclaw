@@ -223,7 +223,7 @@ function resolvePiDiscoveryStores(params: {
   authStorage?: AuthStorage;
   modelRegistry?: ModelRegistry;
   skipPiDiscovery?: boolean;
-  primeReplyRuntimeCache?: boolean;
+  cachePreparedStores?: boolean;
 }): PreparedPiDiscoveryStores {
   if (!params.authStorage && !params.modelRegistry) {
     const cacheKey = buildPreparedPiDiscoveryStoresCacheKey({
@@ -239,7 +239,7 @@ function resolvePiDiscoveryStores(params: {
       agentDir: params.agentDir,
       skipPiDiscovery: params.skipPiDiscovery,
     });
-    if (params.primeReplyRuntimeCache === true) {
+    if (params.cachePreparedStores === true) {
       cache.set(cacheKey, prepared);
     }
     return prepared;
@@ -1187,18 +1187,19 @@ export async function resolveModelAsync(
     model: normalizeStaticProviderModelId(normalizeProviderId(provider), modelId),
   };
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
-  const replyRuntimeCacheKey =
+  const useDefaultReplyRuntimeCachePath =
     !options?.authStorage &&
     !options?.modelRegistry &&
     !options?.runtimeHooks &&
-    !options?.skipProviderRuntimeHooks
-      ? buildReplyRuntimeResolvedModelCacheKey({
-          provider: normalizedRef.provider,
-          modelId: normalizedRef.model,
-          agentDir: resolvedAgentDir,
-          skipPiDiscovery: options?.skipPiDiscovery,
-        })
-      : null;
+    !options?.skipProviderRuntimeHooks;
+  const replyRuntimeCacheKey = useDefaultReplyRuntimeCachePath
+    ? buildReplyRuntimeResolvedModelCacheKey({
+        provider: normalizedRef.provider,
+        modelId: normalizedRef.model,
+        agentDir: resolvedAgentDir,
+        skipPiDiscovery: options?.skipPiDiscovery,
+      })
+    : null;
   if (replyRuntimeCacheKey) {
     const cached = getReplyRuntimeResolvedModelCache().get(replyRuntimeCacheKey);
     if (cached) {
@@ -1210,7 +1211,7 @@ export async function resolveModelAsync(
     authStorage: options?.authStorage,
     modelRegistry: options?.modelRegistry,
     skipPiDiscovery: options?.skipPiDiscovery,
-    primeReplyRuntimeCache: options?.primeReplyRuntimeCache,
+    cachePreparedStores: useDefaultReplyRuntimeCachePath,
   });
   const runtimeHooks = resolveRuntimeHooks(options);
   const explicitModel = resolveExplicitModelWithRegistry({
@@ -1280,7 +1281,7 @@ export async function resolveModelAsync(
   }
   if (model) {
     const result = { model, authStorage, modelRegistry };
-    if (replyRuntimeCacheKey && options?.primeReplyRuntimeCache === true) {
+    if (replyRuntimeCacheKey) {
       getReplyRuntimeResolvedModelCache().set(replyRuntimeCacheKey, result);
     }
     return result;

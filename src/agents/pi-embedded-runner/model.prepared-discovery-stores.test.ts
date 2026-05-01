@@ -2,22 +2,32 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const discoveredModels = new Map<string, Record<string, unknown>>();
+  const registryInstances: Array<{
+    authStorage: unknown;
+    agentDir: string;
+    find: ReturnType<typeof vi.fn>;
+  }> = [];
   const discoverAuthStorage = vi.fn((agentDir?: string) => ({
     agentDir,
     setRuntimeApiKey: vi.fn(),
   }));
-  const discoverModels = vi.fn((authStorage: unknown, agentDir: string) => ({
-    authStorage,
-    agentDir,
-    find: vi.fn((provider: string, modelId: string) => {
-      return discoveredModels.get(`${provider}/${modelId}`) ?? null;
-    }),
-    getAll: vi.fn(() => []),
-    getAvailable: vi.fn(() => []),
-  }));
+  const discoverModels = vi.fn((authStorage: unknown, agentDir: string) => {
+    const registry = {
+      authStorage,
+      agentDir,
+      find: vi.fn((provider: string, modelId: string) => {
+        return discoveredModels.get(`${provider}/${modelId}`) ?? null;
+      }),
+      getAll: vi.fn(() => []),
+      getAvailable: vi.fn(() => []),
+    };
+    registryInstances.push(registry);
+    return registry;
+  });
 
   return {
     discoveredModels,
+    registryInstances,
     discoverAuthStorage,
     discoverModels,
   };
@@ -83,8 +93,10 @@ describe("PI discovery store preparation", () => {
     resetPreparedPiDiscoveryStoresCacheForTest();
     resetReplyRuntimeResolvedModelCacheForTest();
     mocks.discoveredModels.clear();
+    mocks.registryInstances.length = 0;
     mocks.discoveredModels.set("custom/alpha", buildModel("alpha"));
     mocks.discoveredModels.set("custom/beta", buildModel("beta"));
+    mocks.discoveredModels.set("custom/gamma", buildModel("gamma"));
     mocks.discoverAuthStorage.mockClear();
     mocks.discoverModels.mockClear();
   });
@@ -126,6 +138,27 @@ describe("PI discovery store preparation", () => {
     expect(result.modelRegistry).toBe(prepared.modelRegistry);
   });
 
+  it("writes through default-path live resolution into prepared stores and resolved-model caches", async () => {
+    const cfg = buildConfig();
+
+    const first = await resolveModelAsync("custom", "gamma", "/tmp/agent-state", cfg);
+
+    expect(first.model?.id).toBe("gamma");
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(mocks.discoverModels).toHaveBeenCalledTimes(1);
+    expect(mocks.registryInstances).toHaveLength(1);
+    expect(mocks.registryInstances[0]?.find).toHaveBeenCalledTimes(1);
+
+    const second = await resolveModelAsync("custom", "gamma", "/tmp/agent-state", cfg);
+
+    expect(second.model?.id).toBe("gamma");
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(mocks.discoverModels).toHaveBeenCalledTimes(1);
+    expect(mocks.registryInstances[0]?.find).toHaveBeenCalledTimes(1);
+    expect(second.authStorage).toBe(first.authStorage);
+    expect(second.modelRegistry).toBe(first.modelRegistry);
+  });
+
   it("keeps skipPiDiscovery preparation separate from full PI discovery stores", async () => {
     const cfg = buildConfig();
 
@@ -143,5 +176,25 @@ describe("PI discovery store preparation", () => {
     expect(mocks.discoverModels).toHaveBeenCalledTimes(1);
     expect(result.authStorage).not.toBe(skipped.authStorage);
     expect(result.modelRegistry).not.toBe(skipped.modelRegistry);
+  });
+
+  it("does not auto-persist caches when callers bypass the default runtime hook path", async () => {
+    const cfg = buildConfig();
+
+    const first = await resolveModelAsync("custom", "alpha", "/tmp/agent-state", cfg, {
+      skipProviderRuntimeHooks: true,
+    });
+
+    expect(first.model?.id).toBe("alpha");
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(mocks.discoverModels).toHaveBeenCalledTimes(1);
+
+    const second = await resolveModelAsync("custom", "alpha", "/tmp/agent-state", cfg, {
+      skipProviderRuntimeHooks: true,
+    });
+
+    expect(second.model?.id).toBe("alpha");
+    expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(mocks.discoverModels).toHaveBeenCalledTimes(2);
   });
 });

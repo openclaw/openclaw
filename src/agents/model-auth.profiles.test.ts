@@ -15,6 +15,8 @@ import type { ClaudeCliCredential } from "./cli-credentials.js";
 import {
   getApiKeyForModel,
   hasAvailableAuthForProvider,
+  resetReplyRuntimeAuthProfileOrderCacheForTest,
+  resetReplyRuntimeProviderAuthCacheForTest,
   resolveApiKeyForProvider,
   resolveEnvApiKey,
   resolveModelAuthMode,
@@ -220,6 +222,8 @@ vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  resetReplyRuntimeProviderAuthCacheForTest();
+  resetReplyRuntimeAuthProfileOrderCacheForTest();
   cliCredentialMocks.readClaudeCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
@@ -227,6 +231,8 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
+  resetReplyRuntimeProviderAuthCacheForTest();
+  resetReplyRuntimeAuthProfileOrderCacheForTest();
 });
 
 const envVar = (...parts: string[]) => parts.join("_");
@@ -321,6 +327,128 @@ async function resolveDemoLocalApiKey(params: {
   });
   return resolved;
 }
+
+describe("reply-runtime auth cache priming", () => {
+  it("writes through explicit profile auth on the default live path while keeping locked tuples separate", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-cache-",
+        agentEnv: "main",
+        env: {
+          OPENAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "first-profile-key",
+            },
+          },
+        });
+
+        const agentDir = process.env.OPENCLAW_AGENT_DIR;
+        expect(agentDir).toBeTruthy();
+
+        const unlocked = await resolveApiKeyForProvider({
+          provider: "openai",
+          profileId: "openai:default",
+          agentDir,
+        });
+        expect(unlocked.apiKey).toBe("first-profile-key");
+
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "second-profile-key",
+            },
+          },
+        });
+        clearRuntimeAuthProfileStoreSnapshots();
+
+        const locked = await resolveApiKeyForProvider({
+          provider: "openai",
+          profileId: "openai:default",
+          agentDir,
+          lockedProfile: true,
+        });
+        expect(locked.apiKey).toBe("second-profile-key");
+
+        clearRuntimeAuthProfileStoreSnapshots();
+
+        const unlockedAgain = await resolveApiKeyForProvider({
+          provider: "openai",
+          profileId: "openai:default",
+          agentDir,
+        });
+        expect(unlockedAgain.apiKey).toBe("first-profile-key");
+      },
+    );
+  });
+
+  it("does not prime reply-runtime auth from a caller-supplied custom store", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-cache-custom-",
+        agentEnv: "main",
+        env: {
+          OPENAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        await state.writeAuthProfiles({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "default-store-key",
+            },
+          },
+        });
+
+        const agentDir = process.env.OPENCLAW_AGENT_DIR;
+        expect(agentDir).toBeTruthy();
+
+        const customStore = {
+          version: 1 as const,
+          profiles: {
+            "openai:default": {
+              type: "api_key" as const,
+              provider: "openai" as const,
+              key: "custom-store-key",
+            },
+          },
+        };
+
+        const customResolved = await resolveApiKeyForProvider({
+          provider: "openai",
+          profileId: "openai:default",
+          agentDir,
+          store: customStore,
+        });
+        expect(customResolved.apiKey).toBe("custom-store-key");
+
+        clearRuntimeAuthProfileStoreSnapshots();
+
+        const defaultResolved = await resolveApiKeyForProvider({
+          provider: "openai",
+          profileId: "openai:default",
+          agentDir,
+        });
+        expect(defaultResolved.apiKey).toBe("default-store-key");
+      },
+    );
+  });
+});
 
 describe("getApiKeyForModel", () => {
   it("reads oauth auth-profiles entries from auth-profiles.json via explicit profile", async () => {

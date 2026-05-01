@@ -221,6 +221,31 @@ export const mockedGetApiKeyForModel = vi.fn(
 export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 export const mockedResolvePreparedAuthProfileOrder = vi.fn(() => [] as string[]);
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);
+export const mockedResolvePreparedPiRunBootstrapState = vi.fn(
+  ({
+    provider,
+    workspaceDir,
+    agentDir,
+    modelId,
+  }: {
+    provider?: string;
+    workspaceDir?: string;
+    agentDir?: string;
+    modelId?: string;
+  } = {}) => {
+    const preparedPiProfileOrder = mockedResolvePreparedAuthProfileOrder({
+      provider,
+      workspaceDir,
+      agentDir,
+      modelId,
+    });
+    return {
+      authStore: {},
+      preparedPiProfileOrder,
+      preparedPiProviderOrderedProfiles: preparedPiProfileOrder,
+    };
+  },
+);
 
 export const overflowBaseRunParams = {
   sessionId: "test-session",
@@ -391,6 +416,32 @@ export function resetRunOverflowCompactionHarnessMocks(): void {
   mockedResolveAuthProfileOrder.mockReturnValue([]);
   mockedResolvePreparedAuthProfileOrder.mockReset();
   mockedResolvePreparedAuthProfileOrder.mockReturnValue([]);
+  mockedResolvePreparedPiRunBootstrapState.mockReset();
+  mockedResolvePreparedPiRunBootstrapState.mockImplementation(
+    ({
+      provider,
+      workspaceDir,
+      agentDir,
+      modelId,
+    }: {
+      provider?: string;
+      workspaceDir?: string;
+      agentDir?: string;
+      modelId?: string;
+    } = {}) => {
+      const preparedPiProfileOrder = mockedResolvePreparedAuthProfileOrder({
+        provider,
+        workspaceDir,
+        agentDir,
+        modelId,
+      });
+      return {
+        authStore: {},
+        preparedPiProfileOrder,
+        preparedPiProviderOrderedProfiles: preparedPiProfileOrder,
+      };
+    },
+  );
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReset();
   mockedShouldPreferExplicitConfigApiKeyAuth.mockReturnValue(false);
   mockedRunPostCompactionSideEffects.mockReset();
@@ -510,6 +561,11 @@ export async function loadRunOverflowCompactionHarness(): Promise<{
     resolveAuthProfileOrder: mockedResolveAuthProfileOrder,
     resolvePreparedAuthProfileOrder: mockedResolvePreparedAuthProfileOrder,
     shouldPreferExplicitConfigApiKeyAuth: mockedShouldPreferExplicitConfigApiKeyAuth,
+  }));
+
+  vi.doMock("./prepared-bootstrap-state.js", () => ({
+    preparePreparedPiRunBootstrapState: mockedResolvePreparedPiRunBootstrapState,
+    resolvePreparedPiRunBootstrapState: mockedResolvePreparedPiRunBootstrapState,
   }));
 
   vi.doMock("../models-config.js", () => ({

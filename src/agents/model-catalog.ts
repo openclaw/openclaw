@@ -60,6 +60,11 @@ function getReplyRuntimePreparedModelCatalogCache() {
   );
 }
 
+function cachePreparedReplyRuntimeModelCatalog(catalog: ModelCatalogEntry[]): ModelCatalogEntry[] {
+  getReplyRuntimePreparedModelCatalogCache().set("active", catalog);
+  return catalog;
+}
+
 function shouldLogModelCatalogTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
@@ -260,10 +265,7 @@ export async function loadModelCatalog(params?: {
 export async function prepareReplyRuntimeModelCatalog(params?: {
   config?: OpenClawConfig;
 }): Promise<ModelCatalogEntry[]> {
-  const catalog = await loadModelCatalog({ config: params?.config });
-  const cache = getReplyRuntimePreparedModelCatalogCache();
-  cache.set("active", catalog);
-  return catalog;
+  return cachePreparedReplyRuntimeModelCatalog(await loadModelCatalog({ config: params?.config }));
 }
 
 export function getPreparedReplyRuntimeModelCatalog(): ModelCatalogEntry[] | undefined {
@@ -273,7 +275,11 @@ export function getPreparedReplyRuntimeModelCatalog(): ModelCatalogEntry[] | und
 export async function loadPreparedReplyRuntimeModelCatalog(params?: {
   config?: OpenClawConfig;
 }): Promise<ModelCatalogEntry[]> {
-  return getPreparedReplyRuntimeModelCatalog() ?? loadModelCatalog({ config: params?.config });
+  const prepared = getPreparedReplyRuntimeModelCatalog();
+  if (prepared) {
+    return prepared;
+  }
+  return cachePreparedReplyRuntimeModelCatalog(await loadModelCatalog({ config: params?.config }));
 }
 
 /**

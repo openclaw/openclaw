@@ -58,9 +58,13 @@ function createResolveToolsParams(params?: {
   env?: NodeJS.ProcessEnv;
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
+  contextOverrides?: Record<string, unknown>;
 }) {
   return {
-    context: createContext() as never,
+    context: {
+      ...createContext(),
+      ...params?.contextOverrides,
+    } as never,
     ...(params?.toolAllowlist ? { toolAllowlist: [...params.toolAllowlist] } : {}),
     ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
     ...(params?.env ? { env: params.env } : {}),
@@ -374,6 +378,70 @@ describe("resolvePluginTools optional tools", () => {
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(skippedFactory).not.toHaveBeenCalled();
     expect(selectedFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses cache-eligible plugin factory results for stable contexts", () => {
+    const factory = vi.fn(() => makeTool("optional_tool"));
+    const stableContext = createContext() as never;
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: false,
+        source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools({
+      context: stableContext,
+      toolAllowlist: ["optional_tool"],
+    });
+    const second = resolvePluginTools({
+      context: stableContext,
+      toolAllowlist: ["optional_tool"],
+    });
+
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(first[0]).toBe(second[0]);
+  });
+
+  it("keeps delivery-bound plugin factory work live", () => {
+    const factory = vi.fn(() => makeTool("optional_tool"));
+    setRegistry([
+      {
+        pluginId: "optional-demo",
+        optional: false,
+        source: "/tmp/optional-demo.js",
+        names: ["optional_tool"],
+        factory,
+      },
+    ]);
+
+    resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+        contextOverrides: {
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
+        },
+      }),
+    );
+    resolvePluginTools(
+      createResolveToolsParams({
+        toolAllowlist: ["optional_tool"],
+        contextOverrides: {
+          deliveryContext: {
+            channel: "whatsapp",
+            to: "+15551234567",
+          },
+        },
+      }),
+    );
+
+    expect(factory).toHaveBeenCalledTimes(2);
   });
 
   it("skips malformed plugin tools while keeping valid sibling tools", () => {

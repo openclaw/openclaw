@@ -723,6 +723,8 @@ async function compactEmbeddedPiSessionDirectOnce(
       : undefined;
     const bundleLspRuntime = toolsEnabled
       ? await createBundleLspToolRuntime({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
           reservedToolNames: [

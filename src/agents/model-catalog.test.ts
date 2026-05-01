@@ -7,7 +7,9 @@ type PiSdkModule = typeof import("./pi-model-discovery.js");
 let __setModelCatalogImportForTest: typeof import("./model-catalog.js").__setModelCatalogImportForTest;
 let findModelCatalogEntry: typeof import("./model-catalog.js").findModelCatalogEntry;
 let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
+let getPreparedReplyRuntimeModelCatalog: typeof import("./model-catalog.js").getPreparedReplyRuntimeModelCatalog;
 let loadModelCatalog: typeof import("./model-catalog.js").loadModelCatalog;
+let loadPreparedReplyRuntimeModelCatalog: typeof import("./model-catalog.js").loadPreparedReplyRuntimeModelCatalog;
 let modelSupportsInput: typeof import("./model-catalog.js").modelSupportsInput;
 let resetModelCatalogCacheForTest: typeof import("./model-catalog.js").resetModelCatalogCacheForTest;
 let augmentCatalogMock: ReturnType<typeof vi.fn>;
@@ -82,7 +84,9 @@ describe("loadModelCatalog", () => {
       __setModelCatalogImportForTest,
       findModelCatalogEntry,
       findModelInCatalog,
+      getPreparedReplyRuntimeModelCatalog,
       loadModelCatalog,
+      loadPreparedReplyRuntimeModelCatalog,
       modelSupportsInput,
       resetModelCatalogCacheForTest,
     } = await import("./model-catalog.js"));
@@ -143,6 +147,19 @@ describe("loadModelCatalog", () => {
       name: "GLM 5.1 Cloud",
       provider: "ollama",
     });
+  });
+
+  it("writes through the prepared reply-runtime catalog cache on a miss", async () => {
+    mockSingleOpenAiCatalogModel();
+
+    expect(getPreparedReplyRuntimeModelCatalog()).toBeUndefined();
+
+    const catalog = await loadPreparedReplyRuntimeModelCatalog({
+      config: {} as OpenClawConfig,
+    });
+
+    expect(catalog).toEqual([{ id: "gpt-4.1", name: "GPT-4.1", provider: "openai" }]);
+    expect(getPreparedReplyRuntimeModelCatalog()).toBe(catalog);
   });
 
   it("returns partial results on discovery errors", async () => {

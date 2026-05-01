@@ -24,6 +24,7 @@ const hoisted = vi.hoisted(() => ({
   ]),
   selectAgentHarness: vi.fn(() => ({ id: "pi", label: "PI", supports: vi.fn() })),
   resolveProviderRuntimePlugin: vi.fn(() => ({ id: "mock-provider-plugin" })),
+  resolveProviderAuthProfileId: vi.fn(() => undefined),
   prepareSimpleCompletionModel: vi.fn(async () => ({
     model: {
       provider: "openai",
@@ -53,11 +54,18 @@ const hoisted = vi.hoisted(() => ({
   resolveAgentDir: vi.fn((_: OpenClawConfig, agentId?: string) =>
     agentId === "worker" ? "/tmp/openclaw-agent-worker" : "/tmp/openclaw-agent",
   ),
+  listWebSearchProviders: vi.fn(() => []),
+  listWebFetchProviders: vi.fn(() => []),
   prepareWebSearchDefinition: vi.fn(() => null),
   prepareWebFetchDefinition: vi.fn(() => null),
   prepareWebContentExtractors: vi.fn(async () => undefined),
   prepareOpenClawToolsRuntime: vi.fn(async () => undefined),
   prepareWebFetchToolRuntime: vi.fn(async () => undefined),
+  createBundleLspToolRuntime: vi.fn(async () => ({
+    tools: [],
+    sessions: [],
+    dispose: vi.fn(async () => undefined),
+  })),
 }));
 
 vi.mock("../agents/runtime-plugins.js", () => ({
@@ -89,7 +97,7 @@ vi.mock("../agents/model-catalog.js", async (importOriginal) => {
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
   resolveProviderRuntimePlugin: hoisted.resolveProviderRuntimePlugin,
-  resolveProviderAuthProfileId: vi.fn(() => undefined),
+  resolveProviderAuthProfileId: hoisted.resolveProviderAuthProfileId,
 }));
 
 vi.mock("../plugins/providers.js", async (importOriginal) => {
@@ -108,6 +116,10 @@ vi.mock("../agents/openclaw-tools.runtime.js", () => ({
   prepareOpenClawToolsRuntime: hoisted.prepareOpenClawToolsRuntime,
 }));
 
+vi.mock("../agents/pi-bundle-lsp-runtime.js", () => ({
+  createBundleLspToolRuntime: hoisted.createBundleLspToolRuntime,
+}));
+
 vi.mock("../agents/tools/web-fetch.js", () => ({
   prepareWebFetchToolRuntime: hoisted.prepareWebFetchToolRuntime,
 }));
@@ -121,10 +133,12 @@ vi.mock("../config/sessions/store.js", () => ({
 }));
 
 vi.mock("../web-search/runtime.js", () => ({
+  listWebSearchProviders: hoisted.listWebSearchProviders,
   prepareWebSearchDefinition: hoisted.prepareWebSearchDefinition,
 }));
 
 vi.mock("../web-fetch/runtime.js", () => ({
+  listWebFetchProviders: hoisted.listWebFetchProviders,
   prepareWebFetchDefinition: hoisted.prepareWebFetchDefinition,
 }));
 
@@ -298,13 +312,22 @@ describe("reply-runtime readiness", () => {
     hoisted.resolveAuthProfileOrder.mockClear();
     hoisted.selectAgentHarness.mockReset().mockReturnValue({ id: "pi", label: "PI" });
     hoisted.resolveProviderRuntimePlugin.mockClear();
+    hoisted.resolveProviderAuthProfileId.mockReset();
+    hoisted.resolveProviderAuthProfileId.mockReturnValue(undefined);
     hoisted.prepareSimpleCompletionModel.mockClear();
     hoisted.resolveOwningPluginIdsForProvider.mockClear();
     hoisted.resolveStorePath.mockClear();
     hoisted.loadSessionStore.mockClear();
+    hoisted.listWebSearchProviders.mockReset();
+    hoisted.listWebSearchProviders.mockReturnValue([]);
+    hoisted.listWebFetchProviders.mockReset();
+    hoisted.listWebFetchProviders.mockReturnValue([]);
     hoisted.prepareWebSearchDefinition.mockClear();
     hoisted.prepareWebFetchDefinition.mockClear();
     hoisted.prepareWebContentExtractors.mockClear();
+    hoisted.prepareOpenClawToolsRuntime.mockClear();
+    hoisted.prepareWebFetchToolRuntime.mockClear();
+    hoisted.createBundleLspToolRuntime.mockClear();
     hoisted.listAgentIds.mockReset().mockReturnValue(["default"]);
     hoisted.resolveAgentWorkspaceDir
       .mockReset()
@@ -422,6 +445,42 @@ describe("reply-runtime readiness", () => {
     );
   });
 
+  it("warms configured allowlist model targets used for reply-time model switching", async () => {
+    hoisted.loadModelCatalog.mockResolvedValueOnce([
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
+      {
+        provider: "anthropic",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        reasoning: true,
+      },
+    ]);
+
+    const result = await prepareReplyRuntimeForChannels({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(hoisted.prepareSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        workspaceDir: "/tmp/openclaw-workspace",
+        primeReplyRuntimeCache: true,
+      }),
+    );
+  });
+
   it("primes PI auth profile candidates with the same runtime workspace", async () => {
     hoisted.loadModelCatalog.mockResolvedValueOnce([
       {
@@ -470,6 +529,48 @@ describe("reply-runtime readiness", () => {
         provider: "openai",
         modelId: "gpt-5.4",
         profileId: "openai:work",
+        workspaceDir: "/tmp/openclaw-workspace",
+        primeReplyRuntimeCache: true,
+      }),
+    );
+  });
+
+  it("primes the full provider-ordered PI auth profile candidate set", async () => {
+    hoisted.loadModelCatalog.mockResolvedValueOnce([
+      {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        reasoning: true,
+      },
+    ]);
+    hoisted.resolveAuthProfileOrder.mockReturnValueOnce(["openai:alpha", "openai:beta"]);
+    hoisted.resolveProviderAuthProfileId.mockReturnValueOnce("openai:beta");
+
+    const result = await prepareReplyRuntimeForChannels({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.4" },
+          },
+        },
+      } as OpenClawConfig,
+      workspaceDir: "/tmp/openclaw-workspace",
+    });
+
+    expect(result.status).toBe("ready");
+    expect(hoisted.prepareSimpleCompletionModel).toHaveBeenNthCalledWith(
+      3,
+      expect.objectContaining({
+        profileId: "openai:beta",
+        workspaceDir: "/tmp/openclaw-workspace",
+        primeReplyRuntimeCache: true,
+      }),
+    );
+    expect(hoisted.prepareSimpleCompletionModel).toHaveBeenNthCalledWith(
+      4,
+      expect.objectContaining({
+        profileId: "openai:alpha",
         workspaceDir: "/tmp/openclaw-workspace",
         primeReplyRuntimeCache: true,
       }),
@@ -526,7 +627,7 @@ describe("reply-runtime readiness", () => {
       workspaceDir: "/tmp/openclaw-workspace",
       provider: "openai",
       modelId: "gpt-5.4",
-      authProfileId: "openai-codex:work",
+      authProfileId: expect.any(String),
     });
     expect(callOrder).toEqual([
       "ensureRuntimePluginsLoaded",
@@ -656,6 +757,8 @@ describe("reply-runtime readiness", () => {
         },
       },
     } as OpenClawConfig;
+    hoisted.listWebSearchProviders.mockReturnValue([{ id: "perplexity" }, { id: "brave" }]);
+    hoisted.listWebFetchProviders.mockReturnValue([{ id: "firecrawl" }, { id: "jina" }]);
 
     const result = await prepareReplyRuntimeForChannels({
       cfg: config,
@@ -669,10 +772,45 @@ describe("reply-runtime readiness", () => {
         preferRuntimeProviders: true,
       }),
     );
+    expect(hoisted.prepareWebSearchDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        providerId: "perplexity",
+        preferRuntimeProviders: true,
+      }),
+    );
+    expect(hoisted.prepareWebSearchDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        providerId: "brave",
+        preferRuntimeProviders: true,
+      }),
+    );
     expect(hoisted.prepareWebFetchDefinition).toHaveBeenCalledWith(
       expect.objectContaining({
         config,
         preferRuntimeProviders: true,
+      }),
+    );
+    expect(hoisted.prepareWebFetchDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        providerId: "firecrawl",
+        preferRuntimeProviders: true,
+      }),
+    );
+    expect(hoisted.prepareWebFetchDefinition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        providerId: "jina",
+        preferRuntimeProviders: true,
+      }),
+    );
+    expect(hoisted.createBundleLspToolRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:default:main",
+        workspaceDir: "/tmp/openclaw-workspace",
+        cfg: config,
       }),
     );
     expect(hoisted.prepareWebContentExtractors).toHaveBeenCalledWith({ config });

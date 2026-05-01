@@ -10,6 +10,7 @@ import {
   mockedGlobalHookRunner,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
+  mockedResolvePreparedAuthProfileOrder,
   mockedRunEmbeddedAttempt,
   mockedRunPostCompactionSideEffects,
   overflowBaseRunParams,
@@ -20,6 +21,7 @@ let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
 
 const useTwoAuthProfiles = () => {
   mockedResolveAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
+  mockedResolvePreparedAuthProfileOrder.mockReturnValue(["profile-a", "profile-b"]);
   mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
     apiKey: `test-key-${profileId ?? "profile-a"}`,
     profileId: profileId ?? "profile-a",

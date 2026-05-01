@@ -1,9 +1,11 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import crypto from "node:crypto";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logDebug, logWarn } from "../logger.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { loadEmbeddedPiLspConfig } from "./embedded-pi-lsp.js";
 import {
@@ -47,6 +49,32 @@ export type BundleLspToolRuntime = {
   dispose: () => Promise<void>;
 };
 
+type SessionLspToolRuntime = {
+  cacheKey: string;
+  sessionId?: string;
+  sessionKey?: string;
+  workspaceDir: string;
+  configFingerprint: string;
+  createdAt: number;
+  lastUsedAt: number;
+  activeLeases: number;
+  tools: AnyAgentTool[];
+  sessions: Array<{ serverName: string; capabilities: LspServerCapabilities }>;
+  acquireLease: () => () => void;
+  markUsed: () => void;
+  dispose: () => Promise<void>;
+};
+
+type SessionLspToolRuntimeManager = {
+  getOrCreate: (params: {
+    sessionId?: string;
+    sessionKey?: string;
+    workspaceDir: string;
+    cfg?: OpenClawConfig;
+  }) => Promise<SessionLspToolRuntime>;
+  disposeAll: () => Promise<void>;
+};
+
 type LspPositionParams = {
   uri: string;
   line: number;
@@ -55,6 +83,9 @@ type LspPositionParams = {
 
 const LSP_SHUTDOWN_GRACE_MS = 500;
 const LSP_PROCESS_TREE_KILL_GRACE_MS = 1_000;
+const DEFAULT_SESSION_LSP_RUNTIME_IDLE_TTL_MS = 10 * 60 * 1000;
+const SESSION_LSP_RUNTIME_SWEEP_INTERVAL_MS = 60 * 1000;
+const SESSION_LSP_RUNTIME_MANAGER_KEY = Symbol.for("openclaw.sessionLspRuntimeManager");
 const activeBundleLspSessions = new Set<LspSession>();
 
 function delay(ms: number): Promise<void> {
@@ -261,6 +292,48 @@ async function disposeSessions(sessions: Iterable<LspSession>): Promise<void> {
   await Promise.allSettled(Array.from(sessions, (session) => disposeSession(session)));
 }
 
+function createConfigFingerprint(lspServers: Record<string, unknown>): string {
+  return crypto.createHash("sha1").update(JSON.stringify(lspServers)).digest("hex");
+}
+
+function loadSessionLspConfig(params: { workspaceDir: string; cfg?: OpenClawConfig }) {
+  const loaded = loadEmbeddedPiLspConfig({
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+  });
+  return {
+    loaded,
+    fingerprint: createConfigFingerprint(loaded.lspServers),
+  };
+}
+
+function resolveSessionLspRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
+  const raw = cfg?.mcp?.sessionIdleTtlMs;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
+    return Math.floor(raw);
+  }
+  return DEFAULT_SESSION_LSP_RUNTIME_IDLE_TTL_MS;
+}
+
+function resolveSessionLspRuntimeCacheKey(params: {
+  sessionId?: string;
+  sessionKey?: string;
+}): string {
+  const sessionKey = params.sessionKey?.trim();
+  if (sessionKey) {
+    return `session-key:${sessionKey}`;
+  }
+  const sessionId = params.sessionId?.trim();
+  if (sessionId) {
+    return `session-id:${sessionId}`;
+  }
+  throw new Error("bundle-lsp runtime reuse requires a sessionId or sessionKey.");
+}
+
+function createEmptyBundleLspRuntime(): BundleLspToolRuntime {
+  return { tools: [], sessions: [], dispose: async () => {} };
+}
+
 function createLspPositionTool(params: {
   session: LspSession;
   toolName: string;
@@ -377,30 +450,46 @@ function formatLspResult(
   };
 }
 
-export async function createBundleLspToolRuntime(params: {
+async function createSessionLspToolRuntime(params: {
+  cacheKey: string;
+  sessionId?: string;
+  sessionKey?: string;
   workspaceDir: string;
   cfg?: OpenClawConfig;
-  reservedToolNames?: Iterable<string>;
-}): Promise<BundleLspToolRuntime> {
-  const loaded = loadEmbeddedPiLspConfig({
+  configFingerprint?: string;
+}): Promise<SessionLspToolRuntime> {
+  const { loaded, fingerprint: discoveredFingerprint } = loadSessionLspConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
   });
   for (const diagnostic of loaded.diagnostics) {
     logWarn(`bundle-lsp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
-  // Skip spawning when no LSP servers are configured.
   if (Object.keys(loaded.lspServers).length === 0) {
-    return { tools: [], sessions: [], dispose: async () => {} };
+    return {
+      cacheKey: params.cacheKey,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      configFingerprint: params.configFingerprint ?? discoveredFingerprint,
+      createdAt: Date.now(),
+      lastUsedAt: Date.now(),
+      activeLeases: 0,
+      tools: [],
+      sessions: [],
+      acquireLease: () => () => {},
+      markUsed: () => {},
+      dispose: async () => {},
+    };
   }
 
-  const reservedNames = new Set(
-    Array.from(params.reservedToolNames ?? [], (name) =>
-      normalizeOptionalLowercaseString(name),
-    ).filter(Boolean),
-  );
   const sessions: LspSession[] = [];
   const tools: AnyAgentTool[] = [];
+  const reservedNames = new Set<string>();
+  const createdAt = Date.now();
+  let lastUsedAt = createdAt;
+  let activeLeases = 0;
+  let disposed = false;
 
   try {
     for (const [serverName, rawServer] of Object.entries(loaded.lspServers)) {
@@ -453,23 +542,283 @@ export async function createBundleLspToolRuntime(params: {
         );
       }
     }
-
-    return {
-      tools,
-      sessions: sessions.map((s) => ({
-        serverName: s.serverName,
-        capabilities: s.capabilities,
-      })),
-      dispose: async () => {
-        await disposeSessions(sessions);
-      },
-    };
   } catch (error) {
     await disposeSessions(sessions);
     throw error;
   }
+
+  tools.sort((left, right) => left.name.localeCompare(right.name));
+
+  return {
+    cacheKey: params.cacheKey,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+    configFingerprint: params.configFingerprint ?? discoveredFingerprint,
+    createdAt,
+    get lastUsedAt() {
+      return lastUsedAt;
+    },
+    get activeLeases() {
+      return activeLeases;
+    },
+    tools,
+    sessions: sessions.map((session) => ({
+      serverName: session.serverName,
+      capabilities: session.capabilities,
+    })),
+    acquireLease() {
+      activeLeases += 1;
+      let released = false;
+      return () => {
+        if (released) {
+          return;
+        }
+        released = true;
+        activeLeases = Math.max(0, activeLeases - 1);
+        lastUsedAt = Date.now();
+      };
+    },
+    markUsed() {
+      lastUsedAt = Date.now();
+    },
+    async dispose() {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      await disposeSessions(sessions);
+    },
+  };
+}
+
+async function materializeBundleLspToolsForRun(params: {
+  runtime: SessionLspToolRuntime;
+  reservedToolNames?: Iterable<string>;
+  disposeRuntime?: () => Promise<void>;
+}): Promise<BundleLspToolRuntime> {
+  let disposed = false;
+  const releaseLease = params.runtime.acquireLease();
+  params.runtime.markUsed();
+  const reservedNames = new Set(
+    Array.from(params.reservedToolNames ?? [], (name) =>
+      normalizeOptionalLowercaseString(name),
+    ).filter(Boolean),
+  );
+  const tools = params.runtime.tools.filter((tool) => {
+    const normalizedName = normalizeOptionalLowercaseString(tool.name);
+    if (!normalizedName || reservedNames.has(normalizedName)) {
+      return false;
+    }
+    reservedNames.add(normalizedName);
+    return true;
+  });
+  return {
+    tools,
+    sessions: params.runtime.sessions,
+    dispose: async () => {
+      if (disposed) {
+        return;
+      }
+      disposed = true;
+      releaseLease();
+      await params.disposeRuntime?.();
+    },
+  };
+}
+
+function createSessionLspToolRuntimeManager(): SessionLspToolRuntimeManager {
+  const runtimes = new Map<string, SessionLspToolRuntime>();
+  const inFlight = new Map<
+    string,
+    {
+      promise: Promise<SessionLspToolRuntime>;
+      workspaceDir: string;
+      configFingerprint: string;
+    }
+  >();
+  let sweepTimer: ReturnType<typeof setInterval> | undefined;
+  let sweepInFlight: Promise<void> | undefined;
+
+  const sweepIdleRuntimes = async (): Promise<void> => {
+    const nowMs = Date.now();
+    const expired: SessionLspToolRuntime[] = [];
+    for (const [cacheKey, runtime] of runtimes.entries()) {
+      const idleTtlMs = resolveSessionLspRuntimeIdleTtlMs();
+      if (idleTtlMs <= 0 || runtime.activeLeases > 0) {
+        continue;
+      }
+      if (nowMs - runtime.lastUsedAt < idleTtlMs) {
+        continue;
+      }
+      runtimes.delete(cacheKey);
+      expired.push(runtime);
+    }
+    await Promise.allSettled(expired.map((runtime) => runtime.dispose()));
+  };
+
+  const ensureSweepTimer = () => {
+    if (sweepTimer) {
+      return;
+    }
+    sweepTimer = setInterval(() => {
+      if (sweepInFlight) {
+        return;
+      }
+      sweepInFlight = sweepIdleRuntimes()
+        .catch((error: unknown) => {
+          logWarn(`bundle-lsp: idle runtime sweep failed: ${String(error)}`);
+        })
+        .finally(() => {
+          sweepInFlight = undefined;
+        });
+    }, SESSION_LSP_RUNTIME_SWEEP_INTERVAL_MS);
+    sweepTimer.unref?.();
+  };
+
+  return {
+    async getOrCreate(params) {
+      const cacheKey = resolveSessionLspRuntimeCacheKey(params);
+      const idleTtlMs = resolveSessionLspRuntimeIdleTtlMs(params.cfg);
+      if (idleTtlMs > 0) {
+        ensureSweepTimer();
+      }
+      await sweepIdleRuntimes();
+      const { fingerprint } = loadSessionLspConfig({
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+      });
+      const existing = runtimes.get(cacheKey);
+      if (existing) {
+        if (
+          existing.workspaceDir !== params.workspaceDir ||
+          existing.configFingerprint !== fingerprint
+        ) {
+          runtimes.delete(cacheKey);
+          await existing.dispose();
+        } else {
+          existing.markUsed();
+          return existing;
+        }
+      }
+      const pending = inFlight.get(cacheKey);
+      if (pending) {
+        if (
+          pending.workspaceDir === params.workspaceDir &&
+          pending.configFingerprint === fingerprint
+        ) {
+          return pending.promise;
+        }
+        inFlight.delete(cacheKey);
+        const stale = await pending.promise.catch(() => undefined);
+        await stale?.dispose();
+      }
+      const created = createSessionLspToolRuntime({
+        cacheKey,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        cfg: params.cfg,
+        configFingerprint: fingerprint,
+      }).then((runtime) => {
+        runtime.markUsed();
+        runtimes.set(cacheKey, runtime);
+        return runtime;
+      });
+      inFlight.set(cacheKey, {
+        promise: created,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: fingerprint,
+      });
+      try {
+        return await created;
+      } finally {
+        inFlight.delete(cacheKey);
+      }
+    },
+    async disposeAll() {
+      if (sweepTimer) {
+        clearInterval(sweepTimer);
+        sweepTimer = undefined;
+      }
+      const runtimesToDispose = Array.from(runtimes.values());
+      runtimes.clear();
+      const pending = Array.from(inFlight.values());
+      inFlight.clear();
+      const lateRuntimes = await Promise.all(
+        pending.map(async ({ promise }) => await promise.catch(() => undefined)),
+      );
+      const allRuntimes = new Set<SessionLspToolRuntime>(runtimesToDispose);
+      for (const runtime of lateRuntimes) {
+        if (runtime) {
+          allRuntimes.add(runtime);
+        }
+      }
+      await Promise.allSettled(Array.from(allRuntimes, (runtime) => runtime.dispose()));
+    },
+  };
+}
+
+export async function getOrCreateSessionLspRuntime(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+}): Promise<SessionLspToolRuntime> {
+  const manager = resolveGlobalSingleton(
+    SESSION_LSP_RUNTIME_MANAGER_KEY,
+    createSessionLspToolRuntimeManager,
+  );
+  return await manager.getOrCreate(params);
+}
+
+export async function createBundleLspToolRuntime(params: {
+  workspaceDir: string;
+  cfg?: OpenClawConfig;
+  reservedToolNames?: Iterable<string>;
+  sessionId?: string;
+  sessionKey?: string;
+}): Promise<BundleLspToolRuntime> {
+  if (params.sessionId?.trim() || params.sessionKey?.trim()) {
+    const runtime = await getOrCreateSessionLspRuntime({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      workspaceDir: params.workspaceDir,
+      cfg: params.cfg,
+    });
+    return await materializeBundleLspToolsForRun({
+      runtime,
+      reservedToolNames: params.reservedToolNames,
+    });
+  }
+  const runtime = await createSessionLspToolRuntime({
+    cacheKey: `one-off:${crypto.randomUUID()}`,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+    cfg: params.cfg,
+  });
+  if (runtime.tools.length === 0 && runtime.sessions.length === 0) {
+    return createEmptyBundleLspRuntime();
+  }
+  return await materializeBundleLspToolsForRun({
+    runtime,
+    reservedToolNames: params.reservedToolNames,
+    disposeRuntime: async () => {
+      await runtime.dispose();
+    },
+  });
 }
 
 export async function disposeAllBundleLspRuntimes(): Promise<void> {
+  const manager = resolveGlobalSingleton(
+    SESSION_LSP_RUNTIME_MANAGER_KEY,
+    createSessionLspToolRuntimeManager,
+  );
+  await manager.disposeAll();
   await disposeSessions(activeBundleLspSessions);
 }
+
+export const __testing = {
+  resolveSessionLspRuntimeCacheKey,
+};

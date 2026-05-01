@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -16,6 +17,8 @@ const mocks = vi.hoisted(() => {
   return {
     stubTool,
     createCronToolOptions: vi.fn(),
+    createImageTool: vi.fn(() => stubTool("image")),
+    createPdfTool: vi.fn(() => stubTool("pdf")),
     createWebFetchTool: vi.fn(() => stubTool("web_fetch")),
     createWebSearchTool: vi.fn(() => stubTool("web_search")),
     textToSpeech: vi.fn(async () => ({
@@ -59,7 +62,8 @@ vi.mock("./tools/image-generate-tool.js", () => ({
 }));
 
 vi.mock("./tools/image-tool.js", () => ({
-  createImageTool: () => mocks.stubTool("image"),
+  createImageTool: (...args: Parameters<typeof mocks.createImageTool>) =>
+    mocks.createImageTool(...args),
 }));
 
 vi.mock("./tools/message-tool.js", () => ({
@@ -75,7 +79,7 @@ vi.mock("./tools/nodes-tool.js", () => ({
 }));
 
 vi.mock("./tools/pdf-tool.js", () => ({
-  createPdfTool: () => mocks.stubTool("pdf"),
+  createPdfTool: (...args: Parameters<typeof mocks.createPdfTool>) => mocks.createPdfTool(...args),
 }));
 
 vi.mock("./tools/session-status-tool.js", () => ({
@@ -126,11 +130,15 @@ vi.mock("../tts/tts.js", () => ({
 }));
 
 describe("createOpenClawTools TTS config wiring", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     mocks.createCronToolOptions.mockClear();
+    mocks.createImageTool.mockClear();
+    mocks.createPdfTool.mockClear();
     mocks.createWebFetchTool.mockClear();
     mocks.createWebSearchTool.mockClear();
     mocks.textToSpeech.mockClear();
+    const { __testing } = await import("./openclaw-tools.js");
+    __testing.resetPreparedReusableToolSurfaceCacheForTest();
   });
 
   it("passes the resolved shared config into the tts tool", async () => {
@@ -273,6 +281,39 @@ describe("createOpenClawTools TTS config wiring", () => {
 
     expect(first.map((tool) => tool.name)).toEqual(["web_search", "web_fetch"]);
     expect(second.map((tool) => tool.name)).toEqual(["web_search", "web_fetch"]);
+    expect(mocks.createWebSearchTool).toHaveBeenCalledTimes(1);
+    expect(mocks.createWebFetchTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses prepared stable heavy tools for equivalent sandbox surfaces", async () => {
+    const { createOpenClawTools } = await import("./openclaw-tools.js");
+    const sandboxFsBridge = {} as SandboxFsBridge;
+
+    const first = createOpenClawTools({
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      sandboxRoot: "/tmp/openclaw-sandbox",
+      sandboxFsBridge,
+      sandboxed: true,
+      toolAllowlist: ["image", "pdf", "web_search", "web_fetch"],
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+    const second = createOpenClawTools({
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      sandboxRoot: "/tmp/openclaw-sandbox",
+      sandboxFsBridge,
+      sandboxed: true,
+      toolAllowlist: ["image", "pdf", "web_search", "web_fetch"],
+      disableMessageTool: true,
+      disablePluginTools: true,
+    });
+
+    expect(first.map((tool) => tool.name)).toEqual(["web_search", "web_fetch", "image", "pdf"]);
+    expect(second.map((tool) => tool.name)).toEqual(["web_search", "web_fetch", "image", "pdf"]);
+    expect(mocks.createImageTool).toHaveBeenCalledTimes(1);
+    expect(mocks.createPdfTool).toHaveBeenCalledTimes(1);
     expect(mocks.createWebSearchTool).toHaveBeenCalledTimes(1);
     expect(mocks.createWebFetchTool).toHaveBeenCalledTimes(1);
   });

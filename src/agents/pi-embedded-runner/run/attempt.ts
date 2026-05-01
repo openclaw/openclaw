@@ -994,6 +994,8 @@ export async function runEmbeddedAttempt(
     const bundleLspRuntime =
       toolsEnabled && !isRawModelRun
         ? await createBundleLspToolRuntime({
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
             workspaceDir: effectiveWorkspace,
             cfg: params.config,
             reservedToolNames: [

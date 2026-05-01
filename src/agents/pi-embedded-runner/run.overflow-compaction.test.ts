@@ -22,6 +22,7 @@ import {
   mockedGetApiKeyForModel,
   mockedPickFallbackThinkingLevel,
   mockedResolveAuthProfileOrder,
+  mockedResolvePreparedAuthProfileOrder,
   mockedResolveContextWindowInfo,
   mockedResolveFailoverStatus,
   mockedRunContextEngineMaintenance,
@@ -477,6 +478,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockedGetApiKeyForModel.mockRejectedValueOnce(new Error("generic auth should be skipped"));
     mockedResolveAuthProfileOrder.mockReturnValueOnce(["openai-codex:default"]);
+    mockedResolvePreparedAuthProfileOrder.mockReturnValueOnce(["openai-codex:default"]);
 
     try {
       await runEmbeddedPiAgent({
@@ -497,7 +499,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     }
 
     expect(mockedGetApiKeyForModel).not.toHaveBeenCalled();
-    expect(mockedResolveAuthProfileOrder).toHaveBeenCalledWith(
+    expect(mockedResolvePreparedAuthProfileOrder).toHaveBeenCalledWith(
       expect.objectContaining({
         provider: "openai-codex",
       }),

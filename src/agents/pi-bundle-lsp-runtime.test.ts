@@ -138,4 +138,35 @@ describe("bundle LSP runtime", () => {
     await runtime.dispose();
     expect(killProcessTreeMock).not.toHaveBeenCalled();
   });
+
+  it("reuses session-scoped LSP runtimes across repeated runs", async () => {
+    configureSingleLspServer();
+    const child = new MockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const { createBundleLspToolRuntime } = await import("./pi-bundle-lsp-runtime.js");
+
+    const first = await createBundleLspToolRuntime({
+      sessionId: "session-1",
+      sessionKey: "agent/main",
+      workspaceDir: "/tmp/workspace",
+    });
+    const second = await createBundleLspToolRuntime({
+      sessionId: "session-1",
+      sessionKey: "agent/main",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(first.tools.map((tool) => tool.name)).toEqual(second.tools.map((tool) => tool.name));
+
+    await first.dispose();
+    expect(killProcessTreeMock).not.toHaveBeenCalled();
+
+    await second.dispose();
+    expect(killProcessTreeMock).not.toHaveBeenCalled();
+
+    const { disposeAllBundleLspRuntimes } = await import("./pi-bundle-lsp-runtime.js");
+    await disposeAllBundleLspRuntimes();
+    expect(killProcessTreeMock).toHaveBeenCalledWith(4321, { graceMs: 1000 });
+  });
 });
