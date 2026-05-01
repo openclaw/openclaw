@@ -267,7 +267,7 @@ function escapeRegExp(value: string): string {
 
 function extractSection(content: string, title: string): string | undefined {
   const pattern = new RegExp(
-    `^##\\s+${escapeRegExp(title)}\\s*$([\\s\\S]*?)(?=^##\\s+|\\Z)`,
+    `^##\\s+${escapeRegExp(title)}\\s*$([\\s\\S]*?)(?=^##\\s+|(?![\\s\\S]))`,
     "gim",
   );
   const match = pattern.exec(content);

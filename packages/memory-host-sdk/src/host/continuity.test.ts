@@ -60,6 +60,9 @@ describe("parseContinuityDocument", () => {
     expect(parsed.blockers).toEqual(["Need stable parsing"]);
     expect(parsed.nextSteps).toEqual(["Wire post-compaction context"]);
     expect(parsed.keyArtifacts).toEqual(["src/memory/continuity.ts"]);
+    expect(parsed.conversationSummary).toBe(
+      "The user wants a lighter but more resilient memory system.",
+    );
   });
 
   it("parses legacy markdown field headers", () => {
