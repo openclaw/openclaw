@@ -113,6 +113,37 @@ describe("package dist inventory", () => {
     });
   });
 
+  it("keeps transient plugin dependency trees out of the inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-plugin-deps-" }, async (packageRoot) => {
+      const realFile = path.join(packageRoot, "dist", "index.js");
+      const rootDependencyPackage = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "node_modules",
+        "openclaw",
+        "package.json",
+      );
+      const pluginDependencyPackage = path.join(
+        packageRoot,
+        "dist",
+        "extensions",
+        "slack",
+        "node_modules",
+        "left-pad",
+        "package.json",
+      );
+      await fs.mkdir(path.dirname(realFile), { recursive: true });
+      await fs.mkdir(path.dirname(rootDependencyPackage), { recursive: true });
+      await fs.mkdir(path.dirname(pluginDependencyPackage), { recursive: true });
+      await fs.writeFile(realFile, "export {};\n", "utf8");
+      await fs.writeFile(rootDependencyPackage, "{}", "utf8");
+      await fs.writeFile(pluginDependencyPackage, "{}", "utf8");
+
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual(["dist/index.js"]);
+    });
+  });
+
   it("reports runtime-created install staging dirs during installed dist verification", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
       const realFile = path.join(packageRoot, "dist", "real-AbC123.js");

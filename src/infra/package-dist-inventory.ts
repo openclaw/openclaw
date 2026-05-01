@@ -46,6 +46,21 @@ function isInstallStageDirName(value: string): boolean {
   return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
 }
 
+function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
+  const parts = normalizeRelativePath(relativePath).split("/");
+  if (parts[0]?.toLowerCase() !== "dist" || parts[1]?.toLowerCase() !== "extensions") {
+    return false;
+  }
+
+  const rootDependencyDir = parts[2] ?? "";
+  if (rootDependencyDir.toLowerCase() === "node_modules") {
+    return true;
+  }
+
+  const pluginDependencyDir = parts[3] ?? "";
+  return pluginDependencyDir.toLowerCase() === "node_modules";
+}
+
 export function isLegacyPluginDependencyInstallStagePath(relativePath: string): boolean {
   const parts = normalizeRelativePath(relativePath).split("/");
   return (
@@ -59,6 +74,9 @@ export function isLegacyPluginDependencyInstallStagePath(relativePath: string): 
 
 function isPackagedDistPath(relativePath: string): boolean {
   if (!relativePath.startsWith("dist/")) {
+    return false;
+  }
+  if (isLegacyPluginDependencyDirPath(relativePath)) {
     return false;
   }
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
@@ -87,7 +105,10 @@ function isPackagedDistPath(relativePath: string): boolean {
 }
 
 function isOmittedDistSubtree(relativePath: string): boolean {
-  return OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath));
+  return (
+    isLegacyPluginDependencyDirPath(relativePath) ||
+    OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
+  );
 }
 
 async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<string[]> {
