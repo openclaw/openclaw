@@ -124,11 +124,7 @@ export type DiagnosticSessionStateEvent = DiagnosticBaseEvent & {
   queueDepth?: number;
 };
 
-export type DiagnosticSessionActiveWorkKind =
-  | "embedded_run"
-  | "model_call"
-  | "tool_call"
-  | "queued_work";
+export type DiagnosticSessionActiveWorkKind = "embedded_run" | "model_call" | "tool_call";
 
 export type DiagnosticSessionAttentionClassification =
   | "long_running"
