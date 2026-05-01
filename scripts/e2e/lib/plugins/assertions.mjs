@@ -253,10 +253,11 @@ function assertGitPlugin() {
   if (!installPath || !fs.existsSync(installPath)) {
     throw new Error(`git install path missing on disk: ${installPath}`);
   }
-  const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
-  if (!installPath.startsWith(`${extensionsRoot}${path.sep}`)) {
-    throw new Error(`git install path is outside managed extensions root: ${installPath}`);
+  const gitRoot = path.join(process.env.HOME, ".openclaw", "git");
+  if (!installPath.endsWith(`${path.sep}repo`)) {
+    throw new Error(`git install path should point at cloned repo root: ${installPath}`);
   }
+  assertRealPathInside(gitRoot, installPath, "git install path");
 }
 
 function assertRealPathInside(parentPath, childPath, label) {
