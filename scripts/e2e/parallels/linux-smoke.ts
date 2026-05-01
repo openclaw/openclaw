@@ -437,8 +437,23 @@ class LinuxSmoke {
     this.guestExec(["hwclock", "--systohc"], { check: false });
     this.guestExec(["timedatectl", "set-ntp", "true"], { check: false });
     this.guestExec(["systemctl", "restart", "systemd-timesyncd"], { check: false });
-    this.guestExec(["apt-get", "-o", "Acquire::Check-Date=false", "update"]);
-    this.guestExec(["apt-get", "install", "-y", "curl", "ca-certificates"]);
+    this.guestExec([
+      "apt-get",
+      "-o",
+      "Acquire::Check-Date=false",
+      "-o",
+      "DPkg::Lock::Timeout=300",
+      "update",
+    ]);
+    this.guestExec([
+      "apt-get",
+      "-o",
+      "DPkg::Lock::Timeout=300",
+      "install",
+      "-y",
+      "curl",
+      "ca-certificates",
+    ]);
   }
 
   private installLatestRelease(): void {

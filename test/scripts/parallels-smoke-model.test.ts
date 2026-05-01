@@ -213,6 +213,12 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     }
   });
 
+  it("waits for apt locks during Linux snapshot bootstrap", () => {
+    const script = readFileSync(TS_PATHS.linux, "utf8");
+
+    expect(script).toContain("DPkg::Lock::Timeout=300");
+  });
+
   it("resolves provider defaults and explicit model overrides", () => {
     expect(resolveProviderAuth("openai", { env: { OPENAI_API_KEY: "sk-openai" } })).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
