@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  TOOL_DISPLAY_CONFIG,
-  serializeToolDisplayConfig,
-} from "../src/agents/tool-display-config.js";
+import { TOOL_DISPLAY_CONFIG } from "../src/agents/tool-display-config.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -28,7 +25,7 @@ if (!shouldCheck && !shouldWrite) {
   process.exit(1);
 }
 
-const expected = serializeToolDisplayConfig();
+const expected = `${JSON.stringify(TOOL_DISPLAY_CONFIG, null, 2)}\n`;
 ensureCoreToolCoverage();
 
 if (shouldWrite) {
