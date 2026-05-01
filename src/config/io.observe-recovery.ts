@@ -4,8 +4,10 @@ import { isRecord } from "../utils.js";
 import {
   appendConfigAuditRecord,
   appendConfigAuditRecordSync,
+  snapshotConfigAuditProcessInfo,
   type ConfigObserveAuditRecord,
 } from "./io.audit.js";
+import { formatConfigIssueSummary } from "./issue-format.js";
 import { resolveStateDir } from "./paths.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
@@ -142,11 +144,7 @@ function createConfigObserveAuditRecord(params: {
     event: "config.observe",
     phase: "read",
     configPath: params.configPath,
-    pid: process.pid,
-    ppid: process.ppid,
-    cwd: process.cwd(),
-    argv: process.argv.slice(0, 8),
-    execArgv: process.execArgv.slice(0, 8),
+    ...snapshotConfigAuditProcessInfo(),
     exists: true,
     valid: params.valid,
     hash: params.current.hash,
@@ -1068,8 +1066,9 @@ export async function recoverConfigFromLastKnownGood(params: {
   });
   await deps.fs.promises.copyFile(lastGoodPath, snapshot.path);
   await deps.fs.promises.chmod?.(snapshot.path, 0o600).catch(() => {});
+  const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
   deps.logger.warn(
-    `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})`,
+    `Config auto-restored from last-known-good: ${snapshot.path} (${params.reason})${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
   );
   await appendConfigAuditRecord(
     createConfigObserveAuditAppendParams(deps, {

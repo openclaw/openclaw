@@ -120,7 +120,11 @@ function resolveSlackBlocks(payload: {
     | undefined;
   const nativeBlocks = parseSlackBlocksInput(slackData?.blocks) as SlackBlock[] | undefined;
   const renderedPresentation =
-    slackData?.presentationBlocks ?? buildSlackPresentationBlocks(payload.presentation);
+    slackData?.presentationBlocks ??
+    buildSlackPresentationBlocks(
+      payload.presentation,
+      resolveSlackInteractiveBlockOffsets(nativeBlocks),
+    );
   const previousBlocks = [...(nativeBlocks ?? []), ...renderedPresentation];
   const renderedInteractive = resolveRenderedInteractiveBlocks(payload.interactive, previousBlocks);
   const mergedBlocks = [...previousBlocks, ...(renderedInteractive ?? [])];
@@ -147,16 +151,23 @@ export const slackOutbound: ChannelOutboundAdapter = {
     context: true,
     divider: true,
   },
-  renderPresentation: ({ payload, presentation }) => ({
-    ...payload,
-    channelData: {
-      ...payload.channelData,
-      slack: {
-        ...(payload.channelData?.slack as Record<string, unknown> | undefined),
-        presentationBlocks: buildSlackPresentationBlocks(presentation),
+  renderPresentation: ({ payload, presentation }) => {
+    const slackData = payload.channelData?.slack as Record<string, unknown> | undefined;
+    const nativeBlocks = parseSlackBlocksInput(slackData?.blocks) as SlackBlock[] | undefined;
+    return {
+      ...payload,
+      channelData: {
+        ...payload.channelData,
+        slack: {
+          ...slackData,
+          presentationBlocks: buildSlackPresentationBlocks(
+            presentation,
+            resolveSlackInteractiveBlockOffsets(nativeBlocks),
+          ),
+        },
       },
-    },
-  }),
+    };
+  },
   sendPayload: async (ctx) => {
     const payload = {
       ...ctx.payload,

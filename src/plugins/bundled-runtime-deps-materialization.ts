@@ -52,6 +52,14 @@ function sameRuntimeDepSpecs(left: readonly string[], right: readonly string[]):
   );
 }
 
+function runtimeDepSpecsIncludeAll(
+  candidate: readonly string[],
+  required: readonly string[],
+): boolean {
+  const candidateSet = new Set(normalizeRuntimeDepSpecs(candidate));
+  return normalizeRuntimeDepSpecs(required).every((spec) => candidateSet.has(spec));
+}
+
 function readInstalledRuntimeDepPackage(
   rootDir: string,
   depName: string,
@@ -129,7 +137,7 @@ export function isRuntimeDepsPlanMaterialized(
     generatedManifestSpecs !== null ? null : readPackageRuntimeDepSpecs(installRoot);
   return (
     ((generatedManifestSpecs !== null &&
-      sameRuntimeDepSpecs(generatedManifestSpecs, installSpecs)) ||
+      runtimeDepSpecsIncludeAll(generatedManifestSpecs, installSpecs)) ||
       (packageManifestSpecs !== null && sameRuntimeDepSpecs(packageManifestSpecs, installSpecs))) &&
     hasSatisfiedInstallSpecPackages(installRoot, installSpecs)
   );
@@ -166,7 +174,7 @@ function createNpmInstallExecutionManifest(installSpecs: readonly string[]): Jso
   return {
     name: "openclaw-runtime-deps-install",
     private: true,
-    ...(Object.keys(sortedDependencies).length > 0 ? { dependencies: sortedDependencies } : {}),
+    dependencies: sortedDependencies,
   };
 }
 

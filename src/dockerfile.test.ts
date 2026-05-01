@@ -146,6 +146,24 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain('\\"fpr\\"');
   });
 
+  it("counts primary pub keys before Docker apt fingerprint compare and dearmor", async () => {
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const anchor = dockerfile.indexOf(
+      "curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc",
+    );
+    expect(anchor).toBeGreaterThan(-1);
+    const slice = dockerfile.slice(anchor);
+    expect(slice).toContain("docker_gpg_pub_count=");
+    expect(slice).toContain('$1 == "pub"');
+    expect(slice).not.toContain('\\"pub\\"');
+    const pubCountIdx = slice.indexOf("docker_gpg_pub_count=");
+    const fpIdx = slice.indexOf("actual_fingerprint=");
+    const dearmorIdx = slice.indexOf("gpg --dearmor");
+    expect(pubCountIdx).toBeLessThan(fpIdx);
+    expect(fpIdx).toBeLessThan(dearmorIdx);
+    expect(slice).toContain('[ "$docker_gpg_pub_count" != "1" ]');
+  });
+
   it("keeps runtime pnpm available", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("ENV COREPACK_HOME=/usr/local/share/corepack");
