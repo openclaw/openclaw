@@ -36,7 +36,6 @@ export function parseLaneSelection(raw) {
     return [];
   }
   const laneAliases = new Map([
-    ["bundled-channel-deps", ["bundled-channel-deps-compat"]],
     ["install-e2e", ["install-e2e-openai", "install-e2e-anthropic"]],
     [
       "bundled-plugin-install-uninstall",

@@ -144,8 +144,6 @@ describe("docker build helper", () => {
     expect(scenarios).toContain("`bundled-plugin-install-uninstall-${index}`");
     expect(scenarios).toContain("pnpm test:docker:bundled-plugin-install-uninstall");
     expect(scenarios).toContain("OPENCLAW_PLUGINS_E2E_CLAWHUB=0");
-    expect(scenarios).toContain('"bundled-channel-deps-compat"');
-    expect(scenarios).toContain("test:docker:bundled-channel-deps:fast");
   });
 
   it("allows plugin update smoke to tolerate config metadata migrations", () => {

@@ -27,7 +27,6 @@ type ProviderRuntimePluginLookupParams = {
   applyAutoEnable?: boolean;
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
-  installBundledRuntimeDeps?: boolean;
 };
 
 function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
@@ -52,7 +51,6 @@ function resolveProviderRuntimePluginCacheKey(params: ProviderRuntimePluginLooku
     applyAutoEnable: params.applyAutoEnable ?? null,
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? null,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? null,
   });
 }
 
@@ -84,7 +82,6 @@ export function resolveProviderPluginsForHooks(params: {
   applyAutoEnable?: boolean;
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
-  installBundledRuntimeDeps?: boolean;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -97,7 +94,6 @@ export function resolveProviderPluginsForHooks(params: {
       applyAutoEnable: params.applyAutoEnable,
       bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
       bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
-      installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     })
   ) {
     return [];
@@ -110,7 +106,6 @@ export function resolveProviderPluginsForHooks(params: {
     applyAutoEnable: params.applyAutoEnable,
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   });
   return resolved;
 }
@@ -135,7 +130,6 @@ export function resolveProviderRuntimePlugin(
     applyAutoEnable: params.applyAutoEnable,
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   }).find((plugin) => {
     if (apiOwnerHint) {
       return (

@@ -63,8 +63,7 @@ describe("listBundledChannelCatalogEntries", () => {
     // Regression gate for the onboard crash on globally installed CLI: in a
     // published install, resolveBundledPluginsDir returns <pkgRoot>/dist/extensions.
     // Verify the loader iterates that tree and surfaces bundled channels such as
-    // telegram, which are not in dist/channel-catalog.json (filtered to
-    // release.publishToNpm === true) and therefore invisible to the fallback.
+    // telegram, even when they are not in dist/channel-catalog.json.
     const root = seedRoot("bcr-resolved-");
     const extensionsRoot = path.join(root, "dist", "extensions");
     seedChannelPkg(path.join(extensionsRoot, "telegram", "package.json"), {
@@ -80,11 +79,40 @@ describe("listBundledChannelCatalogEntries", () => {
 
     const entries = listBundledChannelCatalogEntries();
 
-    const ids = entries.map((entry) => entry.id).toSorted();
-    expect(ids).toEqual(["imessage", "telegram"]);
+    const ids = entries.map((entry) => entry.id);
+    expect(ids).toEqual(expect.arrayContaining(["imessage", "telegram"]));
     const telegram = entries.find((entry) => entry.id === "telegram");
     expect(telegram?.channel.docsPath).toBe("/channels/telegram");
     expect(telegram?.channel.label).toBe("Telegram");
+  });
+
+  it("merges downloadable official catalog channels with bundled channels", () => {
+    const root = seedRoot("bcr-merge-official-");
+    const extensionsRoot = path.join(root, "dist", "extensions");
+    seedChannelPkg(path.join(extensionsRoot, "telegram", "package.json"), {
+      id: "telegram",
+      docsPath: "/channels/telegram",
+      label: "Telegram",
+    });
+    writeJsonFile(path.join(root, "dist", "channel-catalog.json"), {
+      entries: [
+        {
+          name: "@openclaw/qqbot",
+          openclaw: {
+            channel: {
+              id: "qqbot",
+              label: "QQ Bot",
+              docsPath: "/channels/qqbot",
+              blurb: "downloadable channel",
+            },
+          },
+        },
+      ],
+    });
+    vi.mocked(resolveBundledPluginsDir).mockReturnValue(extensionsRoot);
+
+    const entries = listBundledChannelCatalogEntries();
+    expect(entries.map((entry) => entry.id)).toEqual(expect.arrayContaining(["qqbot", "telegram"]));
   });
 
   it("falls back to dist/channel-catalog.json when the resolver returns undefined", () => {

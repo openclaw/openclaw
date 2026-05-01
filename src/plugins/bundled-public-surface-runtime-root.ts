@@ -1,13 +1,13 @@
 import path from "node:path";
-import {
-  isBuiltBundledPluginRuntimeRoot,
-  prepareBundledPluginRuntimeRoot,
-} from "./bundled-runtime-root.js";
 
 export type BundledPublicSurfaceLocation = {
   modulePath: string;
   boundaryRoot: string;
 };
+
+function isBuiltBundledPluginRoot(rootDir: string): boolean {
+  return rootDir.replace(/\\/g, "/").includes("/dist/extensions/");
+}
 
 export function resolveBuiltBundledPluginRootFromModulePath(params: {
   modulePath: string;
@@ -16,10 +16,7 @@ export function resolveBuiltBundledPluginRootFromModulePath(params: {
   const resolvedModulePath = path.resolve(params.modulePath);
   let currentDir = path.dirname(resolvedModulePath);
   while (true) {
-    if (
-      path.basename(currentDir) === params.pluginId &&
-      isBuiltBundledPluginRuntimeRoot(currentDir)
-    ) {
+    if (path.basename(currentDir) === params.pluginId && isBuiltBundledPluginRoot(currentDir)) {
       const relativePath = path.relative(currentDir, resolvedModulePath);
       if (!relativePath.startsWith("..") && !path.isAbsolute(relativePath)) {
         return currentDir;
@@ -39,24 +36,5 @@ export function prepareBuiltBundledPluginPublicSurfaceLocation(params: {
   env?: NodeJS.ProcessEnv;
   installRuntimeDeps?: boolean;
 }): BundledPublicSurfaceLocation {
-  if (params.installRuntimeDeps === false) {
-    return params.location;
-  }
-  const pluginRoot = resolveBuiltBundledPluginRootFromModulePath({
-    modulePath: params.location.modulePath,
-    pluginId: params.pluginId,
-  });
-  if (!pluginRoot) {
-    return params.location;
-  }
-  const prepared = prepareBundledPluginRuntimeRoot({
-    pluginId: params.pluginId,
-    pluginRoot,
-    modulePath: params.location.modulePath,
-    ...(params.env ? { env: params.env } : {}),
-  });
-  return {
-    modulePath: prepared.modulePath,
-    boundaryRoot: prepared.pluginRoot,
-  };
+  return params.location;
 }

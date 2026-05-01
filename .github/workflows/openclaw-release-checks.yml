@@ -440,7 +440,7 @@ jobs:
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       suite_profile: custom
-      docker_lanes: bundled-channel-deps-compat plugins-offline
+      docker_lanes: plugins-offline plugin-update
       telegram_mode: mock-openai
       telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating
     secrets:

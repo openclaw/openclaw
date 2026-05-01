@@ -3,15 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  createBundledRuntimeDependencyInstallArgs,
-  createBundledRuntimeDependencyInstallEnv,
-  createNestedNpmInstallEnv,
-} from "../../scripts/lib/bundled-runtime-deps-install.mjs";
-import {
   isDirectPostinstallInvocation,
   pruneOpenClawCompileCache,
   pruneInstalledPackageDist,
-  discoverBundledPluginRuntimeDeps,
   pruneBundledPluginSourceNodeModules,
   runBundledPluginPostinstall,
   runPluginRegistryPostinstallMigration,
@@ -65,77 +59,6 @@ describe("bundled plugin postinstall", () => {
         realpathSync,
       }),
     ).toBe(true);
-  });
-
-  async function writeDiscordDaveyOptionalDependencyFixture(
-    extensionsDir: string,
-    packageRoot: string,
-  ) {
-    await writePluginPackage(extensionsDir, "discord", {
-      dependencies: {
-        "@snazzah/davey": "0.1.11",
-      },
-    });
-    await fs.mkdir(path.join(packageRoot, "node_modules", "@snazzah", "davey"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(packageRoot, "node_modules", "@snazzah", "davey", "package.json"),
-      JSON.stringify({
-        optionalDependencies: {
-          "@snazzah/davey-win32-arm64-msvc": "0.1.11",
-        },
-      }),
-    );
-  }
-
-  it("clears global npm config before nested installs", () => {
-    expect(
-      createNestedNpmInstallEnv({
-        NPM_CONFIG_WORKSPACES: "true",
-        npm_config_global: "true",
-        npm_config_include_workspace_root: "true",
-        npm_config_ignore_scripts: "false",
-        npm_config_location: "global",
-        npm_config_prefix: "/opt/homebrew",
-        npm_config_workspace: "extensions/telegram",
-        npm_config_workspaces: "true",
-        HOME: "/tmp/home",
-      }),
-    ).toEqual({
-      HOME: "/tmp/home",
-    });
-  });
-
-  it("uses package-manager-neutral runtime install args with npm config env", () => {
-    expect(createBundledRuntimeDependencyInstallArgs(["acpx@0.4.1"])).toEqual([
-      "install",
-      "--ignore-scripts",
-      "--workspaces=false",
-      "acpx@0.4.1",
-    ]);
-    expect(
-      createBundledRuntimeDependencyInstallEnv({
-        HOME: "/tmp/home",
-        NPM_CONFIG_IGNORE_SCRIPTS: "false",
-        npm_config_dry_run: "true",
-        npm_config_ignore_scripts: "false",
-        npm_config_prefix: "/opt/homebrew",
-        npm_config_workspaces: "true",
-      }),
-    ).toEqual({
-      HOME: "/tmp/home",
-      npm_config_dry_run: "false",
-      npm_config_fetch_retries: "5",
-      npm_config_fetch_retry_maxtimeout: "120000",
-      npm_config_fetch_retry_mintimeout: "10000",
-      npm_config_fetch_timeout: "300000",
-      npm_config_ignore_scripts: "true",
-      npm_config_legacy_peer_deps: "true",
-      npm_config_package_lock: "false",
-      npm_config_save: "false",
-      npm_config_workspaces: "false",
-    });
   });
 
   it("does not install bundled plugin deps outside of source checkouts by default", async () => {
@@ -715,81 +638,6 @@ describe("bundled plugin postinstall", () => {
     });
 
     expect(spawnSync).not.toHaveBeenCalled();
-  });
-
-  it("does not reinstall when only another platform optional native child is missing", async () => {
-    const extensionsDir = await createExtensionsDir();
-    const packageRoot = path.dirname(path.dirname(extensionsDir));
-    await writeDiscordDaveyOptionalDependencyFixture(extensionsDir, packageRoot);
-    const spawnSync = vi.fn();
-
-    runBundledPluginPostinstall({
-      env: { HOME: "/tmp/home" },
-      extensionsDir,
-      packageRoot,
-      arch: "arm64",
-      platform: "darwin",
-      spawnSync,
-      log: { log: vi.fn(), warn: vi.fn() },
-    });
-
-    expect(spawnSync).not.toHaveBeenCalled();
-  });
-
-  it("discovers bundled plugin runtime deps from extension manifests", async () => {
-    const extensionsDir = await createExtensionsDir();
-    await writePluginPackage(extensionsDir, "slack", {
-      dependencies: {
-        "@slack/web-api": "7.11.0",
-      },
-    });
-    await writePluginPackage(extensionsDir, "amazon-bedrock", {
-      dependencies: {
-        "@aws-sdk/client-bedrock": "3.1020.0",
-      },
-    });
-
-    expect(discoverBundledPluginRuntimeDeps({ extensionsDir })).toEqual(
-      expect.arrayContaining([
-        {
-          name: "@slack/web-api",
-          pluginIds: ["slack"],
-          sentinelPath: path.join("node_modules", "@slack", "web-api", "package.json"),
-          version: "7.11.0",
-        },
-        {
-          name: "@aws-sdk/client-bedrock",
-          pluginIds: ["amazon-bedrock"],
-          sentinelPath: path.join("node_modules", "@aws-sdk", "client-bedrock", "package.json"),
-          version: "3.1020.0",
-        },
-      ]),
-    );
-  });
-
-  it("merges duplicate bundled runtime deps across plugins", async () => {
-    const extensionsDir = await createExtensionsDir();
-    await writePluginPackage(extensionsDir, "slack", {
-      dependencies: {
-        "https-proxy-agent": "^8.0.0",
-      },
-    });
-    await writePluginPackage(extensionsDir, "feishu", {
-      dependencies: {
-        "https-proxy-agent": "^8.0.0",
-      },
-    });
-
-    expect(discoverBundledPluginRuntimeDeps({ extensionsDir })).toEqual(
-      expect.arrayContaining([
-        {
-          name: "https-proxy-agent",
-          pluginIds: ["feishu", "slack"],
-          sentinelPath: path.join("node_modules", "https-proxy-agent", "package.json"),
-          version: "^8.0.0",
-        },
-      ]),
-    );
   });
 
   it("prunes only bundled plugin package node_modules in source checkouts", async () => {

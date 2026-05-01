@@ -618,7 +618,7 @@ describe("plugin-sdk package contract guardrails", () => {
     expect(failures).toEqual([]);
   });
 
-  it("keeps Matrix runtime deps local to the Matrix plugin", () => {
+  it("keeps Matrix dependencies local to the Matrix plugin", () => {
     const rootRuntimeDeps = collectRuntimeDependencySpecs(readRootPackageJson());
     const matrixPackageJson = readMatrixPackageJson();
     const matrixRuntimeDeps = collectRuntimeDependencySpecs(matrixPackageJson);

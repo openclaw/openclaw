@@ -17,11 +17,27 @@
     "@openclaw/plugin-sdk": "workspace:*"
   },
   "openclaw": {
-    "bundle": {
-      "stageRuntimeDependencies": true
-    },
     "extensions": [
       "./index.ts"
-    ]
+    ],
+    "install": {
+      "npmSpec": "@openclaw/diffs",
+      "localPath": "extensions/diffs",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.30"
+    },
+    "compat": {
+      "pluginApi": ">=2026.4.30"
+    },
+    "build": {
+      "openclawVersion": "2026.4.30"
+    },
+    "bundle": {
+      "includeInCore": false
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
   }
 }

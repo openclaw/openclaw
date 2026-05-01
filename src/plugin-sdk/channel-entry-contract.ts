@@ -9,10 +9,6 @@ import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import {
-  isBuiltBundledPluginRuntimeRoot,
-  prepareBundledPluginRuntimeRoot,
-} from "../plugins/bundled-runtime-root.js";
-import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
 } from "../plugins/jiti-loader-cache.js";
@@ -126,9 +122,7 @@ export type BundledChannelSetupEntryContract<TPlugin = ChannelPlugin> = {
   features?: BundledChannelSetupEntryFeatures;
 };
 
-export type BundledEntryModuleLoadOptions = {
-  installRuntimeDeps?: boolean;
-};
+export type BundledEntryModuleLoadOptions = Record<string, never>;
 
 const nodeRequire = createRequire(import.meta.url);
 const jitiLoaders: PluginJitiLoaderCache = new Map();
@@ -348,19 +342,9 @@ function canTryNodeRequireBuiltModule(modulePath: string): boolean {
 function loadBundledEntryModuleSync(
   importMetaUrl: string,
   specifier: string,
-  options: BundledEntryModuleLoadOptions = {},
+  _options: BundledEntryModuleLoadOptions = {},
 ): unknown {
-  let modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
-  const boundaryRoot = resolveEntryBoundaryRoot(importMetaUrl);
-  if (options.installRuntimeDeps !== false && isBuiltBundledPluginRuntimeRoot(boundaryRoot)) {
-    const prepared = prepareBundledPluginRuntimeRoot({
-      pluginId: path.basename(boundaryRoot),
-      pluginRoot: boundaryRoot,
-      modulePath,
-      env: process.env,
-    });
-    modulePath = prepared.modulePath;
-  }
+  const modulePath = resolveBundledEntryModulePath(importMetaUrl, specifier);
   const cached = loadedModuleExports.get(modulePath);
   if (cached !== undefined) {
     return cached;

@@ -3,13 +3,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
-  assertNoBundledRuntimeDepsStagingDebris,
-  collectBundledRuntimeDepsStagingDebrisPaths,
+  assertNoLegacyPluginDependencyStagingDebris,
+  collectLegacyPluginDependencyStagingDebrisPaths,
   collectPackageDistInventoryErrors,
   LOCAL_BUILD_METADATA_DIST_PATHS,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   collectPackageDistInventory,
-  isBundledRuntimeDepsInstallStagePath,
+  isLegacyPluginDependencyInstallStagePath,
   writePackageDistInventory,
 } from "./package-dist-inventory.js";
 
@@ -213,28 +213,28 @@ describe("package dist inventory", () => {
 
   it("matches install-stage paths case-insensitively across path segments", () => {
     expect(
-      isBundledRuntimeDepsInstallStagePath(
+      isLegacyPluginDependencyInstallStagePath(
         "dist/extensions/brave/.openclaw-install-stage/node_modules/typebox/package.json",
       ),
     ).toBe(true);
     expect(
-      isBundledRuntimeDepsInstallStagePath(
+      isLegacyPluginDependencyInstallStagePath(
         "dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123/node_modules/playwright-core/package.json",
       ),
     ).toBe(true);
     expect(
-      isBundledRuntimeDepsInstallStagePath(
+      isLegacyPluginDependencyInstallStagePath(
         "Dist/Extensions/browser/.OpenClaw-Install-Stage/package.json",
       ),
     ).toBe(true);
     expect(
-      isBundledRuntimeDepsInstallStagePath(
+      isLegacyPluginDependencyInstallStagePath(
         "dist/extensions/browser/.openclaw-runtime-deps-copy-AbC123/package.json",
       ),
     ).toBe(false);
-    expect(isBundledRuntimeDepsInstallStagePath("dist/extensions/.openclaw-install-stage")).toBe(
-      false,
-    );
+    expect(
+      isLegacyPluginDependencyInstallStagePath("dist/extensions/.openclaw-install-stage"),
+    ).toBe(false);
   });
 
   it("rejects pre-populated install-stage debris at publish time", async () => {
@@ -262,15 +262,15 @@ describe("package dist inventory", () => {
       await fs.mkdir(path.dirname(suffixedSeed), { recursive: true });
       await fs.writeFile(suffixedSeed, "{}", "utf8");
 
-      await expect(collectBundledRuntimeDepsStagingDebrisPaths(packageRoot)).resolves.toEqual([
+      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual([
         "dist/extensions/browser/.openclaw-install-stage-AbC123",
         "dist/extensions/evil/.openclaw-install-stage",
       ]);
-      await expect(assertNoBundledRuntimeDepsStagingDebris(packageRoot)).rejects.toThrow(
-        /unexpected bundled-runtime-deps install staging debris/,
+      await expect(assertNoLegacyPluginDependencyStagingDebris(packageRoot)).rejects.toThrow(
+        /unexpected legacy plugin dependency staging debris/,
       );
       await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-        /unexpected bundled-runtime-deps install staging debris/,
+        /unexpected legacy plugin dependency staging debris/,
       );
     });
   });
@@ -290,11 +290,11 @@ describe("package dist inventory", () => {
         await fs.mkdir(path.dirname(mixedCaseStage), { recursive: true });
         await fs.writeFile(mixedCaseStage, "{}", "utf8");
 
-        await expect(collectBundledRuntimeDepsStagingDebrisPaths(packageRoot)).resolves.toEqual([
-          "dist/Extensions/evil/.OpenClaw-Install-Stage",
-        ]);
+        await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
+          ["dist/Extensions/evil/.OpenClaw-Install-Stage"],
+        );
         await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-          /unexpected bundled-runtime-deps install staging debris/,
+          /unexpected legacy plugin dependency staging debris/,
         );
       },
     );
@@ -313,11 +313,11 @@ describe("package dist inventory", () => {
         await fs.mkdir(path.dirname(mixedCaseStage), { recursive: true });
         await fs.writeFile(mixedCaseStage, "{}", "utf8");
 
-        await expect(collectBundledRuntimeDepsStagingDebrisPaths(packageRoot)).resolves.toEqual([
-          "Dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123",
-        ]);
+        await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
+          ["Dist/Extensions/browser/.OPENCLAW-INSTALL-STAGE-AbC123"],
+        );
         await expect(writePackageDistInventory(packageRoot)).rejects.toThrow(
-          /unexpected bundled-runtime-deps install staging debris/,
+          /unexpected legacy plugin dependency staging debris/,
         );
       },
     );
@@ -326,8 +326,12 @@ describe("package dist inventory", () => {
   it("treats a missing dist/extensions tree as no staging debris", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-no-extensions-" }, async (packageRoot) => {
       await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
-      await expect(collectBundledRuntimeDepsStagingDebrisPaths(packageRoot)).resolves.toEqual([]);
-      await expect(assertNoBundledRuntimeDepsStagingDebris(packageRoot)).resolves.toBeUndefined();
+      await expect(collectLegacyPluginDependencyStagingDebrisPaths(packageRoot)).resolves.toEqual(
+        [],
+      );
+      await expect(
+        assertNoLegacyPluginDependencyStagingDebris(packageRoot),
+      ).resolves.toBeUndefined();
     });
   });
 

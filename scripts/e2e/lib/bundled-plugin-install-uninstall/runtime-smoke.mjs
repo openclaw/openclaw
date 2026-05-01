@@ -565,12 +565,7 @@ function findReadyLogIndex(logPath) {
 function assertNoPostReadyRuntimeDepsWork(logPath, readyIndex) {
   const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
   const postReady = log.slice(Math.max(0, readyIndex));
-  const forbidden = [
-    /\[plugins\].*installed bundled runtime deps/iu,
-    /\[plugins\].*installing bundled runtime deps/iu,
-    /\[plugins\].*staging bundled runtime deps/iu,
-    /\b(?:npm|pnpm|yarn|corepack) install\b/iu,
-  ];
+  const forbidden = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
   const match = forbidden.find((pattern) => pattern.test(postReady));
   if (match) {
     throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(postReady)}`);
@@ -578,14 +573,7 @@ function assertNoPostReadyRuntimeDepsWork(logPath, readyIndex) {
 }
 
 function assertNoRuntimeDepsLocks() {
-  const roots = [
-    ...(process.env.OPENCLAW_PLUGIN_STAGE_DIR ? [process.env.OPENCLAW_PLUGIN_STAGE_DIR] : []),
-    path.join(
-      process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME || os.homedir(), ".openclaw"),
-      "plugin-runtime-deps",
-    ),
-    path.join(process.cwd(), "dist", "extensions"),
-  ];
+  const roots = [path.join(process.cwd(), "dist", "extensions")];
   for (const root of roots) {
     if (!fs.existsSync(root)) {
       continue;

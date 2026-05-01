@@ -49,7 +49,7 @@ function isInstallStageDirName(value: string): boolean {
   return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
 }
 
-export function isBundledRuntimeDepsInstallStagePath(relativePath: string): boolean {
+export function isLegacyPluginDependencyInstallStagePath(relativePath: string): boolean {
   const parts = normalizeRelativePath(relativePath).split("/");
   return (
     parts.length >= 4 &&
@@ -94,7 +94,7 @@ function isPackagedDistPath(relativePath: string): boolean {
 
 function isOmittedDistSubtree(relativePath: string): boolean {
   return (
-    isBundledRuntimeDepsInstallStagePath(relativePath) ||
+    isLegacyPluginDependencyInstallStagePath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
   );
 }
@@ -141,7 +141,7 @@ export async function collectPackageDistInventory(packageRoot: string): Promise<
   return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot);
 }
 
-export async function collectBundledRuntimeDepsStagingDebrisPaths(
+export async function collectLegacyPluginDependencyStagingDebrisPaths(
   packageRoot: string,
 ): Promise<string[]> {
   const distDirs: string[] = [];
@@ -216,18 +216,20 @@ export async function collectBundledRuntimeDepsStagingDebrisPaths(
   return debris.toSorted((left, right) => left.localeCompare(right));
 }
 
-export async function assertNoBundledRuntimeDepsStagingDebris(packageRoot: string): Promise<void> {
-  const debris = await collectBundledRuntimeDepsStagingDebrisPaths(packageRoot);
+export async function assertNoLegacyPluginDependencyStagingDebris(
+  packageRoot: string,
+): Promise<void> {
+  const debris = await collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
   if (debris.length === 0) {
     return;
   }
   throw new Error(
-    `unexpected bundled-runtime-deps install staging debris in package dist: ${debris.join(", ")}`,
+    `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
   );
 }
 
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
-  await assertNoBundledRuntimeDepsStagingDebris(packageRoot);
+  await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
   const inventory = [...new Set(await collectPackageDistInventory(packageRoot))].toSorted(
     (left, right) => left.localeCompare(right),
   );

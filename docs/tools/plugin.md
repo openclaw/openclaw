@@ -96,22 +96,15 @@ Gateway startup skips plugin discovery/load work and `openclaw doctor` preserves
 the disabled plugin config instead of auto-removing it. Re-enable plugins before
 running doctor cleanup if you want stale plugin ids removed.
 
-Packaged OpenClaw installs do not eagerly install every bundled plugin's
-runtime dependency tree. When a bundled OpenClaw-owned plugin is active from
-plugin config, legacy channel config, or a default-enabled manifest, startup
-repairs only that plugin's declared runtime dependencies before importing it.
-Persisted channel auth state alone does not activate a bundled channel for
-Gateway startup runtime-dependency repair.
-Explicit disablement still wins: `plugins.entries.<id>.enabled: false`,
-`plugins.deny`, `plugins.enabled: false`, and `channels.<id>.enabled: false`
-prevent automatic bundled runtime-dependency repair for that plugin/channel.
-A non-empty `plugins.allow` also bounds default-enabled bundled runtime-dependency
-repair; explicit bundled channel enablement (`channels.<id>.enabled: true`) can
-still repair that channel's plugin dependencies.
-External plugins and custom load paths must still be installed through
-`openclaw plugins install`.
-See [Plugin dependency resolution](/plugins/dependency-resolution) for the full
-planning and staging lifecycle.
+Plugin dependency installation happens only during explicit install/update or
+doctor repair flows. Gateway startup, config reload, and runtime inspection do
+not run package managers or repair dependency trees. Local plugins must already
+have their dependencies installed, while npm, git, and ClawHub plugins are
+installed under OpenClaw's managed plugin roots with package-local
+dependencies. External plugins and custom load paths must still be installed
+through `openclaw plugins install`.
+See [Plugin dependency resolution](/plugins/dependency-resolution) for the
+install-time lifecycle.
 
 ## Plugin types
 

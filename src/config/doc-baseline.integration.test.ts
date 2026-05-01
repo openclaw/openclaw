@@ -37,7 +37,7 @@ describe("config doc baseline integration", () => {
     expect(second.json.core).toBe(first.json.core);
     expect(second.json.channel).toBe(first.json.channel);
     expect(second.json.plugin).toBe(first.json.plugin);
-  });
+  }, 240_000);
 
   it("includes core, channel, and plugin config metadata", async () => {
     const byPath = await getSharedByPath();

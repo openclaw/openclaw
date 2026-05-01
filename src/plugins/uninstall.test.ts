@@ -974,6 +974,43 @@ describe("resolveUninstallDirectoryTarget", () => {
     ).toBe(installPath);
   });
 
+  it("uses configured installPath when npm installed it under the managed npm root", () => {
+    const stateDir = path.join(os.tmpdir(), "openclaw-uninstall-safe");
+    const extensionsDir = path.join(stateDir, "extensions");
+    const installPath = path.join(stateDir, "npm", "node_modules", "@openclaw", "kitchen-sink");
+
+    expect(
+      resolveUninstallDirectoryTarget({
+        pluginId: "openclaw-kitchen-sink-fixture",
+        hasInstall: true,
+        installRecord: {
+          source: "npm",
+          spec: "@openclaw/kitchen-sink@latest",
+          installPath,
+        },
+        extensionsDir,
+      }),
+    ).toBe(installPath);
+  });
+
+  it("does not trust npm install paths outside the managed npm root", () => {
+    const stateDir = path.join(os.tmpdir(), "openclaw-uninstall-safe");
+    const extensionsDir = path.join(stateDir, "extensions");
+
+    expect(
+      resolveUninstallDirectoryTarget({
+        pluginId: "openclaw-kitchen-sink-fixture",
+        hasInstall: true,
+        installRecord: {
+          source: "npm",
+          spec: "@openclaw/kitchen-sink@latest",
+          installPath: path.join(os.tmpdir(), "npm", "node_modules", "@openclaw", "kitchen-sink"),
+        },
+        extensionsDir,
+      }),
+    ).toBe(resolvePluginInstallDir("openclaw-kitchen-sink-fixture", extensionsDir));
+  });
+
   it("uses configured installPath when it is under the recorded managed extensions root", () => {
     const currentExtensionsDir = path.join(os.tmpdir(), "openclaw-uninstall-current", "extensions");
     const recordedExtensionsDir = path.join(

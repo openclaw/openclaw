@@ -120,7 +120,6 @@ function expectBundledCompatLoadPath(params: {
     config: params.enablementCompat,
     onlyPluginIds: ["openai"],
     activate: false,
-    installBundledRuntimeDeps: false,
   });
 }
 
@@ -357,7 +356,6 @@ describe("resolvePluginCapabilityProviders", () => {
       }),
       onlyPluginIds: ["deepgram", "google"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -505,7 +503,6 @@ describe("resolvePluginCapabilityProviders", () => {
       }),
       onlyPluginIds: ["microsoft"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -576,7 +573,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: expect.anything(),
       onlyPluginIds: ["google"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
     expect(mocks.loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledWith({
       pluginIds: ["google"],
@@ -877,7 +873,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: expect.anything(),
       onlyPluginIds: [],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -922,11 +917,10 @@ describe("resolvePluginCapabilityProviders", () => {
       config: compatConfig,
       onlyPluginIds: ["google"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
-  it("honors explicit bundled runtime dependency install opt-out for fallback snapshots", () => {
+  it("loads fallback snapshots without startup dependency repair", () => {
     const cfg = { plugins: { allow: ["custom-plugin"] } } as OpenClawConfig;
     const enablementCompat = {
       plugins: {
@@ -942,7 +936,6 @@ describe("resolvePluginCapabilityProviders", () => {
       resolvePluginCapabilityProviders({
         key: "mediaUnderstandingProviders",
         cfg,
-        installBundledRuntimeDeps: false,
       }),
     );
 
@@ -950,7 +943,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: enablementCompat,
       onlyPluginIds: ["openai"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -1058,7 +1050,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: compatConfig,
       onlyPluginIds: ["microsoft"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -1082,7 +1073,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: expect.anything(),
       onlyPluginIds: [],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -1220,7 +1210,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: enablementCompat,
       onlyPluginIds: ["google"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 
@@ -1343,7 +1332,6 @@ describe("resolvePluginCapabilityProviders", () => {
       config: enablementCompat,
       onlyPluginIds: ["microsoft"],
       activate: false,
-      installBundledRuntimeDeps: false,
     });
   });
 });

@@ -97,7 +97,6 @@ function loadChannelSetupPluginRegistry(params: {
     forceSetupOnlyChannelPlugins:
       params.forceSetupOnlyChannelPlugins ?? params.installRuntimeDeps === false,
     activate: params.activate,
-    installBundledRuntimeDeps: params.installRuntimeDeps !== false,
   });
 }
 

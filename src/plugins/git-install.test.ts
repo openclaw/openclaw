@@ -1,7 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const runCommandWithTimeoutMock = vi.fn();
-const installPluginFromDirMock = vi.fn();
+const installPluginFromInstalledPackageDirMock = vi.fn();
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -11,7 +11,8 @@ vi.mock("./install.js", async () => {
   const actual = await vi.importActual<typeof import("./install.js")>("./install.js");
   return {
     ...actual,
-    installPluginFromDir: (...args: unknown[]) => installPluginFromDirMock(...args),
+    installPluginFromInstalledPackageDir: (...args: unknown[]) =>
+      installPluginFromInstalledPackageDirMock(...args),
   };
 });
 
@@ -45,18 +46,19 @@ describe("parseGitPluginSpec", () => {
 describe("installPluginFromGitSpec", () => {
   beforeEach(() => {
     runCommandWithTimeoutMock.mockReset();
-    installPluginFromDirMock.mockReset();
+    installPluginFromInstalledPackageDirMock.mockReset();
   });
 
   it("clones, checks out refs, installs from the clone, and returns commit metadata", async () => {
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" });
-    installPluginFromDirMock.mockResolvedValue({
+      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    installPluginFromInstalledPackageDirMock.mockResolvedValue({
       ok: true,
       pluginId: "demo",
-      targetDir: "/tmp/demo",
+      targetDir: "/tmp/git-root/repo",
       version: "1.2.3",
       extensions: ["index.js"],
     });
@@ -87,9 +89,19 @@ describe("installPluginFromGitSpec", () => {
       "--detach",
       "v1.2.3",
     ]);
-    expect(installPluginFromDirMock).toHaveBeenCalledWith(
+    expect(runCommandWithTimeoutMock.mock.calls[3][0]).toEqual([
+      "npm",
+      "install",
+      "--omit=dev",
+      "--loglevel=error",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+    ]);
+    expect(installPluginFromInstalledPackageDirMock).toHaveBeenCalledWith(
       expect.objectContaining({
         expectedPluginId: "demo",
+        packageDir: expect.stringContaining("/repo"),
         installPolicyRequest: {
           kind: "plugin-git",
           requestedSpecifier: "git:github.com/acme/demo@v1.2.3",
@@ -101,11 +113,12 @@ describe("installPluginFromGitSpec", () => {
   it("uses a shallow clone when no ref is requested", async () => {
     runCommandWithTimeoutMock
       .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" });
-    installPluginFromDirMock.mockResolvedValue({
+      .mockResolvedValueOnce({ code: 0, stdout: "abc123\n", stderr: "" })
+      .mockResolvedValueOnce({ code: 0, stdout: "", stderr: "" });
+    installPluginFromInstalledPackageDirMock.mockResolvedValue({
       ok: true,
       pluginId: "demo",
-      targetDir: "/tmp/demo",
+      targetDir: "/tmp/git-root/repo",
       version: "1.2.3",
       extensions: ["index.js"],
     });

@@ -211,11 +211,10 @@ Validation` or from the `main`/release workflow ref so workflow logic and
 - npm release preflight fails closed unless the tarball includes both
   `dist/control-ui/index.html` and a non-empty `dist/control-ui/assets/` payload
   so we do not ship an empty browser dashboard again
-- Post-publish verification also checks that the published registry install
-  contains non-empty bundled plugin runtime deps under the root `dist/*`
-  layout. A release that ships with missing or empty bundled plugin
-  dependency payloads fails the postpublish verifier and cannot be promoted
-  to `latest`.
+- Post-publish verification also checks that published plugin entrypoints and
+  package metadata are present in the installed registry layout. A release that
+  ships missing plugin runtime payloads fails the postpublish verifier and
+  cannot be promoted to `latest`.
 - `pnpm test:install:smoke` also enforces the npm pack `unpackedSize` budget on
   the candidate update tarball, so installer e2e catches accidental pack bloat
   before the release publish path
@@ -370,13 +369,8 @@ Release Docker coverage includes:
   `plugins-runtime-install-a`, `plugins-runtime-install-b`,
   `plugins-runtime-install-c`, `plugins-runtime-install-d`,
   `plugins-runtime-install-e`, `plugins-runtime-install-f`,
-  `plugins-runtime-install-g`, `plugins-runtime-install-h`,
-  `bundled-channels-core`, `bundled-channels-update-a`,
-  `bundled-channels-update-discord`, `bundled-channels-update-b`, and
-  `bundled-channels-contracts`
+  `plugins-runtime-install-g`, and `plugins-runtime-install-h`
 - OpenWebUI coverage inside the `plugins-runtime-services` chunk when requested
-- split bundled-channel dependency lanes across channel-smoke, update-target,
-  and setup/runtime contract chunks instead of one large bundled-channel job
 - split bundled plugin install/uninstall lanes
   `bundled-plugin-install-uninstall-0` through
   `bundled-plugin-install-uninstall-23`
@@ -430,11 +424,11 @@ Supported candidate sources:
 
 `OpenClaw Release Checks` runs Package Acceptance with `source=ref`,
 `package_ref=<release-ref>`, `suite_profile=custom`,
-`docker_lanes=bundled-channel-deps-compat plugins-offline`, and
-`telegram_mode=mock-openai`. The release-path Docker chunks cover the
-overlapping install, update, and plugin-update lanes; Package Acceptance keeps
-artifact-native bundled-channel compat, offline plugin fixtures, and Telegram
-package QA against the same resolved tarball. It is the GitHub-native
+`docker_lanes=plugins-offline plugin-update`, and `telegram_mode=mock-openai`.
+The release-path Docker chunks cover the overlapping install, update, and
+plugin-update lanes; Package Acceptance keeps offline plugin fixtures, plugin
+update, and Telegram package QA against the same resolved tarball. It is the
+GitHub-native
 replacement for most of the package/update coverage that previously required
 Parallels. Cross-OS release checks still matter for OS-specific onboarding,
 installer, and platform behavior, but package/update product validation should

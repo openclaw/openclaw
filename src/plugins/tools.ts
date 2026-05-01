@@ -148,7 +148,6 @@ export function resolvePluginTools(params: {
     env,
   });
   const loadOptions = buildPluginRuntimeLoadOptions(context, {
-    installBundledRuntimeDeps: false,
     activate: false,
     toolDiscovery: true,
     ...(onlyPluginIds !== undefined ? { onlyPluginIds } : {}),

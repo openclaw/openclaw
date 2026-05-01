@@ -7,6 +7,7 @@ import {
   resolveInstalledPluginIndexPolicyHash,
 } from "./installed-plugin-index-policy.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import { resolveInstalledPluginIndexRegistry } from "./installed-plugin-index-registry.js";
 import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
@@ -46,7 +47,14 @@ function buildInstalledPluginIndex(
   const registryDiagnostics = registry.diagnostics ?? [];
   const diagnostics = [...registryDiagnostics];
   const generatedAtMs = (params.now?.() ?? new Date()).getTime();
-  const installRecords = normalizeInstallRecordMap(params.installRecords);
+  const installRecords = normalizeInstallRecordMap(
+    params.installRecords ??
+      loadInstalledPluginIndexInstallRecordsSync({
+        env,
+        ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+        ...(params.pluginIndexFilePath ? { filePath: params.pluginIndexFilePath } : {}),
+      }),
+  );
   const plugins = buildInstalledPluginIndexRecords({
     candidates,
     registry,

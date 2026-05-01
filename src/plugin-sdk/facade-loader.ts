@@ -135,36 +135,12 @@ export type FacadeModuleLocation = {
   boundaryRoot: string;
 };
 
-function prepareFacadeLocationForBundledRuntimeDeps(params: {
-  location: FacadeModuleLocation;
-  runtimeDeps?: {
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  };
-}): FacadeModuleLocation {
-  if (!params.runtimeDeps) {
-    return params.location;
-  }
-  return prepareBuiltBundledPluginPublicSurfaceLocation({
-    location: params.location,
-    pluginId: params.runtimeDeps.pluginId,
-    ...(params.runtimeDeps.env ? { env: params.runtimeDeps.env } : {}),
-  });
-}
-
 export function loadFacadeModuleAtLocationSync<T extends object>(params: {
   location: FacadeModuleLocation;
   trackedPluginId: string | (() => string);
-  runtimeDeps?: {
-    pluginId: string;
-    env?: NodeJS.ProcessEnv;
-  };
   loadModule?: (modulePath: string) => T;
 }): T {
-  const location = prepareFacadeLocationForBundledRuntimeDeps({
-    location: params.location,
-    ...(params.runtimeDeps ? { runtimeDeps: params.runtimeDeps } : {}),
-  });
+  const location = params.location;
   const cached = loadedFacadeModules.get(location.modulePath);
   if (cached) {
     return cached as T;
@@ -229,10 +205,6 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(param
   return loadFacadeModuleAtLocationSync({
     location,
     trackedPluginId: params.trackedPluginId ?? params.dirName,
-    runtimeDeps: {
-      pluginId: params.dirName,
-      ...(params.env ? { env: params.env } : {}),
-    },
   });
 }
 
@@ -248,12 +220,10 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const preparedLocation = prepareFacadeLocationForBundledRuntimeDeps({
+  const preparedLocation = prepareBuiltBundledPluginPublicSurfaceLocation({
     location,
-    runtimeDeps: {
-      pluginId: params.dirName,
-      ...(params.env ? { env: params.env } : {}),
-    },
+    pluginId: params.dirName,
+    ...(params.env ? { env: params.env } : {}),
   });
   const cached = loadedFacadeModules.get(preparedLocation.modulePath);
   if (cached) {

@@ -458,11 +458,10 @@ By default, the plugin starts OpenClaw's managed Codex binary locally with:
 codex app-server --listen stdio://
 ```
 
-The managed binary is declared as a bundled plugin runtime dependency and staged
-with the rest of the `codex` plugin dependencies. This keeps the app-server
-version tied to the bundled plugin instead of whichever separate Codex CLI
-happens to be installed locally. Set `appServer.command` only when you
-intentionally want to run a different executable.
+The managed binary is shipped with the `codex` plugin package. This keeps the
+app-server version tied to the bundled plugin instead of whichever separate
+Codex CLI happens to be installed locally. Set `appServer.command` only when
+you intentionally want to run a different executable.
 
 By default, OpenClaw starts local Codex harness sessions in YOLO mode:
 `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
