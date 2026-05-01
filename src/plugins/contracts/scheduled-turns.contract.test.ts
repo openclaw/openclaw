@@ -450,6 +450,43 @@ describe("plugin scheduled turns", () => {
     expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([]);
   });
 
+  it("treats already-missing cron jobs as successful scheduled-turn cleanup", async () => {
+    const removed: string[] = [];
+    workflowMocks.callGatewayTool.mockImplementation(
+      async (method: string, _opts: unknown, body: unknown) => {
+        if (method === "cron.add") {
+          return { id: "already-missing-job" };
+        }
+        if (method === "cron.remove") {
+          removed.push((body as { id?: string }).id ?? "");
+          return { ok: true, removed: false };
+        }
+        return { ok: true };
+      },
+    );
+
+    await expect(
+      schedulePluginSessionTurn({
+        pluginId: "workflow-plugin",
+        origin: "bundled",
+        schedule: {
+          sessionKey: "agent:main:main",
+          message: "wake",
+          delayMs: 1_000,
+        },
+      }),
+    ).resolves.toMatchObject({ id: "already-missing-job" });
+
+    await expect(
+      cleanupPluginSessionSchedulerJobs({
+        pluginId: "workflow-plugin",
+        reason: "disable",
+      }),
+    ).resolves.toEqual([]);
+    expect(removed).toEqual(["already-missing-job"]);
+    expect(listPluginSessionSchedulerJobs("workflow-plugin")).toEqual([]);
+  });
+
   it("removes only matching plugin tag jobs in the requested session", async () => {
     const removed: string[] = [];
     const listQueries: unknown[] = [];

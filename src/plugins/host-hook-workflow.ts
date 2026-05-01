@@ -86,7 +86,7 @@ async function removeScheduledSessionTurn(params: {
       { id: params.jobId },
       { scopes: [ADMIN_SCOPE] },
     );
-    return didCronRemoveJob(result);
+    return didCronCleanupJob(result);
   } catch (error) {
     log.warn(
       `plugin session turn cleanup failed (${formatScheduleLogContext(params)}): ${formatErrorMessage(error)}`,
@@ -109,6 +109,14 @@ function didCronRemoveJob(value: unknown): boolean {
     return false;
   }
   return result.ok !== false && result.removed === true;
+}
+
+function didCronCleanupJob(value: unknown): boolean {
+  const result = unwrapGatewayPayload(value);
+  if (!isCronJobRecord(result) || result.ok === false) {
+    return false;
+  }
+  return result.removed === true || result.removed === false;
 }
 
 function normalizeCronJobId(value: unknown): string | undefined {
