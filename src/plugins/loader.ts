@@ -102,6 +102,7 @@ import {
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
+import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { withProfile } from "./plugin-load-profile.js";
 import {
   createPluginIdScopeSet,
@@ -455,10 +456,9 @@ function runPluginRegisterSync(
   }
 }
 
-function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
+function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
   const jitiLoaders: PluginJitiLoaderCache = new Map();
-  return (modulePath: string) => {
-    const tryNative = shouldPreferNativeJiti(modulePath);
+  const loadWithJiti = (modulePath: string) => {
     return getCachedPluginJitiLoader({
       cache: jitiLoaders,
       modulePath,
@@ -471,12 +471,20 @@ function createPluginJitiLoader(options: Pick<PluginLoadOptions, "pluginSdkResol
         options.pluginSdkResolution,
       ),
       pluginSdkResolution: options.pluginSdkResolution,
-      // Source .ts runtime shims import sibling ".js" specifiers that only exist
-      // after build. Disable native loading for source entries so Jiti rewrites
-      // those imports against the source graph, while keeping native dist/*.js
-      // loading for the canonical built module graph.
-      tryNative,
+      tryNative: false,
     });
+  };
+  return (modulePath: string): unknown => {
+    if (shouldPreferNativeJiti(modulePath)) {
+      const native = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
+      if (native.ok) {
+        return native.moduleExport;
+      }
+    }
+    // Source .ts runtime shims import sibling ".js" specifiers that only exist
+    // after build. Jiti remains the dev/source fallback because it rewrites those
+    // imports against the source graph and applies SDK aliases.
+    return loadWithJiti(modulePath)(toSafeImportPath(modulePath));
   };
 }
 
@@ -1241,8 +1249,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       clearMemoryPluginState();
     }
 
-    // Lazy: avoid creating the Jiti loader when all plugins are disabled (common in unit tests).
-    const getJiti = createPluginJitiLoader(options);
+    // Lazy: avoid creating module loaders when all plugins are disabled (common in unit tests).
+    const loadPluginModule = createPluginModuleLoader(options);
 
     let createPluginRuntimeFactory:
       | ((options?: CreatePluginRuntimeOptions) => PluginRuntime)
@@ -1259,12 +1267,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (!runtimeModulePath) {
         throw new Error("Unable to resolve plugin runtime module");
       }
-      const safeRuntimePath = toSafeImportPath(runtimeModulePath);
       const runtimeModule = withProfile(
         { source: runtimeModulePath },
         "runtime-module",
         () =>
-          getJiti(runtimeModulePath)(safeRuntimePath) as {
+          loadPluginModule(runtimeModulePath) as {
             createPluginRuntime?: (options?: CreatePluginRuntimeOptions) => PluginRuntime;
           },
       );
@@ -1715,7 +1722,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
       const safeSource = opened.path;
       fs.closeSync(opened.fd);
-      const safeImportSource = toSafeImportPath(safeSource);
 
       let mod: OpenClawPluginModule | null = null;
       try {
@@ -1727,7 +1733,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         mod = withProfile(
           { pluginId: record.id, source: safeSource },
           registrationMode,
-          () => getJiti(safeSource)(safeImportSource) as OpenClawPluginModule,
+          () => loadPluginModule(safeSource) as OpenClawPluginModule,
         );
       } catch (err) {
         recordPluginError({
@@ -1801,13 +1807,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
             }
             const safeRuntimeSource = runtimeOpened.path;
             fs.closeSync(runtimeOpened.fd);
-            const safeRuntimeImportSource = toSafeImportPath(safeRuntimeSource);
             let runtimeMod: OpenClawPluginModule | null = null;
             try {
               runtimeMod = withProfile(
                 { pluginId: record.id, source: safeRuntimeSource },
                 "load-setup-runtime-entry",
-                () => getJiti(safeRuntimeSource)(safeRuntimeImportSource) as OpenClawPluginModule,
+                () => loadPluginModule(safeRuntimeSource) as OpenClawPluginModule,
               );
             } catch (err) {
               recordPluginError({
@@ -2165,7 +2170,7 @@ export async function loadOpenClawPluginCliRegistry(
   });
   const logger = options.logger ?? defaultLogger();
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
-  const getJiti = createPluginJitiLoader(options);
+  const loadPluginModule = createPluginModuleLoader(options);
   const { registry, registerCli } = createPluginRegistry({
     logger,
     runtime: {} as PluginRuntime,
@@ -2387,14 +2392,13 @@ export async function loadOpenClawPluginCliRegistry(
     }
     const safeSource = opened.path;
     fs.closeSync(opened.fd);
-    const safeImportSource = toSafeImportPath(safeSource);
 
     let mod: OpenClawPluginModule | null = null;
     try {
       mod = withProfile(
         { pluginId: record.id, source: safeSource },
         "cli-metadata",
-        () => getJiti(safeSource)(safeImportSource) as OpenClawPluginModule,
+        () => loadPluginModule(safeSource) as OpenClawPluginModule,
       );
     } catch (err) {
       recordPluginError({

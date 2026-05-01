@@ -201,7 +201,6 @@ type PackageInstallCommonParams = InstallSafetyOverrides & {
   dryRun?: boolean;
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
-  installDependencies?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
 };
 
@@ -228,7 +227,6 @@ function pickPackageInstallCommonParams(
     dryRun: params.dryRun,
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
-    installDependencies: params.installDependencies,
     installPolicyRequest: params.installPolicyRequest,
   };
 }
@@ -607,13 +605,6 @@ type ValidatedPackagePlugin = {
   peerDependencies: Record<string, string>;
 };
 
-function hasInstallablePackageDependencies(manifest: PackageManifest): boolean {
-  return (
-    Object.keys(manifest.dependencies ?? {}).length > 0 ||
-    Object.keys(manifest.optionalDependencies ?? {}).length > 0
-  );
-}
-
 async function validatePackagePluginInstallSource(params: {
   runtime: Awaited<ReturnType<typeof loadPluginInstallRuntime>>;
   packageDir: string;
@@ -902,9 +893,8 @@ async function installPluginFromPackageDir(
     mode: preparedTarget.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps:
-      params.installDependencies === true && hasInstallablePackageDependencies(plugin.manifest),
-    depsLogMessage: "Installing plugin dependencies with npm…",
+    hasDeps: false,
+    depsLogMessage: "",
     nameEncoder: encodePluginInstallDirName,
     afterInstall: async (installedDir) => {
       return await scanAndLinkInstalledPackage({
@@ -955,7 +945,6 @@ export async function installPluginFromArchive(
           dryRun: params.dryRun,
           expectedPluginId: params.expectedPluginId,
           requirePluginManifest: true,
-          installDependencies: true,
           installPolicyRequest,
         }),
       }),

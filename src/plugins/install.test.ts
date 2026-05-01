@@ -618,7 +618,7 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("runs npm for package archive runtime dependencies", async () => {
+  it("does not run npm for package archive runtime dependencies", async () => {
     const result = await installArchivePackageAndReturnResult({
       packageJson: {
         name: "archive-with-deps",
@@ -631,14 +631,7 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(runCommandWithTimeout).mock.calls[0]?.[0]).toEqual([
-      "npm",
-      "install",
-      "--omit=dev",
-      "--loglevel=error",
-      "--ignore-scripts",
-    ]);
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
   it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {

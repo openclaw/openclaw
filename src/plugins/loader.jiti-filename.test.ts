@@ -47,8 +47,8 @@ afterEach(() => {
   }
 });
 
-describe("createPluginJitiLoader", () => {
-  it("uses the bundled plugin module path as the jiti filename", async () => {
+describe("createPluginModuleLoader", () => {
+  it("loads bundled JavaScript without creating a jiti loader", async () => {
     const jitiLoaderCalls: Array<{ modulePath: string; jitiFilename?: string }> = [];
     vi.doMock("./jiti-loader-cache.js", async (importOriginal) => {
       const actual = await importOriginal<typeof import("./jiti-loader-cache.js")>();
@@ -92,8 +92,6 @@ describe("createPluginJitiLoader", () => {
       },
     });
 
-    const bundledPluginLoad = jitiLoaderCalls.find((call) => call.modulePath.endsWith("index.cjs"));
-    expect(bundledPluginLoad).toBeDefined();
-    expect(bundledPluginLoad?.jitiFilename).toBe(bundledPluginLoad?.modulePath);
+    expect(jitiLoaderCalls).toEqual([]);
   });
 });
