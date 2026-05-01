@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/cli-runner: read `parsed.errors[]` strings into the `createResultError` message fallback chain in the Claude live-session runner, so `classifyFailoverReason` sees the original CLI text (e.g. "No conversation found with session ID: …") and returns `session_expired` instead of `unknown`. Without this, the existing `clearCliSessionInStore` + retry-without-`--resume` recovery branch in `attempt-execution.ts` was silently skipped and the session loop wedged on stale `claudeCliSessionId` entries.
 - Google Meet/Voice Call: play Twilio Meet DTMF before opening the realtime media stream and carry the intro as the initial Voice Call message, so the greeting is generated after Meet admits the phone participant instead of racing a live-call TwiML update. Thanks @donkeykong91 and @PfanP.
 - Google Meet/Voice Call: make Twilio setup preflight honor explicit `--transport twilio` and fail local/private Voice Call webhook URLs before joins. Thanks @donkeykong91 and @PfanP.
 - Voice Call/Twilio: retry transient 21220 live-call TwiML updates and catch answered-path initial-greeting failures, so a fast answered callback no longer crashes the Gateway or drops the Twilio greeting/listen transition. (#74606) Thanks @Sivan22.
