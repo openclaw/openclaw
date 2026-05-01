@@ -374,8 +374,7 @@ export function createBundledRuntimeDepsPackagePlan(
     manifestCache,
     ...(normalizePluginId ? { normalizePluginId } : {}),
   });
-  const packageRuntimeDeps =
-    pluginIds.length > 0 ? collectMirroredPackageRuntimeDeps(params.packageRoot) : [];
+  const packageRuntimeDeps = collectMirroredPackageRuntimeDeps(params.packageRoot);
   const plan = createBundledRuntimeDepsPlan({
     deps: [...deps, ...packageRuntimeDeps],
     conflicts,
