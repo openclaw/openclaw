@@ -606,8 +606,8 @@ describe("plugin session extension SessionEntry projection", () => {
       { gate: "open" },
       { gate: "second" },
       undefined,
-      undefined,
-      undefined,
+      { gate: "open" },
+      { gate: "second" },
       undefined,
     ]);
     expect(seenConfig).toEqual([undefined, undefined]);

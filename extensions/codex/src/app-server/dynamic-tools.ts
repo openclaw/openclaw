@@ -6,6 +6,7 @@ import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
   HEARTBEAT_RESPONSE_TOOL_NAME,
+  type EmbeddedRunAttemptParams,
   isToolWrappedWithBeforeToolCallHook,
   isMessagingTool,
   isMessagingToolSendAction,
@@ -47,6 +48,7 @@ export function createCodexDynamicToolBridge(params: {
   signal: AbortSignal;
   hookContext?: {
     agentId?: string;
+    config?: EmbeddedRunAttemptParams["config"];
     sessionId?: string;
     sessionKey?: string;
     runId?: string;

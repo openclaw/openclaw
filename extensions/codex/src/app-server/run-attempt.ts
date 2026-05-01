@@ -425,6 +425,7 @@ export async function runCodexAppServerAttempt(
     signal: runAbortController.signal,
     hookContext: {
       agentId: sessionAgentId,
+      config: params.config,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,

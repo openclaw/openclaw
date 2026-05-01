@@ -1,3 +1,4 @@
+import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginHookBeforeToolCallEvent,
@@ -18,6 +19,19 @@ export async function runTrustedToolPolicies(
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];
   const sessionExtensionStateCache = new Map<string, Record<string, PluginJsonValue> | undefined>();
+  let resolvedSessionConfig: OpenClawConfig | undefined = options?.config;
+  let didResolveSessionConfig = Boolean(options?.config);
+  const resolveSessionConfig = (): OpenClawConfig | undefined => {
+    if (!didResolveSessionConfig) {
+      didResolveSessionConfig = true;
+      try {
+        resolvedSessionConfig = getRuntimeConfig();
+      } catch {
+        resolvedSessionConfig = undefined;
+      }
+    }
+    return resolvedSessionConfig;
+  };
   for (const registration of policies) {
     const policyCtx: PluginHookToolContext = {
       ...ctx,
@@ -26,11 +40,12 @@ export async function runTrustedToolPolicies(
         const normalizedNamespace = namespace.trim();
         const cacheKey = registration.pluginId;
         if (!sessionExtensionStateCache.has(cacheKey)) {
+          const config = ctx.sessionKey ? resolveSessionConfig() : undefined;
           sessionExtensionStateCache.set(
             cacheKey,
-            options?.config
+            config
               ? getPluginSessionExtensionStateSync({
-                  cfg: options.config,
+                  cfg: config,
                   pluginId: registration.pluginId,
                   sessionKey: ctx.sessionKey,
                 })
