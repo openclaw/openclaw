@@ -5,7 +5,6 @@ import {
   areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
   isDiagnosticsEnabled,
-  type DiagnosticSessionActiveWorkKind,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
@@ -20,6 +19,10 @@ import {
   markDiagnosticActivity as markActivity,
   resetDiagnosticActivityForTest,
 } from "./diagnostic-runtime.js";
+import {
+  classifySessionAttention,
+  type SessionAttentionClassification,
+} from "./diagnostic-session-attention.js";
 import {
   diagnosticSessionStates,
   getDiagnosticSessionState,
@@ -154,74 +157,6 @@ function hasOpenDiagnosticWork(snapshot: DiagnosticWorkSnapshot): boolean {
 function hasRecentDiagnosticActivity(now: number): boolean {
   const lastActivityAt = getLastDiagnosticActivityAt();
   return lastActivityAt > 0 && now - lastActivityAt <= RECENT_DIAGNOSTIC_ACTIVITY_MS;
-}
-
-type SessionAttentionClassification =
-  | {
-      eventType: "session.long_running";
-      reason: string;
-      classification: "long_running";
-      activeWorkKind?: DiagnosticSessionActiveWorkKind;
-      recoveryEligible: false;
-    }
-  | {
-      eventType: "session.stalled";
-      reason: string;
-      classification: "blocked_tool_call" | "stalled_agent_run";
-      activeWorkKind?: DiagnosticSessionActiveWorkKind;
-      recoveryEligible: false;
-    }
-  | {
-      eventType: "session.stuck";
-      reason: string;
-      classification: "stale_session_state";
-      activeWorkKind?: undefined;
-      recoveryEligible: true;
-    };
-
-function classifySessionAttention(params: {
-  queueDepth: number;
-  activity: DiagnosticSessionActivitySnapshot;
-  staleMs: number;
-}): SessionAttentionClassification {
-  if (params.activity.activeWorkKind) {
-    if (
-      params.activity.activeWorkKind === "tool_call" &&
-      (params.activity.activeToolAgeMs ?? 0) > params.staleMs &&
-      (params.activity.lastProgressAgeMs ?? 0) > params.staleMs
-    ) {
-      return {
-        eventType: "session.stalled",
-        reason: "blocked_tool_call",
-        classification: "blocked_tool_call",
-        activeWorkKind: params.activity.activeWorkKind,
-        recoveryEligible: false,
-      };
-    }
-    if ((params.activity.lastProgressAgeMs ?? 0) > params.staleMs) {
-      return {
-        eventType: "session.stalled",
-        reason: "active_work_without_progress",
-        classification: "stalled_agent_run",
-        activeWorkKind: params.activity.activeWorkKind,
-        recoveryEligible: false,
-      };
-    }
-    return {
-      eventType: "session.long_running",
-      reason: params.queueDepth > 0 ? "queued_behind_active_work" : "active_work",
-      classification: "long_running",
-      activeWorkKind: params.activity.activeWorkKind,
-      recoveryEligible: false,
-    };
-  }
-
-  return {
-    eventType: "session.stuck",
-    reason: params.queueDepth > 0 ? "queued_work_without_active_run" : "stale_session_state",
-    classification: "stale_session_state",
-    recoveryEligible: true,
-  };
 }
 
 function roundDiagnosticMetric(value: number, digits = 3): number {
