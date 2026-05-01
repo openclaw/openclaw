@@ -52,25 +52,26 @@ const TwitchConfigBaseSchema = z.object({
  *
  * Use this for single-account setups. Properties are at the top level,
  * creating an implicit "default" account.
+ *
+ * Uses .merge() instead of z.intersection() so the generated JSON Schema
+ * produces a single flat object rather than allOf with separate
+ * additionalProperties constraints that conflict in JSON Schema draft-07.
  */
-const SimplifiedSchema = z.intersection(TwitchConfigBaseSchema, TwitchAccountSchema);
+const SimplifiedSchema = TwitchConfigBaseSchema.merge(TwitchAccountSchema);
 
 /**
  * Multi-account configuration schema
  *
  * Use this for multi-account setups. Each key is an account ID (e.g., "default", "secondary").
  */
-const MultiAccountSchema = z.intersection(
-  TwitchConfigBaseSchema,
-  z
-    .object({
-      /** Per-account configuration (for multi-account setups) */
-      accounts: z.record(z.string(), TwitchAccountSchema),
-    })
-    .refine((val) => Object.keys(val.accounts || {}).length > 0, {
-      message: "accounts must contain at least one entry",
-    }),
-);
+const MultiAccountSchema = TwitchConfigBaseSchema.merge(
+  z.object({
+    /** Per-account configuration (for multi-account setups) */
+    accounts: z.record(z.string(), TwitchAccountSchema),
+  }),
+).refine((val) => Object.keys(val.accounts || {}).length > 0, {
+  message: "accounts must contain at least one entry",
+});
 
 /**
  * Twitch plugin configuration schema
