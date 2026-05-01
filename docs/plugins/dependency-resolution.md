@@ -168,7 +168,10 @@ selected bundled-plugin dependency plan is still satisfied by a previous staged
 root, repair reuses that previous `node_modules` tree instead of running the
 package manager again. The new versioned root still gets its own current package
 runtime mirror, so plugin code comes from the current OpenClaw package while
-unchanged dependency trees are shared across updates.
+unchanged dependency trees are shared across updates. Reuse skips previous roots
+with an active OpenClaw runtime-dependency lock, so a new root does not link to a
+dependency tree that another Gateway, doctor, or CLI process is currently
+repairing.
 
 ## Doctor and CLI commands
 

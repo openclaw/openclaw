@@ -17,6 +17,7 @@ import {
   type BundledRuntimeDepsInstallParams,
 } from "./bundled-runtime-deps-install.js";
 import {
+  BUNDLED_RUNTIME_DEPS_LOCK_DIR,
   formatRuntimeDepsLockTimeoutMessage,
   shouldRemoveRuntimeDepsLock,
 } from "./bundled-runtime-deps-lock.js";
@@ -1603,6 +1604,43 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
         "alpha-runtime": "1.0.0",
       },
     });
+  });
+
+  it("does not reuse a compatible previous external runtime deps root with an active install lock", async () => {
+    const packageRoot = setupPolicyPackageRoot();
+    const stageDir = makeTempDir();
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyPackageInstallRoot(packageRoot, { env });
+    const previousRoot = path.join(
+      stageDir,
+      path.basename(installRoot).replace("openclaw-unknown-", "openclaw-2026.4.28-"),
+    );
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+    writeInstalledPackage(previousRoot, "alpha-runtime", "1.0.0");
+    writeGeneratedRuntimeDepsManifest(previousRoot, ["alpha-runtime@1.0.0"]);
+    fs.mkdirSync(path.join(previousRoot, BUNDLED_RUNTIME_DEPS_LOCK_DIR));
+
+    const result = await repairBundledRuntimeDepsPackagePlanAsync({
+      packageRoot,
+      config: {},
+      env,
+      installDeps: (params) => {
+        calls.push(params);
+        writeInstalledPackage(params.installRoot, "alpha-runtime", "1.0.0");
+      },
+    });
+
+    expect(result.reusedSpecs).toBeUndefined();
+    expect(result.reusedFromRoot).toBeUndefined();
+    expect(result.repairedSpecs).toEqual(["alpha-runtime@1.0.0"]);
+    expect(calls).toEqual([
+      {
+        installRoot,
+        missingSpecs: ["alpha-runtime@1.0.0"],
+        installSpecs: ["alpha-runtime@1.0.0"],
+      },
+    ]);
+    expect(fs.lstatSync(path.join(installRoot, "node_modules")).isSymbolicLink()).toBe(false);
   });
 
   it("does not create a reuse symlink when an earlier configured layer already satisfies the plan", async () => {

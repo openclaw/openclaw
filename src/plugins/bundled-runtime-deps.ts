@@ -11,6 +11,7 @@ import {
 import { readRuntimeDepsJsonObject } from "./bundled-runtime-deps-json.js";
 import {
   BUNDLED_RUNTIME_DEPS_LOCK_DIR,
+  removeRuntimeDepsLockIfStale,
   withBundledRuntimeDepsFilesystemLock,
 } from "./bundled-runtime-deps-lock.js";
 import {
@@ -216,6 +217,7 @@ function findReusableBundledRuntimeDepsRoot(params: {
     env: params.env,
   })) {
     if (
+      !hasActiveBundledRuntimeDepsInstallLock(root) &&
       hasConcreteBundledRuntimeDepsNodeModules(root) &&
       isRuntimeDepsPlanMaterialized(root, params.installSpecs)
     ) {
@@ -223,6 +225,11 @@ function findReusableBundledRuntimeDepsRoot(params: {
     }
   }
   return null;
+}
+
+function hasActiveBundledRuntimeDepsInstallLock(root: string): boolean {
+  const lockDir = path.join(root, BUNDLED_RUNTIME_DEPS_LOCK_DIR);
+  return fs.existsSync(lockDir) && !removeRuntimeDepsLockIfStale(lockDir, Date.now());
 }
 
 function hasConcreteBundledRuntimeDepsNodeModules(root: string): boolean {
