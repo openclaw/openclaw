@@ -205,7 +205,10 @@ export function resolveMentionGating(params: MentionGateParams): MentionGateResu
     requireMention: params.requireMention,
     canDetectMention: params.canDetectMention,
     wasMentioned: params.wasMentioned,
-    implicitMentionKinds: implicitMentionKindWhen("native", params.implicitMention === true),
+    implicitMentionKinds: [
+      ...implicitMentionKindWhen("native", params.implicitMention === true),
+      ...implicitMentionKindWhen("bot_thread_participant", params.threadContinuation === true),
+    ],
     shouldBypassMention: params.shouldBypassMention === true,
   });
   return {
@@ -223,7 +226,10 @@ export function resolveMentionGatingWithBypass(
       canDetectMention: params.canDetectMention,
       wasMentioned: params.wasMentioned,
       hasAnyMention: params.hasAnyMention,
-      implicitMentionKinds: implicitMentionKindWhen("native", params.implicitMention === true),
+      implicitMentionKinds: [
+        ...implicitMentionKindWhen("native", params.implicitMention === true),
+        ...implicitMentionKindWhen("bot_thread_participant", params.threadContinuation === true),
+      ],
     },
     policy: {
       isGroup: params.isGroup,
