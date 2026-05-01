@@ -88,6 +88,21 @@ describe("sendExecApprovalFollowupResult", () => {
     );
   });
 
+  it("suppresses approval-not-found followup dispatch failures", async () => {
+    sendExecApprovalFollowup.mockRejectedValue(new Error("unknown or expired approval id"));
+
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-expired",
+        sessionKey: "agent:main:main",
+      },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn },
+    );
+
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
   it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
     sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
     const deps = { sendExecApprovalFollowup, logWarn };
