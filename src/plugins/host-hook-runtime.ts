@@ -89,21 +89,17 @@ function waitForTerminalEventHandlers(pendingHandlers: Set<Promise<void>>): Prom
   if (pendingHandlers.size === 0) {
     return Promise.resolve();
   }
-  return new Promise((resolve) => {
-    let settled = false;
-    const timeout = setTimeout(resolveOnce, PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
-    timeout.unref?.();
-
-    function resolveOnce() {
-      if (settled) {
-        return;
-      }
-      settled = true;
+  let timeout: NodeJS.Timeout | undefined = setTimeout(() => {
+    log.warn(
+      `plugin terminal agent event subscriptions still running after ${PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS}ms; preserving run context until they settle`,
+    );
+  }, PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
+  timeout.unref?.();
+  return Promise.allSettled(pendingHandlers).then(() => {
+    if (timeout) {
       clearTimeout(timeout);
-      resolve();
+      timeout = undefined;
     }
-
-    void Promise.allSettled(pendingHandlers).then(resolveOnce);
   });
 }
 
@@ -132,13 +128,14 @@ function getPluginRunContextNamespaces(params: {
 export function setPluginRunContext(params: {
   pluginId: string;
   patch: PluginRunContextPatch;
+  allowClosedRun?: boolean;
 }): boolean {
   const runId = normalizeOptionalString(params.patch.runId);
   const namespace = normalizeNamespace(params.patch.namespace);
   if (!runId || !namespace) {
     return false;
   }
-  if (isPluginRunClosed(runId)) {
+  if (!params.allowClosedRun && isPluginRunClosed(runId)) {
     return false;
   }
   // Only an explicit `unset: true` deletes the run-context entry — silently
@@ -254,6 +251,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
 }): void {
   const subscriptions = params.registry?.agentEventSubscriptions ?? [];
   const pendingHandlers: Promise<void>[] = [];
+  const isTerminalEvent = isTerminalAgentRunEvent(params.event);
   for (const registration of subscriptions) {
     const streams = registration.subscription.streams;
     if (streams && streams.length > 0 && !streams.includes(params.event.stream)) {
@@ -261,12 +259,17 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     }
     const pluginId = registration.pluginId;
     const runId = params.event.runId;
+    let handlerActive = true;
     const ctx = {
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
       getRunContext: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
         getPluginRunContext<T>({ pluginId, get: { runId, namespace } }),
       setRunContext: (namespace: string, value: PluginJsonValue) => {
-        setPluginRunContext({ pluginId, patch: { runId, namespace, value } });
+        setPluginRunContext({
+          pluginId,
+          patch: { runId, namespace, value },
+          allowClosedRun: isTerminalEvent && handlerActive,
+        });
       },
       clearRunContext: (namespace?: string) => {
         clearPluginRunContext({ pluginId, runId, namespace });
@@ -275,16 +278,21 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     try {
       const pending = Promise.resolve(
         registration.subscription.handle(structuredClone(params.event), ctx),
-      ).catch((error) => {
-        logAgentEventSubscriptionFailure({
-          pluginId,
-          subscriptionId: registration.subscription.id,
-          error,
+      )
+        .catch((error) => {
+          logAgentEventSubscriptionFailure({
+            pluginId,
+            subscriptionId: registration.subscription.id,
+            error,
+          });
+        })
+        .finally(() => {
+          handlerActive = false;
         });
-      });
       trackAgentEventHandler(runId, pending);
       pendingHandlers.push(pending);
     } catch (error) {
+      handlerActive = false;
       logAgentEventSubscriptionFailure({
         pluginId,
         subscriptionId: registration.subscription.id,
@@ -292,12 +300,9 @@ export function dispatchPluginAgentEventSubscriptions(params: {
       });
     }
   }
-  if (isTerminalAgentRunEvent(params.event)) {
+  if (isTerminalEvent) {
     markPluginRunClosed(params.event.runId);
-    const pendingForRun =
-      getPluginHostRuntimeState().pendingAgentEventHandlersByRunId.get(params.event.runId) ??
-      new Set(pendingHandlers);
-    void waitForTerminalEventHandlers(pendingForRun).then(() => {
+    void waitForTerminalEventHandlers(new Set(pendingHandlers)).then(() => {
       clearPluginRunContext({ runId: params.event.runId });
     });
   }

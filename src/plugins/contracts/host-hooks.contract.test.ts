@@ -2401,19 +2401,22 @@ describe("host-hook fixture plugin contract", () => {
     ).toBeUndefined();
   });
 
-  it("bounds terminal event wait before clearing run context", async () => {
+  it("keeps run context until slow terminal event subscriptions settle", async () => {
     vi.useFakeTimers();
+    let releaseTerminalHandler: (() => void) | undefined;
+    let terminalHandlerSawContext: unknown;
+    let terminalHandlerWroteContext: unknown;
     const { config, registry } = createPluginRegistryFixture();
     registerTestPlugin({
       registry,
       config,
       record: createPluginRecord({
-        id: "hung-terminal-subscription",
-        name: "Hung Terminal Subscription",
+        id: "slow-terminal-subscription",
+        name: "Slow Terminal Subscription",
       }),
       register(api) {
         api.registerAgentEventSubscription({
-          id: "hung",
+          id: "slow",
           streams: ["tool", "lifecycle"],
           async handle(event, ctx) {
             if (event.stream === "tool") {
@@ -2421,7 +2424,12 @@ describe("host-hook fixture plugin contract", () => {
               return;
             }
             if (event.data?.phase === "end") {
-              await new Promise<void>(() => {});
+              await new Promise<void>((resolve) => {
+                releaseTerminalHandler = resolve;
+              });
+              terminalHandlerSawContext = ctx.getRunContext("seen");
+              ctx.setRunContext("terminal", { completed: true });
+              terminalHandlerWroteContext = ctx.getRunContext("terminal");
             }
           },
         });
@@ -2431,14 +2439,14 @@ describe("host-hook fixture plugin contract", () => {
 
     try {
       emitAgentEvent({
-        runId: "run-hung-terminal",
+        runId: "run-slow-terminal",
         stream: "tool",
         data: { name: "approval_fixture_tool" },
       });
       await Promise.resolve();
 
       emitAgentEvent({
-        runId: "run-hung-terminal",
+        runId: "run-slow-terminal",
         stream: "lifecycle",
         data: { phase: "end" },
       });
@@ -2446,16 +2454,34 @@ describe("host-hook fixture plugin contract", () => {
 
       expect(
         getPluginRunContext({
-          pluginId: "hung-terminal-subscription",
-          get: { runId: "run-hung-terminal", namespace: "seen" },
+          pluginId: "slow-terminal-subscription",
+          get: { runId: "run-slow-terminal", namespace: "seen" },
         }),
-      ).toEqual({ runId: "run-hung-terminal" });
+      ).toEqual({ runId: "run-slow-terminal" });
 
       await vi.advanceTimersByTimeAsync(PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS);
       expect(
         getPluginRunContext({
-          pluginId: "hung-terminal-subscription",
-          get: { runId: "run-hung-terminal", namespace: "seen" },
+          pluginId: "slow-terminal-subscription",
+          get: { runId: "run-slow-terminal", namespace: "seen" },
+        }),
+      ).toEqual({ runId: "run-slow-terminal" });
+
+      releaseTerminalHandler?.();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(terminalHandlerSawContext).toEqual({ runId: "run-slow-terminal" });
+      expect(terminalHandlerWroteContext).toEqual({ completed: true });
+      expect(
+        getPluginRunContext({
+          pluginId: "slow-terminal-subscription",
+          get: { runId: "run-slow-terminal", namespace: "seen" },
+        }),
+      ).toBeUndefined();
+      expect(
+        getPluginRunContext({
+          pluginId: "slow-terminal-subscription",
+          get: { runId: "run-slow-terminal", namespace: "terminal" },
         }),
       ).toBeUndefined();
     } finally {
