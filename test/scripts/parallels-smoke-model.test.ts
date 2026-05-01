@@ -289,13 +289,16 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
       expect(script, scriptPath).toContain("AgentWorkspaceScript");
       expect(script, scriptPath).toContain("parallels-");
       expect(script, scriptPath).toContain("agents.defaults.skipBootstrap");
-      expect(script, scriptPath).toContain("--timeout");
+      expect(script, scriptPath).toContain("tools.profile");
+      expect(script, scriptPath).toContain("--thinking");
+      expect(script, scriptPath).toContain("minimal");
     }
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
-    expect(npmUpdateScripts).toContain("--timeout 0");
+    expect(npmUpdateScripts).toContain("tools.profile");
+    expect(npmUpdateScripts).toContain("--thinking minimal");
   });
 
   it("clears phase timers and applies phase deadlines to guest commands", () => {

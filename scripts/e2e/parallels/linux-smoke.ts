@@ -695,11 +695,12 @@ rm -rf /root/.openclaw/test-bad-plugin`);
       "true",
       "--strict-json",
     ]);
+    this.guestExec(["openclaw", "config", "set", "tools.profile", '"minimal"', "--strict-json"]);
     this.prepareAgentWorkspace();
     this.guestBash(
       `exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id parallels-linux-smoke --message ${shellQuote(
         "Reply with exact ASCII text OK only.",
-      )} --timeout 0 --json`,
+      )} --thinking minimal --json`,
     );
   }
 

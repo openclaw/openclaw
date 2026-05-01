@@ -972,11 +972,20 @@ exit 1`);
       "true",
       "--strict-json",
     ]);
+    this.guestExec([
+      guestNode,
+      guestOpenClawEntry,
+      "config",
+      "set",
+      "tools.profile",
+      '"minimal"',
+      "--strict-json",
+    ]);
     this.guestSh(
       `${posixAgentWorkspaceScript("Parallels macOS smoke test assistant.")}
 exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} ${guestNode} ${guestOpenClawEntry} agent --local --agent main --session-id parallels-macos-smoke --message ${shellQuote(
         "Reply with exact ASCII text OK only.",
-      )} --timeout 0 --json`,
+      )} --thinking minimal --json`,
     );
   }
 
