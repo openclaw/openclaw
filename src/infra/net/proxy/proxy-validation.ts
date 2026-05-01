@@ -274,7 +274,22 @@ export async function runProxyValidation(
   options: RunProxyValidationOptions,
 ): Promise<ProxyValidationResult> {
   const config = resolveProxyValidationConfig(options);
-  if (config.errors.length > 0 || !config.proxyUrl) {
+  if (config.errors.length > 0) {
+    return { ok: false, config, checks: [] };
+  }
+  if (!config.proxyUrl) {
+    if (!config.enabled && config.source === "disabled") {
+      return {
+        ok: false,
+        config: {
+          ...config,
+          errors: [
+            "Proxy validation is disabled. Set proxy.enabled=true or pass --proxy-url to run validation.",
+          ],
+        },
+        checks: [],
+      };
+    }
     return { ok: false, config, checks: [] };
   }
 
