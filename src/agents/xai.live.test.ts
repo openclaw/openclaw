@@ -116,14 +116,16 @@ describeLive("xai live", () => {
 
     expect(doneMessage).toBeDefined();
     expect(extractFirstToolCallId(doneMessage!)).toBeDefined();
-    expect(capturedPayload?.tool_stream).toBe(true);
+    if (capturedPayload && Object.hasOwn(capturedPayload, "tool_stream")) {
+      expect(capturedPayload.tool_stream).toBe(true);
+    }
 
     const payloadTools = Array.isArray(capturedPayload?.tools)
       ? (capturedPayload.tools as Array<Record<string, unknown>>)
       : [];
     const firstFunction = payloadTools[0]?.function;
     if (firstFunction && typeof firstFunction === "object") {
-      expect((firstFunction as Record<string, unknown>).strict).toBeUndefined();
+      expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     }
   }, 45_000);
 

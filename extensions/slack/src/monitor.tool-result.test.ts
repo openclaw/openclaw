@@ -687,7 +687,7 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
-  it("restores ack reaction when dispatch fails before any reply is delivered", async () => {
+  it("keeps the error reaction when dispatch fails before any reply is delivered", async () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);
     mockGeneralChannelInfo();

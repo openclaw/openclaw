@@ -767,7 +767,9 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
-    record.channelIds.push(id);
+    if (!record.channelIds.includes(id)) {
+      record.channelIds.push(id);
+    }
     registry.channelSetups.push({
       pluginId: record.id,
       pluginName: record.name,
