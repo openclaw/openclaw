@@ -180,6 +180,41 @@ describe("repairSessionFileIfNeeded", () => {
     expect(JSON.parse(repairedLines[2])?.id).toBe("msg-1");
   });
 
+  it("rewrites blank user messages with string-format content", async () => {
+    // Content as a plain string (not array) that is blank should also be rewritten.
+    const { file } = await createTempSessionPath();
+    const { header } = buildSessionHeaderAndMessage();
+    const blankUserEntry = {
+      type: "message",
+      id: "msg-blank-str",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "user",
+        content: "   ",
+      },
+    };
+    const userMessage = {
+      type: "message",
+      id: "msg-1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      message: { role: "user", content: "hello" },
+    };
+    const original = `${JSON.stringify(header)}\n${JSON.stringify(blankUserEntry)}\n${JSON.stringify(userMessage)}\n`;
+    await fs.writeFile(file, original, "utf-8");
+
+    const result = await repairSessionFileIfNeeded({ sessionFile: file });
+
+    expect(result.repaired).toBe(true);
+    expect(result.rewrittenBlankUserMessages).toBe(1);
+    const repaired = await fs.readFile(file, "utf-8");
+    const repairedLines = repaired.trim().split("\n");
+    expect(repairedLines).toHaveLength(3);
+    const blankEntry = JSON.parse(repairedLines[1] ?? "{}");
+    expect(blankEntry.message.content).toEqual([{ type: "text", text: BLANK_USER_FALLBACK_TEXT }]);
+  });
+
   it("rewrites blank user text blocks while preserving media blocks", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();
