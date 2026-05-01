@@ -781,6 +781,47 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
+  it("derives sandboxed apply_patch paths through the sandbox bridge", async () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: /workspace/src/new.ts",
+      "+x",
+      "*** End Patch",
+    ].join("\n");
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "apply_patch",
+      params: { input: patch },
+      toolCallId: "patch-sandbox",
+      ctx: {
+        agentId: "main",
+        cwd: "/workspace",
+        sandbox: {
+          root: "/workspace",
+          bridge: {
+            resolvePath: ({ filePath }: { filePath: string }) => ({
+              containerPath: filePath,
+              hostPath: "/host/sandbox/src/new.ts",
+              relativePath: "src/new.ts",
+            }),
+          } as never,
+        },
+        sessionKey: "main",
+        runId: "run-patch",
+      },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        derivedPaths: ["/host/sandbox/src/new.ts"],
+      }),
+      expect.anything(),
+    );
+  });
+
   it("skips derived path extraction when no policies or hooks can consume it", async () => {
     hookRunner.hasHooks.mockReturnValue(false);
     const params = {};

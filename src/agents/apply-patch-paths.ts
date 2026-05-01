@@ -1,5 +1,6 @@
 import path from "node:path";
 import { resolveSandboxInputPath } from "./sandbox-paths.js";
+import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 /**
  * Lightweight path extractor for the `apply_patch` envelope grammar.
@@ -34,6 +35,11 @@ const MOVE_TO_MARKER = "*** Move to: ";
 export type ApplyPatchPathExtractionOptions = {
   /** Tool execution cwd. Defaults to process.cwd(), matching createApplyPatchTool. */
   cwd?: string;
+  /** Sandbox bridge used by apply_patch execution, when the tool runs in a sandbox. */
+  sandbox?: {
+    root: string;
+    bridge: SandboxFsBridge;
+  };
 };
 
 function readPatchText(input: unknown): string | undefined {
@@ -53,12 +59,19 @@ function normalizePatchPath(
   raw: string,
   options: ApplyPatchPathExtractionOptions = {},
 ): string | undefined {
-  const trimmed = raw.trim();
-  if (!trimmed) {
+  if (raw.length === 0) {
     return undefined;
   }
-  const cwd = options.cwd ?? process.cwd();
-  const normalized = path.normalize(resolveSandboxInputPath(trimmed, cwd));
+  const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
+  const resolved = options.sandbox
+    ? options.sandbox.bridge.resolvePath({
+        filePath: raw,
+        cwd,
+      })
+    : undefined;
+  const normalized = path.normalize(
+    resolved ? (resolved.hostPath ?? resolved.containerPath) : resolveSandboxInputPath(raw, cwd),
+  );
   return normalized && normalized !== "." ? normalized : undefined;
 }
 
@@ -94,11 +107,11 @@ function normalizeMarkerHeaderLine(
   if (line === undefined) {
     return undefined;
   }
-  const candidate = line.trimStart();
-  if (!candidate.startsWith("***")) {
+  const startTrimmed = line.trimStart();
+  if (!startTrimmed.startsWith("***")) {
     return undefined;
   }
-  const leadingWhitespace = line.length - candidate.length;
+  const leadingWhitespace = line.length - startTrimmed.length;
   if (
     options?.allowSingleSpaceIndent === false &&
     leadingWhitespace === 1 &&
@@ -106,7 +119,7 @@ function normalizeMarkerHeaderLine(
   ) {
     return undefined;
   }
-  return candidate;
+  return startTrimmed.trimEnd();
 }
 
 /**
