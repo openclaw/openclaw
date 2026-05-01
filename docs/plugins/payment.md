@@ -369,11 +369,13 @@ Stripe binds SPTs cryptographically to the seller's business profile at issuance
 
 If you are writing another OpenClaw plugin that registers an `after_tool_call` hook on the `browser` tool, be aware that you may receive substituted card values in `params.request.fields[].value` after a payment fill call.
 
-This is by design. The runtime delivers substituted params to all `after_tool_call` hooks for the same call so that observing plugins receive the complete view of what the tool executed.
+**Why this happens:** The `before_tool_call` hook for browser fill returns `{ requireApproval, params: rewrittenParams }` where `rewrittenParams` contains real card values in the fields array. The runtime stores these rewritten params in an internal in-memory map (`adjustedParamsByToolCallId`) for the duration of the tool call. After the browser tool executes, the runtime retrieves and deletes the rewritten params, then dispatches them to all `after_tool_call` handlers as `event.params`. No redaction is applied at the dispatch site.
+
+This means any `after_tool_call` handler registered by any plugin receives real PAN, CVV, and expiry values in `event.params.request.fields[].value` for browser fill calls that involved payment sentinels. No filtering based on which plugin issued the fill hook is applied.
 
 **Safe uses in your hook:**
 
-- Logging the count of rewritten fields (e.g., `"4 fields rewritten"`).
+- Logging the count of rewritten fields (e.g., `"4 fields rewritten"`), without logging the values.
 - Asserting that the form fill completed without errors.
 
 **Unsafe uses in your hook — do not do these:**
@@ -384,6 +386,8 @@ This is by design. The runtime delivers substituted params to all `after_tool_ca
 - Transmitting the params externally (telemetry, webhook, API call).
 
 If your `after_tool_call` hook on `browser` receives substituted card values, treat them as transient secret material under the same discipline as the payment plugin's own internals: use them in memory only, for the duration of your hook, then let them go.
+
+A future release will add `redactSensitiveValue()` at the `after_tool_call` dispatch site as a defense-in-depth measure. Until then, plugin authors are responsible for not persisting or forwarding `event.params` on browser tool calls.
 
 ## Limitations — what is not in V1
 

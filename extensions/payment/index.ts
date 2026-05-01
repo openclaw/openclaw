@@ -40,6 +40,13 @@ export default definePluginEntry({
       }
     }
 
+    if (!config.enabled) {
+      // Plugin loaded but disabled — don't register money-moving surfaces.
+      // Redaction hook is still registered as a defense-in-depth safety net.
+      registerRedactionHook(api);
+      return;
+    }
+
     const manager = createManager(config);
 
     registerPaymentTool(api, manager);

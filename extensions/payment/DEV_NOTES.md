@@ -121,6 +121,15 @@ The V1 scaffold sets `activation.onStartup: false` — `pnpm openclaw plugins li
 
 ## Known issues tracked for follow-up units
 
+- **I-1 (P1-2 Codex finding) — `adjustedParamsByToolCallId` fill-hook leakage vector (known; low current risk, future plugin risk).**
+  When the fill hook returns `{ requireApproval, params: rewrittenParams }`, the runtime stores `rewrittenParams` (containing real PAN/CVV as browser fill field strings) in the `adjustedParamsByToolCallId` in-memory Map for the duration of the tool call. After the browser tool executes, `consumeAdjustedParamsForToolCall()` retrieves and deletes the entry, then passes it as `hookEvent.params` to all registered `after_tool_call` handlers.
+
+  **Current exposure**: No production extension currently registers `after_tool_call` on the `browser` tool (confirmed by grepping all extensions in the tree). The `codex` extension's `after_tool_call` registrations are test-only mock handlers. No real card data reaches any observer today.
+
+  **`recordLoopOutcome` path**: `toolParams` with card data is passed through `recordLoopOutcome` → `recordToolCallOutcome` → `hashToolCall()`, which reduces params to a SHA-256 hex string. Only the hash is stored in `sessionState.toolCallHistory` — no plaintext card data is persisted into session state.
+
+  **Residual risk**: Any future plugin that registers `after_tool_call` will receive `hookEvent.params` with real card values if the browser tool was the target of a fill. The `after_tool_call` dispatch path has no redaction layer between `adjustedParamsByToolCallId` and the hook event. Follow-up: apply `redactSensitiveValue()` to `hookEvent.params` at the dispatch call site in `pi-embedded-subscribe.handlers.tools.ts:~1156` before building the event (tracked as U2 follow-up).
+
 - **I-3 — `--request-approval` long-poll bound only by `commandTimeoutMs` (60s default).** If the buyer takes longer than 60s to approve on the Link mobile app, the runner SIGTERMs and `runCli` rejects with a confusing `ProviderUnavailableError` rather than allowing `pending_approval` retry. Two paths to fix: (a) raise `commandTimeoutMs` default for approval flows or accept a separate `approvalTimeoutMs`, (b) when runner rejects with timeout specifically, map to `pending_approval` `CredentialHandle` so the manager's `getStatus` polling can pick up. Address in U5 or U6.
 
 - **I-4 — `runner.ts` SIGKILL escalation deferred.** `runner.ts` only sends SIGTERM on `commandTimeoutMs` exceedance. A misbehaving subprocess that traps SIGTERM hangs the parent indefinitely. Add a follow-up `setTimeout(() => child.kill("SIGKILL"), 2000)` after the SIGTERM, cleared on `'close'`. Becomes important under U4's heavy `link-cli` usage. Address in U5 or as a focused `runner.ts` fix.

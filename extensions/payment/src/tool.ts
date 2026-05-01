@@ -16,8 +16,8 @@
  */
 
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import { Type, type Static } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { Type, type Static } from "typebox";
 import type { PaymentManager } from "./payments.js";
 import { redactHandle, redactMachinePaymentResult } from "./redact.js";
 

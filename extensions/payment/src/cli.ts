@@ -40,6 +40,27 @@ function writeError(message: string): void {
 }
 
 // ---------------------------------------------------------------------------
+// Strict integer parsing (Codex P2-4)
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a CLI string as a strict positive integer.
+ * Rejects decimals ("12.99"), suffixed strings ("100abc"), empty strings,
+ * zero, negatives, and overflow values.
+ * Throws an Error with a descriptive message on failure.
+ */
+function parseStrictInt(s: string, fieldName: string): number {
+  if (!/^\d+$/.test(s)) {
+    throw new Error(`${fieldName} must be a positive integer (no decimals, no suffix); got "${s}"`);
+  }
+  const n = Number.parseInt(s, 10);
+  if (!Number.isSafeInteger(n) || n < 1) {
+    throw new Error(`${fieldName} must be a positive integer; got "${s}"`);
+  }
+  return n;
+}
+
+// ---------------------------------------------------------------------------
 // registerPaymentCli
 // ---------------------------------------------------------------------------
 
@@ -169,11 +190,11 @@ export function buildPaymentCli(program: Command, manager: PaymentManager): void
         yes?: boolean;
         json?: boolean;
       }) => {
-        const amountCents = parseInt(opts.amount, 10);
-
-        // Validation
-        if (isNaN(amountCents) || amountCents < 1) {
-          writeError("payment virtual-card issue: --amount must be a positive integer (cents)");
+        let amountCents: number;
+        try {
+          amountCents = parseStrictInt(opts.amount, "--amount");
+        } catch (err) {
+          writeError(`payment virtual-card issue: ${String(err)}`);
           process.exit(1);
         }
 

@@ -7,8 +7,8 @@
  *   - fillSentinels included in issue_virtual_card result.
  */
 
-import { Value } from "@sinclair/typebox/value";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PaymentManager } from "./payments.js";
 import { PaymentToolInput, registerPaymentTool } from "./tool.js";

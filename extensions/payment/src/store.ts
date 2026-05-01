@@ -227,7 +227,7 @@ export async function readAuditRecords(storePath: string): Promise<AuditRecord[]
 }
 
 // ---------------------------------------------------------------------------
-// In-memory handle map
+// In-memory handle map with JSONL persistence (Codex P2-5)
 // ---------------------------------------------------------------------------
 
 export type HandleMetadata = {
@@ -239,6 +239,9 @@ export type HandleMetadata = {
   validUntil?: string;
 };
 
+/** Persisted JSONL record shape: handleId + HandleMetadata */
+type HandleRecord = { handleId: string } & HandleMetadata;
+
 const ALLOWED_HANDLE_METADATA_KEYS = new Set([
   "spendRequestId",
   "providerId",
@@ -249,8 +252,89 @@ const ALLOWED_HANDLE_METADATA_KEYS = new Set([
 ] as const);
 
 /**
- * In-memory only. Cleared on process restart. Stores no sensitive card values
- * — see store.ts redaction discipline.
+ * The absolute path to handles.jsonl, set by initHandleStore().
+ * Undefined means no persistence configured (in-memory only).
+ */
+let _handleStorePath: string | undefined;
+
+/**
+ * Configure where handles.jsonl lives and pre-load existing entries into memory.
+ * Call this once at PaymentManager creation (before any get/set).
+ * No-op if already initialized to the same path.
+ *
+ * Returns the number of handle entries loaded from disk.
+ *
+ * TODO: Stream-parse the JSONL file once it grows past a few MB.
+ */
+export async function initHandleStore(storePath: string): Promise<number> {
+  const absPath = path.resolve(storePath, "handles.jsonl");
+  _handleStorePath = absPath;
+
+  let raw: string;
+  try {
+    raw = await fs.readFile(absPath, "utf8");
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return 0; // file doesn't exist yet — normal on first run
+    }
+    throw err;
+  }
+
+  let loaded = 0;
+  const lines = raw.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      const record = JSON.parse(trimmed) as HandleRecord;
+      if (!record.handleId || !record.spendRequestId || !record.providerId) continue;
+      // Validate keys before loading into memory — skip the entire record if any
+      // disallowed key is present (defense against tampered JSONL files).
+      const { handleId, ...meta } = record;
+      let hasDisallowedKey = false;
+      for (const key of Object.keys(meta)) {
+        if (!ALLOWED_HANDLE_METADATA_KEYS.has(key as never)) {
+          hasDisallowedKey = true;
+          break;
+        }
+      }
+      if (hasDisallowedKey) continue;
+      handleMap._map.set(handleId, meta as HandleMetadata);
+      loaded++;
+    } catch {
+      console.warn(`[payment/store] Skipping malformed handle record: ${trimmed.slice(0, 80)}`);
+    }
+  }
+  return loaded;
+}
+
+/**
+ * Append a single HandleRecord to the handles.jsonl file.
+ * Uses the per-path write queue to avoid concurrent-write corruption.
+ * No-op if _handleStorePath is not configured (in-memory only mode).
+ */
+async function appendHandleRecord(handleId: string, meta: HandleMetadata): Promise<void> {
+  if (!_handleStorePath) return;
+  const absPath = _handleStorePath;
+  await withWriteQueue(absPath, async () => {
+    const record: HandleRecord = { handleId, ...meta };
+    // Safety check: the allowed-keys guard on handleMap.set already ran,
+    // but re-verify here to ensure no sensitive data leaks into the JSONL.
+    for (const key of Object.keys(record)) {
+      if (key !== "handleId" && !ALLOWED_HANDLE_METADATA_KEYS.has(key as never)) {
+        throw new Error(`handleMap persistence: disallowed key "${key}" — not writing to disk`);
+      }
+    }
+    const line = `${JSON.stringify(record)}\n`;
+    await fs.mkdir(path.dirname(absPath), { recursive: true });
+    await fs.appendFile(absPath, line, "utf8");
+  });
+}
+
+/**
+ * In-memory handle map with JSONL persistence.
+ * Call initHandleStore(storePath) before using across CLI processes.
+ * Stores no sensitive card values — see store.ts redaction discipline.
  */
 export const handleMap = {
   _map: new Map<string, HandleMetadata>(),
@@ -264,6 +348,11 @@ export const handleMap = {
       }
     }
     this._map.set(handleId, meta);
+    // Fire-and-forget persistence — do not block the caller.
+    // Errors are logged but not surfaced (in-memory set already succeeded).
+    appendHandleRecord(handleId, meta).catch((err) => {
+      console.warn(`[payment/store] Failed to persist handle ${handleId}: ${String(err)}`);
+    });
   },
 
   get(handleId: string): HandleMetadata | undefined {

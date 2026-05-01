@@ -6,6 +6,7 @@ import {
   appendAuditRecord,
   expandStorePath,
   handleMap,
+  initHandleStore,
   readAuditRecords,
   redactSensitiveValue,
 } from "./store.js";
@@ -446,5 +447,191 @@ describe("handleMap", () => {
     };
     expect(() => handleMap.set("handle_provider_test", metaWithProvider)).not.toThrow();
     expect(handleMap.get("handle_provider_test")?.providerId).toBe("mock");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// initHandleStore — JSONL persistence / fresh-process recovery (Codex P2-5)
+// ---------------------------------------------------------------------------
+
+describe("initHandleStore — fresh-process recovery (Codex P2-5)", () => {
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "payment-handle-store-test-"));
+    // Clear the in-memory map before each test to simulate a fresh process
+    for (const id of [...handleMap._map.keys()]) {
+      handleMap.delete(id);
+    }
+  });
+
+  afterEach(async () => {
+    // Reset _handleStorePath by pointing to a fresh dir so subsequent tests
+    // don't accidentally write to a stale path.
+    await initHandleStore(await fs.mkdtemp(path.join(os.tmpdir(), "payment-handle-reset-")));
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns 0 and leaves handleMap empty when handles.jsonl does not exist yet", async () => {
+    const count = await initHandleStore(tmpDir);
+    expect(count).toBe(0);
+    expect(handleMap.size()).toBe(0);
+  });
+
+  it("loads persisted handles from handles.jsonl into memory (fresh-process simulation)", async () => {
+    // Simulate a previous process: write a handles.jsonl manually
+    const record = {
+      handleId: "hndl_persisted_001",
+      spendRequestId: "lsrq_test_persisted",
+      providerId: "stripe-link",
+      last4: "4242",
+      issuedAt: "2026-04-30T00:00:00.000Z",
+    };
+    await fs.mkdir(tmpDir, { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "handles.jsonl"), `${JSON.stringify(record)}\n`, "utf8");
+
+    // Now simulate a fresh process calling initHandleStore
+    const count = await initHandleStore(tmpDir);
+    expect(count).toBe(1);
+    const meta = handleMap.get("hndl_persisted_001");
+    expect(meta).toBeDefined();
+    expect(meta?.spendRequestId).toBe("lsrq_test_persisted");
+    expect(meta?.providerId).toBe("stripe-link");
+    expect(meta?.last4).toBe("4242");
+  });
+
+  it("loads multiple entries from handles.jsonl", async () => {
+    const records = [
+      {
+        handleId: "hndl_multi_001",
+        spendRequestId: "lsrq_multi_001",
+        providerId: "stripe-link",
+        issuedAt: "2026-04-30T00:00:00.000Z",
+      },
+      {
+        handleId: "hndl_multi_002",
+        spendRequestId: "lsrq_multi_002",
+        providerId: "stripe-link",
+        issuedAt: "2026-04-30T01:00:00.000Z",
+      },
+    ];
+    const content = records.map((r) => JSON.stringify(r)).join("\n") + "\n";
+    await fs.mkdir(tmpDir, { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "handles.jsonl"), content, "utf8");
+
+    const count = await initHandleStore(tmpDir);
+    expect(count).toBe(2);
+    expect(handleMap.get("hndl_multi_001")?.spendRequestId).toBe("lsrq_multi_001");
+    expect(handleMap.get("hndl_multi_002")?.spendRequestId).toBe("lsrq_multi_002");
+  });
+
+  it("skips records missing required fields (handleId, spendRequestId, providerId)", async () => {
+    const lines = [
+      // Missing handleId
+      JSON.stringify({
+        spendRequestId: "lsrq_no_handle",
+        providerId: "mock",
+        issuedAt: "2026-04-30T00:00:00.000Z",
+      }),
+      // Missing spendRequestId
+      JSON.stringify({
+        handleId: "hndl_no_spend",
+        providerId: "mock",
+        issuedAt: "2026-04-30T00:00:00.000Z",
+      }),
+      // Valid record
+      JSON.stringify({
+        handleId: "hndl_valid_only",
+        spendRequestId: "lsrq_valid",
+        providerId: "mock",
+        issuedAt: "2026-04-30T00:00:00.000Z",
+      }),
+    ];
+    await fs.mkdir(tmpDir, { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "handles.jsonl"), lines.join("\n") + "\n", "utf8");
+
+    const count = await initHandleStore(tmpDir);
+    expect(count).toBe(1);
+    expect(handleMap.get("hndl_valid_only")).toBeDefined();
+  });
+
+  it("skips records containing disallowed keys (tampered JSONL defense)", async () => {
+    const tampered = {
+      handleId: "hndl_tampered",
+      spendRequestId: "lsrq_tampered",
+      providerId: "mock",
+      issuedAt: "2026-04-30T00:00:00.000Z",
+      pan: "4242424242424242", // disallowed — must cause the entire record to be skipped
+    };
+    await fs.mkdir(tmpDir, { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "handles.jsonl"), `${JSON.stringify(tampered)}\n`, "utf8");
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const count = await initHandleStore(tmpDir);
+    warnSpy.mockRestore();
+
+    expect(count).toBe(0);
+    expect(handleMap.get("hndl_tampered")).toBeUndefined();
+  });
+
+  it("skips malformed (non-JSON) lines with a console.warn", async () => {
+    const content = `not-json\n${JSON.stringify({ handleId: "hndl_good", spendRequestId: "lsrq_good", providerId: "mock", issuedAt: "2026-04-30T00:00:00.000Z" })}\n`;
+    await fs.mkdir(tmpDir, { recursive: true });
+    await fs.writeFile(path.join(tmpDir, "handles.jsonl"), content, "utf8");
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const count = await initHandleStore(tmpDir);
+    expect(count).toBe(1);
+    expect(warnSpy).toHaveBeenCalledOnce();
+    warnSpy.mockRestore();
+  });
+
+  it("handleMap.set() fire-and-forgets persistence to handles.jsonl", async () => {
+    await initHandleStore(tmpDir);
+
+    const meta: HandleMetadata = {
+      spendRequestId: "lsrq_persist_test",
+      providerId: "stripe-link",
+      last4: "9999",
+      issuedAt: "2026-04-30T00:00:00.000Z",
+    };
+    handleMap.set("hndl_persist_test", meta);
+
+    // Drain microtask/macrotask queue to let the fire-and-forget write complete
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Verify handles.jsonl now contains the persisted record
+    const raw = await fs.readFile(path.join(tmpDir, "handles.jsonl"), "utf8");
+    const parsed = JSON.parse(raw.trim()) as Record<string, unknown>;
+    expect(parsed["handleId"]).toBe("hndl_persist_test");
+    expect(parsed["spendRequestId"]).toBe("lsrq_persist_test");
+    expect(parsed["last4"]).toBe("9999");
+
+    // Verify no sensitive data leaked into the file
+    expect(raw).not.toContain("4242");
+  });
+
+  it("fresh initHandleStore after a set() recovers the written handle", async () => {
+    await initHandleStore(tmpDir);
+
+    const meta: HandleMetadata = {
+      spendRequestId: "lsrq_round_trip",
+      providerId: "stripe-link",
+      issuedAt: "2026-04-30T00:00:00.000Z",
+    };
+    handleMap.set("hndl_round_trip", meta);
+
+    // Wait for fire-and-forget write
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    // Simulate fresh process: clear memory and re-init
+    for (const id of [...handleMap._map.keys()]) {
+      handleMap.delete(id);
+    }
+    expect(handleMap.get("hndl_round_trip")).toBeUndefined();
+
+    const count = await initHandleStore(tmpDir);
+    expect(count).toBe(1);
+    expect(handleMap.get("hndl_round_trip")?.spendRequestId).toBe("lsrq_round_trip");
   });
 });

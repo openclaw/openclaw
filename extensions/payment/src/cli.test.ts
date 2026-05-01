@@ -636,3 +636,80 @@ describe("openclaw payment status", () => {
     expect(stdout).not.toContain("4242424242424242");
   });
 });
+
+// ---------------------------------------------------------------------------
+// parseStrictInt boundary tests (Codex P2-4)
+// ---------------------------------------------------------------------------
+
+describe("parseStrictInt via --amount boundary (Codex P2-4)", () => {
+  // Helper: run virtual-card issue with a specific amount value and --yes
+  async function issueWithAmount(amount: string, manager: PaymentManager) {
+    return runCli(manager, [
+      "payment",
+      "virtual-card",
+      "issue",
+      "--provider",
+      "mock",
+      "--funding-source",
+      "fs-card-001",
+      "--amount",
+      amount,
+      "--currency",
+      "usd",
+      "--merchant-name",
+      "Acme Corp",
+      "--purchase-intent",
+      VALID_PURCHASE_INTENT,
+      "--yes",
+    ]);
+  }
+
+  let manager: PaymentManager;
+  beforeEach(() => {
+    manager = makeFakeManager();
+  });
+
+  it("accepts a valid positive integer", async () => {
+    const { stderr } = await issueWithAmount("2500", manager);
+    expect(stderr).toBe("");
+    expect(manager.issueVirtualCard).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: expect.objectContaining({ amountCents: 2500 }) }),
+    );
+  });
+
+  it("rejects decimal '12.99' — no partial parse", async () => {
+    const { stderr } = await issueWithAmount("12.99", manager);
+    expect(stderr).toMatch(/--amount/i);
+    expect(manager.issueVirtualCard).not.toHaveBeenCalled();
+  });
+
+  it("rejects suffixed '100abc'", async () => {
+    const { stderr } = await issueWithAmount("100abc", manager);
+    expect(stderr).toMatch(/--amount/i);
+    expect(manager.issueVirtualCard).not.toHaveBeenCalled();
+  });
+
+  it("rejects zero '0'", async () => {
+    const { stderr } = await issueWithAmount("0", manager);
+    expect(stderr).toMatch(/--amount/i);
+    expect(manager.issueVirtualCard).not.toHaveBeenCalled();
+  });
+
+  it("rejects negative '-1'", async () => {
+    const { stderr } = await issueWithAmount("-1", manager);
+    expect(stderr).toMatch(/--amount/i);
+    expect(manager.issueVirtualCard).not.toHaveBeenCalled();
+  });
+
+  it("rejects empty string ''", async () => {
+    const { stderr } = await issueWithAmount("", manager);
+    expect(stderr).toMatch(/--amount/i);
+    expect(manager.issueVirtualCard).not.toHaveBeenCalled();
+  });
+
+  it("rejects overflow value '99999999999999999999'", async () => {
+    const { stderr } = await issueWithAmount("99999999999999999999", manager);
+    expect(stderr).toMatch(/--amount/i);
+    expect(manager.issueVirtualCard).not.toHaveBeenCalled();
+  });
+});
