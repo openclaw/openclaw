@@ -313,22 +313,29 @@ export async function getReplyFromConfig(
     bodyStripped,
   } = sessionState;
   if (resetTriggered && normalizeOptionalString(bodyStripped)) {
-    const { applyResetModelOverride } = await loadSessionResetModelRuntime();
-    await applyResetModelOverride({
-      cfg,
-      agentId,
-      resetTriggered,
-      bodyStripped,
-      sessionCtx,
-      ctx: finalized,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
-    });
+    try {
+      const { applyResetModelOverride } = await loadSessionResetModelRuntime();
+      await applyResetModelOverride({
+        cfg,
+        agentId,
+        resetTriggered,
+        bodyStripped,
+        sessionCtx,
+        ctx: finalized,
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+      });
+    } catch (err) {
+      sessionResetModelRuntimePromise = null;
+      logVerbose(
+        `session reset model override failed, proceeding without override: ${formatErrorMessage(err)}`,
+      );
+    }
   }
 
   const channelModelOverride = cfg.channels?.modelByChannel
@@ -525,18 +532,25 @@ export async function getReplyFromConfig(
     if (!resetMatch) {
       return;
     }
-    const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
-    const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
-    await emitResetCommandHooks({
-      action,
-      ctx,
-      cfg,
-      command,
-      sessionKey,
-      sessionEntry,
-      previousSessionEntry,
-      workspaceDir,
-    });
+    try {
+      const { emitResetCommandHooks } = await loadCommandsCoreRuntime();
+      const action: ResetCommandAction = resetMatch[1] === "reset" ? "reset" : "new";
+      await emitResetCommandHooks({
+        action,
+        ctx,
+        cfg,
+        command,
+        sessionKey,
+        sessionEntry,
+        previousSessionEntry,
+        workspaceDir,
+      });
+    } catch (err) {
+      commandsCoreRuntimePromise = null;
+      logVerbose(
+        `reset command hooks failed, proceeding without emission: ${formatErrorMessage(err)}`,
+      );
+    }
   };
 
   const inlineActionResult = await handleInlineActions({
@@ -589,29 +603,37 @@ export async function getReplyFromConfig(
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
   if (!useFastTestBootstrap) {
-    const { getGlobalHookRunner } = await loadHookRunnerGlobal();
-    const hookRunner = getGlobalHookRunner();
-    if (hookRunner?.hasHooks("before_agent_reply")) {
-      const { resolveOriginMessageProvider } = await loadOriginRouting();
-      const hookMessageProvider = resolveOriginMessageProvider({
-        originatingChannel: sessionCtx.OriginatingChannel,
-        provider: sessionCtx.Provider,
-      });
-      const hookResult = await hookRunner.runBeforeAgentReply(
-        { cleanedBody },
-        {
-          agentId,
-          sessionKey: agentSessionKey,
-          sessionId,
-          workspaceDir,
-          messageProvider: hookMessageProvider,
-          trigger: opts?.isHeartbeat ? "heartbeat" : "user",
-          channelId: hookMessageProvider,
-        },
-      );
-      if (hookResult?.handled) {
-        return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+    try {
+      const { getGlobalHookRunner } = await loadHookRunnerGlobal();
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("before_agent_reply")) {
+        const { resolveOriginMessageProvider } = await loadOriginRouting();
+        const hookMessageProvider = resolveOriginMessageProvider({
+          originatingChannel: sessionCtx.OriginatingChannel,
+          provider: sessionCtx.Provider,
+        });
+        const hookResult = await hookRunner.runBeforeAgentReply(
+          { cleanedBody },
+          {
+            agentId,
+            sessionKey: agentSessionKey,
+            sessionId,
+            workspaceDir,
+            messageProvider: hookMessageProvider,
+            trigger: opts?.isHeartbeat ? "heartbeat" : "user",
+            channelId: hookMessageProvider,
+          },
+        );
+        if (hookResult?.handled) {
+          return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
+        }
       }
+    } catch (err) {
+      hookRunnerGlobalPromise = null;
+      originRoutingPromise = null;
+      logVerbose(
+        `before_agent_reply hook runner failed, proceeding without plugin interception: ${formatErrorMessage(err)}`,
+      );
     }
   }
 
@@ -620,14 +642,21 @@ export async function getReplyFromConfig(
   // staging a single-call contract instead of relying on relative-path no-op
   // semantics in stageSandboxMedia.
   if (!useFastTestBootstrap && sessionKey && !ctx.MediaStaged && hasInboundMedia(ctx)) {
-    const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
-    await stageSandboxMedia({
-      ctx,
-      sessionCtx,
-      cfg,
-      sessionKey,
-      workspaceDir,
-    });
+    try {
+      const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey,
+        workspaceDir,
+      });
+    } catch (err) {
+      stageSandboxMediaRuntimePromise = null;
+      logVerbose(
+        `sandbox media staging failed, proceeding without staged media: ${formatErrorMessage(err)}`,
+      );
+    }
   }
 
   return runPreparedReply({
