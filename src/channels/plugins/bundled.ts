@@ -192,7 +192,6 @@ function loadGeneratedBundledChannelModule(params: {
   rootScope: BundledChannelRootScope;
   metadata: BundledChannelPluginMetadata;
   entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"];
-  installRuntimeDeps?: boolean;
 }): unknown {
   let modulePath = resolveGeneratedBundledChannelModulePath(params);
   if (!modulePath) {
@@ -224,7 +223,6 @@ function loadGeneratedBundledChannelEntry(params: {
         rootScope: params.rootScope,
         metadata: params.metadata,
         entry: params.metadata.source,
-        installRuntimeDeps: false,
       }),
     );
     if (!entry) {
@@ -257,7 +255,6 @@ function loadGeneratedBundledChannelSetupEntry(params: {
         rootScope: params.rootScope,
         metadata: params.metadata,
         entry: params.metadata.setupSource,
-        installRuntimeDeps: false,
       }),
     );
     if (!setupEntry) {

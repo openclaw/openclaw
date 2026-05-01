@@ -4,7 +4,6 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import { prepareBuiltBundledPluginPublicSurfaceLocation } from "../plugins/bundled-public-surface-runtime-root.js";
 import {
   getCachedPluginJitiLoader,
   type PluginJitiLoaderCache,
@@ -212,7 +211,6 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
   dirName: string;
   artifactBasename: string;
   trackedPluginId?: string | (() => string);
-  env?: NodeJS.ProcessEnv;
 }): Promise<T> {
   const location = resolveFacadeModuleLocation(params);
   if (!location) {
@@ -220,11 +218,7 @@ export async function loadBundledPluginPublicSurfaceModule<T extends object>(par
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const preparedLocation = prepareBuiltBundledPluginPublicSurfaceLocation({
-    location,
-    pluginId: params.dirName,
-    ...(params.env ? { env: params.env } : {}),
-  });
+  const preparedLocation = location;
   const cached = loadedFacadeModules.get(preparedLocation.modulePath);
   if (cached) {
     return cached as T;
