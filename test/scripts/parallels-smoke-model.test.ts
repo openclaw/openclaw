@@ -459,6 +459,7 @@ console.log(JSON.stringify(result));
 
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
+    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 1500");
     expect(script).toContain("windowsModelProviderTimeoutScript(this.auth.modelId)");
     expect(script).toContain("finalAssistant(Raw|Visible)Text");
     expect(script).toContain("parallels-windows-smoke-retry-$attempt");
