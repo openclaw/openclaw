@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   appendJsonl,
+  assertRequiredEnv,
   buildRttResult,
   buildRunId,
   createHarnessEnv,
@@ -68,6 +69,35 @@ describe("RTT harness", () => {
     expect(env.OPENCLAW_NPM_TELEGRAM_FAST).toBe("0");
     expect(env.OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS).toBe("180000");
     expect(env.OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS).toBe("180000");
+  });
+
+  it("accepts Convex credential env for RTT preflight", () => {
+    expect(() =>
+      assertRequiredEnv({
+        OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: "convex",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "secret",
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://example.convex.site",
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      assertRequiredEnv({
+        OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: "convex",
+        OPENCLAW_QA_CONVEX_SITE_URL: "https://example.convex.site",
+      }),
+    ).toThrow(/OPENCLAW_QA_CONVEX_SECRET_CI or OPENCLAW_QA_CONVEX_SECRET_MAINTAINER/);
+  });
+
+  it("keeps raw Telegram env preflight for non-Convex credentials", () => {
+    expect(() =>
+      assertRequiredEnv({
+        OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN: "driver",
+        OPENCLAW_QA_TELEGRAM_GROUP_ID: "-100123",
+        OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN: "sut",
+      }),
+    ).not.toThrow();
+
+    expect(() => assertRequiredEnv({})).toThrow(/Missing Telegram QA env/);
   });
 
   it("extracts RTT values from Telegram QA summaries", async () => {
@@ -142,6 +172,12 @@ describe("RTT harness", () => {
     await appendJsonl(jsonlPath, { run: 2 });
 
     await expect(fs.readFile(jsonlPath, "utf8")).resolves.toBe('{"run":1}\n{"run":2}\n');
+  });
+
+  it("defaults the harness root to the current checkout", () => {
+    const parsed = cliTesting.parseArgs(["openclaw@beta"]);
+
+    expect(parsed.options.harnessRoot).toBe(process.cwd());
   });
 
   it("parses CLI options", () => {
