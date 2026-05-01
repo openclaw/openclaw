@@ -61,7 +61,7 @@ describe("bundled plugin postinstall", () => {
     ).toBe(true);
   });
 
-  it("does not install bundled plugin deps outside of source checkouts by default", async () => {
+  it("does not install bundled plugin package deps outside of source checkouts by default", async () => {
     const extensionsDir = await createExtensionsDir();
     const packageRoot = path.dirname(path.dirname(extensionsDir));
     await writePluginPackage(extensionsDir, "acpx", {
@@ -530,7 +530,7 @@ describe("bundled plugin postinstall", () => {
   });
 
   it("ignores staged bundled plugin node_modules when pruning packaged dist", async () => {
-    const packageRoot = await createTempDirAsync("openclaw-packaged-install-runtime-deps-");
+    const packageRoot = await createTempDirAsync("openclaw-packaged-install-dist-prune-");
     const staleFile = path.join(packageRoot, "dist", "stale-runtime.js");
     const packageJson = path.join(packageRoot, "dist", "extensions", "slack", "package.json");
     const binDir = path.join(packageRoot, "dist", "extensions", "slack", "node_modules", ".bin");
