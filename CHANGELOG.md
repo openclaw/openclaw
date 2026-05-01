@@ -2,6 +2,12 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- Gateway/config: report failed backup restores as failed in logs and config observe audit records instead of marking them valid. (#70515) Thanks @davidangularme.
+
 ## 2026.4.30
 
 ### Changes
@@ -21,6 +27,8 @@ Docs: https://docs.openclaw.ai
 - BlueBubbles: add opt-in `channels.bluebubbles.replyContextApiFallback` that fetches the original message from the BlueBubbles HTTP API when the in-memory reply-context cache misses (multi-instance deployments sharing one BB account, post-restart, after long-lived TTL/LRU eviction). Off by default; channel-level setting propagates to accounts that omit the flag through `mergeAccountConfig`; routed through the typed `BlueBubblesClient` so every fetch is SSRF-guarded by the same three-mode policy as every other BB client request; reply-id shape is validated and part-index prefixes (`p:0/<guid>`) are stripped before the request; concurrent webhooks for the same `replyToId` coalesce into one fetch and successful responses populate the reply cache for subsequent hits. Also promotes BlueBubbles attachment download failures from verbose to runtime error so silently-dropped inbound images are visible at default log level, and extends `sanitizeForLog` to redact `?password=…`/`?token=…` query params and `Authorization:` headers before they reach the log sink (CWE-532). (#71820) Thanks @coletebou and @zqchris.
 - CLI/proxy: add `openclaw proxy validate` so operators can verify effective proxy configuration, proxy reachability, and expected allow/deny destination behavior before deploying proxy-routed OpenClaw commands. (#73438) Thanks @jesse-merhi.
 - Agents/Codex: default Codex app-server dynamic tools to native-first, keeping OpenClaw integration tools while leaving file, patch, exec, and process ownership to the Codex harness. (#75308) Thanks @pashpashpash.
+- Agents/Codex: default Codex-harness direct source replies to the OpenClaw `message` tool when visible reply delivery is not explicitly configured, keeping channel-visible output as a deliberate tool call. (#75765) Thanks @pashpashpash.
+- Heartbeats/agents: add a structured `heartbeat_respond` tool for tool-capable heartbeat runs so agents can record quiet outcomes or explicit notification text without relying only on `HEARTBEAT_OK` parsing. (#75765) Thanks @pashpashpash.
 
 ### Fixes
 

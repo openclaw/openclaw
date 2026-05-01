@@ -6,17 +6,14 @@ import {
 import type { SkillCommandSpec } from "../agents/skills.js";
 import { getChannelPlugin, getLoadedChannelPlugin } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   isCommandEnabled,
   listChatCommands,
   listChatCommandsForConfig,
 } from "./commands-registry-list.js";
 import { normalizeCommandBody, resolveTextCommand } from "./commands-registry-normalize.js";
-import { getChatCommands, getNativeCommandSurfaces } from "./commands-registry.data.js";
+import { getChatCommands } from "./commands-registry.data.js";
 import type {
   ChatCommandDefinition,
   CommandArgChoiceContext,
@@ -27,7 +24,6 @@ import type {
   CommandDetection,
   CommandNormalizeOptions,
   NativeCommandSpec,
-  ShouldHandleTextCommandsParams,
 } from "./commands-registry.types.js";
 import type { ThinkingCatalogEntry } from "./thinking.shared.js";
 
@@ -43,6 +39,8 @@ export {
   normalizeCommandBody,
   resolveTextCommand,
 } from "./commands-registry-normalize.js";
+
+export { isNativeCommandSurface, shouldHandleTextCommands } from "./commands-text-routing.js";
 
 export type {
   ChatCommandDefinition,
@@ -370,21 +368,4 @@ export function formatCommandArgMenuTitle(params: {
 export function isCommandMessage(raw: string): boolean {
   const trimmed = normalizeCommandBody(raw);
   return trimmed.startsWith("/");
-}
-
-export function isNativeCommandSurface(surface?: string): boolean {
-  if (!surface) {
-    return false;
-  }
-  return getNativeCommandSurfaces().has(normalizeLowercaseStringOrEmpty(surface));
-}
-
-export function shouldHandleTextCommands(params: ShouldHandleTextCommandsParams): boolean {
-  if (params.commandSource === "native") {
-    return true;
-  }
-  if (params.cfg.commands?.text !== false) {
-    return true;
-  }
-  return !isNativeCommandSurface(params.surface);
 }
