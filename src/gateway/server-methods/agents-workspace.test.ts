@@ -81,13 +81,13 @@ vi.mock("../../routing/session-key.js", () => ({
 const { agentsWorkspaceHandlers } = await import("./agents-workspace.js");
 const { ErrorCodes } = await import("../protocol/index.js");
 
-// Restore default mock implementations after clearAllMocks
-beforeEach(() => {
+// Helper to restore default mock implementations after clearAllMocks
+function restoreMockDefaults() {
   mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/test-workspace/main");
   mocks.listAgentIds.mockReturnValue(["main"]);
   mocks.fsRealpath.mockImplementation((p: string) => Promise.resolve(p));
   mocks.fsAccess.mockResolvedValue(undefined);
-});
+}
 
 type RespondFn = (ok: boolean, result?: unknown, error?: unknown) => void;
 
@@ -141,6 +141,7 @@ async function invokeWorkspaceHandler(
 describe("agents.workspace security", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   afterEach(() => {
@@ -251,6 +252,7 @@ describe("agents.workspace security", () => {
 describe("agents.workspace.list", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   it("lists directory contents", async () => {
@@ -379,6 +381,7 @@ describe("agents.workspace.list", () => {
 describe("agents.workspace.get", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   it("reads file content as utf8", async () => {
@@ -454,6 +457,7 @@ describe("agents.workspace.get", () => {
 describe("agents.workspace.set", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   it("writes file content as utf8", async () => {
@@ -548,6 +552,7 @@ describe("agents.workspace.set", () => {
 describe("agents.workspace.delete", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   it("deletes a file", async () => {
@@ -645,6 +650,7 @@ describe("agents.workspace.delete", () => {
 describe("agents.workspace.mkdir", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   it("creates a directory", async () => {
@@ -699,6 +705,7 @@ describe("agents.workspace.mkdir", () => {
 describe("agents.workspace.move", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   it("moves a file", async () => {
@@ -784,6 +791,7 @@ describe("agents.workspace.move", () => {
 describe("agents.workspace.stat", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   it("returns file metadata", async () => {
@@ -912,6 +920,7 @@ describe("agents.workspace.stat", () => {
 describe("agents.workspace error handling", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
   });
 
   it("handles invalid agent ID", async () => {
@@ -939,6 +948,7 @@ describe("agents.workspace error handling", () => {
 describe("agents.workspace parameter validation edge cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    restoreMockDefaults();
     // Restore default mock
     mocks.resolveAgentWorkspaceDir.mockReturnValue("/tmp/test-workspace/main");
   });
