@@ -759,6 +759,7 @@ export function createBrowserTool(opts?: {
           return await browserToolDeps.imageResultFromFile({
             label: "browser:screenshot",
             path: result.path,
+            extraText: `MEDIA:${result.path}`,
             details: result,
           });
         }
