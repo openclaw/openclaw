@@ -7,6 +7,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
+import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
 import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -383,7 +384,10 @@ function resolveFallbackSoonestCooldownExpiry(params: {
   // cooldowns through a separate store instance while the fallback loop runs.
   const refreshedStore = params.authRuntime.loadAuthProfileStoreForRuntime(params.agentDir, {
     readOnly: true,
-    allowKeychainPrompt: false,
+    externalCli: externalCliDiscoveryForProviders({
+      cfg: params.cfg,
+      providers: params.candidates.map((candidate) => candidate.provider),
+    }),
   });
   let soonest: number | null = null;
   for (const candidate of params.candidates) {
@@ -772,7 +776,12 @@ export async function runWithModelFallback<T>(params: {
       ? await loadModelFallbackAuthRuntime()
       : null;
   const authStore = authRuntime
-    ? authRuntime.ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
+    ? authRuntime.ensureAuthProfileStore(params.agentDir, {
+        externalCli: externalCliDiscoveryForProviders({
+          cfg: params.cfg,
+          providers: candidates.map((candidate) => candidate.provider),
+        }),
+      })
     : null;
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;

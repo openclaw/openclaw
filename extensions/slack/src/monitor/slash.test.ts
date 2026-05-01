@@ -177,7 +177,7 @@ vi.mock("./slash-commands.runtime.js", () => {
       if (params.command?.key === "reportlong") {
         return resolvePeriodMenu(params, [
           ...fullReportPeriodChoices,
-          { value: "x".repeat(45), label: "long" },
+          { value: "x".repeat(100), label: "long" },
         ]);
       }
       if (params.command?.key === "reportlongbutton") {
@@ -632,8 +632,17 @@ describe("Slack native command argument menus", () => {
   });
 
   it("uses static_select when encoded values fit Slack option limits", async () => {
-    const firstElement = await getFirstActionElementFromCommand(reportLongHandler);
+    const firstElement = (await getFirstActionElementFromCommand(reportLongHandler)) as
+      | {
+          type?: string;
+          options?: Array<{ value?: string }>;
+          confirm?: unknown;
+        }
+      | undefined;
     expect(firstElement?.type).toBe("static_select");
+    const longOption = firstElement?.options?.find((option) => option.value?.includes("xxx"));
+    expect(longOption?.value?.length).toBeGreaterThan(75);
+    expect(longOption?.value?.length).toBeLessThanOrEqual(150);
     expect(firstElement?.confirm).toBeTruthy();
   });
 

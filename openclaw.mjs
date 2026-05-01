@@ -47,7 +47,7 @@ const isSourceCheckoutLauncher = () =>
 
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
-  process.env.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled();
+  Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
 const sanitizeCompileCachePathSegment = (value) => {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized : "unknown";

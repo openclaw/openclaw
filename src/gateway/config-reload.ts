@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { bumpSkillsSnapshotVersion } from "../agents/skills/refresh-state.js";
 import type { ConfigWriteNotification } from "../config/io.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { formatConfigIssueLines, formatConfigIssueSummary } from "../config/issue-format.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import {
   isPluginLocalInvalidConfigSnapshot,
@@ -271,7 +271,10 @@ export function startGatewayConfigReloader(opts: {
     if (!recovered) {
       return null;
     }
-    opts.log.warn(`config reload restored last-known-good config after ${reason}`);
+    const issueSummary = formatConfigIssueSummary([...snapshot.issues, ...snapshot.legacyIssues]);
+    opts.log.warn(
+      `config reload restored last-known-good config after ${reason}${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
+    );
     const nextSnapshot = await opts.readSnapshot();
     if (!nextSnapshot.valid) {
       const issues = formatConfigIssueLines(nextSnapshot.issues, "").join(", ");

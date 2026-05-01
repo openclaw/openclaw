@@ -42,10 +42,16 @@ function resolveGatewayUrl(options: OpenClawOptions): string | undefined {
 function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
   const record =
     typeof payload === "object" && payload !== null
-      ? (payload as { aborted?: unknown; status?: unknown; stopReason?: unknown })
+      ? (payload as Record<string, unknown> & { aborted?: unknown; status?: unknown })
       : {};
   const status = typeof record.status === "string" ? record.status.toLowerCase() : undefined;
   const stopReason = typeof record.stopReason === "string" ? record.stopReason.toLowerCase() : "";
+  const hasTerminalTimeoutMetadata =
+    readOptionalTimestamp(record.endedAt) !== undefined ||
+    readOptionalString(record.error) !== undefined ||
+    stopReason.length > 0 ||
+    typeof record.livenessState === "string" ||
+    record.yielded === true;
   if (
     status === "aborted" ||
     status === "cancelled" ||
@@ -65,7 +71,12 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     return "completed";
   }
   if (status === "timeout") {
-    if (stopReason === "timeout" || stopReason === "timed_out" || record.aborted === true) {
+    if (
+      stopReason === "timeout" ||
+      stopReason === "timed_out" ||
+      record.aborted === true ||
+      hasTerminalTimeoutMetadata
+    ) {
       return "timed_out";
     }
     return "accepted";
@@ -219,15 +230,23 @@ function isTerminalRunEvent(event: OpenClawEvent): boolean {
 function normalizeChatProjectionEvent(
   event: OpenClawEvent,
   projection: ChatProjection,
+  previousText: string | undefined,
 ): OpenClawEvent {
   const text = readChatProjectionText(projection.payload);
+  const isReplacement = Boolean(
+    previousText && text !== undefined && !text.startsWith(previousText),
+  );
   return {
     ...event,
     type: projection.state === "delta" ? "assistant.delta" : "run.completed",
     data:
       projection.state === "delta"
         ? text !== undefined
-          ? { delta: text }
+          ? {
+              text,
+              delta: isReplacement ? text : text.slice(previousText?.length ?? 0),
+              ...(isReplacement ? { replace: true } : {}),
+            }
           : event.data
         : { phase: "end", ...(text !== undefined ? { outputText: text } : {}) },
   };
@@ -335,20 +354,30 @@ export class OpenClaw {
     const replayEvents = this.replaySnapshot(runId);
     let hasCanonicalAssistantRunEvent = replayEvents.some(isAssistantRunEvent);
     let hasTerminalRunEvent = replayEvents.some(isTerminalRunEvent);
+    let previousChatProjectionText: string | undefined;
     const toRunStreamEvent = (event: OpenClawEvent): OpenClawEvent | undefined => {
       const chatProjection = readChatProjection(event);
       if (chatProjection?.state === "delta") {
         if (hasCanonicalAssistantRunEvent) {
           return undefined;
         }
-        return normalizeChatProjectionEvent(event, chatProjection);
+        const runEvent = normalizeChatProjectionEvent(
+          event,
+          chatProjection,
+          previousChatProjectionText,
+        );
+        const text = readChatProjectionText(chatProjection.payload);
+        if (text !== undefined) {
+          previousChatProjectionText = text;
+        }
+        return runEvent;
       }
       if (chatProjection?.state === "final") {
         if (hasTerminalRunEvent) {
           return undefined;
         }
         hasTerminalRunEvent = true;
-        return normalizeChatProjectionEvent(event, chatProjection);
+        return normalizeChatProjectionEvent(event, chatProjection, previousChatProjectionText);
       }
       if (isAssistantRunEvent(event)) {
         hasCanonicalAssistantRunEvent = true;

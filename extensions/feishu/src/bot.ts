@@ -859,6 +859,19 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
+    // Skip messages with no text content and no media attachments. Feishu can
+    // deliver empty-text events (e.g. `{"text":""}`) when a user sends a blank
+    // message or when media parsing produces an empty string. Writing a blank
+    // user turn to the session causes downstream LLM providers (e.g. MiniMax)
+    // to reject the request with "messages must not be empty" errors. Logging
+    // the skip avoids silent loss without polluting the agent session.
+    if (!ctx.content.trim() && mediaList.length === 0) {
+      log(
+        `feishu[${account.accountId}]: skipping empty message (no text, no media) from ${ctx.senderOpenId}`,
+      );
+      return;
+    }
+
     const mediaPayload = buildAgentMediaPayload(mediaList);
     const audioTranscript = await resolveFeishuAudioPreflightTranscript({
       cfg: effectiveCfg,

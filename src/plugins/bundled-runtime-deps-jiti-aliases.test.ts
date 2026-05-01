@@ -111,6 +111,72 @@ describe("bundled runtime dependency Jiti aliases", () => {
     });
   });
 
+  it("honors package condition order before top-level require fallbacks", () => {
+    const rootDir = makeTempRoot();
+    writeJson(path.join(rootDir, "package.json"), {
+      dependencies: {
+        conditional: "1.0.0",
+      },
+    });
+    const conditionalRoot = packageRoot(rootDir, "conditional");
+    writeJson(path.join(conditionalRoot, "package.json"), {
+      exports: {
+        ".": {
+          browser: {
+            default: "./dist/web/index.js",
+          },
+          node: {
+            import: "./dist/node/index.mjs",
+            require: "./dist/node/index.cjs",
+            default: "./dist/node/index.mjs",
+          },
+          import: "./dist/index.mjs",
+          require: "./dist/index.cjs",
+          default: "./dist/index.mjs",
+        },
+      },
+    });
+    writeFile(path.join(conditionalRoot, "dist/index.cjs"));
+    writeFile(path.join(conditionalRoot, "dist/node/index.cjs"));
+
+    registerBundledRuntimeDependencyJitiAliases(rootDir);
+
+    expect(resolveBundledRuntimeDependencyJitiAliasMap()).toEqual({
+      conditional: path.join(conditionalRoot, "dist/node/index.cjs"),
+    });
+  });
+
+  it("falls back to import-only conditional exports for staged runtime deps", () => {
+    const rootDir = makeTempRoot();
+    writeJson(path.join(rootDir, "package.json"), {
+      dependencies: {
+        "import-only": "1.0.0",
+      },
+    });
+    const importOnlyRoot = packageRoot(rootDir, "import-only");
+    writeJson(path.join(importOnlyRoot, "package.json"), {
+      exports: {
+        ".": {
+          types: "./dist/index.d.ts",
+          import: "./dist/index.js",
+        },
+        "./provider": {
+          types: "./dist/provider.d.ts",
+          import: "./dist/provider.js",
+        },
+      },
+    });
+    writeFile(path.join(importOnlyRoot, "dist/index.js"));
+    writeFile(path.join(importOnlyRoot, "dist/provider.js"));
+
+    registerBundledRuntimeDependencyJitiAliases(rootDir);
+
+    expect(resolveBundledRuntimeDependencyJitiAliasMap()).toEqual({
+      "import-only/provider": path.join(importOnlyRoot, "dist/provider.js"),
+      "import-only": path.join(importOnlyRoot, "dist/index.js"),
+    });
+  });
+
   it("ignores missing, private, and escaping export targets", () => {
     const rootDir = makeTempRoot();
     writeJson(path.join(rootDir, "package.json"), {

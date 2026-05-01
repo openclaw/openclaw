@@ -13,6 +13,10 @@ type RuntimeDependencyPackageJson = {
 };
 
 const bundledRuntimeDependencyJitiAliases = new Map<string, string>();
+const RUNTIME_DEPENDENCY_JITI_CONDITION_PASSES = [
+  new Set(["node", "require", "default"]),
+  new Set(["node", "import", "default"]),
+] as const;
 
 function readRuntimeDependencyPackageJson(
   packageJsonPath: string,
@@ -32,13 +36,16 @@ function collectRuntimeDependencyNames(pkg: RuntimeDependencyPackageJson): strin
   ].toSorted((left, right) => left.localeCompare(right));
 }
 
-function resolveRuntimePackageImportTarget(exportsField: unknown): string | null {
+function resolveRuntimePackageImportTargetForConditions(
+  exportsField: unknown,
+  activeConditions: ReadonlySet<string>,
+): string | null {
   if (typeof exportsField === "string") {
     return exportsField;
   }
   if (Array.isArray(exportsField)) {
     for (const entry of exportsField) {
-      const resolved = resolveRuntimePackageImportTarget(entry);
+      const resolved = resolveRuntimePackageImportTargetForConditions(entry, activeConditions);
       if (resolved) {
         return resolved;
       }
@@ -50,10 +57,23 @@ function resolveRuntimePackageImportTarget(exportsField: unknown): string | null
   }
   const record = exportsField as Record<string, unknown>;
   if (Object.prototype.hasOwnProperty.call(record, ".")) {
-    return resolveRuntimePackageImportTarget(record["."]);
+    return resolveRuntimePackageImportTargetForConditions(record["."], activeConditions);
   }
-  for (const condition of ["require", "node", "default", "import"] as const) {
-    const resolved = resolveRuntimePackageImportTarget(record[condition]);
+  for (const [condition, target] of Object.entries(record)) {
+    if (!activeConditions.has(condition)) {
+      continue;
+    }
+    const resolved = resolveRuntimePackageImportTargetForConditions(target, activeConditions);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  return null;
+}
+
+function resolveRuntimePackageImportTarget(exportsField: unknown): string | null {
+  for (const activeConditions of RUNTIME_DEPENDENCY_JITI_CONDITION_PASSES) {
+    const resolved = resolveRuntimePackageImportTargetForConditions(exportsField, activeConditions);
     if (resolved) {
       return resolved;
     }

@@ -174,6 +174,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "npm-onboard-channel-agent",
       "doctor-switch",
       "update-channel-switch",
+      "upgrade-survivor",
+      "published-upgrade-survivor",
     ]);
     expect(packageUpdateCore.lanes).toEqual(
       expect.arrayContaining([
@@ -188,6 +190,14 @@ describe("scripts/lib/docker-e2e-plan", () => {
         expect.objectContaining({
           name: "update-channel-switch",
           stateScenario: "update-stable",
+        }),
+        expect.objectContaining({
+          name: "upgrade-survivor",
+          stateScenario: "upgrade-survivor",
+        }),
+        expect.objectContaining({
+          name: "published-upgrade-survivor",
+          stateScenario: "upgrade-survivor",
         }),
       ]),
     );
@@ -394,6 +404,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "bundled-channel-setup-entry",
         "bundled-plugin-install-uninstall-0",
         "update-channel-switch",
+        "upgrade-survivor",
       ],
     });
 
@@ -473,6 +484,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
       expect.objectContaining({
         name: "update-channel-switch",
         stateScenario: "update-stable",
+      }),
+      expect.objectContaining({
+        name: "upgrade-survivor",
+        stateScenario: "upgrade-survivor",
       }),
     ]);
   });

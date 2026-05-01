@@ -278,6 +278,20 @@ export const mainLanes = [
       weight: 3,
     },
   ),
+  npmLane("upgrade-survivor", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor", {
+    stateScenario: "upgrade-survivor",
+    timeoutMs: 20 * 60 * 1000,
+    weight: 3,
+  }),
+  npmLane(
+    "published-upgrade-survivor",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
+    {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
+      weight: 3,
+    },
+  ),
   lane("plugins", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:plugins", {
     resources: ["npm", "service"],
     stateScenario: "empty",
@@ -527,6 +541,20 @@ const releasePathPackageUpdateCoreLanes = [
     {
       stateScenario: "update-stable",
       timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  npmLane("upgrade-survivor", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor", {
+    stateScenario: "upgrade-survivor",
+    timeoutMs: 20 * 60 * 1000,
+    weight: 3,
+  }),
+  npmLane(
+    "published-upgrade-survivor",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:published-upgrade-survivor",
+    {
+      stateScenario: "upgrade-survivor",
+      timeoutMs: 25 * 60 * 1000,
       weight: 3,
     },
   ),

@@ -176,6 +176,28 @@ describe("OpenClaw SDK", () => {
     });
   });
 
+  it("maps terminal timeout snapshots without stop reasons to timed_out", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_timed_out",
+        startedAt: 123,
+        endedAt: 456,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_timed_out");
+
+    expect(result).toMatchObject({
+      runId: "run_timed_out",
+      status: "timed_out",
+      startedAt: 123,
+      endedAt: 456,
+    });
+    expect(result.error).toBeUndefined();
+  });
+
   it("splits provider-qualified model refs and rejects unsupported run options", async () => {
     const transport = new FakeTransport({
       agent: { status: "accepted", runId: "run_openrouter" },
@@ -499,20 +521,34 @@ describe("OpenClaw SDK", () => {
           payload: {
             runId: "run_chat_only",
             sessionKey: "chat-only",
-            state: "final",
+            state: "delta",
             message: {
               role: "assistant",
-              content: [{ type: "text", text: "hello again" }],
+              content: [{ type: "text", text: "reset" }],
               timestamp: ts + 2,
             },
           },
         });
         fake.emit({
-          event: "custom.debug",
+          event: "chat",
           seq: 4,
           payload: {
             runId: "run_chat_only",
-            ts: ts + 3,
+            sessionKey: "chat-only",
+            state: "final",
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: "reset" }],
+              timestamp: ts + 3,
+            },
+          },
+        });
+        fake.emit({
+          event: "custom.debug",
+          seq: 5,
+          payload: {
+            runId: "run_chat_only",
+            ts: ts + 4,
             data: { ok: true },
           },
         });
@@ -534,7 +570,7 @@ describe("OpenClaw SDK", () => {
         done: false,
         value: {
           type: "assistant.delta",
-          data: { delta: "hello" },
+          data: { text: "hello", delta: "hello" },
           raw: { event: "chat" },
         },
       });
@@ -544,7 +580,7 @@ describe("OpenClaw SDK", () => {
         done: false,
         value: {
           type: "assistant.delta",
-          data: { delta: "hello again" },
+          data: { text: "hello again", delta: " again" },
           raw: { event: "chat" },
         },
       });
@@ -553,8 +589,18 @@ describe("OpenClaw SDK", () => {
       expect(third).toMatchObject({
         done: false,
         value: {
+          type: "assistant.delta",
+          data: { text: "reset", delta: "reset", replace: true },
+          raw: { event: "chat" },
+        },
+      });
+
+      const fourth = await iterator.next();
+      expect(fourth).toMatchObject({
+        done: false,
+        value: {
           type: "run.completed",
-          data: { phase: "end", outputText: "hello again" },
+          data: { phase: "end", outputText: "reset" },
           raw: { event: "chat" },
         },
       });

@@ -125,33 +125,36 @@ function resolveObserveOnlyDispatchResult<TDispatchResult>(
 export async function dispatchAssembledChannelTurn(
   params: AssembledChannelTurn,
 ): Promise<DispatchedChannelTurnResult> {
-  return await runPreparedChannelTurn({
-    channel: params.channel,
-    accountId: params.accountId,
-    routeSessionKey: params.routeSessionKey,
-    storePath: params.storePath,
-    ctxPayload: params.ctxPayload,
-    recordInboundSession: params.recordInboundSession,
-    record: params.record,
-    history: params.history,
-    admission: params.admission,
-    log: params.log,
-    messageId: params.messageId,
-    runDispatch: async () =>
-      await params.dispatchReplyWithBufferedBlockDispatcher({
-        ctx: params.ctxPayload,
-        cfg: params.cfg,
-        dispatcherOptions: {
-          ...params.dispatcherOptions,
-          deliver: async (payload: ReplyPayload, info) => {
-            await params.delivery.deliver(payload, info);
+  return await runPreparedChannelTurnCore(
+    {
+      channel: params.channel,
+      accountId: params.accountId,
+      routeSessionKey: params.routeSessionKey,
+      storePath: params.storePath,
+      ctxPayload: params.ctxPayload,
+      recordInboundSession: params.recordInboundSession,
+      record: params.record,
+      history: params.history,
+      admission: params.admission,
+      log: params.log,
+      messageId: params.messageId,
+      runDispatch: async () =>
+        await params.dispatchReplyWithBufferedBlockDispatcher({
+          ctx: params.ctxPayload,
+          cfg: params.cfg,
+          dispatcherOptions: {
+            ...params.dispatcherOptions,
+            deliver: async (payload: ReplyPayload, info) => {
+              await params.delivery.deliver(payload, info);
+            },
+            onError: params.delivery.onError,
           },
-          onError: params.delivery.onError,
-        },
-        replyOptions: params.replyOptions,
-        replyResolver: params.replyResolver,
-      }),
-  });
+          replyOptions: params.replyOptions,
+          replyResolver: params.replyResolver,
+        }),
+    },
+    { suppressObserveOnlyDispatch: false },
+  );
 }
 
 function isPreparedChannelTurn<TDispatchResult>(
@@ -170,24 +173,18 @@ async function dispatchResolvedChannelTurn<TDispatchResult>(
   },
 ): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
   if (isPreparedChannelTurn(params)) {
-    return await runPreparedChannelTurn(
-      params.admission.kind === "observeOnly"
-        ? {
-            ...params,
-            runDispatch: async () => resolveObserveOnlyDispatchResult(params),
-          }
-        : params,
-    );
+    return await runPreparedChannelTurn(params);
   }
   return (await dispatchAssembledChannelTurn(
     params,
   )) as DispatchedChannelTurnResult<TDispatchResult>;
 }
 
-export async function runPreparedChannelTurn<
+async function runPreparedChannelTurnCore<
   TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
 >(
   params: PreparedChannelTurn<TDispatchResult>,
+  options: { suppressObserveOnlyDispatch: boolean },
 ): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
   const admission = params.admission ?? ({ kind: "dispatch" } as const);
   emit({
@@ -253,7 +250,10 @@ export async function runPreparedChannelTurn<
   });
   let dispatchResult: TDispatchResult;
   try {
-    dispatchResult = await params.runDispatch();
+    dispatchResult =
+      options.suppressObserveOnlyDispatch && admission.kind === "observeOnly"
+        ? resolveObserveOnlyDispatchResult(params)
+        : await params.runDispatch();
   } catch (err) {
     emit({
       ...params,
@@ -287,6 +287,14 @@ export async function runPreparedChannelTurn<
     routeSessionKey: params.routeSessionKey,
     dispatchResult,
   };
+}
+
+export async function runPreparedChannelTurn<
+  TDispatchResult = DispatchedChannelTurnResult["dispatchResult"],
+>(
+  params: PreparedChannelTurn<TDispatchResult>,
+): Promise<DispatchedChannelTurnResult<TDispatchResult>> {
+  return await runPreparedChannelTurnCore(params, { suppressObserveOnlyDispatch: true });
 }
 
 export async function runChannelTurn<

@@ -47,6 +47,24 @@ describe("loadGatewayModelCatalog", () => {
     expect(loadModelCatalog).toHaveBeenCalledTimes(1);
   });
 
+  it("does not cache an empty catalog so the next request retries", async () => {
+    const emptyCatalog: GatewayModelChoice[] = [];
+    const freshCatalog = [model("gpt-5.5")];
+    const loadModelCatalog = vi
+      .fn<LoadModelCatalogForTest>()
+      .mockResolvedValueOnce(emptyCatalog)
+      .mockResolvedValueOnce(freshCatalog);
+
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
+      emptyCatalog,
+    );
+    await expect(loadGatewayModelCatalog({ getConfig, loadModelCatalog })).resolves.toBe(
+      freshCatalog,
+    );
+
+    expect(loadModelCatalog).toHaveBeenCalledTimes(2);
+  });
+
   it("returns the last catalog while a stale reload refresh is still pending", async () => {
     const staleCatalog = [model("gpt-5.4")];
     const freshCatalog = [model("gpt-5.5")];

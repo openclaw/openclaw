@@ -52,6 +52,14 @@ function sameRuntimeDepSpecs(left: readonly string[], right: readonly string[]):
   );
 }
 
+function runtimeDepSpecsIncludeAll(
+  candidate: readonly string[],
+  required: readonly string[],
+): boolean {
+  const candidateSet = new Set(normalizeRuntimeDepSpecs(candidate));
+  return normalizeRuntimeDepSpecs(required).every((spec) => candidateSet.has(spec));
+}
+
 function readInstalledRuntimeDepPackage(
   rootDir: string,
   depName: string,
@@ -77,7 +85,17 @@ function hasInstalledRuntimeDepEntryFiles(packageDir: string, packageJson: JsonO
   if (mainPath !== packageDir && !mainPath.startsWith(`${packageDir}${path.sep}`)) {
     return false;
   }
-  return fs.existsSync(mainPath);
+  if (fs.existsSync(mainPath)) {
+    return true;
+  }
+  return (
+    fs.existsSync(`${mainPath}.js`) ||
+    fs.existsSync(`${mainPath}.json`) ||
+    fs.existsSync(`${mainPath}.node`) ||
+    fs.existsSync(path.join(mainPath, "index.js")) ||
+    fs.existsSync(path.join(mainPath, "index.json")) ||
+    fs.existsSync(path.join(mainPath, "index.node"))
+  );
 }
 
 export function isRuntimeDepSatisfied(
@@ -119,7 +137,7 @@ export function isRuntimeDepsPlanMaterialized(
     generatedManifestSpecs !== null ? null : readPackageRuntimeDepSpecs(installRoot);
   return (
     ((generatedManifestSpecs !== null &&
-      sameRuntimeDepSpecs(generatedManifestSpecs, installSpecs)) ||
+      runtimeDepSpecsIncludeAll(generatedManifestSpecs, installSpecs)) ||
       (packageManifestSpecs !== null && sameRuntimeDepSpecs(packageManifestSpecs, installSpecs))) &&
     hasSatisfiedInstallSpecPackages(installRoot, installSpecs)
   );
@@ -156,7 +174,7 @@ function createNpmInstallExecutionManifest(installSpecs: readonly string[]): Jso
   return {
     name: "openclaw-runtime-deps-install",
     private: true,
-    ...(Object.keys(sortedDependencies).length > 0 ? { dependencies: sortedDependencies } : {}),
+    dependencies: sortedDependencies,
   };
 }
 

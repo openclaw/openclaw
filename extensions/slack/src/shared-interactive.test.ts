@@ -89,8 +89,8 @@ describe("buildSlackInteractiveBlocks", () => {
         {
           type: "select",
           options: [
-            { label: "Allowed", value: "a".repeat(75) },
-            { label: "Too long", value: "b".repeat(76) },
+            { label: "Allowed", value: "a".repeat(150) },
+            { label: "Too long", value: "b".repeat(151) },
           ],
         },
       ],
@@ -101,7 +101,7 @@ describe("buildSlackInteractiveBlocks", () => {
     };
 
     expect(selectBlock.elements?.[0]?.options).toHaveLength(1);
-    expect(selectBlock.elements?.[0]?.options?.[0]?.value).toBe("a".repeat(75));
+    expect(selectBlock.elements?.[0]?.options?.[0]?.value).toBe("a".repeat(150));
   });
 
   it("omits Slack select blocks when every option value exceeds Block Kit limits", () => {
@@ -110,7 +110,7 @@ describe("buildSlackInteractiveBlocks", () => {
         blocks: [
           {
             type: "select",
-            options: [{ label: "Too long", value: "x".repeat(76) }],
+            options: [{ label: "Too long", value: "x".repeat(151) }],
           },
         ],
       }),

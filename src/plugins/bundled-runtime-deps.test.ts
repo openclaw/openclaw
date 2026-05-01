@@ -11,6 +11,10 @@ import {
   waitForBundledRuntimeDepsInstallIdle,
 } from "./bundled-runtime-deps-activity.js";
 import {
+  assertBundledRuntimeDepsInstalled,
+  ensureNpmInstallExecutionManifest,
+} from "./bundled-runtime-deps-materialization.js";
+import {
   __testing as bundledRuntimeDepsTesting,
   createBundledRuntimeDependencyAliasMap,
   createBundledRuntimeDepsInstallArgs,
@@ -544,6 +548,18 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("always includes a dependencies field in the install manifest, even when specs are empty", () => {
+    const installRoot = makeTempDir();
+
+    ensureNpmInstallExecutionManifest(installRoot, []);
+
+    const written = JSON.parse(fs.readFileSync(path.join(installRoot, "package.json"), "utf8")) as {
+      dependencies?: unknown;
+    };
+    expect(written).toHaveProperty("dependencies");
+    expect(written.dependencies).toEqual({});
+  });
+
   it("repairs external install roots from the complete generated dependency plan", async () => {
     const installRoot = makeTempDir();
     writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
@@ -886,6 +902,33 @@ describe("installBundledRuntimeDeps", () => {
     );
   });
 
+  it("accepts extensionless package main entries resolved by Node", () => {
+    const installRoot = makeTempDir();
+    spawnSyncMock.mockImplementation((_command, _args, options) => {
+      const packageDir = path.join(String(options?.cwd ?? ""), "node_modules", "jszip");
+      fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+      fs.writeFileSync(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+      );
+      fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n");
+      return {
+        pid: 123,
+        output: [],
+        stdout: "",
+        stderr: "",
+        signal: null,
+        status: 0,
+      };
+    });
+
+    installBundledRuntimeDeps({
+      installRoot,
+      missingSpecs: ["jszip@^3.10.1"],
+      env: {},
+    });
+  });
+
   it("cleans an owned isolated execution root after copying node_modules back", () => {
     const installRoot = makeTempDir();
     const installExecutionRoot = path.join(installRoot, ".openclaw-install-stage");
@@ -1044,6 +1087,20 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       enabledByDefault: true,
       providers: ["amazon-bedrock"],
     });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "anthropic",
+      deps: { "anthropic-runtime": "4.0.0" },
+      modelSupport: { modelPrefixes: ["claude-"] },
+      providers: ["anthropic"],
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "openai",
+      deps: { "openai-runtime": "5.0.0" },
+      modelSupport: { modelPrefixes: ["gpt-", "o1", "o3", "o4"] },
+      providers: ["openai", "openai-codex"],
+    });
     return packageRoot;
   }
 
@@ -1146,6 +1203,28 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
       config: { agents: { defaults: { model: "amazon-bedrock/claude-opus-4-7" } } },
       includeConfiguredChannels: false,
       expectedDeps: ["alpha-runtime@1.0.0", "bedrock-runtime@3.0.0"],
+    },
+    {
+      name: "includes configured bare model owner deps from model support",
+      config: { agents: { defaults: { model: "gpt-5.5" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "openai-runtime@5.0.0"],
+    },
+    {
+      name: "includes configured bare fallback model owner deps from model support",
+      config: {
+        agents: {
+          defaults: { model: { primary: "unknown-model", fallbacks: ["claude-sonnet-4-6"] } },
+        },
+      },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "anthropic-runtime@4.0.0"],
+    },
+    {
+      name: "includes configured model provider deps from manifest provider aliases",
+      config: { agents: { defaults: { model: "openai-codex/gpt-5.5" } } },
+      includeConfiguredChannels: false,
+      expectedDeps: ["alpha-runtime@1.0.0", "openai-runtime@5.0.0"],
     },
     {
       name: "includes configured model provider deps from aliases",
@@ -1262,6 +1341,20 @@ describe("scanBundledPluginRuntimeDeps config policy", () => {
     expect(result.deps.map((dep) => `${dep.name}@${dep.version}`)).toEqual(["alpha-runtime@1.0.0"]);
     expect(result.missing).toEqual([]);
     expect(result.conflicts).toEqual([]);
+  });
+
+  it("accepts staged runtime deps whose package main relies on Node extension resolution", () => {
+    const installRoot = makeTempDir();
+    const packageDir = path.join(installRoot, "node_modules", "jszip");
+    fs.mkdirSync(path.join(packageDir, "lib"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "jszip", version: "3.10.1", main: "./lib/index" }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(packageDir, "lib", "index.js"), "export default {};\n", "utf8");
+
+    expect(() => assertBundledRuntimeDepsInstalled(installRoot, ["jszip@^3.10.1"])).not.toThrow();
   });
 
   it("reports staged package-level runtime deps as missing when the version is stale", () => {
@@ -2206,6 +2299,49 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       pluginRoot: alphaRoot,
       installDeps: () => {
         throw new Error("current runtime deps should not reinstall");
+      },
+    });
+
+    expect(result).toEqual({ installedSpecs: [] });
+  });
+
+  it("accepts generated package-level runtime-deps supersets without reinstalling", () => {
+    const packageRoot = makeTempDir();
+    const stageDir = makeTempDir();
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.29" }),
+    );
+    const alphaRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "alpha",
+      deps: { "alpha-runtime": "1.0.0" },
+      enabledByDefault: true,
+    });
+    writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "tokenjuice",
+      deps: { tokenjuice: "0.7.0" },
+      enabledByDefault: true,
+    });
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+    const installRoot = resolveBundledRuntimeDependencyInstallRoot(alphaRoot, { env });
+    writeInstalledPackage(installRoot, "alpha-runtime", "1.0.0");
+    writeInstalledPackage(installRoot, "tokenjuice", "0.7.0");
+    writeGeneratedRuntimeDepsManifest(installRoot, ["alpha-runtime@1.0.0", "tokenjuice@0.7.0"]);
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env,
+      config: {
+        plugins: {
+          allow: ["alpha"],
+          entries: { alpha: { enabled: true } },
+        },
+      },
+      pluginId: "alpha",
+      pluginRoot: alphaRoot,
+      installDeps: () => {
+        throw new Error("compatible runtime deps superset should not reinstall");
       },
     });
 
@@ -3326,6 +3462,78 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       "sqlite-vec@0.1.9",
       "typebox@1.1.34",
     ]);
+  });
+
+  it("installs local memory embedding runtime deps only when local memory search is configured", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+      runtimeDependencies: {
+        localMemoryEmbedding: ["node-llama-cpp@3.18.1"],
+      },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "local" },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result.installedSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+      "typebox@1.1.34",
+    ]);
+    expect(calls[0]?.installSpecs).toEqual([
+      "chokidar@^5.0.0",
+      "node-llama-cpp@3.18.1",
+      "typebox@1.1.34",
+    ]);
+  });
+
+  it("does not install local memory embedding runtime deps for remote memory search", () => {
+    const packageRoot = makeTempDir();
+    const pluginRoot = writeBundledPluginPackage({
+      packageRoot,
+      pluginId: "memory-core",
+      deps: { chokidar: "^5.0.0", typebox: "1.1.34" },
+      runtimeDependencies: {
+        localMemoryEmbedding: ["node-llama-cpp@3.18.1"],
+      },
+    });
+    const calls: BundledRuntimeDepsInstallParams[] = [];
+
+    const result = ensureBundledPluginRuntimeDeps({
+      env: {},
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai" },
+          },
+        },
+      },
+      installDeps: (params) => {
+        calls.push(params);
+      },
+      pluginId: "memory-core",
+      pluginRoot,
+    });
+
+    expect(result.installedSpecs).toEqual(["chokidar@^5.0.0", "typebox@1.1.34"]);
+    expect(calls[0]?.installSpecs).toEqual(["chokidar@^5.0.0", "typebox@1.1.34"]);
   });
 
   it("repairs external staged deps even when packaged plugin-local deps are present", () => {
