@@ -1,3 +1,4 @@
+import { isCliProvider } from "../../agents/model-selection-cli.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
@@ -145,6 +146,22 @@ export async function resolveCronModelSelection(
         model = resolvedSessionOverride.ref.model;
       }
     }
+  }
+
+  // Honor the agent's configured CLI runtime: the model-string slash-prefix
+  // (e.g. "anthropic/claude-opus-4-7") names the *underlying* model provider,
+  // but when an agent has agentRuntime.id pointing at a CLI backend (e.g.
+  // "claude-cli"), the cron-fired turn must dispatch through that backend, not
+  // the paid API. The interactive path consults isCliProvider() via
+  // run-executor; this aligns the cron path with the same source of truth.
+  const runtimeId = params.cfgWithAgentDefaults.agents?.defaults?.agentRuntime?.id;
+  if (
+    typeof runtimeId === "string" &&
+    runtimeId.length > 0 &&
+    runtimeId !== provider &&
+    isCliProvider(runtimeId, params.cfgWithAgentDefaults)
+  ) {
+    provider = runtimeId;
   }
 
   return { ok: true, provider, model };

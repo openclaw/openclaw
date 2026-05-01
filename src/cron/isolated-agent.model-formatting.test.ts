@@ -442,6 +442,83 @@ describe("cron model formatting and precedence edge cases", () => {
     });
   });
 
+  describe("agentRuntime CLI provider stamping", () => {
+    // Regression: prior to this fix, resolveCronModelSelection derived the
+    // session-stamped provider from the model string's slash-prefix
+    // (e.g. "anthropic/claude-opus-4-6" -> "anthropic"), ignoring the agent's
+    // configured agentRuntime.id. For agents whose runtime is a CLI backend
+    // (e.g. "claude-cli"), this routed cron-fired turns through the paid
+    // Anthropic API instead of the OAuth-backed CLI. The interactive path
+    // already consults isCliProvider() via run-executor; the cron path now
+    // does the same.
+    function cfgWithClaudeCli(extra: Record<string, unknown> = {}) {
+      return {
+        agents: {
+          defaults: {
+            agentRuntime: { id: "claude-cli" },
+            cliBackends: { "claude-cli": {} },
+            ...extra,
+          },
+        },
+      };
+    }
+
+    it("stamps agentRuntime.id when it is a configured CLI backend", async () => {
+      await expectSelectedModel(
+        {
+          cfg: cfgWithClaudeCli({ model: "anthropic/claude-opus-4-6" }),
+        },
+        { provider: "claude-cli", model: "claude-opus-4-6" },
+      );
+    });
+
+    it("stamps CLI runtime even when payload.model carries a non-CLI provider prefix", async () => {
+      await expectSelectedModel(
+        {
+          cfg: cfgWithClaudeCli({ model: "anthropic/claude-opus-4-6" }),
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "anthropic/claude-sonnet-4-6",
+          },
+        },
+        { provider: "claude-cli", model: "claude-sonnet-4-6" },
+      );
+    });
+
+    it("does not rewrite provider when agentRuntime.id is not a CLI backend", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                agentRuntime: { id: "anthropic" },
+                model: "anthropic/claude-opus-4-6",
+              },
+            },
+          },
+        },
+        { provider: "anthropic", model: "claude-opus-4-6" },
+      );
+    });
+
+    it("leaves provider untouched when no agentRuntime is configured", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                cliBackends: { "claude-cli": {} },
+                model: "anthropic/claude-opus-4-6",
+              },
+            },
+          },
+        },
+        { provider: "anthropic", model: "claude-opus-4-6" },
+      );
+    });
+  });
+
   describe("config model format variations", () => {
     it("default model as string 'provider/model'", async () => {
       await expectSelectedModel(
