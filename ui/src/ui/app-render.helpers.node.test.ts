@@ -130,6 +130,8 @@ function createChatSessionState(overrides: Partial<AppViewState> = {}) {
     chatStreamStartedAt: null,
     connected: true,
     client: { request: vi.fn() },
+    sessionsLoading: false,
+    sessionsError: null,
     sessionsResult: {
       ts: 0,
       path: "",
@@ -633,6 +635,22 @@ describe("createChatSession", () => {
     expect(state.lastError).toBe(
       "Session list is still refreshing. Try New Chat again in a moment.",
     );
+  });
+
+  it("shows retry feedback when creation is skipped without a session error", async () => {
+    const state = createChatSessionState({ lastError: "previous error" });
+    createSessionAndRefreshMock.mockResolvedValue(null);
+
+    await createChatSession(state);
+
+    expect(createSessionAndRefreshMock).toHaveBeenCalledTimes(1);
+    expect(state.sessionKey).toBe("agent:ops:main");
+    expect(state.chatMessage).toBe("draft prompt");
+    expect(state.sessionsError).toBeNull();
+    expect(state.lastError).toBe(
+      "Session list is still refreshing. Try New Chat again in a moment.",
+    );
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 });
 
