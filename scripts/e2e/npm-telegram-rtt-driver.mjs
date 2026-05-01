@@ -13,6 +13,7 @@ const canaryTimeoutMs = Number(
 const warmSampleCount = Number(process.env.OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES ?? "20");
 const sampleTimeoutMs = Number(process.env.OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS ?? "30000");
 const maxWarmFailures = Number(process.env.OPENCLAW_NPM_TELEGRAM_MAX_FAILURES ?? "3");
+const successMarker = process.env.OPENCLAW_NPM_TELEGRAM_SUCCESS_MARKER ?? "OPENCLAW_E2E_OK";
 const scenarioIds = (
   process.env.OPENCLAW_NPM_TELEGRAM_SCENARIOS ?? "telegram-mentioned-message-reply"
 )
@@ -82,7 +83,10 @@ function messageText(message) {
 }
 
 async function flushUpdates(bot) {
-  let updates = await bot.getUpdates({ timeout: 0, allowed_updates: ["message"] });
+  let updates = await bot.getUpdates({
+    timeout: 0,
+    allowed_updates: ["message", "edited_message"],
+  });
   let nextOffset;
   while (updates.length > 0) {
     const lastUpdateId = updates.at(-1).update_id;
@@ -90,7 +94,7 @@ async function flushUpdates(bot) {
     updates = await bot.getUpdates({
       offset: nextOffset,
       timeout: 0,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "edited_message"],
     });
   }
   return nextOffset;
@@ -102,15 +106,16 @@ async function waitForSutReply(params) {
     const updates = await driver.getUpdates({
       offset: driverUpdateOffset,
       timeout: 5,
-      allowed_updates: ["message"],
+      allowed_updates: ["message", "edited_message"],
     });
     for (const update of updates) {
       driverUpdateOffset = Math.max(driverUpdateOffset, update.update_id + 1);
-      const message = update.message;
+      const message = update.message ?? update.edited_message;
       if (!message || String(message.chat?.id) !== String(groupId)) {
         continue;
       }
       observedMessages.push({
+        updateType: update.edited_message ? "edited_message" : "message",
         updateId: update.update_id,
         messageId: message.message_id,
         fromId: message.from?.id,
@@ -128,10 +133,12 @@ async function waitForSutReply(params) {
         continue;
       }
       const text = messageText(message);
+      if (params.matchText && !text.includes(params.matchText)) {
+        continue;
+      }
       const replyMatches = message.reply_to_message?.message_id === params.requestMessageId;
-      const markerMatches = params.matchText ? text.includes(params.matchText) : false;
       const anySutReplyMatches = params.allowAnySutReply;
-      if (replyMatches || markerMatches || anySutReplyMatches) {
+      if (replyMatches || anySutReplyMatches || params.matchText) {
         return message;
       }
     }
@@ -143,11 +150,15 @@ async function waitForSutReply(params) {
 async function runScenario(params) {
   const startedAt = new Date();
   const startedUnixSeconds = Math.floor(startedAt.getTime() / 1000);
-  const request = await driver.sendMessage({
+  const sendParams = {
     chat_id: groupId,
     text: params.input,
     disable_notification: true,
-  });
+  };
+  if (params.replyToMessageId) {
+    sendParams.reply_parameters = { message_id: params.replyToMessageId };
+  }
+  const request = await driver.sendMessage(sendParams);
 
   try {
     const reply = await waitForSutReply({
@@ -167,6 +178,7 @@ async function runScenario(params) {
       title: params.title,
       status: "pass",
       details: `observed SUT message ${reply.message_id}`,
+      messageId: reply.message_id,
       rttMs,
     };
   } catch (error) {
@@ -207,10 +219,13 @@ async function runWarmScenario(params) {
   let failures = 0;
   let passed = 0;
   for (let index = 0; passed < params.sampleCount; index += 1) {
+    const sampleMarker = `${successMarker}_${index + 1}`;
     const sample = await runScenario({
-      allowAnySutReply: true,
+      allowAnySutReply: false,
       id: params.id,
-      input: `/status@${params.sutUsername}`,
+      input: `@${params.sutUsername} RTT sample ${index + 1}. Reply with exactly ${sampleMarker}.`,
+      matchText: sampleMarker,
+      replyToMessageId: params.replyToMessageId,
       sampleIndex: index + 1,
       sutId: params.sutId,
       timeoutMs: params.sampleTimeoutMs,
@@ -282,27 +297,27 @@ async function main() {
   driverUpdateOffset = (await flushUpdates(driver)) ?? driverUpdateOffset;
 
   const scenarios = [];
-  scenarios.push(
-    await runScenario({
-      allowAnySutReply: true,
-      id: "telegram-canary",
-      input: `/status@${sutMe.username}`,
-      sutId: sutMe.id,
-      timeoutMs: canaryTimeoutMs,
-      title: "Telegram canary",
-    }),
-  );
+  const canary = await runScenario({
+    allowAnySutReply: true,
+    id: "telegram-canary",
+    input: `/status@${sutMe.username}`,
+    sutId: sutMe.id,
+    timeoutMs: canaryTimeoutMs,
+    title: "Telegram canary",
+  });
+  scenarios.push(canary);
 
   if (scenarioIds.includes("telegram-mentioned-message-reply")) {
     scenarios.push(
       await runWarmScenario({
         id: "telegram-mentioned-message-reply",
         maxFailures: maxWarmFailures,
+        replyToMessageId: canary.messageId,
         sampleCount: warmSampleCount,
         sampleTimeoutMs,
         sutId: sutMe.id,
         sutUsername: sutMe.username,
-        title: "Telegram status command reply",
+        title: "Telegram normal reply",
       }),
     );
   }
