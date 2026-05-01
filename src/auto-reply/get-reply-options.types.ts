@@ -3,6 +3,11 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
+/** Result returned by onBlockReply to confirm which media URLs were delivered. */
+export type BlockReplyResult = {
+  sentMediaUrls?: readonly string[];
+};
+
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
   timeoutMs?: number;
