@@ -255,6 +255,9 @@ See [Configuration reference](/gateway/configuration-reference) and
 <ParamField path="agents.defaults.subagents.requireAgentId" type="boolean" default="false">
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.list[].subagents.requireAgentId`.
 </ParamField>
+<ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
+  Maximum time to wait for a child-session announce delivery before treating the announce step as timed out. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum.
+</ParamField>
 
 If the requester session is sandboxed, `sessions_spawn` rejects targets
 that would run unsandboxed.
@@ -292,6 +295,7 @@ worker sub-sub-agents.
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn when omitted (0 = no timeout)
+        announceTimeoutMs: 120000, // max time to wait for child announce delivery
       },
     },
   },
