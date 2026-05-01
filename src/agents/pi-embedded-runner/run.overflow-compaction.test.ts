@@ -554,6 +554,8 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
   });
 
   it("passes trigger=overflow when retrying compaction after context overflow", async () => {
+    const runtimePlan = makeForwardedRuntimePlan();
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     mockOverflowRetrySuccess({
       runEmbeddedAttempt: mockedRunEmbeddedAttempt,
       compactDirect: mockedCompactDirect,
@@ -567,6 +569,7 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
         sessionId: "test-session",
         sessionFile: "/tmp/session.json",
         runtimeContext: expect.objectContaining({
+          runtimePlan,
           trigger: "overflow",
           authProfileId: "test-profile",
         }),

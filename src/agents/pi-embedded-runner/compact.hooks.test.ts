@@ -2,15 +2,19 @@ import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyExtraParamsToAgentMock,
+  buildAgentRuntimePlanMock,
   contextEngineCompactMock,
+  createBundleMcpToolRuntimeMock,
   createOpenClawCodingToolsMock,
   ensureOpenClawModelsJsonMock,
   ensureRuntimePluginsLoaded,
   estimateTokensMock,
   getApiKeyForModelMock,
+  getOrCreateSessionMcpRuntimeMock,
   getMemorySearchManagerMock,
   hookRunner,
   loadCompactHooksHarness,
+  materializeBundleMcpToolsForRunMock,
   maybeCompactAgentHarnessSessionMock,
   registerProviderStreamForModelMock,
   resolvePreparedPiRunBootstrapStateMock,
@@ -347,6 +351,105 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
       "/tmp/workspace",
       undefined,
       undefined,
+    );
+  });
+
+  it("uses the shared session MCP runtime path during compaction", async () => {
+    const sharedRuntime = { runtimeId: "shared-runtime" };
+    getOrCreateSessionMcpRuntimeMock.mockResolvedValueOnce(sharedRuntime);
+    materializeBundleMcpToolsForRunMock.mockResolvedValueOnce({
+      tools: [],
+      dispose: vi.fn(async () => {}),
+    });
+
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+    });
+
+    expect(createBundleMcpToolRuntimeMock).not.toHaveBeenCalled();
+    expect(getOrCreateSessionMcpRuntimeMock).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      workspaceDir: "/tmp/workspace",
+      cfg: undefined,
+    });
+    expect(materializeBundleMcpToolsForRunMock).toHaveBeenCalledWith({
+      runtime: sharedRuntime,
+      reservedToolNames: [],
+    });
+  });
+
+  it("reuses a forwarded runtime plan instead of rebuilding it during compaction", async () => {
+    const runtimePlan = {
+      tools: {
+        normalize: vi.fn((tools: unknown[]) => tools),
+        logDiagnostics: vi.fn(),
+      },
+      transcript: {
+        resolvePolicy: vi.fn(() => ({
+          allowSyntheticToolResults: false,
+          validateGeminiTurns: false,
+          validateAnthropicTurns: false,
+        })),
+      },
+      prompt: {
+        resolveSystemPromptContribution: vi.fn(() => undefined),
+      },
+      transport: {
+        resolveExtraParams: vi.fn(() => ({ transport: "prepared-runtime-plan" })),
+      },
+    } as never;
+
+    await compactEmbeddedPiSessionDirect({
+      sessionId: "session-1",
+      sessionKey: TEST_SESSION_KEY,
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp/workspace",
+      runtimePlan,
+    });
+
+    expect(buildAgentRuntimePlanMock).not.toHaveBeenCalled();
+    expect(runtimePlan.tools.normalize).toHaveBeenCalledWith(
+      [],
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        modelApi: "responses",
+      }),
+    );
+    expect(runtimePlan.transcript.resolvePolicy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        modelApi: "responses",
+      }),
+    );
+    expect(runtimePlan.transport.resolveExtraParams).toHaveBeenCalledWith(
+      expect.objectContaining({
+        thinkingLevel: "off",
+        agentId: "main",
+        workspaceDir: "/tmp/workspace",
+      }),
+    );
+    expect(applyExtraParamsToAgentMock).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      "openai",
+      "fake-model",
+      undefined,
+      "off",
+      "main",
+      "/tmp/workspace",
+      expect.objectContaining({
+        provider: "openai",
+        api: "responses",
+      }),
+      "/tmp",
+      undefined,
+      {
+        preparedExtraParams: { transport: "prepared-runtime-plan" },
+      },
     );
   });
 

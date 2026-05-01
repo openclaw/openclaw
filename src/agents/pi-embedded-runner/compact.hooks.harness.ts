@@ -102,6 +102,25 @@ function createDefaultSessionMessages(): unknown[] {
 export const sessionMessages: unknown[] = createDefaultSessionMessages();
 export const sessionAbortCompactionMock: Mock<(reason?: unknown) => void> = vi.fn();
 export const createOpenClawCodingToolsMock = vi.fn(() => []);
+export const buildAgentRuntimePlanMock = vi.fn(() => ({
+  tools: {
+    normalize: vi.fn((tools: unknown[]) => tools),
+    logDiagnostics: vi.fn(),
+  },
+  transcript: {
+    resolvePolicy: vi.fn(() => ({
+      allowSyntheticToolResults: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: false,
+    })),
+  },
+  prompt: {
+    resolveSystemPromptContribution: vi.fn(() => undefined),
+  },
+  transport: {
+    resolveExtraParams: vi.fn(() => ({})),
+  },
+}));
 export const resolveEmbeddedAgentStreamFnMock: Mock<
   (params?: unknown) => MockEmbeddedAgentStreamFn
 > = vi.fn((_params?: unknown) => vi.fn());
@@ -116,6 +135,17 @@ export const rotateTranscriptAfterCompactionMock: Mock<
   (_params?: unknown) => Promise<CompactionTranscriptRotation>
 > = vi.fn(async () => ({
   rotated: false,
+}));
+export const createBundleMcpToolRuntimeMock = vi.fn(async () => ({
+  tools: [],
+  dispose: vi.fn(async () => {}),
+}));
+export const getOrCreateSessionMcpRuntimeMock = vi.fn(async () => ({
+  runtimeId: "shared-session-mcp-runtime",
+}));
+export const materializeBundleMcpToolsForRunMock = vi.fn(async () => ({
+  tools: [],
+  dispose: vi.fn(async () => {}),
 }));
 
 export function resetCompactSessionStateMocks(): void {
@@ -215,6 +245,40 @@ export function resetCompactHooksHarnessMocks(): void {
   resetCompactSessionStateMocks();
   createOpenClawCodingToolsMock.mockReset();
   createOpenClawCodingToolsMock.mockReturnValue([]);
+  buildAgentRuntimePlanMock.mockReset();
+  buildAgentRuntimePlanMock.mockReturnValue({
+    tools: {
+      normalize: vi.fn((tools: unknown[]) => tools),
+      logDiagnostics: vi.fn(),
+    },
+    transcript: {
+      resolvePolicy: vi.fn(() => ({
+        allowSyntheticToolResults: false,
+        validateGeminiTurns: false,
+        validateAnthropicTurns: false,
+      })),
+    },
+    prompt: {
+      resolveSystemPromptContribution: vi.fn(() => undefined),
+    },
+    transport: {
+      resolveExtraParams: vi.fn(() => ({})),
+    },
+  });
+  createBundleMcpToolRuntimeMock.mockReset();
+  createBundleMcpToolRuntimeMock.mockResolvedValue({
+    tools: [],
+    dispose: vi.fn(async () => {}),
+  });
+  getOrCreateSessionMcpRuntimeMock.mockReset();
+  getOrCreateSessionMcpRuntimeMock.mockResolvedValue({
+    runtimeId: "shared-session-mcp-runtime",
+  });
+  materializeBundleMcpToolsForRunMock.mockReset();
+  materializeBundleMcpToolsForRunMock.mockResolvedValue({
+    tools: [],
+    dispose: vi.fn(async () => {}),
+  });
 }
 
 export async function loadCompactHooksHarness(): Promise<{
@@ -383,10 +447,9 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../pi-bundle-mcp-tools.js", () => ({
     retireSessionMcpRuntime: vi.fn(async () => true),
-    createBundleMcpToolRuntime: vi.fn(async () => ({
-      tools: [],
-      dispose: vi.fn(async () => {}),
-    })),
+    createBundleMcpToolRuntime: createBundleMcpToolRuntimeMock,
+    getOrCreateSessionMcpRuntime: getOrCreateSessionMcpRuntimeMock,
+    materializeBundleMcpToolsForRun: materializeBundleMcpToolsForRunMock,
   }));
 
   vi.doMock("../pi-bundle-lsp-runtime.js", () => ({
@@ -605,6 +668,10 @@ export async function loadCompactHooksHarness(): Promise<{
       async (provider: string, modelId: string, agentDir?: string, cfg?: unknown) =>
         resolveModelMock(provider, modelId, agentDir, cfg),
     ),
+  }));
+
+  vi.doMock("../runtime-plan/build.js", () => ({
+    buildAgentRuntimePlan: buildAgentRuntimePlanMock,
   }));
 
   vi.doMock("./prepared-bootstrap-state.js", () => ({

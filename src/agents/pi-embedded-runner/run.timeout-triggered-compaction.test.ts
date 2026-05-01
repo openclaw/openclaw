@@ -1,7 +1,9 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
+  mockedBuildAgentRuntimePlan,
   mockedCompactDirect,
   mockedContextEngine,
   mockedGetApiKeyForModel,
@@ -36,6 +38,10 @@ describe("timeout-triggered compaction", () => {
   });
 
   it("attempts compaction when LLM times out with high prompt token usage (>65%)", async () => {
+    const runtimePlan = {
+      reuseMarker: "timeout-compaction-runtime-plan",
+    } as unknown as AgentRuntimePlan;
+    mockedBuildAgentRuntimePlan.mockReturnValueOnce(runtimePlan);
     // First attempt: timeout with high prompt usage (150k / 200k = 75%)
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
@@ -80,6 +86,7 @@ describe("timeout-triggered compaction", () => {
         force: true,
         compactionTarget: "budget",
         runtimeContext: expect.objectContaining({
+          runtimePlan,
           promptCache: expect.objectContaining({
             retention: "short",
             lastCallUsage: expect.objectContaining({

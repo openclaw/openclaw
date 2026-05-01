@@ -66,7 +66,10 @@ import { isFallbackSummaryError, runWithModelFallback } from "../model-fallback.
 import { supportsModelTools } from "../model-tool-support.js";
 import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
-import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
+import {
+  getOrCreateSessionMcpRuntime,
+  materializeBundleMcpToolsForRun,
+} from "../pi-bundle-mcp-tools.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
 import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import {
@@ -704,10 +707,17 @@ async function compactEmbeddedPiSessionDirectOnce(
       toolsEnabled ? toolsRaw : [],
       runtimePlanModelContext,
     );
-    const bundleMcpRuntime = toolsEnabled
-      ? await createBundleMcpToolRuntime({
+    const bundleMcpSessionRuntime = toolsEnabled
+      ? await getOrCreateSessionMcpRuntime({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
           workspaceDir: effectiveWorkspace,
           cfg: params.config,
+        })
+      : undefined;
+    const bundleMcpRuntime = bundleMcpSessionRuntime
+      ? await materializeBundleMcpToolsForRun({
+          runtime: bundleMcpSessionRuntime,
           reservedToolNames: tools.map((tool) => tool.name),
         })
       : undefined;
