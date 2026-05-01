@@ -12,7 +12,9 @@ import { getActivePluginRegistry } from "./runtime.js";
 function normalizeDerivedEventFields(
   value: Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> | undefined,
 ): Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> {
-  return Array.isArray(value?.derivedPaths) ? { derivedPaths: value.derivedPaths } : {};
+  return Array.isArray(value?.derivedPaths)
+    ? { derivedPaths: Object.freeze([...value.derivedPaths]) }
+    : {};
 }
 
 export async function runTrustedToolPolicies(
@@ -44,9 +46,7 @@ export async function runTrustedToolPolicies(
     return resolvedSessionConfig;
   };
   const { derivedPaths, ...eventWithoutDerivedPaths } = event;
-  let currentDerivedEvent: Pick<PluginHookBeforeToolCallEvent, "derivedPaths"> = derivedPaths
-    ? { derivedPaths }
-    : {};
+  let currentDerivedEvent = normalizeDerivedEventFields({ derivedPaths });
   const buildEvent = (): PluginHookBeforeToolCallEvent => {
     return {
       ...eventWithoutDerivedPaths,
