@@ -18,7 +18,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
 import { copyPluginToolMeta } from "../plugins/tools.js";
-import { runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
+import { hasTrustedToolPolicies, runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import {
   PluginApprovalResolutions,
   type PluginApprovalResolution,
@@ -53,6 +53,8 @@ export function isAbortSignalCancellation(err: unknown, signal?: AbortSignal): b
 export type HookContext = {
   agentId?: string;
   config?: OpenClawConfig;
+  /** Tool execution cwd for host-derived path facts. */
+  cwd?: string;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
@@ -495,10 +497,16 @@ export async function runBeforeToolCallHook(args: {
 
   const hookRunner = getGlobalHookRunner();
   try {
+    const hasBeforeToolCallHooks = hookRunner?.hasHooks("before_tool_call") === true;
+    const shouldRunTrustedPolicies = hasTrustedToolPolicies();
+    if (!shouldRunTrustedPolicies && !hasBeforeToolCallHooks) {
+      return { blocked: false, params };
+    }
     const normalizedParams = isPlainObject(params) ? params : {};
-    const derivedToolParams = deriveToolParams(toolName, normalizedParams);
+    const deriveOptions = args.ctx?.cwd ? { cwd: args.ctx.cwd } : undefined;
+    const derivedToolParams = deriveToolParams(toolName, normalizedParams, deriveOptions);
     const deriveToolEventParams = (candidateParams: Record<string, unknown>) => {
-      const derived = deriveToolParams(toolName, candidateParams);
+      const derived = deriveToolParams(toolName, candidateParams, deriveOptions);
       return derived.derivedPaths ? { derivedPaths: derived.derivedPaths } : {};
     };
     const toolContext = {
@@ -511,20 +519,24 @@ export async function runBeforeToolCallHook(args: {
       ...(args.toolCallId && { toolCallId: args.toolCallId }),
       ...(args.ctx?.channelId && { channelId: args.ctx.channelId }),
     };
-    const trustedPolicyResult = await runTrustedToolPolicies(
-      {
-        toolName,
-        params: normalizedParams,
-        ...(args.ctx?.runId && { runId: args.ctx.runId }),
-        ...(args.toolCallId && { toolCallId: args.toolCallId }),
-        ...(derivedToolParams.derivedPaths ? { derivedPaths: derivedToolParams.derivedPaths } : {}),
-      },
-      toolContext,
-      {
-        ...(args.ctx?.config ? { config: args.ctx.config } : {}),
-        deriveEvent: deriveToolEventParams,
-      },
-    );
+    const trustedPolicyResult = shouldRunTrustedPolicies
+      ? await runTrustedToolPolicies(
+          {
+            toolName,
+            params: normalizedParams,
+            ...(args.ctx?.runId && { runId: args.ctx.runId }),
+            ...(args.toolCallId && { toolCallId: args.toolCallId }),
+            ...(derivedToolParams.derivedPaths
+              ? { derivedPaths: derivedToolParams.derivedPaths }
+              : {}),
+          },
+          toolContext,
+          {
+            ...(args.ctx?.config ? { config: args.ctx.config } : {}),
+            deriveEvent: deriveToolEventParams,
+          },
+        )
+      : undefined;
     if (trustedPolicyResult?.block) {
       return {
         blocked: true,
@@ -560,9 +572,9 @@ export async function runBeforeToolCallHook(args: {
     const policyAdjustedParams = trustedPolicyResult?.params ?? params;
     const policyAdjustedDerivedToolParams =
       trustedPolicyResult?.params && isPlainObject(policyAdjustedParams)
-        ? deriveToolParams(toolName, policyAdjustedParams)
+        ? deriveToolParams(toolName, policyAdjustedParams, deriveOptions)
         : derivedToolParams;
-    if (!hookRunner?.hasHooks("before_tool_call")) {
+    if (!hasBeforeToolCallHooks) {
       return { blocked: false, params: policyAdjustedParams };
     }
     const hookEventParams = isPlainObject(policyAdjustedParams) ? policyAdjustedParams : {};
