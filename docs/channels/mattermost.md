@@ -96,6 +96,7 @@ Native slash commands are opt-in. When enabled, OpenClaw registers `oc_*` slash 
     - OpenClaw refreshes current Mattermost command registration before accepting each callback so stale tokens from deleted or regenerated slash commands stop being accepted without a gateway restart.
     - Callback validation fails closed if the Mattermost API cannot confirm the command is still current; failed validations are cached briefly, concurrent lookups are coalesced, and fresh lookup starts are rate-limited per command to bound replay pressure.
     - Slash callbacks fail closed when registration failed, startup was partial, or the callback token does not match the resolved command's registered token (a token valid for one command cannot reach upstream validation for a different command).
+
   </Accordion>
   <Accordion title="Reachability requirement">
     The callback endpoint must be reachable from the Mattermost server.
