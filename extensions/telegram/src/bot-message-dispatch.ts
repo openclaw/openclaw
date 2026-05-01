@@ -89,6 +89,7 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
+import { createReasoningStreamSink } from "./reasoning-stream-sink.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -479,6 +480,17 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
+  const reasoningStreamSink = telegramCfg.reasoningStreamSink?.url
+    ? createReasoningStreamSink({
+        config: telegramCfg.reasoningStreamSink,
+        context: {
+          chatId: String(chatId),
+          threadId: typeof threadSpec.id === "number" ? threadSpec.id : undefined,
+          accountId: route.accountId,
+        },
+        warn: logVerbose,
+      })
+    : undefined;
   const previewToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let previewToolProgressSuppressed = false;
@@ -1119,17 +1131,25 @@ export const dispatchTelegramMessage = async ({
                             await ingestDraftLaneSegments(payload.text);
                           })
                       : undefined,
-                  onReasoningStream: reasoningLane.stream
-                    ? (payload) =>
-                        enqueueDraftLaneEvent(async () => {
-                          if (splitReasoningOnNextStream) {
-                            reasoningLane.stream?.forceNewMessage();
-                            resetDraftLaneState(reasoningLane);
-                            splitReasoningOnNextStream = false;
+                  onReasoningStream:
+                    reasoningLane.stream || reasoningStreamSink
+                      ? (payload) => {
+                          if (payload.text && reasoningStreamSink) {
+                            reasoningStreamSink(payload.text);
                           }
-                          await ingestDraftLaneSegments(payload.text);
-                        })
-                    : undefined,
+                          if (!reasoningLane.stream) {
+                            return;
+                          }
+                          return enqueueDraftLaneEvent(async () => {
+                            if (splitReasoningOnNextStream) {
+                              reasoningLane.stream?.forceNewMessage();
+                              resetDraftLaneState(reasoningLane);
+                              splitReasoningOnNextStream = false;
+                            }
+                            await ingestDraftLaneSegments(payload.text);
+                          });
+                        }
+                      : undefined,
                   onAssistantMessageStart: answerLane.stream
                     ? () =>
                         enqueueDraftLaneEvent(async () => {

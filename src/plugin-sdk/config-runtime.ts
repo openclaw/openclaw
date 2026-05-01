@@ -116,6 +116,7 @@ export type {
   TelegramGroupConfig,
   TelegramInlineButtonsScope,
   TelegramNetworkConfig,
+  TelegramReasoningStreamSinkConfig,
   TelegramTopicConfig,
   ResolvedTtsPersona,
   TtsAutoMode,
