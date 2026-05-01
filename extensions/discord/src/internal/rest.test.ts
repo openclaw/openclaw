@@ -230,6 +230,41 @@ describe("RequestClient", () => {
     expect(client.queueSize).toBe(0);
   });
 
+  it("does not requeue an active rate limit after the queue is cleared", async () => {
+    const response = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () => {
+      if (fetchSpy.mock.calls.length > 1) {
+        throw new Error("unexpected retry after clearQueue");
+      }
+      return await response.promise;
+    });
+    const client = new RequestClient("test-token", { fetch: fetchSpy });
+
+    const request = client.get("/channels/c1/messages");
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+    expect(client.queueSize).toBe(1);
+
+    client.clearQueue();
+    expect(client.queueSize).toBe(1);
+
+    response.resolve(
+      createJsonResponse(
+        { message: "Rate limited", retry_after: 0, global: false },
+        {
+          status: 429,
+          headers: { "X-RateLimit-Bucket": "channel-messages" },
+        },
+      ),
+    );
+
+    await expect(request).rejects.toMatchObject({
+      name: "RateLimitError",
+      retryAfter: 0,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(client.queueSize).toBe(0);
+  });
+
   it("retries queued global rate limits after Retry-After", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
