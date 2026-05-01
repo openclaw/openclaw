@@ -70,10 +70,11 @@ LABEL org.opencontainers.image.source="https://github.com/1aboveio/openclaw" \
 
 # Upstream's slim variant ships curl/openssl but not ca-certificates, so any
 # HTTPS call from the final image (gh, gcloud, openclaw runtime) fails with
-# curl error 77 / TLS errors. Smallest possible apt run to fix it.
+# curl error 77 / TLS errors. ffmpeg is needed by skills/extensions that
+# transcode audio or video.
 USER root
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates && \
+    apt-get install -y --no-install-recommends ca-certificates ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 USER node
 

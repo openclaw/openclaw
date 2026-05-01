@@ -67,6 +67,7 @@ steps:
         timeout 10 gh --version | head -1
         timeout 30 lark-cli --version
         timeout 30 gcloud --version | head -1
+        timeout 10 ffmpeg -version | head -1
         echo
         echo "=== Boot gateway ==="
         # Run gateway directly (no pipeline) so $! is the node PID, not tee's.
