@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { FILE_TYPE_SNIFF_MAX_BYTES } from "../../media/mime.js";
+import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveAttachmentDelivery, sendPluginSessionAttachment } from "../host-hook-workflow.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
@@ -287,7 +289,7 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("reports best-effort attachment delivery as failed when no delivery result is returned", async () => {
+  it("reports attachment delivery as failed when no delivery result is returned", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await updateSessionStore(storePath, (store) => {
         store["agent:main:main"] = {
@@ -440,6 +442,128 @@ describe("plugin session attachments", () => {
       ).resolves.toEqual({
         ok: false,
         error: `attachment file MIME mismatch for ${fakePdfPath}: expected application/pdf, got unknown`,
+      });
+      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("returns validation errors for unreadable attachment MIME probes", async () => {
+    await withSessionStore(async ({ storePath, stateDir }) => {
+      const unreadablePath = path.join(stateDir, "unreadable.pdf");
+      await fs.writeFile(unreadablePath, "%PDF-1.7\n", "utf8");
+      await fs.chmod(unreadablePath, 0o000);
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+
+      try {
+        const result = await sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: unreadablePath }],
+          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+        });
+
+        expect(result.ok).toBe(false);
+        if (result.ok) {
+          throw new Error("expected unreadable attachment MIME probe to fail");
+        }
+        expect(result.error).toContain(`attachment file MIME read failed for ${unreadablePath}`);
+      } finally {
+        await fs.chmod(unreadablePath, 0o600).catch(() => undefined);
+      }
+      expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
+    });
+  });
+
+  it("validates force-document MIME using only the configured sniff window", async () => {
+    await withSessionStore(async ({ storePath, stateDir }) => {
+      const pdfPath = path.join(stateDir, "large.pdf");
+      await fs.writeFile(
+        pdfPath,
+        Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(FILE_TYPE_SNIFF_MAX_BYTES + 32)]),
+      );
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      workflowMocks.sendMessage.mockImplementation(async (params: Record<string, unknown>) => ({
+        channel: params.channel,
+        to: params.to,
+        via: "direct" as const,
+        mediaUrl: null,
+        result: { channel: params.channel, messageId: "attachment-1" },
+      }));
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: pdfPath }],
+          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+        }),
+      ).resolves.toMatchObject({ ok: true, channel: "telegram", count: 1 });
+      expect(workflowMocks.sendMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mediaUrls: [pdfPath],
+          forceDocument: true,
+        }),
+      );
+    });
+  });
+
+  it("rejects gateway-mode channels before attempting host-local attachment delivery", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "telegram",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "telegram",
+              outbound: { deliveryMode: "gateway" },
+            }),
+          },
+        ]),
+      );
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          "session attachments require direct outbound delivery for channel telegram; " +
+          "channel uses gateway delivery",
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
     });

@@ -857,6 +857,28 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("forwards gateway send delivery options to outbound delivery", async () => {
+    mockDeliverySuccess("m-options");
+
+    await runSend({
+      to: "channel:C1",
+      message: "<b>report</b>",
+      channel: "slack",
+      forceDocument: true,
+      silent: true,
+      parseMode: "HTML",
+      idempotencyKey: "idem-send-options",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceDocument: true,
+        silent: true,
+        formatting: { parseMode: "HTML" },
+      }),
+    );
+  });
+
   it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
     mockDeliverySuccess("m-thread-derived");
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({

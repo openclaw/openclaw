@@ -1,8 +1,9 @@
-import { lstat, readFile } from "node:fs/promises";
+import { lstat, open } from "node:fs/promises";
 import { extractDeliveryInfo } from "../config/sessions/delivery-info.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { detectMime, normalizeMimeType } from "../media/mime.js";
+import { resolveOutboundChannelPlugin } from "../infra/outbound/channel-resolution.js";
+import { detectMime, FILE_TYPE_SNIFF_MAX_BYTES, normalizeMimeType } from "../media/mime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   PluginAttachmentChannelHints,
@@ -44,6 +45,26 @@ function captionFormatToParseMode(
 
 function escapeHtmlText(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+async function readMimeSniffBuffer(
+  filePath: string,
+  size: number,
+): Promise<Buffer | { error: string }> {
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(filePath, "r");
+    const length = Math.min(Math.max(0, size), FILE_TYPE_SNIFF_MAX_BYTES);
+    const buffer = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(buffer, 0, length, 0);
+    return buffer.subarray(0, bytesRead);
+  } catch (error) {
+    return {
+      error: `attachment file MIME read failed for ${filePath}: ${formatErrorMessage(error)}`,
+    };
+  } finally {
+    await handle?.close().catch(() => undefined);
+  }
 }
 
 export function resolveAttachmentDelivery(params: {
@@ -110,8 +131,19 @@ async function validateAttachmentFiles(
       return { error: `attachment file exceeds ${maxBytes} bytes: ${filePath}` };
     }
     if (options?.forceDocumentMime) {
-      const fileBuffer = await readFile(filePath);
-      const detectedMime = normalizeMimeType(await detectMime({ buffer: fileBuffer }));
+      const fileBuffer = await readMimeSniffBuffer(filePath, info.size);
+      if (!Buffer.isBuffer(fileBuffer)) {
+        return fileBuffer;
+      }
+      let detectedMime: string | undefined;
+      try {
+        detectedMime = normalizeMimeType(await detectMime({ buffer: fileBuffer }));
+      } catch (error) {
+        return {
+          error:
+            `attachment file MIME detection failed for ${filePath}: ` + formatErrorMessage(error),
+        };
+      }
       if (detectedMime !== options.forceDocumentMime) {
         return {
           error:
@@ -156,6 +188,18 @@ export async function sendPluginSessionAttachment(
   const { deliveryContext, threadId } = extractDeliveryInfo(sessionKey, { cfg: params.config });
   if (!deliveryContext?.channel || !deliveryContext.to) {
     return { ok: false, error: `session has no active delivery route: ${sessionKey}` };
+  }
+  const deliveryPlugin = resolveOutboundChannelPlugin({
+    channel: deliveryContext.channel,
+    cfg: params.config,
+  });
+  if (deliveryPlugin?.outbound?.deliveryMode === "gateway") {
+    return {
+      ok: false,
+      error:
+        `session attachments require direct outbound delivery for channel ` +
+        `${deliveryContext.channel}; channel uses gateway delivery`,
+    };
   }
   const rawText = normalizeOptionalString(params.text) ?? "";
   const explicitThreadId = normalizeOptionalThreadId(params.threadId);

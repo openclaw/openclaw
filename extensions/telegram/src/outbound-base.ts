@@ -7,7 +7,7 @@ export const telegramOutboundBaseAdapter = {
     ctx?.formatting?.parseMode === "HTML"
       ? splitTelegramHtmlChunks(text, limit)
       : chunkMarkdownText(text, limit),
-  chunkerMode: "markdown" as const,
+  chunkerMode: "text" as const,
   extractMarkdownImages: true,
   textChunkLimit: 4000,
   pollMaxOptions: 10,

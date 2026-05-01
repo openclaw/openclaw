@@ -12,7 +12,7 @@ describe("telegramPlugin outbound", () => {
 
     expect(telegramOutboundBaseAdapter.chunker(text, 4000)).toEqual(expected);
     expect(telegramOutboundBaseAdapter.deliveryMode).toBe("direct");
-    expect(telegramOutboundBaseAdapter.chunkerMode).toBe("markdown");
+    expect(telegramOutboundBaseAdapter.chunkerMode).toBe("text");
     expect(telegramOutboundBaseAdapter.textChunkLimit).toBe(4000);
   });
 
