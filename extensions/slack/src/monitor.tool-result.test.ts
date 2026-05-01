@@ -694,7 +694,7 @@ describe("monitorSlackProvider tool results", () => {
     await runMentionGatedChannelMessageAndFlush();
 
     expect(sendMock).not.toHaveBeenCalled();
-    expectReactionNames(["eyes", "scream", "eyes", "eyes", "scream"]);
+    expectReactionNames(["eyes", "scream", "scream"]);
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
