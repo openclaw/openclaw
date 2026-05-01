@@ -382,6 +382,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
         ),
       }),
     ]);
+    expect(plan.lanes[0]?.command).toContain(
+      'OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/published-upgrade-survivor-2026.4.29"',
+    );
   });
 
   it("expands the published upgrade survivor lane across scenarios", () => {
@@ -408,6 +411,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
           command: expect.stringContaining("OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='tilde-log-path'"),
         }),
       ]),
+    );
+    expect(
+      plan.lanes.find((lane) => lane.name === "published-upgrade-survivor-2026.4.29-tilde-log-path")
+        ?.command,
+    ).toContain(
+      'OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/published-upgrade-survivor-2026.4.29-tilde-log-path"',
     );
   });
 

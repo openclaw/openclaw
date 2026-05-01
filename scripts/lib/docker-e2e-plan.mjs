@@ -168,6 +168,7 @@ export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, 
         const suffix = suffixParts.join("-");
         const name = suffix ? `${poolLane.name}-${suffix}` : poolLane.name;
         const commandPrefix = [
+          `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}"`,
           baselineSpec ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}` : "",
           scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
         ]
