@@ -146,6 +146,9 @@ const ttsMocks = vi.hoisted(() => {
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
   };
 });
+const transcriptMocks = vi.hoisted(() => ({
+  persistAcpDispatchTranscript: vi.fn(async (_params: unknown) => undefined),
+}));
 const replyMediaPathMocks = vi.hoisted(() => ({
   createReplyMediaPathNormalizer: vi.fn(
     (_params?: unknown) => async (payload: ReplyPayload) => payload,
@@ -473,6 +476,10 @@ vi.mock("../../tts/status-config.js", () => ({
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
+vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
+  persistAcpDispatchTranscript: (params: unknown) =>
+    transcriptMocks.persistAcpDispatchTranscript(params),
+}));
 vi.mock("./dispatch-acp-session.runtime.js", () => ({
   readAcpSessionEntry: (params: { sessionKey: string; cfg?: OpenClawConfig }) =>
     acpMocks.readAcpSessionEntry(params),
@@ -794,6 +801,7 @@ describe("dispatchReplyFromConfig", () => {
     ttsMocks.resolveTtsConfig.mockReturnValue({
       mode: "final",
     });
+    transcriptMocks.persistAcpDispatchTranscript.mockClear();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReset();
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
@@ -2798,7 +2806,7 @@ describe("dispatchReplyFromConfig", () => {
       RawBody: "who are you",
       Body: "who are you",
       MessageSid: "msg-claim-1",
-      SessionKey: "agent:main:telegram:group:-10099:77",
+      SessionKey: "agent:main:hook-test",
     });
     const replyResolver = vi.fn(async () => ({ text: "core reply" }) satisfies ReplyPayload);
 
@@ -2829,7 +2837,7 @@ describe("dispatchReplyFromConfig", () => {
       expect.objectContaining({
         type: "message",
         action: "received",
-        sessionKey: "agent:main:telegram:group:-10099:77",
+        sessionKey: "agent:main:hook-test",
       }),
     );
     expect(replyResolver).toHaveBeenCalledTimes(1);
