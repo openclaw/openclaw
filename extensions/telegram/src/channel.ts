@@ -185,7 +185,9 @@ function buildTelegramSendOptions(params: {
     accountId: params.accountId ?? undefined,
     silent: params.silent ?? undefined,
     forceDocument: params.forceDocument ?? undefined,
-    textMode: params.parseMode === "MarkdownV2" ? "markdown" : "html",
+    ...(params.parseMode
+      ? { textMode: params.parseMode === "MarkdownV2" ? "markdown" : "html" }
+      : {}),
     ...(Array.isArray(params.gatewayClientScopes)
       ? { gatewayClientScopes: [...params.gatewayClientScopes] }
       : {}),

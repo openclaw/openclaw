@@ -117,6 +117,7 @@ describe("plugin session attachments", () => {
         to: params.to,
         via: "direct" as const,
         mediaUrl: null,
+        result: { channel: params.channel, messageId: "attachment-1" },
       }));
 
       const result = await sendPluginSessionAttachment({
@@ -164,6 +165,7 @@ describe("plugin session attachments", () => {
         to: params.to,
         via: "direct" as const,
         mediaUrl: null,
+        result: { channel: params.channel, messageId: "attachment-1" },
       }));
 
       await expect(
@@ -183,6 +185,39 @@ describe("plugin session attachments", () => {
       expect(workflowMocks.sendMessage.mock.calls[0]?.[0]).toMatchObject({
         content: "1 &lt; 2 &amp; 3 &gt; 2",
         parseMode: "HTML",
+      });
+    });
+  });
+
+  it("reports best-effort attachment delivery as failed when no delivery result is returned", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:main"] = {
+          sessionId: "session-id",
+          updatedAt: Date.now(),
+          deliveryContext: {
+            channel: "telegram",
+            to: "12345",
+          },
+        } as unknown as SessionEntry;
+        return undefined;
+      });
+      workflowMocks.sendMessage.mockResolvedValue({
+        channel: "telegram",
+        to: "12345",
+        via: "direct",
+        mediaUrl: null,
+      });
+
+      await expect(
+        sendPluginSessionAttachment({
+          origin: "bundled",
+          sessionKey: "agent:main:main",
+          files: [{ path: filePath }],
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error: "attachment delivery failed: no delivery result returned",
       });
     });
   });
@@ -294,6 +329,7 @@ describe("plugin session attachments", () => {
         to: params.to,
         via: "direct" as const,
         mediaUrl: null,
+        result: { channel: params.channel, messageId: "attachment-1" },
       }));
 
       const { config, registry } = createPluginRegistryFixture({ session: { store: storePath } });
