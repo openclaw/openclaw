@@ -481,7 +481,9 @@ export const dispatchTelegramMessage = async ({
   };
   const answerLane = lanes.answer;
   const reasoningLane = lanes.reasoning;
-  let reasoningStreamSink: ((text: string) => void) | undefined;
+  let reasoningStreamSink:
+    | import("./reasoning-stream-sink.js").ReasoningStreamSinkHandle
+    | undefined;
   if (telegramCfg.reasoningStreamSink?.url) {
     const sinkCfg = telegramCfg.reasoningStreamSink;
     let resolvedSecret: string | undefined;
@@ -500,6 +502,7 @@ export const dispatchTelegramMessage = async ({
         chatId: String(chatId),
         threadId: typeof threadSpec.id === "number" ? threadSpec.id : undefined,
         accountId: route.accountId,
+        sessionKey: ctxPayload.SessionKey,
       },
       resolvedSecret,
       warn: logVerbose,
@@ -1149,7 +1152,7 @@ export const dispatchTelegramMessage = async ({
                     reasoningLane.stream || reasoningStreamSink
                       ? (payload) => {
                           if (payload.text && reasoningStreamSink) {
-                            reasoningStreamSink(payload.text);
+                            reasoningStreamSink.onToken(payload.text);
                           }
                           if (!reasoningLane.stream) {
                             return;
@@ -1335,6 +1338,7 @@ export const dispatchTelegramMessage = async ({
     } finally {
       await draftLaneEventQueue;
       progressDraftGate.cancel();
+      reasoningStreamSink?.onEnd();
       if (isDispatchSuperseded()) {
         if (answerLane.hasStreamedMessage || typeof answerLane.stream?.messageId() === "number") {
           retainPreviewOnCleanupByLane.answer = true;

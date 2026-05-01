@@ -7,15 +7,40 @@ export type ReasoningStreamSinkContext = {
   chatId: string;
   threadId?: number;
   accountId?: string;
+  sessionKey?: string;
 };
 
-export type ReasoningStreamSinkEvent = {
-  event: "reasoning_stream";
-  text: string;
+export type ReasoningStreamSinkStartEvent = {
+  event: "reasoning_start";
+  streamId: string;
   chatId: string;
   threadId?: number;
   accountId?: string;
+  sessionKey?: string;
   timestamp: number;
+};
+
+export type ReasoningStreamSinkTokenEvent = {
+  event: "reasoning_stream";
+  streamId: string;
+  text: string;
+  timestamp: number;
+};
+
+export type ReasoningStreamSinkEndEvent = {
+  event: "reasoning_end";
+  streamId: string;
+  timestamp: number;
+};
+
+export type ReasoningStreamSinkEvent =
+  | ReasoningStreamSinkStartEvent
+  | ReasoningStreamSinkTokenEvent
+  | ReasoningStreamSinkEndEvent;
+
+export type ReasoningStreamSinkHandle = {
+  onToken(text: string): void;
+  onEnd(): void;
 };
 
 export function createReasoningStreamSink(params: {
@@ -23,24 +48,14 @@ export function createReasoningStreamSink(params: {
   context: ReasoningStreamSinkContext;
   resolvedSecret?: string;
   warn?: (message: string) => void;
-}): (text: string) => void {
+}): ReasoningStreamSinkHandle {
   const { config, context, resolvedSecret, warn } = params;
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const streamId = crypto.randomBytes(4).toString("hex");
+  let started = false;
 
-  return (text: string) => {
-    if (!text) {
-      return;
-    }
-    const payload: ReasoningStreamSinkEvent = {
-      event: "reasoning_stream",
-      text,
-      chatId: context.chatId,
-      threadId: context.threadId,
-      accountId: context.accountId,
-      timestamp: Date.now(),
-    };
+  function post(payload: ReasoningStreamSinkEvent): void {
     const body = JSON.stringify(payload);
-
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       ...config.headers,
@@ -49,7 +64,6 @@ export function createReasoningStreamSink(params: {
       const sig = crypto.createHmac("sha256", resolvedSecret).update(body).digest("hex");
       headers["X-Openclaw-Signature"] = `sha256=${sig}`;
     }
-
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     fetch(config.url, {
@@ -69,5 +83,41 @@ export function createReasoningStreamSink(params: {
       .finally(() => {
         clearTimeout(timer);
       });
+  }
+
+  return {
+    onToken(text: string): void {
+      if (!text) {
+        return;
+      }
+      if (!started) {
+        started = true;
+        post({
+          event: "reasoning_start",
+          streamId,
+          chatId: context.chatId,
+          threadId: context.threadId,
+          accountId: context.accountId,
+          sessionKey: context.sessionKey,
+          timestamp: Date.now(),
+        });
+      }
+      post({
+        event: "reasoning_stream",
+        streamId,
+        text,
+        timestamp: Date.now(),
+      });
+    },
+    onEnd(): void {
+      if (!started) {
+        return;
+      }
+      post({
+        event: "reasoning_end",
+        streamId,
+        timestamp: Date.now(),
+      });
+    },
   };
 }
