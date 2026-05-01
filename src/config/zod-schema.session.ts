@@ -11,6 +11,7 @@ import {
   QueueSchema,
   TypingModeSchema,
   TtsConfigSchema,
+  VisibleRepliesSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -145,7 +146,7 @@ export const SessionSchema = z
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
-    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
+    visibleReplies: VisibleRepliesSchema,
     responsePrefix: z.string().optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,

@@ -397,11 +397,23 @@ export const ModelsConfigSchema = z
   .strict()
   .optional();
 
+// Accepts the canonical enum values and coerces legacy boolean literals:
+// true → "automatic" (keep room posting on), false → "message_tool" (private replies).
+// Boolean values were never documented but were intuitive enough that users set them;
+// coercing instead of rejecting prevents the silent all-channels-down failure.
+export const VisibleRepliesSchema = z
+  .union([
+    z.enum(["automatic", "message_tool"]),
+    z.literal(true).transform((): "automatic" => "automatic"),
+    z.literal(false).transform((): "message_tool" => "message_tool"),
+  ])
+  .optional();
+
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
     historyLimit: z.number().int().positive().optional(),
-    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
+    visibleReplies: VisibleRepliesSchema,
   })
   .strict()
   .optional();
