@@ -45,9 +45,13 @@ const sessionMocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
   resolveStorePath: vi.fn(),
+  updateSessionStore: vi.fn(),
 }));
 const commandAuthMocks = vi.hoisted(() => ({
   resolveCommandArgMenu: vi.fn(),
+}));
+const pluginCommandMocks = vi.hoisted(() => ({
+  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
 }));
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
@@ -148,6 +152,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
     ...actual,
     loadSessionStore: sessionMocks.loadSessionStore,
     resolveStorePath: sessionMocks.resolveStorePath,
+    updateSessionStore: sessionMocks.updateSessionStore,
   };
 });
 vi.mock("openclaw/plugin-sdk/command-auth-native", async () => {
@@ -178,7 +183,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
     ...actual,
     getPluginCommandSpecs: vi.fn(() => []),
     matchPluginCommand: vi.fn(() => null),
-    executePluginCommand: vi.fn(async () => ({ text: "ok" })),
+    executePluginCommand: pluginCommandMocks.executePluginCommand,
   };
 });
 vi.mock("./bot/delivery.js", () => ({
@@ -232,6 +237,11 @@ function registerAndResolveCommandHandlerBase(params: {
   useAccessGroups: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
+  pluginCommandSpecs?: NonNullable<TelegramNativeCommandDeps["getPluginCommandSpecs"]> extends (
+    ...args: unknown[]
+  ) => infer R
+    ? R
+    : never;
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -245,6 +255,7 @@ function registerAndResolveCommandHandlerBase(params: {
     useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
+    pluginCommandSpecs,
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -252,7 +263,7 @@ function registerAndResolveCommandHandlerBase(params: {
     getRuntimeConfig: vi.fn(() => cfg),
     readChannelAllowFromStore: vi.fn(async () => storeAllowFrom ?? []),
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-    getPluginCommandSpecs: vi.fn(() => []),
+    getPluginCommandSpecs: vi.fn(() => pluginCommandSpecs ?? []),
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
   };
@@ -291,6 +302,11 @@ function registerAndResolveCommandHandler(params: {
   useAccessGroups?: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
+  pluginCommandSpecs?: NonNullable<TelegramNativeCommandDeps["getPluginCommandSpecs"]> extends (
+    ...args: unknown[]
+  ) => infer R
+    ? R
+    : never;
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -304,6 +320,7 @@ function registerAndResolveCommandHandler(params: {
     useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
+    pluginCommandSpecs,
   } = params;
   return registerAndResolveCommandHandlerBase({
     commandName,
@@ -314,6 +331,7 @@ function registerAndResolveCommandHandler(params: {
     useAccessGroups: useAccessGroups ?? true,
     telegramCfg,
     resolveTelegramGroupConfig,
+    pluginCommandSpecs,
   });
 }
 
@@ -449,7 +467,15 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     commandAuthMocks.resolveCommandArgMenu.mockClear();
     sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
-    sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
+    sessionMocks.resolveStorePath
+      .mockClear()
+      .mockReturnValue("/tmp/openclaw-sessions/sessions.json");
+    sessionMocks.updateSessionStore.mockClear().mockImplementation(async (_storePath, updater) => {
+      const store = {};
+      updater(store);
+      return store;
+    });
+    pluginCommandMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
     replyMocks.dispatchReplyWithBufferedBlockDispatcher
       .mockClear()
       .mockResolvedValue(dispatchReplyResult);
@@ -983,5 +1009,51 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramTopicCommandContext());
 
     expectUnauthorizedNewCommandBlocked(sendMessage);
+  });
+
+  it("passes a persisted topic session file to plugin commands", async () => {
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:telegram:group:-1001234567890:topic:42": {
+        sessionId: "sess-topic",
+        updatedAt: 1,
+      },
+    });
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      groupAllowFrom: ["-1001234567890"],
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          command: "codex",
+          description: "Codex",
+          pluginId: "openclaw-codex-app-server",
+          pluginName: "Codex",
+          requireAuth: true,
+        },
+      ] as NonNullable<TelegramNativeCommandDeps["getPluginCommandSpecs"]> extends (
+        ...args: unknown[]
+      ) => infer R
+        ? R
+        : never,
+    });
+
+    await handler(
+      createTelegramTopicCommandContext({ match: "bind --cwd /tmp/work", threadId: 42 }),
+    );
+
+    expect(sessionMocks.updateSessionStore).toHaveBeenCalledWith(
+      "/tmp/openclaw-sessions/sessions.json",
+      expect.any(Function),
+    );
+    expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+        sessionId: "sess-topic",
+        sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+        messageThreadId: 42,
+      }),
+    );
   });
 });
