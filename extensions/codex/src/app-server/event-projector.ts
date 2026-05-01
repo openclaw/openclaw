@@ -332,7 +332,7 @@ export class CodexAppServerEventProjector {
     this.reasoningTextByItem.set(itemId, text);
     const formatted = formatReasoningMessage(text);
     if (formatted) {
-      await this.params.onReasoningStream?.({ text: formatted, isReasoning: true });
+      await this.params.onReasoningStream?.({ text: formatted });
     }
   }
 
