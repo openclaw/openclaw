@@ -32,7 +32,9 @@ const mocks = vi.hoisted(() => ({
     () => createEmptyMockManifestRegistry(),
   ),
   loadBundledCapabilityRuntimeRegistry: vi.fn(),
-  loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  loadPluginRegistrySnapshot: vi.fn<() => { plugins: Array<Record<string, unknown>> }>(() => ({
+    plugins: [],
+  })),
   withBundledPluginAllowlistCompat: vi.fn(
     ({ config, pluginIds }: { config?: OpenClawConfig; pluginIds: string[] }) =>
       ({

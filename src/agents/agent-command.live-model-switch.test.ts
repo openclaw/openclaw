@@ -291,7 +291,7 @@ vi.mock("./lanes.js", () => ({
 }));
 
 vi.mock("./model-catalog.js", () => ({
-  loadManifestModelCatalog: (...args: unknown[]) => state.loadManifestModelCatalogMock(...args),
+  loadManifestModelCatalog: state.loadManifestModelCatalogMock,
 }));
 
 vi.mock("./model-selection.js", () => ({

@@ -7,6 +7,7 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
@@ -56,6 +57,39 @@ function createPlugin(params: {
   };
 }
 
+function createInstalledPluginRecord(
+  plugin: PluginManifestRecord,
+  enabledPluginIds: string[],
+): InstalledPluginIndexRecord {
+  const enabled = plugin.origin === "bundled" || enabledPluginIds.includes(plugin.id);
+  return {
+    pluginId: plugin.id,
+    manifestPath: plugin.manifestPath,
+    manifestHash: `test-${plugin.id}`,
+    source: plugin.source,
+    rootDir: plugin.rootDir,
+    origin: plugin.origin,
+    enabled,
+    startup: {
+      sidecar: false,
+      memory: false,
+      deferConfiguredChannelFullLoadUntilAfterListen: false,
+      agentHarnesses: [],
+    },
+    compat: [],
+  };
+}
+
+function legacyModelProviderConfig(provider: Record<string, unknown>): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        comfy: provider as never,
+      },
+    },
+  };
+}
+
 function installSnapshot(
   config: OpenClawConfig,
   plugins: PluginManifestRecord[],
@@ -68,11 +102,15 @@ function installSnapshot(
     policyHash: resolveInstalledPluginIndexPolicyHash(config),
     ...(workspaceDir ? { workspaceDir } : {}),
     index: {
-      plugins: plugins.map((plugin) => ({
-        pluginId: plugin.id,
-        origin: plugin.origin,
-        enabled: plugin.origin === "bundled" || enabledPluginIds.includes(plugin.id),
-      })),
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: plugins.map((plugin) => createInstalledPluginRecord(plugin, enabledPluginIds)),
+      diagnostics: [],
     },
     registryDiagnostics: [],
     manifestRegistry: { plugins, diagnostics: [] },
@@ -530,16 +568,10 @@ describe("optional media tool factory planning", () => {
   it.each([
     {
       name: "legacy local provider config",
-      config: {
-        models: {
-          providers: {
-            comfy: {
-              workflow: { "1": { inputs: {} } },
-              promptNodeId: "1",
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
+      config: legacyModelProviderConfig({
+        workflow: { "1": { inputs: {} } },
+        promptNodeId: "1",
+      }),
     },
     {
       name: "plugin cloud API key config",
@@ -560,18 +592,12 @@ describe("optional media tool factory planning", () => {
     },
     {
       name: "legacy cloud API key config",
-      config: {
-        models: {
-          providers: {
-            comfy: {
-              mode: "cloud",
-              apiKey: "cloud-key",
-              workflow: { "1": { inputs: {} } },
-              promptNodeId: "1",
-            },
-          },
-        },
-      } satisfies OpenClawConfig,
+      config: legacyModelProviderConfig({
+        mode: "cloud",
+        apiKey: "cloud-key",
+        workflow: { "1": { inputs: {} } },
+        promptNodeId: "1",
+      }),
     },
   ])(
     "registers generation tools from Comfy $name without a current metadata snapshot",
@@ -596,6 +622,7 @@ describe("optional media tool factory planning", () => {
         providers: {
           openai: {
             baseUrl: "http://localhost:11434/v1",
+            models: [],
           },
         },
       },

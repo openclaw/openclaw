@@ -83,11 +83,10 @@ describe("loadModelCatalog", () => {
     currentPluginMetadataSnapshotMock = vi.fn();
     loadPluginMetadataSnapshotMock = vi.fn();
     vi.doMock("../plugins/current-plugin-metadata-snapshot.js", () => ({
-      getCurrentPluginMetadataSnapshot: (...args: unknown[]) =>
-        currentPluginMetadataSnapshotMock(...args),
+      getCurrentPluginMetadataSnapshot: currentPluginMetadataSnapshotMock,
     }));
     vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
-      loadPluginMetadataSnapshot: (...args: unknown[]) => loadPluginMetadataSnapshotMock(...args),
+      loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
     }));
 
     ({

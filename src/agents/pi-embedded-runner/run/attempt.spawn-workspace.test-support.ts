@@ -1027,6 +1027,7 @@ export async function createContextEngineAttemptRunner(params: {
     modelId: "gpt-test",
     model: testModel,
     authStorage: testAuthStorage as never,
+    authProfileStore: { version: 1, profiles: {} },
     modelRegistry: {} as never,
     thinkLevel: "off",
     senderIsOwner: true,
