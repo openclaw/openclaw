@@ -121,7 +121,15 @@ export async function updateSessionStoreAfterAgentRun(params: {
     // Keep the pre-existing runtime model and context window so a background
     // heartbeat turn using a different model does not bleed into the main
     // session's perceived state.
-    next.contextTokens = entry.contextTokens ?? contextTokens;
+    if (entry.model) {
+      // Prior runtime model exists: preserve its contextTokens. When missing,
+      // leave contextTokens unset rather than falling back to the heartbeat
+      // run's context window; status derives it from the preserved model.
+      next.contextTokens = entry.contextTokens;
+    } else {
+      // No prior runtime model: heartbeat establishes initial state.
+      next.contextTokens = entry.contextTokens ?? contextTokens;
+    }
     setSessionRuntimeModel(next, {
       provider: entry.modelProvider ?? providerUsed,
       model: entry.model ?? modelUsed,
