@@ -81,15 +81,20 @@ function findSessionEntryInStore(
   store: ReturnType<typeof loadSessionStore>,
   keys: readonly string[],
 ) {
+  let legacyIndex: Map<string, string> | undefined;
   for (const key of keys) {
     const direct = store[key];
     if (direct) {
       return direct;
     }
     const normalized = normalizeLowercaseStringOrEmpty(key);
-    const legacyKey = Object.keys(store).find(
-      (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalized,
+    legacyIndex ??= new Map(
+      Object.keys(store).map((candidate) => [
+        normalizeLowercaseStringOrEmpty(candidate),
+        candidate,
+      ]),
     );
+    const legacyKey = legacyIndex.get(normalized);
     if (legacyKey && store[legacyKey]) {
       return store[legacyKey];
     }

@@ -109,7 +109,10 @@ export async function runAgentHarnessBeforeAgentFinalizeHook(params: {
       runId: params.event.runId ?? params.ctx.runId,
     };
     return normalizeBeforeAgentFinalizeResult(
-      await hookRunner.runBeforeAgentFinalize(params.event, buildAgentHookContext(params.ctx)),
+      await hookRunner.runBeforeAgentFinalize(
+        eventForNormalization,
+        buildAgentHookContext(params.ctx),
+      ),
       eventForNormalization,
     );
   } catch (error) {
