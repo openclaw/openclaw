@@ -10,13 +10,11 @@ vi.mock("./plugin-registry.js", () => ({
 
 import {
   buildManifestBuiltInModelSuppressionResolver,
-  clearManifestModelSuppressionCacheForTest,
   resolveManifestBuiltInModelSuppression,
 } from "./manifest-model-suppression.js";
 
 describe("manifest model suppression", () => {
   beforeEach(() => {
-    clearManifestModelSuppressionCacheForTest();
     mocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
     mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       diagnostics: [],

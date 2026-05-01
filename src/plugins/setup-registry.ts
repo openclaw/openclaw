@@ -84,20 +84,6 @@ const NOOP_LOGGER: PluginLogger = {
 
 const jitiLoaders: PluginJitiLoaderCache = new Map();
 
-export const __testing = {
-  get maxSetupLookupCacheEntries() {
-    return 0;
-  },
-  setMaxSetupLookupCacheEntriesForTest(_value?: number) {},
-  getCacheSizes() {
-    return {
-      setupRegistry: 0,
-      setupProvider: 0,
-      setupCliBackend: 0,
-    };
-  },
-} as const;
-
 export function clearPluginSetupRegistryCache(): void {
   jitiLoaders.clear();
 }

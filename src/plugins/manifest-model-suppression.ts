@@ -99,10 +99,6 @@ function manifestSuppressionMatchesConditions(params: {
   return true;
 }
 
-export function clearManifestModelSuppressionCacheForTest(): void {
-  // Manifest suppressions are read fresh. Keep the test hook as a no-op.
-}
-
 export function buildManifestBuiltInModelSuppressionResolver(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
