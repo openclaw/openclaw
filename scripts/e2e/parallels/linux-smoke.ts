@@ -101,8 +101,6 @@ const defaultOptions = (): LinuxOptions => ({
   vmNameExplicit: false,
 });
 
-const agentModelTimeoutSeconds = Number(process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || 300);
-
 function usage(): string {
   return `Usage: bash scripts/e2e/parallels-linux-smoke.sh [options]
 
@@ -678,14 +676,6 @@ rm -rf /root/.openclaw/test-bad-plugin`);
       "openclaw",
       "config",
       "set",
-      `models.providers.${this.options.provider}.timeoutSeconds`,
-      String(agentModelTimeoutSeconds),
-      "--strict-json",
-    ]);
-    this.guestExec([
-      "openclaw",
-      "config",
-      "set",
       "agents.defaults.skipBootstrap",
       "true",
       "--strict-json",
@@ -694,7 +684,7 @@ rm -rf /root/.openclaw/test-bad-plugin`);
     this.guestBash(
       `exec /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id parallels-linux-smoke --message ${shellQuote(
         "Reply with exact ASCII text OK only.",
-      )} --json`,
+      )} --timeout 0 --json`,
     );
   }
 

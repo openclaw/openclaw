@@ -102,8 +102,6 @@ const defaultOptions = (): WindowsOptions => ({
   vmName: "Windows 11",
 });
 
-const agentModelTimeoutSeconds = Number(process.env.OPENCLAW_PARALLELS_MODEL_TIMEOUT_S || 300);
-
 function usage(): string {
   return `Usage: bash scripts/e2e/parallels-windows-smoke.sh [options]
 
@@ -881,8 +879,6 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
 $PSNativeCommandUseErrorActionPreference = $false
 Invoke-OpenClaw models set ${psSingleQuote(this.auth.modelId)}
 if ($LASTEXITCODE -ne 0) { throw "models set failed" }
-Invoke-OpenClaw config set models.providers.${this.options.provider}.timeoutSeconds ${agentModelTimeoutSeconds} --strict-json
-if ($LASTEXITCODE -ne 0) { throw "provider timeout config set failed" }
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
@@ -896,6 +892,8 @@ $args = ${psArray([
         "parallels-windows-smoke",
         "--message",
         "Reply with exact ASCII text OK only.",
+        "--timeout",
+        "0",
         "--json",
       ])}
 $output = Invoke-OpenClaw @args 2>&1
