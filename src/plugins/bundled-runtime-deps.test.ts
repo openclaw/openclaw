@@ -3418,7 +3418,7 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     },
   );
 
-  it("prunes stale unknown external runtime roots while keeping newest and locked roots", () => {
+  it("prunes stale unknown and legacy versioned external runtime roots", () => {
     const stageDir = makeTempDir();
     const nowMs = Date.parse("2026-04-29T08:00:00.000Z");
     const makeRoot = (name: string, ageMs: number, locked = false) => {
@@ -3440,7 +3440,9 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     const newest = makeRoot("openclaw-unknown-newest", 1_000);
     const stale = makeRoot("openclaw-unknown-stale", 120_000);
     const locked = makeRoot("openclaw-unknown-locked", 120_000, true);
-    const versioned = makeRoot("openclaw-2026.4.25-versioned", 120_000);
+    const legacyVersioned = makeRoot("openclaw-2026.4.25-discord", 1_000);
+    const lockedLegacyVersioned = makeRoot("openclaw-2026.4.25-telegram", 1_000, true);
+    const modernVersioned = makeRoot("openclaw-2026.4.25-abcdef123456", 120_000);
 
     const result = pruneUnknownBundledRuntimeDepsRoots({
       env: { OPENCLAW_PLUGIN_STAGE_DIR: stageDir },
@@ -3449,11 +3451,13 @@ describe("ensureBundledPluginRuntimeDeps", () => {
       minAgeMs: 60_000,
     });
 
-    expect(result).toEqual({ scanned: 3, removed: 1, skippedLocked: 1 });
+    expect(result).toEqual({ scanned: 5, removed: 2, skippedLocked: 2 });
     expect(fs.existsSync(newest)).toBe(true);
     expect(fs.existsSync(stale)).toBe(false);
     expect(fs.existsSync(locked)).toBe(true);
-    expect(fs.existsSync(versioned)).toBe(true);
+    expect(fs.existsSync(legacyVersioned)).toBe(false);
+    expect(fs.existsSync(lockedLegacyVersioned)).toBe(true);
+    expect(fs.existsSync(modernVersioned)).toBe(true);
   });
 
   it("uses the plugin-local stage for source-checkout runtime deps", () => {

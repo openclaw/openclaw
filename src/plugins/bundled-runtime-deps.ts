@@ -25,6 +25,7 @@ import {
 import {
   isSourceCheckoutRoot,
   listSiblingExternalBundledRuntimeDepsRoots,
+  pruneUnknownBundledRuntimeDepsRoots,
   resolveBundledRuntimeDependencyInstallRootPlan,
   resolveBundledRuntimeDependencyPackageInstallRootPlan,
   resolveBundledRuntimeDependencyPackageRoot,
@@ -397,6 +398,10 @@ export async function repairBundledRuntimeDepsPackagePlanAsync(params: {
   onProgress?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairBundledRuntimeDepsPackagePlanResult> {
+  pruneUnknownBundledRuntimeDepsRoots({
+    env: params.env,
+    ...(params.warn ? { warn: params.warn } : {}),
+  });
   const plan = createBundledRuntimeDepsPackagePlan(params);
   if (plan.missingSpecs.length === 0) {
     return { plan, repairedSpecs: [] };
