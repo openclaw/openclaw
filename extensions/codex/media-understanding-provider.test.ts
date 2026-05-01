@@ -215,6 +215,33 @@ describe("codex media understanding provider", () => {
     });
   });
 
+  it("passes the request agent dir through to the Codex app-server client", async () => {
+    const { client } = createFakeClient();
+    const clientFactory = vi.fn(async () => client);
+    const provider = buildCodexMediaUnderstandingProvider({
+      clientFactory,
+    });
+
+    await provider.describeImage?.({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      provider: "codex",
+      model: "gpt-5.4",
+      prompt: "Describe briefly.",
+      timeoutMs: 30_000,
+      profile: "openai-codex:work",
+      cfg: {},
+      agentDir: "/tmp/openclaw-media-agent",
+    });
+
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({ transport: "stdio" }),
+      "openai-codex:work",
+      "/tmp/openclaw-media-agent",
+    );
+  });
+
   it("declines approval requests during image understanding", async () => {
     const { client, approvalResponses } = createFakeClient({
       approvalRequestMethod: "item/permissions/requestApproval",

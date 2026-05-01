@@ -82,13 +82,14 @@ async function describeCodexImages(
   const timeoutMs = Math.max(100, req.timeoutMs);
   const ownsClient = !options.clientFactory;
   const client = options.clientFactory
-    ? await options.clientFactory(appServer.start, req.profile)
+    ? await options.clientFactory(appServer.start, req.profile, req.agentDir)
     : await import("./src/app-server/shared-client.js").then(
         ({ createIsolatedCodexAppServerClient }) =>
           createIsolatedCodexAppServerClient({
             startOptions: appServer.start,
             timeoutMs,
             authProfileId: req.profile,
+            agentDir: req.agentDir,
           }),
       );
   const abortController = new AbortController();
