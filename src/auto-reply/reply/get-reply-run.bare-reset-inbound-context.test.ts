@@ -14,6 +14,22 @@ vi.mock("../../agents/pi-embedded.runtime.js", () => ({
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
+vi.mock("../../agents/spawned-context.js", () => ({
+  resolveIngressWorkspaceOverrideForSpawnedRun: vi.fn().mockReturnValue(undefined),
+}));
+
+vi.mock("./session-reset-prompt.js", () => ({
+  resolveBareSessionResetPromptState: vi
+    .fn()
+    .mockResolvedValue({ prompt: "", shouldPrependStartupContext: false }),
+  resolveBareResetBootstrapFileAccess: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("./startup-context.js", () => ({
+  shouldApplyStartupContext: vi.fn().mockReturnValue(false),
+  buildSessionStartupContextPrelude: vi.fn().mockResolvedValue(null),
+}));
+
 vi.mock("../../config/sessions/group.js", () => ({
   resolveGroupSessionKey: vi.fn().mockReturnValue(undefined),
 }));
@@ -162,8 +178,8 @@ function bareResetParams(
       abortKey: "session-key",
       ownerList: [],
       senderIsOwner: false,
-      rawBodyNormalized: "",
-      commandBodyNormalized: "",
+      rawBodyNormalized: "/reset",
+      commandBodyNormalized: "/reset",
     } as never,
     commandSource: "",
     allowTextCommands: true,
@@ -193,7 +209,7 @@ function bareResetParams(
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-1",
     timeoutMs: 30_000,
-    isNewSession: false,
+    isNewSession: true,
     resetTriggered: true,
     systemSent: true,
     sessionKey: "session-key",
@@ -228,6 +244,7 @@ describe("runPreparedReply isBareSessionReset carries inboundUserContext (#71520
   it("does not duplicate inboundUserContext when the non-reset path runs", async () => {
     await runPreparedReply(
       bareResetParams({
+        isNewSession: false,
         resetTriggered: false,
       }),
     );
