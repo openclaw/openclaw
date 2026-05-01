@@ -357,7 +357,27 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
     return null;
   }
   const obj = requireObject(raw, "components");
+  // GPT-5.4/5.5 sends all-empty-default component objects on every call (#52757).
+  // Detect the pattern: blocks is an empty array, modal has empty fields + empty title,
+  // and text is absent/empty. Return null so callers treat it as absent.
   const blocksRaw = obj.blocks;
+  // Early-exit: if blocks is empty, modal is absent or has empty fields+title,
+  // and text is absent/empty — this is the all-empty-defaults no-op pattern.
+  const modalRawForCheck = obj.modal;
+  const textRawForCheck = typeof obj.text === "string" ? obj.text.trim() : "";
+  const blocksEmpty = !Array.isArray(blocksRaw) || blocksRaw.length === 0;
+  const modalEmpty =
+    modalRawForCheck === undefined ||
+    modalRawForCheck === null ||
+    (typeof modalRawForCheck === "object" &&
+      modalRawForCheck !== null &&
+      (!Array.isArray((modalRawForCheck as Record<string, unknown>).fields) ||
+        ((modalRawForCheck as Record<string, unknown>).fields as unknown[]).length === 0) &&
+      (typeof (modalRawForCheck as Record<string, unknown>).title !== "string" ||
+        ((modalRawForCheck as Record<string, unknown>).title as string).trim().length === 0));
+  if (blocksEmpty && modalEmpty && textRawForCheck.length === 0) {
+    return null;
+  }
   const blocks = Array.isArray(blocksRaw)
     ? blocksRaw.map((entry, idx) => parseComponentBlock(entry, `components.blocks[${idx}]`))
     : undefined;
@@ -367,7 +387,14 @@ export function readDiscordComponentSpec(raw: unknown): DiscordComponentMessageS
   if (modalRaw !== undefined) {
     const modalObj = requireObject(modalRaw, "components.modal");
     const fieldsRaw = modalObj.fields;
+    // GPT-5.4/5.5 sends components with all-empty defaults on every message.send
+    // call. Treat a modal with an empty fields array AND an empty/absent title as
+    // a model-filled no-op default — return null instead of throwing (#52757).
+    const titleRaw = typeof modalObj.title === "string" ? modalObj.title.trim() : "";
     if (!Array.isArray(fieldsRaw) || fieldsRaw.length === 0) {
+      if (titleRaw.length === 0) {
+        return null; // all-empty defaults from model — treat as absent
+      }
       throw new Error("components.modal.fields must be a non-empty array");
     }
     if (fieldsRaw.length > 5) {
