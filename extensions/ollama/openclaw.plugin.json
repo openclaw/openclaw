@@ -9,7 +9,10 @@
   "providerRequest": {
     "providers": {
       "ollama": {
-        "family": "ollama"
+        "family": "ollama",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
       }
     }
   },
