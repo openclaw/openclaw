@@ -687,6 +687,7 @@ describe("plugin session actions", () => {
         workspaceApi = api;
       },
     });
+    setActivePluginRegistry(registry.registry);
 
     try {
       expect(
@@ -788,6 +789,36 @@ describe("plugin session actions", () => {
           runId: "stale-run",
           stream: "approval",
           data: { stale: true },
+        }),
+      ).toEqual({ emitted: false, reason: "plugin is not loaded" });
+
+      const neverActiveRegistry = createPluginRegistry({
+        logger: {
+          info() {},
+          warn() {},
+          error() {},
+          debug() {},
+        },
+        runtime: {} as never,
+      });
+      let neverActiveApi: OpenClawPluginApi | undefined;
+      registerTestPlugin({
+        registry: neverActiveRegistry,
+        config,
+        record: createPluginRecord({
+          id: "never-active-event-plugin",
+          name: "Never Active Event Plugin",
+          origin: "bundled",
+        }),
+        register(api) {
+          neverActiveApi = api;
+        },
+      });
+      expect(
+        neverActiveApi?.emitAgentEvent({
+          runId: "never-active-run",
+          stream: "approval",
+          data: { inactive: true },
         }),
       ).toEqual({ emitted: false, reason: "plugin is not loaded" });
 
