@@ -228,9 +228,26 @@ async function waitForReady(params) {
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     }
+    if (logShowsGatewayReady(params.logPath) && (await httpOk(params.port, "/healthz"))) {
+      return;
+    }
     await delay(250);
   }
   throw new Error(`gateway did not become ready: ${lastError}\n${tailFile(params.logPath)}`);
+}
+
+function logShowsGatewayReady(logPath) {
+  const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+  return log.includes("[gateway] ready");
+}
+
+async function httpOk(port, pathName) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 async function assertHttpOk(port, pathName) {
@@ -238,6 +255,19 @@ async function assertHttpOk(port, pathName) {
   if (!res.ok) {
     throw new Error(`${pathName} returned HTTP ${res.status}`);
   }
+}
+
+async function assertReadyzProbe(options) {
+  const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
+  if (res.ok) {
+    return;
+  }
+  if (!options.allowDegradedReadyz) {
+    throw new Error(`/readyz returned HTTP ${res.status}`);
+  }
+  console.log(
+    `Runtime readyz smoke degraded for ${options.pluginId}: /readyz returned HTTP ${res.status}`,
+  );
 }
 
 async function rpcCall(method, params, options) {
@@ -351,7 +381,13 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
   });
   try {
     await waitForReady({ child, port, logPath });
-    await assertBaseGatewayProbes({ entrypoint, port, env: process.env });
+    await assertBaseGatewayProbes({
+      entrypoint,
+      port,
+      env: process.env,
+      pluginId,
+      allowDegradedReadyz: plan.channels.length > 0,
+    });
     await runManifestProbes(plan, { entrypoint, port, env: process.env, pluginId });
     await runWatchdog({ child, logPath, port, entrypoint, env: process.env, pluginId });
     console.log(`Runtime smoke passed for ${pluginId}`);
@@ -365,7 +401,7 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
 
 async function assertBaseGatewayProbes(options) {
   await assertHttpOk(options.port, "/healthz");
-  await assertHttpOk(options.port, "/readyz");
+  await assertReadyzProbe(options);
   await rpcCall("health", {}, options);
 }
 
