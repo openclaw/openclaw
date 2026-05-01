@@ -45,6 +45,7 @@ function createManifestProviderPlugin(params: {
   origin?: "bundled" | "workspace";
   enabledByDefault?: boolean;
   modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
+  modelCatalog?: PluginManifestRecord["modelCatalog"];
   activation?: PluginManifestRecord["activation"];
   setup?: PluginManifestRecord["setup"];
   contracts?: PluginManifestRecord["contracts"];
@@ -56,6 +57,7 @@ function createManifestProviderPlugin(params: {
     channels: [],
     providers: params.providerIds,
     cliBackends: params.cliBackends ?? [],
+    modelCatalog: params.modelCatalog,
     modelSupport: params.modelSupport,
     activation: params.activation,
     setup: params.setup,
@@ -87,6 +89,14 @@ function setOwningProviderManifestPlugins() {
       id: "openai",
       providerIds: ["openai", "openai-codex"],
       cliBackends: ["codex-cli"],
+      modelCatalog: {
+        aliases: {
+          "azure-openai-responses": {
+            provider: "openai",
+            api: "azure-openai-responses",
+          },
+        },
+      },
       modelSupport: {
         modelPrefixes: ["gpt-", "o1", "o3", "o4"],
       },
@@ -189,6 +199,11 @@ function listManifestContributionIdsForFixture(
   switch (contribution) {
     case "providers":
       return plugin.providers;
+    case "modelCatalogProviders":
+      return [
+        ...Object.keys(plugin.modelCatalog?.providers ?? {}),
+        ...Object.keys(plugin.modelCatalog?.aliases ?? {}),
+      ];
     case "cliBackends":
       return plugin.cliBackends;
     default:
@@ -972,6 +987,31 @@ describe("resolvePluginProviders", () => {
     );
   });
 
+  it("activates owning plugins for explicit manifest catalog provider aliases", () => {
+    setOwningProviderManifestPlugins();
+
+    resolvePluginProviders({
+      config: {},
+      providerRefs: ["azure-openai-responses"],
+      activate: true,
+    });
+
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        onlyPluginIds: ["openai"],
+        activate: true,
+        config: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["openai"],
+            entries: {
+              openai: { enabled: true },
+            },
+          }),
+        }),
+      }),
+    );
+  });
+
   it("activates the owner plugin for custom provider refs that use a native provider api", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
@@ -1411,6 +1451,10 @@ describe("resolvePluginProviders", () => {
     },
     {
       provider: "openai-codex",
+      expectedPluginIds: ["openai"],
+    },
+    {
+      provider: "azure-openai-responses",
       expectedPluginIds: ["openai"],
     },
     {
