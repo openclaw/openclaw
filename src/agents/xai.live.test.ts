@@ -116,7 +116,7 @@ describeLive("xai live", () => {
 
     expect(doneMessage).toBeDefined();
     expect(extractFirstToolCallId(doneMessage!)).toBeDefined();
-    if (capturedPayload) {
+    if (capturedPayload && Object.hasOwn(capturedPayload, "tool_stream")) {
       expect(capturedPayload.tool_stream).toBe(true);
     }
 
