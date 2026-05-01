@@ -332,6 +332,14 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
     expect(combined).toContain("where.exe git.exe");
   });
 
+  it("preseeds dev update channel before stable-to-dev update lanes", () => {
+    const macos = readFileSync(TS_PATHS.macos, "utf8");
+    const windows = readFileSync(TS_PATHS.windows, "utf8");
+
+    expect(macos).toContain('channel: "dev"');
+    expect(windows).toContain("Name channel -Value 'dev'");
+  });
+
   it("passes aggregate model overrides into each OS fresh lane", () => {
     const script = readFileSync(TS_PATHS.npmUpdate, "utf8");
 

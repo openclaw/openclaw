@@ -798,6 +798,13 @@ if ((Test-Path $logPath) -or (Test-Path $donePath)) {
 $portableGit = Join-Path (Join-Path (Join-Path $env:LOCALAPPDATA 'OpenClaw\\deps') 'portable-git') ''
 $env:PATH = "$portableGit\\cmd;$portableGit\\mingw64\\bin;$portableGit\\usr\\bin;$env:PATH"
 where.exe git.exe
+$configPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json'
+$config = Get-Content $configPath -Raw | ConvertFrom-Json
+if ($null -eq $config.update) {
+  $config | Add-Member -MemberType NoteProperty -Name update -Value ([pscustomobject]@{})
+}
+$config.update | Add-Member -Force -MemberType NoteProperty -Name channel -Value 'dev'
+$config | ConvertTo-Json -Depth 100 | Set-Content -Path $configPath -Encoding utf8
 $env:OPENCLAW_DISABLE_BUNDLED_PLUGINS = '1'
 Invoke-OpenClaw update --channel dev --yes --json
 if ($LASTEXITCODE -ne 0) { throw "openclaw update failed with exit code $LASTEXITCODE" }
@@ -883,7 +890,7 @@ Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
 Invoke-OpenClaw config set tools.profile minimal
 if ($LASTEXITCODE -ne 0) { throw "tools profile config set failed" }
-Invoke-OpenClaw config set models.providers.openai '{"baseUrl":"https://api.openai.com/v1","models":[],"timeoutSeconds":300}' --strict-json
+Invoke-OpenClaw config set models.providers.openai ${psSingleQuote('{"baseUrl":"https://api.openai.com/v1","models":[],"timeoutSeconds":300}')} --strict-json
 if ($LASTEXITCODE -ne 0) { throw "openai provider timeout config set failed" }
 ${windowsAgentWorkspaceScript("Parallels Windows smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}

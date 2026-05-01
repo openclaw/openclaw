@@ -854,6 +854,14 @@ mkdir -p "$bootstrap_root"
       `set -eu
 rm -rf ${shellQuote(`${home}/openclaw`)}
 export PATH=${shellQuote(`/tmp/openclaw-smoke-pnpm-bootstrap/node_modules/.bin:${guestPath}`)}
+${guestNode} - <<'JS'
+const fs = require("node:fs");
+const path = require("node:path");
+const configPath = path.join(process.env.HOME || ${JSON.stringify(home)}, ".openclaw", "openclaw.json");
+const config = JSON.parse(fs.readFileSync(configPath, "utf8"));
+config.update = { ...(config.update || {}), channel: "dev" };
+fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\\n");
+JS
 /usr/bin/env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_DISABLE_BUNDLED_PLUGINS=1 ${guestNode} ${guestOpenClawEntry} update --channel dev --yes --json
 ${guestNode} ${guestOpenClawEntry} --version
 ${guestNode} ${guestOpenClawEntry} update status --json`,
