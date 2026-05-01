@@ -53,7 +53,9 @@ function isPackagedBundledPluginRoot(pluginRoot: string): boolean {
 }
 
 function createPathHash(value: string): string {
-  return createHash("sha256").update(path.resolve(value)).digest("hex").slice(0, 12);
+  // Hash the OS-canonical (realpath) form so symlinked / junctioned
+  // packageRoots converge on a single staging directory across call sites.
+  return createHash("sha256").update(realpathOrResolve(value)).digest("hex").slice(0, 12);
 }
 
 function sanitizePathSegment(value: string): string {

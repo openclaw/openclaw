@@ -2645,6 +2645,41 @@ describe("ensureBundledPluginRuntimeDeps", () => {
     expect(path.basename(resolved).startsWith("openclaw-unknown-")).toBe(false);
   });
 
+  const itSupportsPackageRootSymlinks = process.platform === "win32" ? it.skip : it;
+  itSupportsPackageRootSymlinks(
+    "stages bundled runtime deps to the same root for symlinked packageRoot views (issue #74963)",
+    () => {
+      const realParent = makeTempDir();
+      const stageDir = makeTempDir();
+      const realPackageRoot = path.join(realParent, "openclaw-real");
+      fs.mkdirSync(realPackageRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(realPackageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.4.27" }),
+      );
+      const realPluginRoot = path.join(realPackageRoot, "dist", "extensions", "discord");
+      fs.mkdirSync(realPluginRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(realPluginRoot, "package.json"),
+        JSON.stringify({ dependencies: {} }),
+      );
+      const linkedPackageRoot = path.join(realParent, "openclaw-linked");
+      fs.symlinkSync(realPackageRoot, linkedPackageRoot, "dir");
+      const linkedPluginRoot = path.join(linkedPackageRoot, "dist", "extensions", "discord");
+      const env = { OPENCLAW_PLUGIN_STAGE_DIR: stageDir };
+
+      const installRootViaReal = resolveBundledRuntimeDependencyInstallRoot(realPluginRoot, {
+        env,
+      });
+      const installRootViaLink = resolveBundledRuntimeDependencyInstallRoot(linkedPluginRoot, {
+        env,
+      });
+
+      expect(installRootViaLink).toBe(installRootViaReal);
+      expect(path.basename(installRootViaReal)).toMatch(/^openclaw-2026\.4\.27-[0-9a-f]{12}$/);
+    },
+  );
+
   it("prunes stale unknown external runtime roots while keeping newest and locked roots", () => {
     const stageDir = makeTempDir();
     const nowMs = Date.parse("2026-04-29T08:00:00.000Z");
