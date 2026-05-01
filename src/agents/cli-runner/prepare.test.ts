@@ -614,6 +614,62 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("does not expose OPENCLAW_MCP_* placeholder env when tools are disabled even if a user MCP server opts in to caller context", async () => {
+    // Disabled-tools runs must keep bundle MCP fully off — including the
+    // OPENCLAW_MCP_* placeholder env that would otherwise carry x-session-key
+    // and caller IDs to a remote MCP server the operator opted in elsewhere.
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+        createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      });
+
+      const baseConfig = createCliBackendConfig({ bundleMcp: true });
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-disable-tools-caller-env",
+        sessionKey: "agent:main:test",
+        agentAccountId: "acct-1",
+        messageChannel: "telegram",
+        config: {
+          ...baseConfig,
+          mcp: {
+            servers: {
+              remote: {
+                type: "sse",
+                url: "https://example.com/mcp",
+                injectCallerContext: true,
+              },
+            },
+          },
+        },
+        disableTools: true,
+      });
+
+      expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
+      expect(context.preparedBackend.env?.OPENCLAW_MCP_SESSION_KEY).toBeUndefined();
+      expect(context.preparedBackend.env?.OPENCLAW_MCP_AGENT_ID).toBeUndefined();
+      expect(context.preparedBackend.env?.OPENCLAW_MCP_ACCOUNT_ID).toBeUndefined();
+      expect(context.preparedBackend.env?.OPENCLAW_MCP_MESSAGE_CHANNEL).toBeUndefined();
+      expect(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("fails closed for native tool-capable CLI backends when tools are disabled", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

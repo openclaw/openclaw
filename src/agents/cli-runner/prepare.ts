@@ -185,8 +185,11 @@ export async function prepareCliRunContext(
     }
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
+  // Gate placeholder env on bundleMcpEnabled (NOT raw backendResolved.bundleMcp)
+  // so a disabled-tools run never exposes OPENCLAW_MCP_SESSION_KEY / caller IDs
+  // for opted-in MCP servers — bundle MCP is fully suppressed in that mode.
   const needsMcpPlaceholderEnv =
-    backendResolved.bundleMcp &&
+    bundleMcpEnabled &&
     (Boolean(mcpLoopbackRuntime) || ownerWantsBundleMcpCallerContextInjection(params.config));
   const mcpPlaceholderEnv: Record<string, string> | undefined = needsMcpPlaceholderEnv
     ? {
