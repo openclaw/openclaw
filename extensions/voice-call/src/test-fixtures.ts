@@ -57,6 +57,15 @@ export function createVoiceCallBaseConfig(params?: {
         sources: ["memory", "sessions"],
         fallbackToConsult: false,
       },
+      callerContext: {
+        enabled: false,
+        callers: {},
+        maxProfileChars: 1200,
+        maxVoiceCardChars: 1800,
+        unknownCallerInstructions:
+          "Caller identity: unknown. Ask briefly who is calling before using personal context.",
+      },
+      transcriptLog: { enabled: false, includeInterim: true },
       providers: {},
     },
     skipSignatureVerification: false,
