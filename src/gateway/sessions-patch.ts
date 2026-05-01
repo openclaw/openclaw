@@ -105,6 +105,7 @@ export async function applySessionsPatchToStore(params: {
     ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
     : undefined;
   const loadedModelCatalogByMode = new Map<GatewayModelCatalogMode, ModelCatalogEntry[]>();
+  let explicitModelSwitchCatalog: ModelCatalogEntry[] | undefined;
   const loadModelCatalogForPatch = async (mode: GatewayModelCatalogMode = "cacheOnly") => {
     const cached = loadedModelCatalogByMode.get(mode);
     if (cached) {
@@ -446,6 +447,7 @@ export async function applySessionsPatchToStore(params: {
       const isDefault =
         resolved.ref.provider === resolvedDefault.provider &&
         resolved.ref.model === resolvedDefault.model;
+      explicitModelSwitchCatalog = catalog;
       applyModelOverrideToSessionEntry({
         entry: next,
         selection: {
@@ -462,7 +464,7 @@ export async function applySessionsPatchToStore(params: {
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    const thinkingCatalog = await loadModelCatalogForPatch();
+    const thinkingCatalog = explicitModelSwitchCatalog ?? (await loadModelCatalogForPatch());
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else if (
