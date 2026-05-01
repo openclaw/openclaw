@@ -62,7 +62,6 @@ echo "Current beta dist-tag: ${current_beta_version:-<missing>}"
 echo "Resolved release channel: ${release_channel}"
 echo "Resolved publish tag: ${publish_tag}"
 echo "Resolved mirror dist-tags: ${mirror_dist_tags_csv:-<none>}"
-echo "Publish auth: GitHub OIDC trusted publishing"
 echo "Mirror dist-tag auth source: ${mirror_auth_source}"
 echo "Mirror dist-tag auth requirement: ${mirror_auth_requirement}"
 
@@ -75,6 +74,13 @@ case "${mirror_auth_source}" in
     mirror_auth_token="${NPM_TOKEN:-}"
     ;;
 esac
+publish_auth_token="${mirror_auth_token}"
+publish_auth_source="${mirror_auth_source}"
+if [[ -n "${publish_auth_token}" ]]; then
+  echo "Publish auth: ${publish_auth_source} with provenance"
+else
+  echo "Publish auth: GitHub OIDC trusted publishing"
+fi
 
 if [[ "${mirror_auth_requirement}" == "required" && -z "${mirror_auth_token}" ]]; then
   echo "npm dist-tag mirroring requires explicit npm auth via NODE_AUTH_TOKEN or NPM_TOKEN." >&2
@@ -92,11 +98,22 @@ fi
 
 (
   cd "${package_dir}"
-  "${publish_cmd[@]}"
+  cleanup_files=()
+  trap 'rm -f "${cleanup_files[@]}"' EXIT
+  publish_userconfig=""
+  if [[ -n "${publish_auth_token}" ]]; then
+    publish_userconfig="$(mktemp)"
+    cleanup_files+=("${publish_userconfig}")
+    chmod 0600 "${publish_userconfig}"
+    printf '%s\n' "//registry.npmjs.org/:_authToken=${publish_auth_token}" > "${publish_userconfig}"
+    NPM_CONFIG_USERCONFIG="${publish_userconfig}" "${publish_cmd[@]}"
+  else
+    "${publish_cmd[@]}"
+  fi
 
   if [[ -n "${mirror_dist_tags_csv}" ]]; then
     mirror_userconfig="$(mktemp)"
-    trap 'rm -f "${mirror_userconfig}"' EXIT
+    cleanup_files+=("${mirror_userconfig}")
     chmod 0600 "${mirror_userconfig}"
     printf '%s\n' "//registry.npmjs.org/:_authToken=${mirror_auth_token}" > "${mirror_userconfig}"
 
