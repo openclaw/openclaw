@@ -295,8 +295,10 @@ function parseLockTimeoutErrorMeta(error: unknown): {
     return { lockDir: undefined, waitedMs: undefined };
   }
   const afterPrefix = error.message.slice(LOCK_TIMEOUT_MESSAGE_PREFIX.length);
-  const parenIdx = afterPrefix.indexOf(" (");
-  const lockDir = parenIdx >= 0 ? afterPrefix.slice(0, parenIdx) : undefined;
+  // Use the stable ` (waited=` marker emitted by formatRuntimeDepsLockTimeoutMessage
+  // so paths containing ` (` like `/tmp/OpenClaw (prod)/...` are not truncated.
+  const markerIdx = afterPrefix.indexOf(" (waited=");
+  const lockDir = markerIdx >= 0 ? afterPrefix.slice(0, markerIdx) : undefined;
   const waitedMatch = /waited=(\d+)ms/.exec(error.message);
   const waitedMs = waitedMatch ? Number(waitedMatch[1]) : undefined;
   return { lockDir, waitedMs };

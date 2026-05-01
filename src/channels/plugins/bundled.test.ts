@@ -112,6 +112,42 @@ describe("loadGeneratedBundledChannelEntry: structured warn for lock timeout", (
     });
   });
 
+  it("preserves lockDir for paths that contain ` (` segments", async () => {
+    const fakeModulePath = path.join("/tmp", "openclaw-alpha", "index.js");
+    const lockDirWithParen = "/tmp/OpenClaw (prod)/.openclaw-runtime-deps.lock";
+    const messageWithParen =
+      `Timed out waiting for bundled runtime deps lock at ${lockDirWithParen} ` +
+      `(waited=300000ms, ownerFile=present, ownerFileSymlink=false, pid=12345 alive=false, ` +
+      `ownerAge=300001ms, ownerFileAge=300001ms, lockAge=300001ms, ` +
+      `ownerFilePath=${lockDirWithParen}/owner.json). ` +
+      `If no OpenClaw/npm install is running, remove the lock directory and retry.`;
+
+    mockBundledChannelRuntime(fakeModulePath);
+    vi.doMock("./module-loader.js", () => ({
+      isJavaScriptModulePath: () => false,
+      loadChannelPluginModule: () => {
+        throw new Error(messageWithParen);
+      },
+    }));
+
+    const bundled = await importFreshModule<typeof import("./bundled.js")>(
+      import.meta.url,
+      "./bundled.js?scope=lock-timeout-paren-path",
+    );
+
+    const result = bundled.getBundledChannelPlugin("alpha");
+
+    expect(result).toBeUndefined();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [, meta] = warn.mock.calls[0] as [string, Record<string, unknown>];
+    expect(meta).toMatchObject({
+      failureReason: "lock_timeout",
+      bundledChannelId: "alpha",
+      lockDir: lockDirWithParen,
+      waitedMs: 300000,
+    });
+  });
+
   it("emits flat string warn for non-lock-timeout module import errors", async () => {
     const fakeModulePath = path.join("/tmp", "openclaw-alpha", "index.js");
 
