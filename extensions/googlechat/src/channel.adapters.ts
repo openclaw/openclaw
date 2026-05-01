@@ -392,7 +392,11 @@ export const googlechatOutboundAdapter = {
         accountId,
       });
       const space = await resolveGoogleChatOutboundSpace({ account, target: to });
-      const thread = resolveGoogleChatOutboundThread({ threadId, replyToId });
+      const thread = resolveGoogleChatOutboundThread({
+        threadId,
+        replyToId,
+        allowThreadIdOnly: true,
+      });
       const maxBytes = resolveChannelMediaMaxBytes({
         cfg,
         resolveChannelLimitMb: ({ cfg: cfgLocal, accountId: accountIdLocal }) =>
