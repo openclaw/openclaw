@@ -69,8 +69,10 @@ export function logAuthProfileFailureStateChange(params: {
         provider: params.provider,
         reason: params.reason,
       }),
-    ).catch((e) => {
-      observationLog.error("failed to dispatch provider_tripped hook", { error: e?.message });
+    ).catch((error: unknown) => {
+      observationLog.error("failed to dispatch provider_tripped hook", {
+        error: error instanceof Error ? error.message : String(error),
+      });
     });
   }
 }

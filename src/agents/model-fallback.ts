@@ -1166,7 +1166,7 @@ function resolveCooldownDecision(params: {
   // 402 might have been misclassified. Probe single-provider setups on the
   // standard throttle so they can recover without a restart; when fallbacks
   // exist, only probe near cooldown expiry so the fallback chain stays preferred.
-  if (inferredReason === "billing" || inferredReason === "quota_exhausted") {
+  if (inferredReason === "billing") {
     const shouldProbeSingleProviderBilling =
       params.isPrimary &&
       !params.hasFallbackCandidates &&
@@ -1178,6 +1178,19 @@ function resolveCooldownDecision(params: {
       type: "suspend_lanes",
       reason: inferredReason,
       leaderCandidate: params.candidate,
+    };
+  }
+
+  // Quota exhaustion is calendar/plan-window based, so avoid billing's
+  // 30-second single-provider probe loop. Only probe near disabled-window expiry.
+  if (inferredReason === "quota_exhausted") {
+    if (params.isPrimary && shouldProbe) {
+      return { type: "attempt", reason: inferredReason, markProbe: true };
+    }
+    return {
+      type: "skip",
+      reason: inferredReason,
+      error: `Provider ${params.candidate.provider} has ${inferredReason} issue (skipping all models)`,
     };
   }
 
