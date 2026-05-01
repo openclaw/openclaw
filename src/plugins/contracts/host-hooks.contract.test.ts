@@ -432,6 +432,58 @@ describe("host-hook fixture plugin contract", () => {
     expect(seenDerivedPaths).toEqual([["old.ts"]]);
   });
 
+  it("does not let trusted policies mutate derived paths for later policies", async () => {
+    const seenDerivedPaths: unknown[] = [];
+    let mutationRejected = false;
+    const registry = createEmptyPluginRegistry();
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-a",
+        pluginName: "Trusted A",
+        source: "test",
+        policy: {
+          id: "mutate",
+          description: "mutate",
+          evaluate: (event) => {
+            try {
+              (event.derivedPaths as string[] | undefined)?.push("mutated.ts");
+            } catch {
+              mutationRejected = true;
+            }
+            return undefined;
+          },
+        },
+      },
+      {
+        pluginId: "trusted-b",
+        pluginName: "Trusted B",
+        source: "test",
+        policy: {
+          id: "inspect",
+          description: "inspect",
+          evaluate: (event) => {
+            seenDerivedPaths.push(event.derivedPaths);
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      runTrustedToolPolicies(
+        {
+          toolName: "apply_patch",
+          params: { input: "*** Update File: old.ts" },
+          derivedPaths: ["old.ts"],
+        },
+        { toolName: "apply_patch" },
+      ),
+    ).resolves.toBeUndefined();
+    expect(mutationRejected).toBe(true);
+    expect(seenDerivedPaths).toEqual([["old.ts"]]);
+  });
+
   it("clears stale derived paths when trusted policy rewrites remove targets", async () => {
     const seenDerivedPaths: unknown[] = [];
     const registry = createEmptyPluginRegistry();

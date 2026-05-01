@@ -125,6 +125,19 @@ describe("extractApplyPatchTargetPaths", () => {
     ]);
   });
 
+  it("finds indented markers after an update hunk", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Update File: src/old.ts",
+      "@@",
+      "-old",
+      "+new",
+      "  *** Delete File: src/dead.ts",
+      "*** End Patch",
+    ].join("\n");
+    expect(extractApplyPatchTargetPaths(patch)).toEqual(["src/old.ts", "src/dead.ts"]);
+  });
+
   it("ignores markers outside of the envelope grammar", () => {
     expect(
       extractApplyPatchTargetPaths(

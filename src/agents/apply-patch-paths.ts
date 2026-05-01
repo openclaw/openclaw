@@ -65,11 +65,23 @@ function pushPath(target: string[], seen: Set<string>, raw: string): void {
 }
 
 function readMarkerPath(line: string | undefined, marker: string): string | undefined {
-  const candidate = line?.trimStart();
+  const candidate = normalizeMarkerHeaderLine(line);
   if (!candidate?.startsWith(marker)) {
     return undefined;
   }
   return candidate.slice(marker.length);
+}
+
+function normalizeMarkerHeaderLine(line: string | undefined): string | undefined {
+  if (line === undefined) {
+    return undefined;
+  }
+  const candidate = line.trimStart();
+  if (!candidate.startsWith("***")) {
+    return undefined;
+  }
+  const leadingWhitespace = line.length - candidate.length;
+  return leadingWhitespace === 1 && line.startsWith(" ") ? undefined : candidate;
 }
 
 /**
@@ -121,7 +133,7 @@ export function extractApplyPatchTargetPaths(input: unknown): string[] {
           lookahead += 1;
           continue;
         }
-        if (lines[lookahead].startsWith("***")) {
+        if (normalizeMarkerHeaderLine(lines[lookahead]) !== undefined) {
           break;
         }
         lookahead += 1;
