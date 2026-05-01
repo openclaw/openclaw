@@ -68,7 +68,10 @@ const fs = require("node:fs");
 const path = require("node:path");
 const configPath = process.env.OPENCLAW_PARALLELS_AGENT_CONFIG_PATH;
 const payload = JSON.parse(process.env.OPENCLAW_PARALLELS_AGENT_CONFIG_PATCH || "{}");
-const cfg = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf8")) : {};
+function readJsonFile(filePath) {
+  return JSON.parse(fs.readFileSync(filePath, "utf8").replace(/^\\uFEFF/u, ""));
+}
+const cfg = fs.existsSync(configPath) ? readJsonFile(configPath) : {};
 cfg.agents = cfg.agents && typeof cfg.agents === "object" ? cfg.agents : {};
 cfg.agents.defaults = cfg.agents.defaults && typeof cfg.agents.defaults === "object" ? cfg.agents.defaults : {};
 cfg.agents.defaults.skipBootstrap = true;

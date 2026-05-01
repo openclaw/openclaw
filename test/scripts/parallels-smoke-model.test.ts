@@ -344,6 +344,7 @@ console.log(JSON.stringify(result));
     expect(powershell).toContain("config set --batch-file");
     expect(powershell).toContain("agents.defaults.skipBootstrap");
     expect(powershell).toContain("tools.profile");
+    expect(powershell).toContain("replace(/^\\\\uFEFF/u");
 
     const npmUpdateScripts = readFileSync(TS_PATHS.npmUpdateScripts, "utf8");
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
