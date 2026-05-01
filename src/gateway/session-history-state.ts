@@ -39,11 +39,16 @@ function resolveCursorSeq(cursor: string | undefined): number | undefined {
   return Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function isSessionHistoryMessage(message: unknown): message is SessionHistoryMessage {
+  return Boolean(message) && typeof message === "object" && !Array.isArray(message);
+}
+
+function toRawSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
+  return messages.filter(isSessionHistoryMessage);
+}
+
 function toSessionHistoryMessages(messages: unknown[]): SessionHistoryMessage[] {
-  return messages.filter(
-    (message): message is SessionHistoryMessage =>
-      Boolean(message) && typeof message === "object" && !Array.isArray(message),
-  );
+  return messages.filter(isSessionHistoryMessage);
 }
 
 function buildPaginatedSessionHistory(params: {
@@ -105,7 +110,7 @@ export function buildSessionHistorySnapshot(params: {
     }),
   );
   const history = paginateSessionMessages(visibleMessages, params.limit, params.cursor);
-  const rawHistoryMessages = toSessionHistoryMessages(params.rawMessages);
+  const rawHistoryMessages = toRawSessionHistoryMessages(params.rawMessages);
   return {
     history,
     rawTranscriptSeq: resolveMessageSeq(rawHistoryMessages.at(-1)) ?? rawHistoryMessages.length,
