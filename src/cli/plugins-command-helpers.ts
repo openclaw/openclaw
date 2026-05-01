@@ -25,7 +25,7 @@ type SlotSelectionPlugin = {
 };
 
 type SlotSelectionRegistry = {
-  plugins: readonly SlotSelectionPlugin[];
+  plugins: SlotSelectionPlugin[];
 };
 
 function mergeRuntimeKinds(
