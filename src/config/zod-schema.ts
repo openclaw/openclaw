@@ -49,6 +49,22 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+const AccessGroupsSchema = z
+  .record(
+    z.string().min(1),
+    z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("discord.channelAudience"),
+          guildId: z.string().min(1),
+          channelId: z.string().min(1),
+          membership: z.literal("canViewChannel").optional(),
+        })
+        .strict(),
+    ]),
+  )
+  .optional();
+
 const MemoryQmdPathSchema = z
   .object({
     path: z.string(),
@@ -522,6 +538,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    accessGroups: AccessGroupsSchema,
     acp: z
       .object({
         enabled: z.boolean().optional(),
