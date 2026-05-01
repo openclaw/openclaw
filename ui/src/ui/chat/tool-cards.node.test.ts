@@ -222,6 +222,106 @@ describe("tool-card extraction", () => {
     });
   });
 
+  it("extracts validated Fluid open_surface bridge results into assistant canvas previews", () => {
+    const [card] = extractToolCards(
+      {
+        role: "tool",
+        toolName: "fluid_ui.bridge",
+        content: JSON.stringify({
+          kind: "ack",
+          regenerate: {
+            ref: "cv_status:demo-1",
+            embed: '[embed ref="cv_status:demo-1" title="Status" height="360" /]',
+            served: {
+              url: "/__openclaw__/canvas/documents/cv_status%3Ademo-1/index.html",
+            },
+          },
+        }),
+      },
+      "msg:fluid:1",
+    );
+
+    expect(card?.preview).toMatchObject({
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_status:demo-1",
+      url: "/__openclaw__/canvas/documents/cv_status%3Ademo-1/index.html",
+      title: "Status",
+      preferredHeight: 360,
+    });
+  });
+
+  it("rejects unsafe Fluid open_surface bridge embed hand-offs", () => {
+    const cases = [
+      {
+        name: "malformed embed",
+        result: {
+          kind: "ack",
+          regenerate: { ref: "cv_ok", embed: '[embed ref="cv_ok"]x[/embed]' },
+        },
+      },
+      {
+        name: "mismatched ref",
+        result: {
+          kind: "ack",
+          regenerate: { ref: "cv_a", embed: '[embed ref="cv_b" title="Bad" /]' },
+        },
+      },
+      {
+        name: "external url",
+        result: {
+          kind: "ack",
+          regenerate: {
+            ref: "cv_a",
+            embed: '[embed ref="cv_a" url="https://example.com/embed.html" /]',
+          },
+        },
+      },
+      {
+        name: "unsafe ref",
+        result: {
+          kind: "ack",
+          regenerate: { ref: "../cv_a", embed: '[embed ref="../cv_a" title="Bad" /]' },
+        },
+      },
+      {
+        name: "dot ref",
+        result: {
+          kind: "ack",
+          regenerate: { ref: ".", embed: '[embed ref="." title="Bad" /]' },
+        },
+      },
+      {
+        name: "dot-dot ref",
+        result: {
+          kind: "ack",
+          regenerate: { ref: "..", embed: '[embed ref=".." title="Bad" /]' },
+        },
+      },
+      {
+        name: "non bridge completion kind",
+        result: {
+          kind: "blocked",
+          regenerate: { ref: "cv_a", embed: '[embed ref="cv_a" title="Bad" /]' },
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const [card] = extractToolCards(
+        {
+          role: "tool",
+          toolName: "fluid_ui.bridge",
+          content: JSON.stringify(testCase.result),
+        },
+        `msg:fluid:${testCase.name}`,
+      );
+
+      expect(card?.preview, testCase.name).toBeUndefined();
+    }
+  });
+
   it("does not create previews for non-assistant canvas or generic outputs", () => {
     const cases = [
       {
