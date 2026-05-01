@@ -2,6 +2,7 @@ import { buildDispatchInboundCaptureMock } from "openclaw/plugin-sdk/channel-con
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SignalQuote } from "./event-handler.types.js";
 
 type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
   Body?: string;
