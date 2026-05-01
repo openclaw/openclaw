@@ -19,7 +19,7 @@
   "modelProvider": "openai",
   "runtime": "codex_app_server",
   "sourceReplyDeliveryMode": "message_tool_only",
-  "toolSnapshot": "codex-dynamic-tools.user-turn.json",
+  "toolSnapshot": "codex-dynamic-tools.telegram-direct.json",
   "trigger": "user"
 }
 ```

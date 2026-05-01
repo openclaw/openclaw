@@ -330,7 +330,8 @@ function createScenarios(): PromptScenario[] {
     Body: HEARTBEAT_PROMPT,
     BodyStripped: HEARTBEAT_PROMPT,
   };
-  const userTools = createDynamicTools({ ctx: telegramDirectCtx, trigger: "user" });
+  const telegramDirectTools = createDynamicTools({ ctx: telegramDirectCtx, trigger: "user" });
+  const discordGroupTools = createDynamicTools({ ctx: discordGroupCtx, trigger: "user" });
   const heartbeatTools = createDynamicTools({ ctx: heartbeatCtx, trigger: "heartbeat" });
 
   return [
@@ -357,8 +358,8 @@ function createScenarios(): PromptScenario[] {
           silentToken: SILENT_REPLY_TOKEN,
         }),
       }),
-      dynamicTools: userTools,
-      toolSnapshotFile: "codex-dynamic-tools.user-turn.json",
+      dynamicTools: telegramDirectTools,
+      toolSnapshotFile: "codex-dynamic-tools.telegram-direct.json",
     },
     {
       id: "discord-group-codex-message-tool",
@@ -391,8 +392,8 @@ function createScenarios(): PromptScenario[] {
           silentReplyRewrite: false,
         }),
       }),
-      dynamicTools: userTools,
-      toolSnapshotFile: "codex-dynamic-tools.user-turn.json",
+      dynamicTools: discordGroupTools,
+      toolSnapshotFile: "codex-dynamic-tools.discord-group.json",
     },
     {
       id: "telegram-heartbeat-codex-tool",
@@ -553,7 +554,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     '- `messages.visibleReplies: "message_tool"`, which is the Codex-harness default for visible source replies.',
     "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available.",
     "",
-    "The Markdown files show the OpenClaw-owned developer instructions, selected thread start/resume params, turn input, and the critical message/heartbeat tool specs. The JSON files contain the complete Codex dynamic tool catalog for normal user turns and heartbeat turns.",
+    "The Markdown files show the OpenClaw-owned developer instructions, selected thread start/resume params, turn input, and the critical message/heartbeat tool specs. The JSON files contain the complete Codex dynamic tool catalog for each scenario.",
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",
@@ -570,17 +571,13 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "Snapshots:",
     "",
     ...scenarios.map((scenario) => `- ${scenario.id}.md`),
-    "- codex-dynamic-tools.user-turn.json",
-    "- codex-dynamic-tools.heartbeat-turn.json",
+    ...scenarios.map((scenario) => `- ${scenario.toolSnapshotFile}`),
     "",
   ].join("\n");
 }
 
 export function createHappyPathPromptSnapshotFiles(): PromptSnapshotFile[] {
   const scenarios = createScenarios();
-  const userTools = scenarios.find((scenario) => scenario.trigger === "user")?.dynamicTools ?? [];
-  const heartbeatTools =
-    scenarios.find((scenario) => scenario.trigger === "heartbeat")?.dynamicTools ?? [];
   return [
     {
       path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
@@ -590,14 +587,10 @@ export function createHappyPathPromptSnapshotFiles(): PromptSnapshotFile[] {
       path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
       content: renderScenarioSnapshot(scenario),
     })),
-    {
-      path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "codex-dynamic-tools.user-turn.json"),
-      content: stableJson(userTools),
-    },
-    {
-      path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "codex-dynamic-tools.heartbeat-turn.json"),
-      content: stableJson(heartbeatTools),
-    },
+    ...scenarios.map((scenario) => ({
+      path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
+      content: stableJson(scenario.dynamicTools),
+    })),
   ].map((file) => ({
     ...file,
     content: file.content.endsWith("\n") ? file.content : `${file.content}\n`,

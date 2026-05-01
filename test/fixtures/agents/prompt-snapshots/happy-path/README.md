@@ -8,7 +8,7 @@ These fixtures capture the default OpenAI/Codex happy path for prompt review:
 - `messages.visibleReplies: "message_tool"`, which is the Codex-harness default for visible source replies.
 - Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available.
 
-The Markdown files show the OpenClaw-owned developer instructions, selected thread start/resume params, turn input, and the critical message/heartbeat tool specs. The JSON files contain the complete Codex dynamic tool catalog for normal user turns and heartbeat turns.
+The Markdown files show the OpenClaw-owned developer instructions, selected thread start/resume params, turn input, and the critical message/heartbeat tool specs. The JSON files contain the complete Codex dynamic tool catalog for each scenario.
 
 The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.
 
@@ -31,5 +31,6 @@ Snapshots:
 - telegram-direct-codex-message-tool.md
 - discord-group-codex-message-tool.md
 - telegram-heartbeat-codex-tool.md
-- codex-dynamic-tools.user-turn.json
+- codex-dynamic-tools.telegram-direct.json
+- codex-dynamic-tools.discord-group.json
 - codex-dynamic-tools.heartbeat-turn.json

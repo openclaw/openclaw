@@ -10,6 +10,12 @@ import {
 } from "../test/helpers/agents/happy-path-prompt-snapshots.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const oxfmtPath = path.resolve(
+  repoRoot,
+  "node_modules",
+  ".bin",
+  process.platform === "win32" ? "oxfmt.cmd" : "oxfmt",
+);
 const execFileAsync = promisify(execFile);
 
 type PromptSnapshotFile = ReturnType<typeof createHappyPathPromptSnapshotFiles>[number];
@@ -30,7 +36,7 @@ async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
 
 async function formatSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   const filePaths = files.map((file) => path.resolve(root, file.path));
-  await execFileAsync("oxfmt", ["--write", "--threads=1", ...filePaths], {
+  await execFileAsync(oxfmtPath, ["--write", "--threads=1", ...filePaths], {
     cwd: repoRoot,
   });
 }
