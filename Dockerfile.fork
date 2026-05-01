@@ -77,9 +77,11 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 USER node
 
-COPY --from=source /usr/local/bin/gh /usr/local/bin/gh
-COPY --from=source /usr/local/bin/lark-cli /usr/local/bin/lark-cli
-COPY --from=source /usr/local/lib/node_modules/@larksuite /usr/local/lib/node_modules/@larksuite
+# Bring over /usr/local entirely — gh, lark-cli, the full node_modules tree
+# (top-level + any flat-installed peer deps), corepack home, share/. Source
+# stage was BASE_IMAGE so the layout aligns with what's already in this final
+# stage; overwrites are safe (same node binary, same corepack).
+COPY --from=source /usr/local /usr/local
 COPY --from=source /usr/lib/google-cloud-sdk /usr/lib/google-cloud-sdk
 COPY --from=source /usr/bin/gcloud /usr/bin/gcloud
 COPY --from=source /usr/bin/gsutil /usr/bin/gsutil

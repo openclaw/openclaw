@@ -60,10 +60,13 @@ steps:
       - -ceu
       - |
         echo "=== CLIs ==="
-        git --version
-        gh --version | head -1
-        lark-cli --version
-        gcloud --version | head -1
+        # Wrap each CLI in `timeout` so a hung binary (e.g. waiting on stdin
+        # or a slow registry lookup) fails the smoke step quickly instead of
+        # burning the build's whole timeout window.
+        timeout 10 git --version
+        timeout 10 gh --version | head -1
+        timeout 30 lark-cli --version
+        timeout 30 gcloud --version | head -1
         echo
         echo "=== Boot gateway ==="
         # Run gateway directly (no pipeline) so $! is the node PID, not tee's.
