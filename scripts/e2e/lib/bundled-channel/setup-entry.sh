@@ -54,7 +54,7 @@ bundled_channel_assert_staged_dep whatsapp @whiskeysockets/baileys
 echo "Configuring setup-entry channels; doctor should now install bundled runtime deps externally..."
 bundled_channel_write_config setup-entry-channels
 
-openclaw doctor --non-interactive >/tmp/openclaw-setup-entry-doctor.log 2>&1
+openclaw doctor --fix --non-interactive >/tmp/openclaw-setup-entry-doctor.log 2>&1
 
 for channel in "${!SETUP_ENTRY_DEP_SENTINELS[@]}"; do
   dep_sentinel="${SETUP_ENTRY_DEP_SENTINELS[$channel]}"
