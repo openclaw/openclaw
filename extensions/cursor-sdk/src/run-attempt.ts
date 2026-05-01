@@ -93,24 +93,52 @@ export async function runCursorSdkAttempt(
           local: { cwd: config.local?.cwd ?? params.workspaceDir },
         };
 
+  const runAbortController = new AbortController();
+  let timedOut = false;
+
+  const abortFromUpstream = () => {
+    runAbortController.abort(params.abortSignal?.reason ?? "upstream_abort");
+  };
+  if (params.abortSignal?.aborted) {
+    abortFromUpstream();
+  } else {
+    params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
+  }
+
+  const timeoutHandle = setTimeout(() => {
+    timedOut = true;
+    runAbortController.abort("timeout");
+  }, params.timeoutMs);
+
   const agent = await Promise.resolve(Agent.create(agentOptions));
 
   try {
+    if (runAbortController.signal.aborted) {
+      return buildErrorResult(params, {
+        error: "Cursor SDK run aborted before send",
+        started,
+        aborted: true,
+      });
+    }
+
     const run = await agent.send(params.prompt);
-    let text = "";
-    let timedOut = false;
 
-    const timeoutHandle = setTimeout(() => {
-      timedOut = true;
+    const cancelOnAbort = () => {
       run.cancel().catch(() => {});
-    }, params.timeoutMs);
+    };
+    if (runAbortController.signal.aborted) {
+      cancelOnAbort();
+    } else {
+      runAbortController.signal.addEventListener("abort", cancelOnAbort, { once: true });
+    }
 
+    let text = "";
     try {
       for await (const event of run.stream()) {
         text += collectAssistantText(event);
       }
     } finally {
-      clearTimeout(timeoutHandle);
+      runAbortController.signal.removeEventListener("abort", cancelOnAbort);
     }
 
     if (timedOut) {
@@ -120,13 +148,20 @@ export async function runCursorSdkAttempt(
         timedOut: true,
       });
     }
+    if (runAbortController.signal.aborted && !timedOut) {
+      return buildErrorResult(params, {
+        error: "Cursor SDK run was aborted by upstream",
+        started,
+        aborted: true,
+      });
+    }
 
     const result = await run.wait();
     const durationMs = run.durationMs ?? Date.now() - started;
 
     if (result.status === "error") {
       return buildErrorResult(params, {
-        error: `Cursor SDK run finished with status: error`,
+        error: "Cursor SDK run finished with status: error",
         started,
       });
     }
@@ -163,6 +198,8 @@ export async function runCursorSdkAttempt(
       timedOut: isTimeout,
     });
   } finally {
+    clearTimeout(timeoutHandle);
+    params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     try {
       await agent[Symbol.asyncDispose]();
     } catch {

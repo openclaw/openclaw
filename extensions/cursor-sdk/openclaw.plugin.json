@@ -3,6 +3,9 @@
   "name": "Cursor SDK",
   "description": "Cursor SDK agent harness supporting local and cloud execution via @cursor/sdk.",
   "providers": ["cursor-sdk"],
+  "providerAuthEnvVars": {
+    "cursor-sdk": ["CURSOR_API_KEY"]
+  },
   "activation": {
     "onStartup": false,
     "onAgentHarnesses": ["cursor-sdk"]
