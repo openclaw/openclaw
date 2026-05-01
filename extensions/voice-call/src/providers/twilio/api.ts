@@ -71,8 +71,9 @@ export async function twilioApiRequest<T = unknown>(params: {
       },
       body: bodyParams,
     },
+    policy: { allowedHostnames: ["api.twilio.com"] },
     timeoutMs: TWILIO_API_TIMEOUT_MS,
-    auditContext: "voice-call.twilio_api",
+    auditContext: "voice-call.twilio.api",
   });
   try {
     if (!response.ok) {
