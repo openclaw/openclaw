@@ -12,18 +12,18 @@ type SessionHistoryTranscriptMeta = {
   seq?: number;
 };
 
-export type SessionHistoryMessage = Record<string, unknown> & {
+type SessionHistoryMessage = Record<string, unknown> & {
   __openclaw?: SessionHistoryTranscriptMeta;
 };
 
-export type PaginatedSessionHistory = {
+type PaginatedSessionHistory = {
   items: SessionHistoryMessage[];
   messages: SessionHistoryMessage[];
   nextCursor?: string;
   hasMore: boolean;
 };
 
-export type SessionHistorySnapshot = {
+type SessionHistorySnapshot = {
   history: PaginatedSessionHistory;
   rawTranscriptSeq: number;
 };

@@ -169,13 +169,13 @@ export function readSessionMessages(
   return messages;
 }
 
-export type ReadRecentSessionMessagesOptions = {
+type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
   maxBytes?: number;
   maxLines?: number;
 };
 
-export type ReadRecentSessionMessagesResult = {
+type ReadRecentSessionMessagesResult = {
   messages: unknown[];
   totalMessages: number;
 };
@@ -746,7 +746,7 @@ export function readLastMessagePreviewFromTranscript(
   });
 }
 
-export type SessionTranscriptUsageSnapshot = {
+type SessionTranscriptUsageSnapshot = {
   modelProvider?: string;
   model?: string;
   inputTokens?: number;
