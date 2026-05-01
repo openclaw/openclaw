@@ -583,7 +583,8 @@ Codex dynamic tools default to the `native-first` profile. In that mode,
 OpenClaw does not expose dynamic tools that duplicate Codex-native workspace
 operations: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`, and
 `update_plan`. OpenClaw integration tools such as messaging, sessions, media,
-cron, browser, nodes, gateway, and `web_search` remain available.
+cron, browser, nodes, gateway, `heartbeat_respond`, and `web_search` remain
+available.
 
 Supported top-level Codex plugin fields:
 

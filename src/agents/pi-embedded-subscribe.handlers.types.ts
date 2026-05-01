@@ -1,4 +1,5 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
@@ -89,6 +90,7 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
   messagingToolSentTargets: MessagingToolSend[];
+  heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
@@ -207,6 +209,7 @@ export type ToolHandlerState = Pick<
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
   | "messagingToolSentTargets"
+  | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
 >;
