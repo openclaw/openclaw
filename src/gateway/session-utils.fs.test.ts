@@ -8,6 +8,7 @@ import {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
+  readRecentSessionUsageFromTranscript,
   readRecentSessionMessages,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
@@ -945,6 +946,48 @@ describe("readLatestSessionUsageFromTranscript", () => {
       totalTokensFresh: true,
     });
     expect(snapshot?.costUsd).toBeCloseTo(0.0063, 8);
+  });
+
+  test("bounds recent usage reads for bulk session listing", () => {
+    const sessionId = "usage-recent-large";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const lines = [
+      JSON.stringify({ type: "session", version: 1, id: sessionId }),
+      ...Array.from({ length: 2500 }, (_, index) =>
+        JSON.stringify({
+          message: { role: "user", content: `filler ${index} ${"x".repeat(700)}` },
+        }),
+      ),
+      JSON.stringify({
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.4",
+          usage: {
+            input: 900,
+            output: 100,
+            cost: { total: 0.003 },
+          },
+        },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+
+    try {
+      expect(
+        readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
+      ).toMatchObject({
+        modelProvider: "openai",
+        model: "gpt-5.4",
+        inputTokens: 900,
+        outputTokens: 100,
+        totalTokens: 900,
+      });
+      expect(readFileSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+    }
   });
 
   test("returns null when the transcript has no assistant usage snapshot", () => {

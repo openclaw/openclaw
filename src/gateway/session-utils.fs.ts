@@ -730,6 +730,39 @@ export function readLatestSessionUsageFromTranscript(
   });
 }
 
+export function readRecentSessionUsageFromTranscript(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  agentId: string | undefined,
+  maxBytes: number,
+): SessionTranscriptUsageSnapshot | null {
+  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return null;
+  }
+
+  return withOpenTranscriptFd(filePath, (fd) => {
+    const stat = fs.fstatSync(fd);
+    if (stat.size === 0) {
+      return null;
+    }
+    const readLen = Math.min(stat.size, Math.max(1024, Math.floor(maxBytes)));
+    const readStart = Math.max(0, stat.size - readLen);
+    const buf = Buffer.alloc(readLen);
+    const bytesRead = fs.readSync(fd, buf, 0, readLen, readStart);
+    if (bytesRead <= 0) {
+      return null;
+    }
+    const chunk = buf
+      .toString("utf-8", 0, bytesRead)
+      .split(/\r?\n/)
+      .slice(readStart > 0 ? 1 : 0)
+      .join("\n");
+    return extractLatestUsageFromTranscriptChunk(chunk);
+  });
+}
+
 const PREVIEW_READ_SIZES = [64 * 1024, 256 * 1024, 1024 * 1024];
 const PREVIEW_MAX_LINES = 200;
 

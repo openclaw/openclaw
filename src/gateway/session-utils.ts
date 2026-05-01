@@ -87,6 +87,7 @@ import {
 } from "./session-store-key.js";
 import {
   readLatestSessionUsageFromTranscript,
+  readRecentSessionUsageFromTranscript,
   readSessionTitleFieldsFromTranscript,
 } from "./session-utils.fs.js";
 import type {
@@ -105,6 +106,7 @@ export {
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
+  readRecentSessionUsageFromTranscript,
   readRecentSessionMessages,
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
@@ -403,6 +405,7 @@ function resolveTranscriptUsageFallback(params: {
   storePath: string;
   fallbackProvider?: string;
   fallbackModel?: string;
+  maxTranscriptBytes?: number;
 }): {
   estimatedCostUsd?: number;
   totalTokens?: number;
@@ -419,12 +422,21 @@ function resolveTranscriptUsageFallback(params: {
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
     : resolveDefaultAgentId(params.cfg);
-  const snapshot = readLatestSessionUsageFromTranscript(
-    entry.sessionId,
-    params.storePath,
-    entry.sessionFile,
-    agentId,
-  );
+  const snapshot =
+    typeof params.maxTranscriptBytes === "number"
+      ? readRecentSessionUsageFromTranscript(
+          entry.sessionId,
+          params.storePath,
+          entry.sessionFile,
+          agentId,
+          params.maxTranscriptBytes,
+        )
+      : readLatestSessionUsageFromTranscript(
+          entry.sessionId,
+          params.storePath,
+          entry.sessionFile,
+          agentId,
+        );
   if (!snapshot) {
     return null;
   }
@@ -1300,6 +1312,7 @@ export function buildGatewaySessionRow(params: {
   now?: number;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
+  transcriptUsageMaxBytes?: number;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const now = params.now ?? Date.now();
@@ -1408,6 +1421,7 @@ export function buildGatewaySessionRow(params: {
           storePath,
           fallbackProvider: resolvedModel.provider,
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
+          maxTranscriptBytes: params.transcriptUsageMaxBytes,
         })
       : null;
   const preferLiveSubagentModelIdentity =
@@ -1614,6 +1628,7 @@ export function listSessionsFromStore(params: {
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
+  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
 
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
@@ -1720,6 +1735,7 @@ export function listSessionsFromStore(params: {
       now,
       includeDerivedTitles,
       includeLastMessage,
+      transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
     }),
   );
 
