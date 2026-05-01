@@ -198,6 +198,22 @@ describe("fetchWithSsrFGuard hardening", () => {
     }
   });
 
+  it("blocks cloud metadata hostnames even when private network access is enabled", async () => {
+    const fetchImpl = vi.fn();
+    const lookupFn = createPublicLookup();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://metadata.google.internal/computeMetadata/v1",
+        fetchImpl,
+        lookupFn,
+        policy: { allowPrivateNetwork: true },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
   it("blocks special-use IPv4 literal URLs before fetch", async () => {
     const fetchImpl = vi.fn();
     await expect(
