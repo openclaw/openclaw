@@ -315,6 +315,75 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it("reschedules interrupted isolated agent-turn jobs instead of disabling them on startup", async () => {
+    const store = await makeStorePath();
+    const startNow = Date.parse("2025-12-13T17:00:00.000Z");
+    const staleRunningAt = startNow - 30_000;
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const onEvent = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "restart-isolated-agent-running",
+        name: "isolated agent running at restart",
+        enabled: true,
+        createdAtMs: startNow - 120_000,
+        updatedAtMs: startNow - 60_000,
+        schedule: { kind: "at", at: "2025-12-13T16:59:00.000Z" },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "finish safely" },
+        state: {
+          nextRunAtMs: startNow - 60_000,
+          runningAtMs: staleRunningAt,
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob,
+      onEvent,
+      nowMs: () => startNow,
+      startupDeferredMissedAgentJobDelayMs: 90_000,
+    });
+
+    try {
+      await cron.start();
+
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(requestHeartbeatNow).not.toHaveBeenCalled();
+      expect(noopLogger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ jobId: "restart-isolated-agent-running" }),
+        "cron: rescheduling interrupted isolated agent job after startup",
+      );
+      expect(onEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: "finished",
+          jobId: "restart-isolated-agent-running",
+        }),
+      );
+
+      const listedJobs = await cron.list({ includeDisabled: true });
+      const updated = listedJobs.find((job) => job.id === "restart-isolated-agent-running");
+      expect(updated?.enabled).toBe(true);
+      expect(updated?.state.runningAtMs).toBeUndefined();
+      expect(updated?.state.lastStatus).toBeUndefined();
+      expect(updated?.state.lastRunStatus).toBeUndefined();
+      expect(updated?.state.lastRunAtMs).toBeUndefined();
+      expect(updated?.state.nextRunAtMs).toBe(startNow + 90_000);
+      expect(updated?.state.lastError).toBeUndefined();
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
   it("does not replay cron slot when the latest slot already ran before restart", async () => {
     vi.setSystemTime(new Date("2025-12-13T04:02:00.000Z"));
     await withRestartedCron(
