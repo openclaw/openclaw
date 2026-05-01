@@ -3,6 +3,10 @@ import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import {
+  clearBundledRuntimeDependencyJitiAliases,
+  registerBundledRuntimeDependencyJitiAliases,
+} from "./bundled-runtime-deps-jiti-aliases.js";
 import type { PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { loadPluginBoundaryModuleWithJiti } from "./runtime/runtime-plugin-boundary.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -119,11 +123,85 @@ function expectSharedWhatsAppListenerState(runtimePluginDir: string, accountId: 
 }
 
 afterEach(() => {
+  clearBundledRuntimeDependencyJitiAliases();
   cleanupTrackedTempDirs(tempDirs);
 });
 
 describe("runtime plugin boundary whatsapp seam", () => {
   it("shares listener state between staged light and heavy runtime modules", () => {
     expectSharedWhatsAppListenerState(createBundledWhatsAppRuntimeFixture(), "work");
+  });
+
+  it("resolves staged root runtime dependency aliases while loading boundary modules", () => {
+    const packageRoot = makeTrackedTempDir("openclaw-runtime-boundary-alias", tempDirs);
+    const stageRoot = makeTrackedTempDir("openclaw-runtime-boundary-deps", tempDirs);
+    writeRuntimeFixtureText(
+      packageRoot,
+      "package.json",
+      JSON.stringify(
+        {
+          name: "openclaw",
+          type: "module",
+          bin: {
+            openclaw: "openclaw.mjs",
+          },
+          exports: {
+            "./plugin-sdk": {
+              default: "./dist/plugin-sdk/index.js",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    writeRuntimeFixtureText(packageRoot, "openclaw.mjs", "export {};\n");
+    writeRuntimeFixtureText(
+      packageRoot,
+      bundledDistPluginFile("acpx", "runtime-api.js"),
+      'export { marker } from "../../root-runtime-chunk.js";\n',
+    );
+    writeRuntimeFixtureText(
+      packageRoot,
+      "dist/root-runtime-chunk.js",
+      'import { marker as depMarker } from "package-only-runtime-dep";\nexport const marker = depMarker;\n',
+    );
+    stageBundledPluginRuntime({ repoRoot: packageRoot });
+
+    writeRuntimeFixtureText(
+      stageRoot,
+      "package.json",
+      JSON.stringify({
+        dependencies: {
+          "package-only-runtime-dep": "1.0.0",
+        },
+      }),
+    );
+    writeRuntimeFixtureText(
+      stageRoot,
+      "node_modules/package-only-runtime-dep/package.json",
+      JSON.stringify({
+        name: "package-only-runtime-dep",
+        version: "1.0.0",
+        exports: {
+          ".": "./index.js",
+        },
+        type: "module",
+      }),
+    );
+    writeRuntimeFixtureText(
+      stageRoot,
+      "node_modules/package-only-runtime-dep/index.js",
+      'export const marker = "staged-runtime-dep";\n',
+    );
+    registerBundledRuntimeDependencyJitiAliases(stageRoot);
+
+    const loaders: PluginJitiLoaderCache = new Map();
+    const loaded = loadPluginBoundaryModuleWithJiti<{ marker: string }>(
+      path.join(packageRoot, "dist-runtime", "extensions", "acpx", "runtime-api.js"),
+      loaders,
+    );
+
+    expect(loaded.marker).toBe("staged-runtime-dep");
   });
 });

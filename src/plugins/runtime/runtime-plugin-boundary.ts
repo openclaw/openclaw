@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveBundledRuntimeDependencyJitiAliasMap } from "../bundled-runtime-deps-jiti-aliases.js";
 import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
-import { shouldPreferNativeJiti } from "../sdk-alias.js";
+import { buildPluginLoaderAliasMap, shouldPreferNativeJiti } from "../sdk-alias.js";
 
 type PluginRuntimeRecord = {
   origin?: string;
@@ -107,11 +108,20 @@ export function resolvePluginRuntimeModulePath(
 
 export function getPluginBoundaryJiti(modulePath: string, loaders: PluginJitiLoaderCache) {
   const tryNative = shouldPreferNativeJiti(modulePath);
+  const runtimeAliasMap = resolveBundledRuntimeDependencyJitiAliasMap();
   return getCachedPluginJitiLoader({
     cache: loaders,
     modulePath,
     importerUrl: import.meta.url,
     jitiFilename: import.meta.url,
+    ...(runtimeAliasMap
+      ? {
+          aliasMap: {
+            ...buildPluginLoaderAliasMap(modulePath, process.argv[1], import.meta.url),
+            ...runtimeAliasMap,
+          },
+        }
+      : {}),
     tryNative,
   });
 }
