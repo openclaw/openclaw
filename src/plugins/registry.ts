@@ -103,7 +103,7 @@ import {
 import { createModelCatalogRegistrationHandlers } from "./model-catalog-registration.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { isPluginRegistryRetired } from "./registry-lifecycle.js";
+import { isPluginRegistryActivated, isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type {
   PluginHttpRouteRegistration as RegistryTypesPluginHttpRouteRegistration,
   PluginRecord,
@@ -2426,6 +2426,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       !registry.plugins.some((plugin) => plugin.id === record.id);
     const shouldCommitWorkflowSideEffect = () =>
       sideEffectGuard.active &&
+      isPluginRegistryActivated(registry) &&
       !isPluginRegistryRetired(registry) &&
       (isLoadedRecordInRegistry() || isActivatingLoadedRecord());
     return buildPluginApi({
