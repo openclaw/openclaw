@@ -501,6 +501,10 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   return stripRuntimeContextCustomMessages(normalized);
 }
 
+export function selectBtwSnapshotMessages(messages: AgentMessage[]): AgentMessage[] {
+  return stripTrailingEmptyAssistantTurn(messages).slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+}
+
 function isMidTurnPrecheckAssistantError(message: AgentMessage | undefined): boolean {
   if (!message || message.role !== "assistant") {
     return false;
@@ -2890,7 +2894,7 @@ export async function runEmbeddedAttempt(
               messages: activeSession.messages,
               imagesCount: imageResult.images.length,
             });
-            const btwSnapshotMessages = normalizedReplayMessages.slice(-MAX_BTW_SNAPSHOT_MESSAGES);
+            const btwSnapshotMessages = selectBtwSnapshotMessages(activeSession.messages);
             updateActiveEmbeddedRunSnapshot(params.sessionId, {
               transcriptLeafId,
               messages: btwSnapshotMessages,
