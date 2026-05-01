@@ -106,6 +106,47 @@ describe("redactSensitiveValue — Authorization header redaction", () => {
   });
 });
 
+describe("Authorization header redaction parity with redact-primitives", () => {
+  it("redacts Proxy-Authorization: Payment header values", () => {
+    const input = { headers: { "Proxy-Authorization": "Payment spt_test_xyz" } };
+    const result = redactSensitiveValue(input);
+    expect(JSON.stringify(result)).not.toContain("spt_test_xyz");
+    expect(JSON.stringify(result)).toContain("[REDACTED]");
+  });
+
+  it("redacts case-variant Payment prefix (PAYMENT, payment)", () => {
+    const input = { authorization: "PAYMENT spt_x" };
+    const result = redactSensitiveValue(input);
+    expect(JSON.stringify(result)).not.toContain("spt_x");
+  });
+
+  it("redacts Payment prefix with leading whitespace", () => {
+    const input = { authorization: "  Payment spt_leading" };
+    const result = redactSensitiveValue(input);
+    expect(JSON.stringify(result)).not.toContain("spt_leading");
+    expect(JSON.stringify(result)).toContain("[REDACTED]");
+  });
+
+  it("does NOT redact non-Payment auth (Bearer, Basic)", () => {
+    const input = { authorization: "Bearer eyJhbGc..." };
+    const result = redactSensitiveValue(input);
+    expect(JSON.stringify(result)).toContain("Bearer eyJhbGc...");
+  });
+
+  it("does NOT redact Proxy-Authorization with Bearer scheme", () => {
+    const input = { "Proxy-Authorization": "Bearer some-token" };
+    const result = redactSensitiveValue(input);
+    expect(JSON.stringify(result)).toContain("Bearer some-token");
+  });
+
+  it("does NOT redact Payment-only value (no token after)", () => {
+    // "Payment" alone with no following non-whitespace token must not be redacted
+    const input = { authorization: "Payment " };
+    const result = redactSensitiveValue(input);
+    expect(JSON.stringify(result)).not.toContain("[REDACTED]");
+  });
+});
+
 describe("redactSensitiveValue — non-card numeric strings NOT redacted", () => {
   it("does not redact a dollar amount string", () => {
     // "12345" — short and not Luhn-valid as PAN (only 5 digits, under 13)

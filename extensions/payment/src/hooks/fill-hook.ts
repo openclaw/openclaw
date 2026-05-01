@@ -126,7 +126,11 @@ export async function handleBrowserBeforeToolCall(
   // rewritten params with real values are held by the runtime only during the approval
   // wait and never reach the LLM transcript. On deny/timeout the tool call is blocked
   // and the values are discarded.
-  let secretsByHandle = new Map<string, CardSecrets>();
+  //
+  // The try/finally guarantees secretsByHandle.clear() runs on EVERY exit path
+  // (success, CardUnavailableError, unexpected throw). The clear-then-null pattern
+  // enforces "drop the reference immediately" as an invariant, not happy-path-only.
+  let secretsByHandle: Map<string, CardSecrets> | null = new Map();
   try {
     for (const hid of handleIds) {
       const meta = handleMap.get(hid)!; // checked above
@@ -136,6 +140,45 @@ export async function handleBrowserBeforeToolCall(
       );
       secretsByHandle.set(hid, secrets);
     }
+
+    // 5. Substitute sentinel values with real card values.
+    //    realValue is captured into rewrittenFields (plain strings) before finally runs.
+    const rewrittenFields = (
+      fields as Array<{ value?: unknown; ref?: string; type?: string; [k: string]: unknown }>
+    ).map((f) => {
+      if (!isFillSentinel(f.value)) return f;
+      const secrets = secretsByHandle!.get(f.value.$paymentHandle);
+      if (!secrets) return f; // defense: shouldn't happen
+      const realValue = pickSecretValue(secrets, f.value.field as FillSentinelField);
+      return { ...f, value: realValue };
+    });
+
+    // 6. Build approval description (non-secret display only)
+    const description = buildApprovalDescription({
+      handleIds,
+      sentinelCount: sentinels.length,
+      targetId: typeof request.targetId === "string" ? request.targetId : undefined,
+    });
+
+    // 7. Build rewritten params using structuredClone to deep-clone request, isolating
+    //    rewrittenRequest.targetId and any future fields from downstream-hook mutation.
+    const rewrittenRequest = structuredClone(request);
+    (rewrittenRequest as { fields?: unknown }).fields = rewrittenFields;
+    const rewrittenParams = { ...params, request: rewrittenRequest };
+
+    // 8. Return requireApproval + rewritten params together.
+    //    The SDK runtime will use `params` as overrideParams only if the user approves.
+    //    Raw card values in rewrittenFields are held in memory for at most the approval
+    //    timeout duration and are never serialized to the LLM transcript.
+    return {
+      requireApproval: {
+        severity: "critical",
+        title: "Payment fill: substitute card values",
+        description,
+        timeoutBehavior: "deny",
+      },
+      params: rewrittenParams,
+    };
   } catch (err) {
     if (err instanceof CardUnavailableError) {
       return {
@@ -144,46 +187,10 @@ export async function handleBrowserBeforeToolCall(
       };
     }
     throw err;
+  } finally {
+    secretsByHandle?.clear();
+    secretsByHandle = null;
   }
-
-  // 5. Substitute sentinel values with real card values
-  const rewrittenFields = (
-    fields as Array<{ value?: unknown; ref?: string; type?: string; [k: string]: unknown }>
-  ).map((f) => {
-    if (!isFillSentinel(f.value)) return f;
-    const secrets = secretsByHandle.get(f.value.$paymentHandle);
-    if (!secrets) return f; // defense: shouldn't happen
-    const realValue = pickSecretValue(secrets, f.value.field as FillSentinelField);
-    return { ...f, value: realValue };
-  });
-
-  // 6. Drop local secret references immediately after substitution
-  secretsByHandle.clear();
-  secretsByHandle = null as unknown as Map<string, CardSecrets>;
-
-  // 7. Build approval description (non-secret display only)
-  const description = buildApprovalDescription({
-    handleIds,
-    sentinelCount: sentinels.length,
-    targetId: typeof request.targetId === "string" ? request.targetId : undefined,
-  });
-
-  // 8. Return requireApproval + rewritten params together.
-  //    The SDK runtime will use `params` as overrideParams only if the user approves.
-  //    Raw card values in rewrittenFields are held in memory for at most the approval
-  //    timeout duration and are never serialized to the LLM transcript.
-  return {
-    requireApproval: {
-      severity: "critical",
-      title: "Payment fill: substitute card values",
-      description,
-      timeoutBehavior: "deny",
-    },
-    params: {
-      ...params,
-      request: { ...request, fields: rewrittenFields },
-    },
-  };
 }
 
 // ---------------------------------------------------------------------------

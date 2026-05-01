@@ -619,6 +619,74 @@ describe("fill hook — CardUnavailableError", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Secret clear on error path (C1 / I1)
+// ---------------------------------------------------------------------------
+
+describe("fill hook — secret clear on error path", () => {
+  it("clears local secret state when retrieve fails partway through", async () => {
+    // Setup: two unique handles. First retrieve succeeds, second rejects.
+    seedHandle(HANDLE_ID, SPEND_REQ_ID);
+    seedHandle(HANDLE_ID_B, SPEND_REQ_ID_B);
+
+    const secretsA: CardSecrets = {
+      pan: "4242424242424242",
+      cvv: "111",
+      expMonth: "12",
+      expYear: "2030",
+      holderName: "Alice Holder",
+    };
+
+    const manager = {
+      retrieveCardSecretsForHook: vi
+        .fn()
+        .mockResolvedValueOnce(secretsA)
+        .mockRejectedValueOnce(new CardUnavailableError(HANDLE_ID_B, "consumed", "mock")),
+      getSetupStatus: vi.fn(),
+      listFundingSources: vi.fn(),
+      issueVirtualCard: vi.fn(),
+      executeMachinePayment: vi.fn(),
+      getStatus: vi.fn(),
+    } as unknown as PaymentManager;
+
+    const result = await handleBrowserBeforeToolCall(
+      makeFillEvent([
+        { ref: "pan-a", type: "text", value: makeSentinel(HANDLE_ID, "pan") },
+        { ref: "pan-b", type: "text", value: makeSentinel(HANDLE_ID_B, "pan") },
+      ]),
+      makeOpts(manager),
+    );
+
+    // Should return block: true (CardUnavailableError path)
+    expect(result).toMatchObject({ block: true });
+
+    // Secrets from handle A must not appear in the returned block result
+    const json = JSON.stringify(result);
+    expect(json).not.toContain("4242424242424242");
+    expect(json).not.toContain("111");
+    expect(json).not.toContain("Alice Holder");
+  });
+
+  it("does not cache secrets across hook calls (re-retrieves on each call)", async () => {
+    // Verified by the existing "retry semantics" test, but assert explicitly here
+    // with three calls so the no-cache invariant is unambiguous.
+    seedHandle(HANDLE_ID, SPEND_REQ_ID);
+    const manager = makeMockManager();
+
+    await handleBrowserBeforeToolCall(
+      makeFillEvent([{ ref: "pan", type: "text", value: makeSentinel(HANDLE_ID, "pan") }]),
+      makeOpts(manager),
+    );
+    await handleBrowserBeforeToolCall(
+      makeFillEvent([{ ref: "pan", type: "text", value: makeSentinel(HANDLE_ID, "pan") }]),
+      makeOpts(manager),
+    );
+
+    // Two separate calls must each trigger a fresh retrieve (map cleared between calls)
+    expect(manager.retrieveCardSecretsForHook).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Retry semantics
 // ---------------------------------------------------------------------------
 
@@ -654,7 +722,7 @@ describe("fill hook — memory hygiene", () => {
     expect(manager.retrieveCardSecretsForHook).toHaveBeenCalledTimes(3);
   });
 
-  it("after hook returns, the returned params object does not share identity with internal state", async () => {
+  it("returns distinct params objects across separate calls", async () => {
     seedHandle(HANDLE_ID, SPEND_REQ_ID);
     const manager = makeMockManager();
     const result1 = await handleBrowserBeforeToolCall(

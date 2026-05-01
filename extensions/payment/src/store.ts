@@ -95,11 +95,15 @@ function redact(value: unknown, parentKey: string | null, seen: WeakSet<object>)
       if (parentKey !== null && CVV_KEY_PATTERN.test(parentKey)) {
         return "[REDACTED]";
       }
-      // Authorization header: redact Payment tokens
+      // Authorization / Proxy-Authorization header: redact Payment tokens.
+      // Matches redact-primitives.ts: case-insensitive key check for both
+      // "authorization" and "proxy-authorization", case-insensitive Payment prefix,
+      // allows leading whitespace, requires at least one non-whitespace token after.
       if (
         parentKey !== null &&
-        parentKey.toLowerCase() === "authorization" &&
-        value.startsWith("Payment ")
+        (parentKey.toLowerCase() === "authorization" ||
+          parentKey.toLowerCase() === "proxy-authorization") &&
+        /^\s*Payment\s+\S/i.test(value)
       ) {
         return "[REDACTED]";
       }
