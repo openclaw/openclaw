@@ -33,7 +33,12 @@ import { WindowsGuest } from "./guest-transports.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
-import { encodePowerShell, psSingleQuote, windowsOpenClawResolver } from "./powershell.ts";
+import {
+  encodePowerShell,
+  psSingleQuote,
+  windowsModelProviderTimeoutScript,
+  windowsOpenClawResolver,
+} from "./powershell.ts";
 import { ensureGuestGit, prepareMinGitZip } from "./windows-git.ts";
 
 interface WindowsOptions {
@@ -887,6 +892,7 @@ if ($LASTEXITCODE -ne 0) { throw "gateway ${action} failed with exit code $LASTE
 $PSNativeCommandUseErrorActionPreference = $false
 Invoke-OpenClaw models set ${psSingleQuote(this.auth.modelId)}
 if ($LASTEXITCODE -ne 0) { throw "models set failed" }
+${windowsModelProviderTimeoutScript(this.auth.modelId)}
 Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
 if ($LASTEXITCODE -ne 0) { throw "config set failed" }
 Invoke-OpenClaw config set tools.profile minimal
