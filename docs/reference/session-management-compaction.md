@@ -54,6 +54,12 @@ OpenClaw persists sessions in two layers:
      transcript exceeds the checkpoint size cap, avoiding a second giant
      `.checkpoint.*.jsonl` copy.
 
+Gateway history readers should avoid materializing the whole transcript unless
+the surface explicitly needs arbitrary historical access. First-page history,
+embedded chat history, restart recovery, and token/usage checks use bounded tail
+reads. Full transcript scans go through the async transcript index, which is
+cached by file path plus `mtimeMs`/`size` and shared across concurrent readers.
+
 ---
 
 ## On-disk locations

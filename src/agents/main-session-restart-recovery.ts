@@ -230,6 +230,11 @@ async function recoverStore(params: {
         entry.sessionId,
         params.storePath,
         entry.sessionFile,
+        {
+          mode: "recent",
+          maxMessages: 20,
+          maxBytes: 256 * 1024,
+        },
       );
     } catch (err) {
       log.warn(`failed to read transcript for ${sessionKey}: ${String(err)}`);
