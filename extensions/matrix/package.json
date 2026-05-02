@@ -79,20 +79,7 @@
       }
     },
     "install": {
-      "npmSpec": "@openclaw/matrix",
-      "defaultChoice": "npm",
-      "minHostVersion": ">=2026.4.10",
-      "allowInvalidConfigRecovery": true
-    },
-    "compat": {
-      "pluginApi": ">=2026.5.2"
-    },
-    "build": {
-      "openclawVersion": "2026.5.2"
-    },
-    "release": {
-      "publishToClawHub": true,
-      "publishToNpm": true
+      "minHostVersion": ">=2026.4.10"
     }
   }
 }

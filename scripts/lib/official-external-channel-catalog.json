@@ -199,52 +199,6 @@
       }
     },
     {
-      "name": "@openclaw/matrix",
-      "description": "OpenClaw Matrix channel plugin",
-      "source": "official",
-      "kind": "channel",
-      "openclaw": {
-        "channel": {
-          "id": "matrix",
-          "label": "Matrix",
-          "selectionLabel": "Matrix (plugin)",
-          "docsPath": "/channels/matrix",
-          "docsLabel": "matrix",
-          "blurb": "open protocol; install the plugin to enable.",
-          "order": 70,
-          "quickstartAllowFrom": true
-        },
-        "install": {
-          "npmSpec": "@openclaw/matrix",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10",
-          "allowInvalidConfigRecovery": true
-        }
-      }
-    },
-    {
-      "name": "@openclaw/mattermost",
-      "description": "OpenClaw Mattermost channel plugin",
-      "source": "official",
-      "kind": "channel",
-      "openclaw": {
-        "channel": {
-          "id": "mattermost",
-          "label": "Mattermost",
-          "selectionLabel": "Mattermost (plugin)",
-          "docsPath": "/channels/mattermost",
-          "docsLabel": "mattermost",
-          "blurb": "self-hosted Slack-style chat; install the plugin to enable.",
-          "order": 65
-        },
-        "install": {
-          "npmSpec": "@openclaw/mattermost",
-          "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
-        }
-      }
-    },
-    {
       "name": "@openclaw/msteams",
       "description": "OpenClaw Microsoft Teams channel plugin",
       "source": "official",
