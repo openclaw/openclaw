@@ -10,4 +10,3 @@ export {
   normalizeAgentId,
 } from "../runtime-api.js";
 export { loadSessionStore, resolveSessionStoreEntry } from "../runtime-api.js";
-export { resolveAgentConfig } from "../runtime-api.js";
