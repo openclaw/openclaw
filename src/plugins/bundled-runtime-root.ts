@@ -240,7 +240,9 @@ function ensureOpenClawPluginSdkAlias(distRoot: string): void {
       "./plugin-sdk/*": "./plugin-sdk/*.js",
     },
   });
-  fs.rmSync(pluginSdkAliasDir, { recursive: true, force: true });
+  if (fs.existsSync(pluginSdkAliasDir) && !fs.lstatSync(pluginSdkAliasDir).isDirectory()) {
+    fs.rmSync(pluginSdkAliasDir, { recursive: true, force: true });
+  }
   fs.mkdirSync(pluginSdkAliasDir, { recursive: true });
   for (const entry of fs.readdirSync(pluginSdkDir, { withFileTypes: true })) {
     if (!entry.isFile() || path.extname(entry.name) !== ".js") {
@@ -252,3 +254,7 @@ function ensureOpenClawPluginSdkAlias(distRoot: string): void {
     );
   }
 }
+
+export const __testing = {
+  ensureOpenClawPluginSdkAlias,
+};
