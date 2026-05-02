@@ -26,6 +26,7 @@ import { createOpenClawTools } from "./openclaw-tools.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import { wrapToolWithBeforeToolCallHook } from "./pi-tools.before-tool-call.js";
 import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
+import { wrapToolInstructionFileGuard } from "./pi-tools.instruction-file-guard.js";
 import { filterToolsByMessageProvider } from "./pi-tools.message-provider-policy.js";
 import {
   isToolAllowedByPolicies,
@@ -517,14 +518,18 @@ export function createOpenClawCodingTools(options?: {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
+      const wrapped = wrapToolInstructionFileGuard(
+        createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly }),
+      );
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) {
         return [];
       }
-      const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
+      const wrapped = wrapToolInstructionFileGuard(
+        createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly }),
+      );
       return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
     }
     return [tool];
@@ -591,22 +596,30 @@ export function createOpenClawCodingTools(options?: {
         ? [
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  wrapToolInstructionFileGuard(
+                    createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  ),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : wrapToolInstructionFileGuard(
+                  createSandboxedEditTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                ),
             workspaceOnly
               ? wrapToolWorkspaceRootGuardWithOptions(
-                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  wrapToolInstructionFileGuard(
+                    createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                  ),
                   sandboxRoot,
                   {
                     containerWorkdir: sandbox.containerWorkdir,
                   },
                 )
-              : createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+              : wrapToolInstructionFileGuard(
+                  createSandboxedWriteTool({ root: sandboxRoot, bridge: sandboxFsBridge! }),
+                ),
           ]
         : []
       : []),
