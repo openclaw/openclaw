@@ -5,6 +5,10 @@ import {
 } from "openclaw/plugin-sdk/runtime";
 import { startGatewayBonjourAdvertiser } from "./src/advertiser.js";
 
+type BonjourPluginConfig = {
+  instanceName?: string;
+};
+
 function formatBonjourInstanceName(displayName: string) {
   const trimmed = displayName.trim();
   if (!trimmed) {
@@ -14,6 +18,15 @@ function formatBonjourInstanceName(displayName: string) {
     return trimmed;
   }
   return `${trimmed} (OpenClaw)`;
+}
+
+function resolveInstanceName(
+  pluginConfig: Record<string, unknown> | undefined,
+  machineDisplayName: string,
+): string {
+  const cfg = (pluginConfig ?? {}) as BonjourPluginConfig;
+  const configured = typeof cfg.instanceName === "string" ? cfg.instanceName.trim() : "";
+  return formatBonjourInstanceName(configured || machineDisplayName);
 }
 
 export default definePluginEntry({
@@ -26,7 +39,7 @@ export default definePluginEntry({
       advertise: async (ctx) => {
         const advertiser = await startGatewayBonjourAdvertiser(
           {
-            instanceName: formatBonjourInstanceName(ctx.machineDisplayName),
+            instanceName: resolveInstanceName(api.pluginConfig, ctx.machineDisplayName),
             gatewayPort: ctx.gatewayPort,
             gatewayTlsEnabled: ctx.gatewayTlsEnabled,
             gatewayTlsFingerprintSha256: ctx.gatewayTlsFingerprintSha256,

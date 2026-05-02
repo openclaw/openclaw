@@ -30,6 +30,10 @@ Docs: https://docs.openclaw.ai
 - Discord/channels: add reusable message-channel access groups plus Discord channel-audience DM authorization, so allowlists can reference `accessGroup:<name>` across channel auth paths. (#75813)
 - Crabbox/scripts: print the selected Crabbox binary, version, and supported providers before `pnpm crabbox:*` commands, and reject stale binaries that lack `blacksmith-testbox` provider support.
 
+### Changes
+
+- Bonjour: add `plugins.entries.bonjour.config.instanceName` to override the mDNS service instance name, so multi-gateway hosts can advertise distinct names instead of relying on the shared machine display name and getting auto-suffixed `(2)` on every restart. Fixes #54467. Thanks @jeffjhunter.
+
 ### Fixes
 
 - Models CLI: restore `openclaw models list --provider <id>` catalog and registry fallback rows for unconfigured providers, so provider-specific verification commands no longer report "No models found." Fixes #75517; supersedes #75615. Thanks @lotsoftick and @koshaji.
