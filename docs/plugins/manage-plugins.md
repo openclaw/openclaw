@@ -89,6 +89,11 @@ openclaw plugins update @scope/openclaw-plugin
 The second command moves a plugin back to the registry's default release line
 when it was previously pinned to an exact version or tag.
 
+When `openclaw update` runs on the beta channel, default-line npm and ClawHub
+plugin records try the matching plugin `@beta` release first. If that beta
+release does not exist, OpenClaw falls back to the recorded default/latest spec.
+Exact versions and explicit tags such as `@rc` or `@beta` are preserved.
+
 ## Uninstall plugins
 
 ```bash

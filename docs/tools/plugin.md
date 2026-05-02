@@ -529,6 +529,9 @@ Passing the package name without a version moves an exact pinned install back to
 the registry's default release line. If the installed npm plugin already matches
 the resolved version and recorded artifact identity, OpenClaw skips the update
 without downloading, reinstalling, or rewriting config.
+When `openclaw update` runs on the beta channel, default-line npm and ClawHub
+plugin records try `@beta` first and fall back to default/latest when no plugin
+beta release exists. Exact versions and explicit tags stay pinned.
 
 `--pin` is npm-only. It is not supported with `--marketplace`, because
 marketplace installs persist marketplace source metadata instead of an npm spec.

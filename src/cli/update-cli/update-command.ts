@@ -848,6 +848,7 @@ async function updatePluginsAfterCoreUpdate(params: {
   const npmResult = await updateNpmInstalledPlugins({
     config: pluginConfig,
     timeoutMs: params.timeoutMs,
+    updateChannel: params.channel,
     skipIds: new Set(syncResult.summary.switchedToNpm),
     skipDisabledPlugins: true,
     logger: pluginLogger,
