@@ -1142,7 +1142,7 @@ describe("grouped chat rendering", () => {
     }
   });
 
-  it("renders verified local assistant attachments through authenticated blob URLs", async () => {
+  it("renders verified local assistant media through blobs while document links stay on gateway route", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     vi.stubGlobal(
       "URL",
@@ -1201,7 +1201,9 @@ describe("grouped chat rendering", () => {
         ".chat-assistant-attachment-card__link",
       );
       expect(image?.getAttribute("src")).toBe("blob:assistant-media");
-      expect(docLink?.getAttribute("href")).toBe("blob:assistant-media");
+      expect(docLink?.getAttribute("href")).toBe(
+        "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftest-doc.pdf&mediaTicket=ticket-local",
+      );
     });
     expect(container.textContent).not.toContain("test image.png");
     vi.unstubAllGlobals();

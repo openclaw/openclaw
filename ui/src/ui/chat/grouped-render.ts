@@ -1282,7 +1282,7 @@ function renderAssistantAttachments(
             availability.status === "checking" ? "Checking..." : "Unavailable",
           );
         }
-        const renderAvailableAttachment = (previewUrl: string) => {
+        const renderAvailableAttachment = (previewUrl: string, linkUrl = previewUrl) => {
           if (attachment.kind === "image") {
             return html`
               <img
@@ -1326,7 +1326,7 @@ function renderAssistantAttachments(
                 <video controls preload="metadata" src=${previewUrl}></video>
                 <a
                   class="chat-assistant-attachment-card__link"
-                  href=${previewUrl}
+                  href=${linkUrl}
                   target="_blank"
                   rel="noreferrer"
                   >${attachment.label}</a
@@ -1339,7 +1339,7 @@ function renderAssistantAttachments(
               <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
               <a
                 class="chat-assistant-attachment-card__link"
-                href=${previewUrl}
+                href=${linkUrl}
                 target="_blank"
                 rel="noreferrer"
                 >${attachment.label}</a
@@ -1350,6 +1350,9 @@ function renderAssistantAttachments(
         if (!isLocalAttachment) {
           return renderAvailableAttachment(attachmentUrl);
         }
+        if (attachment.kind === "document") {
+          return renderAvailableAttachment(attachmentUrl);
+        }
         return until(
           resolveAssistantAttachmentBlobUrl(
             attachment.url,
@@ -1357,7 +1360,9 @@ function renderAssistantAttachments(
             authToken,
             availability.mediaTicket,
           ).then((previewUrl) =>
-            previewUrl ? renderAvailableAttachment(previewUrl) : renderStatusCard("Unavailable"),
+            previewUrl
+              ? renderAvailableAttachment(previewUrl, attachmentUrl)
+              : renderStatusCard("Unavailable"),
           ),
           renderStatusCard("Checking..."),
         );
