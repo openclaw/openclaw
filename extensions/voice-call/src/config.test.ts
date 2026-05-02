@@ -4,7 +4,6 @@ import {
   VoiceCallConfigSchema,
   resolveTwilioAuthToken,
   validateProviderConfig,
-  VoiceCallConfigSchema,
   normalizeVoiceCallConfig,
   normalizeResolvedVoiceCallPhoneNumber,
   resolveVoiceCallConfig,
@@ -306,6 +305,8 @@ describe("voice-call manifest SecretRefs", () => {
     expect(manifest.configContracts?.secretInputs?.paths).toEqual([
       { path: "allowFrom[]", expected: "string" },
       { path: "fromNumber", expected: "string" },
+      { path: "realtime.providers.*.apiKey", expected: "string" },
+      { path: "streaming.providers.*.apiKey", expected: "string" },
       { path: "toNumber", expected: "string" },
       { path: "tts.providers.*.apiKey", expected: "string" },
       { path: "twilio.authToken", expected: "string" },

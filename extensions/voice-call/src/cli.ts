@@ -378,7 +378,7 @@ async function initiateCallViaGatewayOrRuntime(params: {
   }
 
   const rt = await params.ensureRuntime();
-  const to = params.to ?? rt.config.toNumber;
+  const to = params.to ?? normalizeResolvedVoiceCallPhoneNumber(rt.config.toNumber);
   if (!to) {
     throw new Error("Missing --to and no toNumber configured");
   }
