@@ -921,6 +921,7 @@ describe("ensureAuthProfileStore", () => {
               missing_provider: 1,
               non_object: 1,
             },
+            validTypes: ["api_key", "oauth", "token"],
             keys: ["anthropic:missing-type", "openai:missing-provider", "qwen:not-object"],
           },
         );

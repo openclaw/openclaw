@@ -162,6 +162,29 @@ describe("models cli", () => {
     expect(command).toHaveBeenCalledWith(expect.objectContaining(expected), expect.any(Object));
   });
 
+  it("passes --token to models auth paste-token", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "--agent",
+      "poe",
+      "paste-token",
+      "--provider",
+      "anthropic",
+      "--token",
+      "sk-ant-oat01-token",
+    ]);
+
+    expect(modelsAuthPasteTokenCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agent: "poe",
+        provider: "anthropic",
+        token: "sk-ant-oat01-token",
+      }),
+      expect.any(Object),
+    );
+  });
+
   it("shows help for models auth without error exit", async () => {
     const program = new Command();
     program.exitOverride();

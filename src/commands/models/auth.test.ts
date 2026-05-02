@@ -799,6 +799,34 @@ describe("modelsAuthLoginCommand", () => {
     });
   });
 
+  it("writes --token values without prompting", async () => {
+    const runtime = createRuntime();
+
+    await modelsAuthPasteTokenCommand({ provider: "openai", token: " openai-token " }, runtime);
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).toHaveBeenCalledWith({
+      profileId: "openai:manual",
+      credential: {
+        type: "token",
+        provider: "openai",
+        token: "openai-token",
+      },
+      agentDir: "/tmp/openclaw/agents/main",
+    });
+  });
+
+  it("rejects empty --token values before prompting", async () => {
+    const runtime = createRuntime();
+
+    await expect(modelsAuthPasteTokenCommand({ provider: "openai", token: " " }, runtime)).rejects
+      .toThrow("--token value must not be empty");
+
+    expect(mocks.clackText).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+  });
+
   it("rejects an unknown agent before prompting for pasted tokens", async () => {
     const runtime = createRuntime();
     currentConfig = { agents: { list: [{ id: "main" }] } };
