@@ -1073,11 +1073,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.Body).not.toContain("parent_user_id");
   });
 
-  it("creates thread session for top-level DM when replyToMode=all", async () => {
+  it("keeps top-level DM session stable when replyToMode=all", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
+        session: { store: storePath, dmScope: "per-channel-peer" },
         channels: { slack: { enabled: true, replyToMode: "all" } },
       } as OpenClawConfig,
       replyToMode: "all",
@@ -1092,9 +1092,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expect(prepared).toBeTruthy();
-    // Session key should include :thread:500.000 for the auto-threaded message
-    expect(prepared!.ctxPayload.SessionKey).toContain(":thread:500.000");
-    // MessageThreadId should be set for the reply
+    expect(prepared!.ctxPayload.SessionKey).toBe("agent:main:slack:direct:u1");
     expect(prepared!.ctxPayload.MessageThreadId).toBe("500.000");
   });
 
