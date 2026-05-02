@@ -160,7 +160,7 @@ export function resolveSlackRoutingContext(params: {
     isDirectMessage,
     isGroupDm,
     isRoom,
-    isRoomish,
+    isRoomish: _isRoomish,
     seedTopLevelRoomThread,
   } = params;
   let route = resolveSlackInitialAgentRoute({
@@ -203,12 +203,12 @@ export function resolveSlackRoutingContext(params: {
     ? isThreadReply
       ? threadTs
       : undefined
-    : isRoomish
+    : isGroupDm
       ? roomThreadId
       : isThreadReply
         ? threadTs
         : autoThreadId;
-  const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
+  const routedThreadId = canonicalThreadId ?? (isRoom ? seededRoomThreadId : undefined);
   const baseConversationId = resolveSlackBaseConversationId({ message, isDirectMessage });
   const boundThreadRoute = routedThreadId
     ? resolveRuntimeConversationBindingRoute({
