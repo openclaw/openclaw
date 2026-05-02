@@ -11,6 +11,7 @@ import {
   resolveSelectedClawHubPublishablePluginPackages,
   type PublishablePluginPackage,
 } from "../scripts/lib/plugin-clawhub-release.ts";
+import { OPENCLAW_PLUGIN_NPM_REPOSITORY_URL } from "../scripts/lib/plugin-npm-release.ts";
 import { cleanupTempDirs, makeTempRepoRoot } from "./helpers/temp-repo.js";
 
 const tempDirs: string[] = [];
@@ -146,7 +147,7 @@ describe("collectClawHubVersionGateErrors", () => {
           version: "2026.4.1",
           repository: {
             type: "git",
-            url: "https://github.com/openclaw/openclaw",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
           },
           openclaw: {
             extensions: ["./index.ts"],
@@ -345,7 +346,7 @@ function createTempPluginRepo(
           version: "2026.4.1",
           repository: {
             type: "git",
-            url: "https://github.com/openclaw/openclaw",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
           },
           openclaw: {
             extensions: ["./index.ts"],
