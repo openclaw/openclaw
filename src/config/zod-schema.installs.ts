@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-export const InstallSourceSchema = z.union([
+const InstallSourceSchema = z.union([
   z.literal("npm"),
   z.literal("archive"),
   z.literal("path"),
@@ -8,7 +8,7 @@ export const InstallSourceSchema = z.union([
   z.literal("git"),
 ]);
 
-export const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
+const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
 
 export const InstallRecordShape = {
   source: InstallSourceSchema,
