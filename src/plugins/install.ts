@@ -906,6 +906,7 @@ export async function installPluginFromArchive(
           mode,
           dryRun: params.dryRun,
           expectedPluginId: params.expectedPluginId,
+          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           requirePluginManifest: true,
           installPolicyRequest,
         }),
