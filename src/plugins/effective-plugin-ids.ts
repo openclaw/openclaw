@@ -11,8 +11,8 @@ import {
   resolveConfiguredChannelPluginIds,
 } from "./channel-plugin-ids.js";
 import { normalizePluginsConfig } from "./config-state.js";
+import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
@@ -63,14 +63,13 @@ function collectBundledChannelOwnerPluginIds(params: {
           : {}),
       }
     : params.env;
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const snapshot = loadManifestMetadataSnapshot({
     config: params.config,
     env,
     workspaceDir: params.workspaceDir,
-    includeDisabled: true,
   });
   const pluginIds = new Set<string>();
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (plugin.origin !== "bundled") {
       continue;
     }

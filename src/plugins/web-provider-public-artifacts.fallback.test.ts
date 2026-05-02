@@ -1,18 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
-  loadPluginRegistrySnapshotWithMetadata: vi.fn(),
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn(() => null),
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: vi.fn(() => null),
   loadBundledWebSearchProviderEntriesFromDir: vi.fn(),
   loadBundledWebFetchProviderEntriesFromDir: vi.fn(),
-}));
-
-vi.mock("./plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
-  loadPluginRegistrySnapshotWithMetadata: mocks.loadPluginRegistrySnapshotWithMetadata,
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
@@ -48,23 +41,6 @@ const {
 describe("web provider public artifact manifest fallback", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
-      diagnostics: [],
-      plugins: [
-        {
-          id: "fallback-search",
-          origin: "bundled",
-          rootDir: "/tmp/fallback-search",
-          contracts: { webSearchProviders: ["fallback-search"] },
-        },
-        {
-          id: "fallback-fetch",
-          origin: "bundled",
-          rootDir: "/tmp/fallback-fetch",
-          contracts: { webFetchProviders: ["fallback-fetch"] },
-        },
-      ],
-    });
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       diagnostics: [],
       plugins: [
@@ -82,11 +58,6 @@ describe("web provider public artifact manifest fallback", () => {
         },
       ],
     });
-    mocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
-      source: "derived",
-      snapshot: { plugins: [] },
-      diagnostics: [],
-    });
     mocks.loadBundledWebSearchProviderEntriesFromDir.mockReturnValue([
       { id: "fallback-search", pluginId: "fallback-search" },
     ]);
@@ -100,7 +71,6 @@ describe("web provider public artifact manifest fallback", () => {
 
     expect(providers).toEqual([{ id: "fallback-search", pluginId: "fallback-search" }]);
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
     expect(mocks.loadBundledWebSearchProviderEntriesFromDir).toHaveBeenCalledWith({
       dirName: "fallback-search",
       pluginId: "fallback-search",
@@ -112,7 +82,6 @@ describe("web provider public artifact manifest fallback", () => {
 
     expect(providers).toEqual([{ id: "fallback-fetch", pluginId: "fallback-fetch" }]);
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
-    expect(mocks.loadPluginManifestRegistryForPluginRegistry).not.toHaveBeenCalled();
     expect(mocks.loadBundledWebFetchProviderEntriesFromDir).toHaveBeenCalledWith({
       dirName: "fallback-fetch",
       pluginId: "fallback-fetch",

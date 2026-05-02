@@ -42,6 +42,11 @@ const voiceCallConfigSchema = {
     inboundPolicy: { label: "Inbound Policy" },
     allowFrom: { label: "Inbound Allowlist" },
     inboundGreeting: { label: "Inbound Greeting", advanced: true },
+    numbers: {
+      label: "Per-number Routing",
+      help: "Inbound overrides keyed by dialed E.164 number.",
+      advanced: true,
+    },
     "telnyx.apiKey": { label: "Telnyx API Key", sensitive: true },
     "telnyx.connectionId": { label: "Telnyx Connection ID" },
     "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },

@@ -481,7 +481,7 @@ console.log(JSON.stringify(result));
 
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
-    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2100");
+    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2700");
     expect(script).toContain("windowsAgentTurnConfigPatchScript(this.auth.modelId)");
     expect(script).toContain("--model");
     expect(script).toContain('resolveParallelsModelTimeoutSeconds("windows")');
@@ -503,10 +503,13 @@ console.log(JSON.stringify({
 }));
 `;
     expect(JSON.parse(runTsEval(source))).toEqual({
-      linux: 600,
-      macos: 900,
-      windows: 900,
+      linux: 900,
+      macos: 1800,
+      windows: 1800,
     });
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
+      "OPENCLAW_PARALLELS_MACOS_AGENT_TIMEOUT_S || 2700",
+    );
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
       '--timeout ${resolveParallelsModelTimeoutSeconds("macos")}',
     );
