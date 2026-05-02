@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
+
 ### Fixes
 
 - Gateway/session history: recover Discord sender labels from hidden runtime-context rows without exposing those rows in dashboard or history output. Thanks @Squirbie.

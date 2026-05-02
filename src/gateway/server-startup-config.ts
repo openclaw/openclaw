@@ -1,3 +1,4 @@
+import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   readConfigFileSnapshotWithPluginMetadata,
@@ -366,8 +367,13 @@ export function createRuntimeSecretsActivator(params: {
   return async (config, activationParams) =>
     await runWithSecretsActivationLock(async () => {
       try {
+        const startupPreflight =
+          activationParams.reason === "startup" || activationParams.reason === "restart-check";
         const prepared = await prepareRuntimeSecretsSnapshot({
           config: pruneSkippedStartupSecretSurfaces(config),
+          ...(startupPreflight
+            ? { loadAuthStore: loadAuthProfileStoreWithoutExternalProfiles }
+            : {}),
         });
         assertRuntimeGatewayAuthNotKnownWeak(prepared.config);
         if (activationParams.activate) {
