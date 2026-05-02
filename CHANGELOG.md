@@ -28,6 +28,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/gateway: reconnect when the gateway socket closes while waiting for the shared IDENTIFY concurrency window, instead of silently skipping IDENTIFY and leaving the bot online but unresponsive. Fixes #74617. Thanks @zeeskdr-ai.
 - Telegram/startup: use the existing `getMe` request guard for the gateway bot probe instead of a fixed 2.5-second budget, and honor higher `timeoutSeconds` configs for slow Telegram API paths. Fixes #75783. Thanks @tankotan.
 - Infer/media: report missing image-understanding and audio-transcription provider configuration for `image describe`, `image describe-many`, and `audio transcribe` instead of blaming the input path when no provider is available. Fixes #73569 and supersedes #73593, #74288, and #74495. Thanks @bittoby, @tmimmanuel, @Linux2010, and @vyctorbrzezowski.
 - Docs/health: clarify that session listing surfaces stored conversation rows rather than Discord/channel socket liveness, and point connectivity checks at channel status and health probes. Fixes #70420. Thanks @ashersoutherncities-art and @martingarramon.

@@ -248,7 +248,12 @@ export class GatewayPlugin extends Plugin {
             true,
           );
         } else {
-          void this.identifyWithConcurrency();
+          void this.identifyWithConcurrency().catch((error: unknown) => {
+            this.emitter.emit(
+              "error",
+              error instanceof Error ? error : new Error(String(error), { cause: error }),
+            );
+          });
         }
         break;
       case GatewayOpcodes.HeartbeatAck:
@@ -325,7 +330,13 @@ export class GatewayPlugin extends Plugin {
       shardId: this.shardId,
       maxConcurrency: this.gatewayInfo?.session_start_limit.max_concurrency,
     });
-    if (!this.ws || this.ws.readyState !== READY_STATE_OPEN) {
+    const socket = this.ws;
+    if (!socket || socket.readyState !== READY_STATE_OPEN) {
+      const error = new Error("Discord gateway socket closed before IDENTIFY could be sent");
+      this.emitter.emit("error", error);
+      if (socket) {
+        this.scheduleReconnect(false);
+      }
       return;
     }
     this.identify();
