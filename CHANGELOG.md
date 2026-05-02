@@ -24,8 +24,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/sandbox: preserve existing workspace file modes when sandbox edits atomically replace files, so 0644 files do not collapse to 0600 after Write/Edit/apply_patch. Fixes #44077. Thanks @patosullivan.
-- Agents/models: keep legacy CLI runtime model refs such as `claude-cli/*` in the configured allowlist after canonical runtime migration, so cron `payload.model` overrides keep working. Fixes #75753. Thanks @RyanSandoval.
+- Gateway/macOS: write LaunchAgent services with a canonical system PATH and stop preserving old plist PATH entries, so Volta, asdf, fnm, and pnpm shell paths no longer affect gateway child-process Node resolution. Fixes #75233. Thanks @nphyde2.
+- # Agents/sandbox: preserve existing workspace file modes when sandbox edits atomically replace files, so 0644 files do not collapse to 0600 after Write/Edit/apply_patch. Fixes #44077. Thanks @patosullivan.
+  > > > > > > > 007574cee3 (fix: canonicalize macOS LaunchAgent PATH)
 - Gateway/watch: keep colored subsystem log prefixes in the managed tmux pane even when the parent shell exports `NO_COLOR`, while preserving explicit `FORCE_COLOR=0` opt-out. Thanks @vincentkoc.
 - Agents/compaction: submit a non-empty runtime-event marker for pre-compaction memory flush turns, so strict Anthropic providers no longer reject the silent flush as an empty user message. Fixes #75305. Thanks @sableassistant3777-source.
 - Plugin SDK: re-export `isPrivateIpAddress` from `plugin-sdk/ssrf-runtime`, restoring source-checkout builds for SearXNG and Firecrawl private-network guards. Thanks @vincentkoc.
@@ -285,6 +286,7 @@ Docs: https://docs.openclaw.ai
 - Discord: collapse repeated native slash-command deploy rate-limit startup logs into one non-fatal warning while keeping per-request REST timing in verbose output. Thanks @discord.
 - Discord: report native slash-command deploy aborts as REST timeouts with method, path, timeout budget, and observed duration, so startup logs explain slow Discord API calls instead of showing a generic aborted operation. Thanks @discord.
 - Security/logging: redact payment credential field names such as card number, CVC/CVV, shared payment token, and payment credential across default log and tool-payload redaction patterns so wallet-style MCP tools do not expose raw payment credentials in UI events or transcripts. Thanks @stainlu.
+- Providers/OpenAI Codex: preserve existing wrapped Codex streams
 - Providers/OpenAI Codex: preserve existing wrapped Codex streams during OpenAI attribution so PI OAuth bearer injection reaches ChatGPT/Codex Responses, and strip native Codex-only unsupported payload fields without touching custom compatible endpoints. (#75111) Thanks @keshavbotagent.
 - Plugins/runtime-deps: materialize newly required bundled plugin packages after local `openclaw onboard` and `openclaw configure` config writes, while keeping remote setup read-only, so first Gateway startup no longer discovers missing channel/provider deps after setup claimed success. Fixes #75309; refs #75069. Thanks @scottgl9 and @xiaohuaxi.
 - Plugins/runtime-deps: expire stale legacy install locks whose live PID cannot be tied to the current process incarnation, so Docker PID reuse no longer leaves bundled dependency repair stuck behind old `.openclaw-runtime-deps.lock` directories. Fixes #74948; refs #74950 and #74346. Thanks @dchekmarev.
