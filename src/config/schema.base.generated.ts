@@ -8101,6 +8101,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                       description:
                         "Per-agent provider-specific tool policy overrides for channel-scoped capability control. Use this when a single agent needs tighter restrictions on one provider than others.",
                     },
+                    toolsBySender: {
+                      type: "object",
+                      propertyNames: {
+                        type: "string",
+                      },
+                      additionalProperties: {
+                        type: "object",
+                        properties: {
+                          allow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          alsoAllow: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                          deny: {
+                            type: "array",
+                            items: {
+                              type: "string",
+                            },
+                          },
+                        },
+                        additionalProperties: false,
+                      },
+                    },
                     elevated: {
                       type: "object",
                       properties: {
@@ -8528,6 +8558,36 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             title: "Tool Policy by Provider",
             description:
               "Per-provider tool allow/deny overrides keyed by channel/provider ID to tailor capabilities by surface. Use this when one provider needs stricter controls than global tool policy.",
+          },
+          toolsBySender: {
+            type: "object",
+            propertyNames: {
+              type: "string",
+            },
+            additionalProperties: {
+              type: "object",
+              properties: {
+                allow: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                },
+                alsoAllow: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                },
+                deny: {
+                  type: "array",
+                  items: {
+                    type: "string",
+                  },
+                },
+              },
+              additionalProperties: false,
+            },
           },
           web: {
             type: "object",

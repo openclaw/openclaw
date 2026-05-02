@@ -544,6 +544,9 @@ export function resolveGroupToolPolicy(params: {
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    // Fall back to the already-normalised channel id so <channel>:<senderId> keys
+    // in group toolsBySender configs match even when messageProvider is not explicit.
+    messageProvider: params.messageProvider ?? channel,
   });
   return pickSandboxToolPolicy(configTools);
 }

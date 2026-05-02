@@ -61,9 +61,13 @@ export type GroupToolPolicySender = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
+  /**
+   * The channel/platform that delivered this message (e.g. "discord", "telegram", "slack").
+   * Required for `<channel>:<senderId>` compound key matching.
+   */
+  messageProvider?: string | null;
 };
 
-type SenderKeyType = "id" | "e164" | "username" | "name";
 type CompiledSenderPolicy = {
   buckets: SenderPolicyBuckets;
   wildcard?: GroupToolPolicyConfig;
@@ -77,7 +81,7 @@ const compiledToolsBySenderCache = new WeakMap<
 
 type ParsedSenderPolicyKey =
   | { kind: "wildcard" }
-  | { kind: "typed"; type: SenderKeyType; key: string };
+  | { kind: "typed"; type: ToolsBySenderKeyType; key: string };
 
 type SenderPolicyBuckets = Record<ToolsBySenderKeyType, Map<string, GroupToolPolicyConfig>>;
 
@@ -95,7 +99,7 @@ function normalizeSenderKey(
   return normalizeLowercaseStringOrEmpty(withoutAt);
 }
 
-function normalizeTypedSenderKey(value: string, type: SenderKeyType): string {
+function normalizeTypedSenderKey(value: string, type: ToolsBySenderKeyType): string {
   return normalizeSenderKey(value, {
     stripLeadingAt: type === "username",
   });
@@ -114,7 +118,7 @@ function warnLegacyToolsBySenderKey(rawKey: string) {
   }
   warnedLegacyToolsBySenderKeys.add(trimmed);
   process.emitWarning(
-    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
+    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (id:, e164:, username:, name:, channel:<channelName>:<senderId>). Legacy unprefixed keys are matched as id only.`,
     {
       type: "DeprecationWarning",
       code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
@@ -143,7 +147,7 @@ function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined
     };
   }
 
-  // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
+  // Backward-compatible fallback: untyped keys map to immutable sender IDs only.
   warnLegacyToolsBySenderKey(trimmed);
   const key = normalizeLegacySenderKey(trimmed);
   if (!key) {
@@ -162,6 +166,7 @@ function createSenderPolicyBuckets(): SenderPolicyBuckets {
     e164: new Map<string, GroupToolPolicyConfig>(),
     username: new Map<string, GroupToolPolicyConfig>(),
     name: new Map<string, GroupToolPolicyConfig>(),
+    channel: new Map<string, GroupToolPolicyConfig>(),
   };
 }
 
@@ -212,7 +217,7 @@ function resolveCompiledToolsBySenderPolicy(
   return compiled;
 }
 
-function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
+function normalizeCandidate(value: string | null | undefined, type: ToolsBySenderKeyType): string {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return "";
@@ -240,6 +245,19 @@ function matchToolsBySenderPolicy(
   compiled: CompiledSenderPolicy,
   params: GroupToolPolicySender,
 ): GroupToolPolicyConfig | undefined {
+  // Channel-scoped compound key: checked first so platform-specific entries win over bare id matches.
+  // Key format stored in bucket: "<channel>:<senderId>" (both lowercased).
+  const rawProvider = normalizeOptionalString(params.messageProvider);
+  const channelProvider = rawProvider ? normalizeSenderKey(rawProvider) : "";
+  if (channelProvider) {
+    for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
+      const compositeKey = `${channelProvider}:${senderIdCandidate}`;
+      const match = compiled.buckets.channel.get(compositeKey);
+      if (match) {
+        return match;
+      }
+    }
+  }
   for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
     const match = compiled.buckets.id.get(senderIdCandidate);
     if (match) {
@@ -433,6 +451,7 @@ export function resolveChannelGroupToolsPolicy(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    messageProvider: params.messageProvider,
   });
   if (groupSenderPolicy) {
     return groupSenderPolicy;
@@ -446,6 +465,7 @@ export function resolveChannelGroupToolsPolicy(
     senderName: params.senderName,
     senderUsername: params.senderUsername,
     senderE164: params.senderE164,
+    messageProvider: params.messageProvider,
   });
   if (defaultSenderPolicy) {
     return defaultSenderPolicy;
