@@ -113,6 +113,7 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
 export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = 600;
+export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
 
 if (isMainModule()) {
   try {
@@ -1901,6 +1902,14 @@ async function runInstalledModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
+  await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
 }
 
 async function runInstalledAgentTurn(params) {
@@ -2689,6 +2698,13 @@ async function runModelsSet(params) {
     lane: params.lane,
     env: params.env,
     args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
+    args: ["config", "set", "tools.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE],
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });

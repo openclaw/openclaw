@@ -27,6 +27,7 @@ import {
   CROSS_OS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS,
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS,
+  CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE,
   CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS,
   CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS,
@@ -160,11 +161,13 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(allowlist).not.toContain("web-readability");
   });
 
-  it("keeps cross-OS live smoke agent turns on GPT-5.5-safe timeouts and minimal thinking", () => {
+  it("keeps cross-OS live smoke agent turns on GPT-5.5-safe timeouts and minimal context", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
     const providerOverride = "models.providers.${params.providerConfig.extensionId}";
 
+    expect(CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE).toBe("minimal");
     expect(source).toContain('"--thinking",\n    "minimal"');
+    expect(source.match(/"tools\.profile", CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE/g)).toHaveLength(2);
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
     expect(source).toContain("buildReleaseProviderConfigOverride");
     expect(source).toContain("models: []");
