@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Docker/Gateway: harden the gateway container by dropping `NET_RAW` and `NET_ADMIN` capabilities and enabling `no-new-privileges` in the bundled `docker-compose.yml`. Thanks @VintageAyu.
+- Channels/WhatsApp: end onboarding with a "next steps" note that verifies inbound routing per the configured `dmPolicy` (pairing approval, an `allowFrom` number, or any sender — and outbound-only when `dmPolicy=disabled`) and shows how to send outbound via `openclaw message send --channel whatsapp`, with the same hello-world path documented on the WhatsApp channel page and the message CLI examples. Onboarding never auto-sends. (#74413) Thanks @sanjarcode.
 - Telegram: accept plugin-owned numeric forum-topic targets in the agent message tool and keep reply-dispatch provider chunks behind a real stable runtime alias during in-place package updates. Fixes #77137. Thanks @richardmqq.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
 - TTS/telephony: honor provider voice/model overrides in telephony synthesis providers so Google Meet agent speech logs match the backend that actually produced the audio. Thanks @vincentkoc.
@@ -949,7 +950,6 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Dependencies: refresh bundled runtime and plugin dependency pins, including Pi 0.71.1, OpenAI 6.35.0, Codex 0.128.0, Zod 4.4.1, and Matrix 41.4.0. Thanks @mariozechner.
-- Channels/WhatsApp: end onboarding with a "next steps" note that verifies inbound routing per the configured `dmPolicy` (pairing approval, an `allowFrom` number, or any sender — and outbound-only when `dmPolicy=disabled`) and shows how to send outbound via `openclaw message send --channel whatsapp`, with the same hello-world path documented on the WhatsApp channel page and the message CLI examples. Onboarding never auto-sends. (#74413) Thanks @sanjarcode.
 - Agents/workspace: add `agents.defaults.skipOptionalBootstrapFiles` for skipping selected optional workspace files during bootstrap without disabling required workspace setup. (#62110) Thanks @mainstay22.
 - Plugins/CLI: add first-class `git:` plugin installs with ref checkout, commit metadata, normal scanner/staging, and `plugins update` support for recorded git sources. Thanks @badlogic.
 - Google Meet: add live caption health for Chrome transcribe mode, including caption observer state, transcript counters, last caption text, and recent transcript lines in status and doctor output. Refs #72478. Thanks @DougButdorf.
