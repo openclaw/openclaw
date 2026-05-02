@@ -964,16 +964,16 @@ describe("model-selection", () => {
       });
     });
 
-    it("preserves custom provider key when it collides with a built-in alias (#76155)", () => {
-      // "kimi-code" normalizes to "kimi" via normalizeProviderId, but the user
-      // has explicitly configured a custom provider named "kimi-code" in
-      // models.providers. resolveAllowedModelRef must preserve the raw key so
-      // dispatch can match the inline entry — not route to the built-in kimi extension.
+    it("normalizes alias-colliding custom provider key when no custom transport is declared (#76155)", () => {
+      // "kimi-code" is a built-in compatibility alias for "kimi". A models.providers
+      // entry named "kimi-code" WITHOUT a custom api or baseUrl is treated as a
+      // legacy alias stub — not a true custom inline provider. resolveAllowedModelRef
+      // must fall through to parseModelRef which normalizes "kimi-code" → "kimi".
       const cfg = {
         agents: {
           defaults: {
             models: {
-              "kimi-code/kimi-for-coding": {},
+              "kimi/kimi-for-coding": {},
             },
           },
         },
@@ -994,15 +994,15 @@ describe("model-selection", () => {
       });
 
       expect(result).toEqual({
-        key: "kimi-code/kimi-for-coding",
-        ref: { provider: "kimi-code", model: "kimi-for-coding" },
+        key: "kimi/kimi-for-coding",
+        ref: { provider: "kimi", model: "kimi-for-coding" },
       });
     });
 
-    it("preserves custom provider key without api field when it collides with a built-in alias (#76155)", () => {
-      // Same as above but the inline provider config has no explicit api field —
-      // the previous guard (!apiOwner) would have returned null and fallen through
-      // to parseModelRef which normalizes "kimi-code" → "kimi".
+    it("preserves custom provider key with baseUrl when it collides with a built-in alias (#76155)", () => {
+      // Same alias collision but with a custom baseUrl — this is a genuine custom
+      // inline provider. resolveAllowedModelRef must preserve the raw key so
+      // dispatch can match the inline entry instead of routing to the built-in kimi extension.
       const cfg = {
         agents: {
           defaults: {
@@ -1031,6 +1031,40 @@ describe("model-selection", () => {
       expect(result).toEqual({
         key: "kimi-code/kimi-for-coding",
         ref: { provider: "kimi-code", model: "kimi-for-coding" },
+      });
+    });
+
+    it("normalizes legacy modelstudio alias when no custom api owner is configured (#76155)", () => {
+      // "modelstudio" is a compatibility alias for "qwen". A models.providers entry
+      // named "modelstudio" WITHOUT a foreign api owner must still resolve to
+      // provider "qwen" — not be preserved as raw "modelstudio".
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "qwen/qwen3-plus": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            modelstudio: {
+              models: [{ id: "qwen3-plus" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "modelstudio/qwen3-plus",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "qwen/qwen3-plus",
+        ref: { provider: "qwen", model: "qwen3-plus" },
       });
     });
   });

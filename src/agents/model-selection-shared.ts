@@ -284,15 +284,21 @@ function resolveExactConfiguredProviderRef(params: {
   const [configuredProvider, providerConfig] = exactConfigured;
   const rawProviderKey = normalizeLowercaseStringOrEmpty(configuredProvider);
   const normalizedConfiguredProvider = normalizeProviderId(configuredProvider);
-  // A custom provider key whose raw lowercased form differs from its normalized
-  // form (e.g. "kimi-code" → "kimi") would be silently routed to the built-in
-  // provider by parseModelRef. Preserve the raw key so the user's inline config
-  // entry is matched correctly at dispatch time.
-  const hasKeyAliasCollision = rawProviderKey !== normalizedConfiguredProvider;
   const apiOwner =
     typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
-  if (!hasKeyAliasCollision && (!apiOwner || apiOwner === normalizedConfiguredProvider)) {
-    return null;
+  // Only preserve the raw key when the entry has custom transport (api or baseUrl).
+  // Built-in compatibility aliases such as "modelstudio" → "qwen" or "kimi-code" → "kimi"
+  // have no custom transport and must stay on the normalized built-in path so that
+  // legacy refs continue to resolve via parseModelRef without breaking.
+  const hasCustomTransport = Boolean(
+    (typeof providerConfig?.api === "string" && providerConfig.api.trim()) ||
+    (typeof providerConfig?.baseUrl === "string" && providerConfig.baseUrl.trim()),
+  );
+  const hasKeyAliasCollision = rawProviderKey !== normalizedConfiguredProvider;
+  if (!hasCustomTransport || !hasKeyAliasCollision) {
+    if (!apiOwner || apiOwner === normalizedConfiguredProvider) {
+      return null;
+    }
   }
   const provider = rawProviderKey;
   return {
