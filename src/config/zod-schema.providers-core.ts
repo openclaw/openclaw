@@ -374,7 +374,7 @@ export const TelegramAccountSchemaBase = z
         url: z
           .string()
           .url()
-          .refine((v) => new URL(v).protocol === "https:", "Expected https:// URL"),
+          .refine((v) => { try { return new URL(v).protocol === "https:"; } catch { return false; } }, "Expected https:// URL"),
         secret: SecretInputSchema.optional().register(sensitive),
         headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
         timeoutMs: z.number().int().positive().optional(),

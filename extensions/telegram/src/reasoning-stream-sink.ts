@@ -124,6 +124,7 @@ export function createReasoningStreamSink(params: {
         return;
       }
       started = false;
+      lastSnapshot = "";
       enqueue({
         event: "reasoning_end",
         streamId,
