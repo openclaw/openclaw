@@ -1464,6 +1464,36 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionsCleanupParams: Codable, Sendable {
+    public let agent: String?
+    public let allagents: Bool?
+    public let enforce: Bool?
+    public let activekey: String?
+    public let fixmissing: Bool?
+
+    public init(
+        agent: String?,
+        allagents: Bool?,
+        enforce: Bool?,
+        activekey: String?,
+        fixmissing: Bool?)
+    {
+        self.agent = agent
+        self.allagents = allagents
+        self.enforce = enforce
+        self.activekey = activekey
+        self.fixmissing = fixmissing
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agent
+        case allagents = "allAgents"
+        case enforce
+        case activekey = "activeKey"
+        case fixmissing = "fixMissing"
+    }
+}
+
 public struct SessionsPreviewParams: Codable, Sendable {
     public let keys: [String]
     public let limit: Int?
