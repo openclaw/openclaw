@@ -471,6 +471,44 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("suppresses completion announces for inline ACP session delivery", async () => {
+    registerAcpBackendForTest();
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:1",
+      runId: "run-acp",
+      mode: "session",
+      inlineDelivery: true,
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+      agentAccountId: "default",
+      agentTo: "channel:parent-channel",
+      agentThreadId: "child-thread",
+    });
+
+    await tool.execute("call-inline-acp", {
+      runtime: "acp",
+      task: "investigate",
+      agentId: "codex",
+      thread: true,
+      mode: "session",
+    });
+
+    expect(hoisted.registerSubagentRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "run-acp",
+        childSessionKey: "agent:codex:acp:1",
+        requesterSessionKey: "agent:main:main",
+        task: "investigate",
+        cleanup: "keep",
+        spawnMode: "session",
+        expectsCompletionMessage: false,
+      }),
+    );
+  });
+
   it("rejects ACP runtime calls from sandboxed requester sessions", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({

@@ -603,7 +603,7 @@ describe("google-meet CLI", () => {
     try {
       await setupCli({
         runtime: {
-          status: () => ({
+          status: async () => ({
             found: true,
             sessions: [
               {
@@ -684,7 +684,7 @@ describe("google-meet CLI", () => {
     try {
       await setupCli({
         runtime: {
-          status: () => ({
+          status: async () => ({
             found: true,
             session: {
               id: "meet_1",
@@ -703,6 +703,11 @@ describe("google-meet CLI", () => {
                 audioBridge: { type: "node-command-pair", provider: "openai" },
                 health: {
                   inCall: true,
+                  captioning: true,
+                  transcriptLines: 2,
+                  lastCaptionAt: "2026-04-25T00:00:03.000Z",
+                  lastCaptionSpeaker: "Alice",
+                  lastCaptionText: "Can everyone hear OpenClaw?",
                   providerConnected: true,
                   realtimeReady: true,
                   audioInputActive: true,
@@ -720,6 +725,9 @@ describe("google-meet CLI", () => {
       expect(stdout.output()).toContain("session: meet_1");
       expect(stdout.output()).toContain("node: node-1");
       expect(stdout.output()).toContain("provider connected: yes");
+      expect(stdout.output()).toContain("captioning: yes");
+      expect(stdout.output()).toContain("transcript lines: 2");
+      expect(stdout.output()).toContain("last caption text: Alice: Can everyone hear OpenClaw?");
       expect(stdout.output()).toContain("audio input active: yes");
       expect(stdout.output()).toContain("audio output active: no");
     } finally {
@@ -732,7 +740,7 @@ describe("google-meet CLI", () => {
     try {
       await setupCli({
         runtime: {
-          status: () => ({
+          status: async () => ({
             found: true,
             session: {
               id: "meet_1",

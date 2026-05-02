@@ -23,23 +23,6 @@ import {
 } from "./engine/messaging/target-parser.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
-/** Maximum text length for a single QQ Bot message. */
-export const TEXT_CHUNK_LIMIT = 5000;
-
-/**
- * Naive text chunking fallback.
- *
- * The outbound pipeline normally uses `runtime.channel.text.chunkMarkdownText`;
- * this remains exported for callers that need the legacy channel helper.
- */
-export function chunkText(text: string, limit: number = TEXT_CHUNK_LIMIT): string[] {
-  const chunks: string[] = [];
-  for (let i = 0; i < text.length; i += limit) {
-    chunks.push(text.slice(i, i + limit));
-  }
-  return chunks.length > 0 ? chunks : [text];
-}
-
 // Shared promise so concurrent multi-account startups serialize the dynamic
 // import of the gateway module, avoiding an ESM circular-dependency race.
 let _gatewayModulePromise: Promise<typeof import("./bridge/gateway.js")> | undefined;
@@ -116,6 +99,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
   },
   approvalCapability: getQQBotApprovalCapability(),
   messaging: {
+    targetPrefixes: ["qqbot"],
     /** Normalize common QQ Bot target formats into the canonical qqbot:... form. */
     normalizeTarget: coreNormalizeTarget,
     targetResolver: {

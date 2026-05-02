@@ -83,6 +83,7 @@ async function runNonInteractiveMigrationImport(params: {
       await replaceConfigFile({
         nextConfig: config,
         ...(params.baseHash !== undefined ? { baseHash: params.baseHash } : {}),
+        writeOptions: { allowConfigSizeDrop: true },
       });
       logConfigUpdated(params.runtime);
       return config;

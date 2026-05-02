@@ -1,12 +1,74 @@
 import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import { shellQuote } from "./host-command.ts";
-import { psSingleQuote, windowsOpenClawResolver } from "./powershell.ts";
-import type { ProviderAuth } from "./types.ts";
+import {
+  psSingleQuote,
+  windowsAgentTurnConfigPatchScript,
+  windowsOpenClawResolver,
+} from "./powershell.ts";
+import {
+  modelProviderConfigBatchJson,
+  resolveParallelsModelTimeoutSeconds,
+} from "./provider-auth.ts";
+import type { Platform, ProviderAuth } from "./types.ts";
 
 export interface NpmUpdateScriptInput {
   auth: ProviderAuth;
   expectedNeedle: string;
   updateTarget: string;
+}
+
+function posixModelProviderConfigCommands(
+  command: string,
+  modelId: string,
+  platform: Platform,
+): string {
+  const batchJson = modelProviderConfigBatchJson(modelId, platform);
+  if (!batchJson) {
+    return "";
+  }
+  return `provider_config_batch="$(mktemp)"
+cat >"$provider_config_batch" <<'JSON'
+${batchJson}
+JSON
+set +e
+${command} config set --batch-file "$provider_config_batch" --strict-json
+provider_config_exit=$?
+set -e
+rm -f "$provider_config_batch"
+if [ "$provider_config_exit" -ne 0 ]; then exit "$provider_config_exit"; fi`;
+}
+
+function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {
+  return `agent_ok=false
+for attempt in 1 2; do
+  session_id=${shellQuote(sessionId)}
+  if [ "$attempt" -gt 1 ]; then session_id=${shellQuote(`${sessionId}-retry`)}"-$attempt"; fi
+  rm -f "$HOME/.openclaw/agents/main/sessions/$session_id.jsonl"
+  output_file="$(mktemp)"
+  set +e
+  ${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} ${command} agent --local --agent main --session-id "$session_id" --message 'Reply with exact ASCII text OK only.' --thinking minimal --json >"$output_file" 2>&1
+  rc=$?
+  set -e
+  cat "$output_file"
+  if [ "$rc" -ne 0 ]; then
+    rm -f "$output_file"
+    exit "$rc"
+  fi
+  if grep -Eq '"finalAssistant(Raw|Visible)Text"[[:space:]]*:[[:space:]]*"OK"' "$output_file"; then
+    agent_ok=true
+    rm -f "$output_file"
+    break
+  fi
+  rm -f "$output_file"
+  if [ "$attempt" -lt 2 ]; then
+    echo "agent turn attempt $attempt finished without OK response; retrying"
+    sleep 3
+  fi
+done
+if [ "$agent_ok" != true ]; then
+  echo "openclaw agent finished without OK response" >&2
+  exit 1
+fi`;
 }
 
 export function macosUpdateScript(input: NpmUpdateScriptInput): string {
@@ -70,10 +132,11 @@ ${posixVersionCheck("/opt/homebrew/bin/openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
 /opt/homebrew/bin/openclaw models set ${shellQuote(input.auth.modelId)}
+${posixModelProviderConfigCommands("/opt/homebrew/bin/openclaw", input.auth.modelId, "macos")}
 /opt/homebrew/bin/openclaw config set agents.defaults.skipBootstrap true --strict-json
 /opt/homebrew/bin/openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} /opt/homebrew/bin/openclaw agent --local --agent main --session-id parallels-npm-update-macos --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
+${posixAssertAgentOkScript("/opt/homebrew/bin/openclaw", input, "parallels-npm-update-macos")}`;
 }
 
 export function windowsUpdateScript(input: NpmUpdateScriptInput): string {
@@ -141,14 +204,30 @@ if ($LASTEXITCODE -ne 0) {
   "gateway restart exited with code $LASTEXITCODE; probing readiness before failing" | Out-Host
 }
 Wait-OpenClawGateway
-Invoke-OpenClaw models set ${psSingleQuote(input.auth.modelId)}
-Invoke-OpenClaw config set agents.defaults.skipBootstrap true --strict-json
-Invoke-OpenClaw config set tools.profile minimal
+${windowsAgentTurnConfigPatchScript(input.auth.modelId)}
 $sessionPath = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions\\parallels-npm-update-windows.jsonl'
 Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
 ${windowsAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
 Set-Item -Path ('Env:' + ${psSingleQuote(input.auth.apiKeyEnv)}) -Value ${psSingleQuote(input.auth.apiKeyValue)}
-Invoke-OpenClaw agent --local --agent main --session-id parallels-npm-update-windows --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
+$agentOk = $false
+for ($attempt = 1; $attempt -le 2; $attempt++) {
+  $sessionId = if ($attempt -eq 1) { 'parallels-npm-update-windows' } else { "parallels-npm-update-windows-retry-$attempt" }
+  $sessionsDir = Join-Path $env:USERPROFILE '.openclaw\\agents\\main\\sessions'
+  $sessionPath = Join-Path $sessionsDir "$sessionId.jsonl"
+  Remove-Item $sessionPath -Force -ErrorAction SilentlyContinue
+  $output = Invoke-OpenClaw agent --local --agent main --session-id $sessionId --model ${psSingleQuote(input.auth.modelId)} --message 'Reply with exact ASCII text OK only.' --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("windows")} --json 2>&1
+  if ($null -ne $output) { $output | ForEach-Object { $_ } }
+  if ($LASTEXITCODE -ne 0) { throw "agent failed with exit code $LASTEXITCODE" }
+  if (($output | Out-String) -match '"finalAssistant(Raw|Visible)Text":\\s*"OK"') {
+    $agentOk = $true
+    break
+  }
+  if ($attempt -lt 2) {
+    Write-Host "agent turn attempt $attempt finished without OK response; retrying"
+    Start-Sleep -Seconds 3
+  }
+}
+if (-not $agentOk) { throw 'openclaw agent finished without OK response' }`;
 }
 
 export function linuxUpdateScript(input: NpmUpdateScriptInput): string {
@@ -207,10 +286,11 @@ ${posixVersionCheck("openclaw", input.expectedNeedle)}
 start_openclaw_gateway
 wait_for_gateway
 openclaw models set ${shellQuote(input.auth.modelId)}
+${posixModelProviderConfigCommands("openclaw", input.auth.modelId, "linux")}
 openclaw config set agents.defaults.skipBootstrap true --strict-json
 openclaw config set tools.profile minimal
 ${posixAgentWorkspaceScript("Parallels npm update smoke test assistant.")}
-${input.auth.apiKeyEnv}=${shellQuote(input.auth.apiKeyValue)} openclaw agent --local --agent main --session-id parallels-npm-update-linux --message 'Reply with exact ASCII text OK only.' --thinking minimal --json`;
+${posixAssertAgentOkScript("openclaw", input, "parallels-npm-update-linux")}`;
 }
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {

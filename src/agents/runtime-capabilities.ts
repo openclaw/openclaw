@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { resolveChannelPromptCapabilities } from "./channel-tools.js";
 
-export function mergeRuntimeCapabilities(
+function mergeRuntimeCapabilities(
   base?: readonly string[] | null,
   additions: readonly string[] = [],
 ): string[] | undefined {

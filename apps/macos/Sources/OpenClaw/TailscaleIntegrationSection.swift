@@ -348,7 +348,7 @@ struct TailscaleIntegrationSection: View {
         }
 
         do {
-            try await ConfigStore.save(root)
+            try await ConfigStore.save(root, allowGatewayAuthMutation: true)
             return (true, nil)
         } catch {
             return (false, error.localizedDescription)

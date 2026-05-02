@@ -76,7 +76,7 @@ const mockWebSearchProviders = [
   {
     id: "minimax",
     pluginId: "minimax",
-    envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
+    envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_OAUTH_TOKEN"],
     credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("minimax"),
     getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("minimax"),
@@ -421,6 +421,7 @@ describe("web search provider auto-detection", () => {
     delete process.env.MINIMAX_API_KEY;
     delete process.env.MINIMAX_CODE_PLAN_KEY;
     delete process.env.MINIMAX_CODING_API_KEY;
+    delete process.env.MINIMAX_OAUTH_TOKEN;
     delete process.env.MOONSHOT_API_KEY;
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
@@ -472,6 +473,11 @@ describe("web search provider auto-detection", () => {
 
   it("auto-detects minimax when only MINIMAX_CODE_PLAN_KEY is set", () => {
     process.env.MINIMAX_CODE_PLAN_KEY = "sk-cp-test";
+    expect(resolveSearchProvider({})).toBe("minimax");
+  });
+
+  it("auto-detects minimax when only MINIMAX_OAUTH_TOKEN is set", () => {
+    process.env.MINIMAX_OAUTH_TOKEN = "oauth-test-token"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("minimax");
   });
 

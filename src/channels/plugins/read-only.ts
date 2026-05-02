@@ -8,11 +8,11 @@ import {
   listConfiguredChannelIdsForReadOnlyScope,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../plugins/channel-plugin-ids.js";
-import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../../plugins/jiti-loader-cache.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
+import {
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../../plugins/plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
@@ -34,7 +34,7 @@ const BUILT_PLUGIN_LOADER_MODULE_CANDIDATES = [
   "plugins/loader.js",
   "plugins/build-smoke-entry.js",
 ] as const;
-const jitiLoaders: PluginJitiLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = new Map();
 
 type PluginLoaderModule = {
   loadOpenClawPlugins: (params: {
@@ -93,14 +93,15 @@ function loadPluginLoaderModule(): PluginLoaderModule {
   for (const candidate of listPluginLoaderModuleCandidateUrls()) {
     const modulePath = fileURLToPath(candidate);
     try {
-      const jiti = getCachedPluginJitiLoader({
-        cache: jitiLoaders,
+      const moduleLoader = getCachedPluginModuleLoader({
+        cache: moduleLoaders,
         modulePath,
         importerUrl: import.meta.url,
         preferBuiltDist: true,
-        jitiFilename: import.meta.url,
+        loaderFilename: import.meta.url,
+        tryNative: true,
       });
-      pluginLoaderModule = jiti(modulePath) as PluginLoaderModule;
+      pluginLoaderModule = moduleLoader(modulePath) as PluginLoaderModule;
       return pluginLoaderModule;
     } catch {
       // Try built/runtime source candidates in order.

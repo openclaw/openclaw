@@ -741,6 +741,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           isRoom,
         });
         const {
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
           groupAllowConfigured,
@@ -1149,6 +1150,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           triggerSnapshot,
           threadRootId: _threadRootId,
           thread,
+          effectiveAllowFrom,
           effectiveGroupAllowFrom,
           effectiveRoomUsers,
         };
@@ -1203,6 +1205,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         triggerSnapshot,
         threadRootId: _threadRootId,
         thread,
+        effectiveAllowFrom,
         effectiveGroupAllowFrom,
         effectiveRoomUsers,
       } = resolvedIngressResult;
@@ -1832,7 +1835,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const pinnedMainDmOwner = isDirectMessage
         ? resolvePinnedMainDmOwnerFromAllowlist({
             dmScope: cfg.session?.dmScope,
-            allowFrom: liveDmAllowFrom,
+            allowFrom: effectiveAllowFrom,
             normalizeEntry: normalizeMatrixUserId,
           })
         : null;

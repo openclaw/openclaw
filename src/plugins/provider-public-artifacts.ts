@@ -1,11 +1,17 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "./provider-thinking.types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
@@ -16,6 +22,9 @@ export type BundledProviderPolicySurface = {
     ctx: ProviderApplyConfigDefaultsContext,
   ) => OpenClawConfig | null | undefined;
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
+  resolveThinkingProfile?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => ProviderThinkingProfile | null | undefined;
 };
 
 function hasProviderPolicyHook(
@@ -24,7 +33,8 @@ function hasProviderPolicyHook(
   return (
     typeof mod.normalizeConfig === "function" ||
     typeof mod.applyConfigDefaults === "function" ||
-    typeof mod.resolveConfigApiKey === "function"
+    typeof mod.resolveConfigApiKey === "function" ||
+    typeof mod.resolveThinkingProfile === "function"
   );
 }
 
@@ -36,7 +46,6 @@ function tryLoadBundledProviderPolicySurface(
       const mod = loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
         dirName: pluginId,
         artifactBasename,
-        installRuntimeDeps: false,
       });
       if (hasProviderPolicyHook(mod)) {
         return mod;
@@ -54,6 +63,34 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
+function resolveBundledProviderPolicyPluginId(providerId: string): string | null {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  if (!normalizedProviderId) {
+    return null;
+  }
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  if (!bundledPluginsDir) {
+    return null;
+  }
+
+  const registry = loadPluginManifestRegistry();
+  for (const plugin of registry.plugins.toSorted((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
+    if (plugin.origin !== "bundled") {
+      continue;
+    }
+    const ownsProvider = plugin.providers.some(
+      (provider) => normalizeProviderId(provider) === normalizedProviderId,
+    );
+    if (ownsProvider) {
+      return plugin.id;
+    }
+  }
+
+  return null;
+}
+
 export function resolveBundledProviderPolicySurface(
   providerId: string,
 ): BundledProviderPolicySurface | null {
@@ -61,5 +98,10 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  return tryLoadBundledProviderPolicySurface(normalizedProviderId);
+  return (
+    tryLoadBundledProviderPolicySurface(normalizedProviderId) ??
+    tryLoadBundledProviderPolicySurface(
+      resolveBundledProviderPolicyPluginId(normalizedProviderId) ?? normalizedProviderId,
+    )
+  );
 }
