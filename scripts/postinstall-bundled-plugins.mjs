@@ -414,7 +414,15 @@ function expandInstalledDistImportClosure(params) {
       if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
         continue;
       }
-      const source = params.readText(importerPath);
+      let source;
+      try {
+        source = params.readText(importerPath);
+      } catch (error) {
+        if (error?.code === "ENOENT") {
+          continue;
+        }
+        throw error;
+      }
       for (const specifier of collectImportSpecifiers(source)) {
         const importedPath = resolveDistImportPath(importerPath, specifier);
         if (!importedPath || !fileSet.has(importedPath) || expectedSet.has(importedPath)) {
