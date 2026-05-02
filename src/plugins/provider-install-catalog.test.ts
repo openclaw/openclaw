@@ -621,4 +621,120 @@ describe("provider install catalog", () => {
 
     expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toBeUndefined();
   });
+
+  it("keeps missing provider-index entries visible when only some provider plugins are installed", () => {
+    loadPluginRegistrySnapshot.mockReturnValue({
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [
+        {
+          pluginId: "moonshot",
+          origin: "bundled",
+          manifestPath: "/repo/extensions/moonshot/openclaw.plugin.json",
+          manifestHash: "hash",
+          rootDir: "/repo/extensions/moonshot",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
+        },
+      ],
+      diagnostics: [],
+    });
+    loadOpenClawProviderIndex.mockReturnValue({
+      version: 1,
+      providers: {
+        groq: {
+          id: "groq",
+          name: "Groq",
+          plugin: {
+            id: "groq",
+            package: "@openclaw/plugin-groq",
+            install: {
+              npmSpec: "@openclaw/plugin-groq@1.0.0",
+              defaultChoice: "npm",
+            },
+          },
+          authChoices: [
+            {
+              method: "api-key",
+              choiceId: "groq-api-key",
+              choiceLabel: "Groq API key",
+            },
+          ],
+        },
+        moonshot: {
+          id: "moonshot",
+          name: "Moonshot AI",
+          plugin: {
+            id: "moonshot",
+            package: "@openclaw/plugin-moonshot",
+            install: {
+              clawhubSpec: "clawhub:openclaw/moonshot@2026.5.2",
+              npmSpec: "@openclaw/plugin-moonshot@2026.5.2",
+              defaultChoice: "clawhub",
+            },
+          },
+          authChoices: [
+            {
+              method: "api-key",
+              choiceId: "moonshot-api-key",
+              choiceLabel: "Moonshot API key",
+            },
+          ],
+        },
+        vllm: {
+          id: "vllm",
+          name: "vLLM",
+          plugin: {
+            id: "vllm",
+            package: "@openclaw/plugin-vllm",
+            install: {
+              clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
+              npmSpec: "@openclaw/plugin-vllm@2026.5.2",
+              defaultChoice: "clawhub",
+            },
+          },
+          authChoices: [
+            {
+              method: "server",
+              choiceId: "vllm-server",
+              choiceLabel: "vLLM server",
+            },
+          ],
+        },
+      },
+    });
+
+    const entries = resolveProviderInstallCatalogEntries();
+
+    expect(entries.map((entry) => entry.choiceId)).toEqual(["groq-api-key", "vllm-server"]);
+    expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toBeUndefined();
+    expect(resolveProviderInstallCatalogEntry("vllm-server")).toMatchObject({
+      pluginId: "vllm",
+      install: {
+        clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
+        npmSpec: "@openclaw/plugin-vllm@2026.5.2",
+        defaultChoice: "clawhub",
+      },
+      installSource: {
+        defaultChoice: "clawhub",
+        clawhub: {
+          spec: "clawhub:openclaw/vllm@2026.5.2",
+        },
+        npm: {
+          spec: "@openclaw/plugin-vllm@2026.5.2",
+        },
+      },
+    });
+  });
 });
