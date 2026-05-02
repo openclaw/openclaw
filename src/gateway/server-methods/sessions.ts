@@ -646,8 +646,9 @@ async function handleSessionSend(params: {
     });
   }
 }
-let sessionsListCache: { result: SessionsListResult; ts: number; paramsKey: string } | null = null;
+const sessionsListCache = new Map<string, { result: SessionsListResult; ts: number }>();
 const SESSIONS_LIST_CACHE_TTL_MS = 300_000;
+const SESSIONS_LIST_CACHE_MAX = 20;
 
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": async ({ params, respond, context }) => {
@@ -657,12 +658,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const paramsKey = JSON.stringify(p);
     const now = Date.now();
-    if (
-      sessionsListCache &&
-      now - sessionsListCache.ts < SESSIONS_LIST_CACHE_TTL_MS &&
-      sessionsListCache.paramsKey === paramsKey
-    ) {
-      respond(true, sessionsListCache.result, undefined);
+    const cached = sessionsListCache.get(paramsKey);
+    if (cached && now - cached.ts < SESSIONS_LIST_CACHE_TTL_MS) {
+      respond(true, cached.result, undefined);
       return;
     }
     const cfg = context.getRuntimeConfig();
@@ -675,7 +673,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       modelCatalog,
       opts: p,
     });
-    sessionsListCache = { result, ts: now, paramsKey };
+    if (sessionsListCache.size >= SESSIONS_LIST_CACHE_MAX) {
+      const firstKey = sessionsListCache.keys().next().value;
+      if (firstKey !== undefined) sessionsListCache.delete(firstKey);
+    }
+    sessionsListCache.set(paramsKey, { result, ts: now });
     respond(true, result, undefined);
   },
   "sessions.subscribe": ({ client, context, respond }) => {
