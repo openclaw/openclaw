@@ -104,6 +104,7 @@ type GatewayHost = {
   chatRunId: string | null;
   pendingAbort?: { runId: string; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
+  sessionsRefreshTimer: ReturnType<typeof setTimeout> | null;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
@@ -739,7 +740,16 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
 
   if (evt.event === "sessions.changed") {
     applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
-    void loadSessions(host as unknown as SessionsState);
+    // Debounce the full sessions.list reload after push events.
+    // The incremental update from applySessionsChangedEvent keeps the UI
+    // responsive; the full reload reconciles any missed edge cases.
+    if (host.sessionsRefreshTimer != null) {
+      clearTimeout(host.sessionsRefreshTimer);
+    }
+    host.sessionsRefreshTimer = setTimeout(() => {
+      host.sessionsRefreshTimer = null;
+      void loadSessions(host as unknown as SessionsState);
+    }, 5000);
     return;
   }
 

@@ -567,6 +567,7 @@ export class OpenClawApp extends LitElement {
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
   refreshSessionsAfterChat = new Set<string>();
+  sessionsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
   chatSideResultTerminalRuns = new Set<string>();
   basePath = "";
   private popStateHandler = () =>
