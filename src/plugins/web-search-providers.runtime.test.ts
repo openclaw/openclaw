@@ -304,7 +304,7 @@ function createActiveBraveRegistryFixture(params?: {
     workspaceDir: DEFAULT_WEB_SEARCH_WORKSPACE,
     env,
     onlyPluginIds: ["brave"],
-    cache: false,
+    cache: true,
     activate: false,
   });
   const registry = createEmptyPluginRegistry();
@@ -326,6 +326,16 @@ describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
     loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForPluginRegistry>();
     loadInstalledPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForInstalledIndex>();
+    vi.doMock("./manifest-registry.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
+      return {
+        ...actual,
+        loadPluginManifestRegistry: (
+          ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
+        ) => loadPluginManifestRegistryMock(...args),
+      };
+    });
     vi.doMock("./plugin-registry.js", async () => {
       const actual =
         await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
