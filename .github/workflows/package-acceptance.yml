@@ -509,7 +509,7 @@ jobs:
     needs: resolve_package
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
-      ref: ${{ inputs.workflow_ref }}
+      ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
       include_repo_e2e: false
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
       include_openwebui: ${{ needs.resolve_package.outputs.include_openwebui == 'true' }}

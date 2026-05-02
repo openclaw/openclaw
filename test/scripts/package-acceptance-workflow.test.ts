@@ -77,7 +77,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
     );
-    expect(workflow).toContain("ref: ${{ inputs.workflow_ref }}");
+    expect(workflow).toContain(
+      "ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}",
+    );
     expect(workflow).toContain(
       "package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}",
     );
