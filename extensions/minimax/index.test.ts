@@ -246,7 +246,7 @@ describe("minimax provider hooks", () => {
     expect(webSearchProviders[0]).toMatchObject({
       id: "minimax",
       label: "MiniMax Search",
-      envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY"],
+      envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_OAUTH_TOKEN"],
     });
   });
 
