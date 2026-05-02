@@ -651,6 +651,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Critical threshold for repetitive patterns when detector is enabled (default: 20).",
   "tools.loopDetection.globalCircuitBreakerThreshold":
     "Global no-progress breaker threshold (default: 30).",
+  "tools.loopDetection.consecutiveErrorThreshold":
+    "Block a run after this many completed tool calls fail back-to-back, even when the failing tools differ (default: 10).",
   "tools.loopDetection.detectors.genericRepeat":
     "Enable generic repeated same-tool/same-params loop detection (default: true).",
   "tools.loopDetection.detectors.knownPollNoProgress":

@@ -18234,6 +18234,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 9007199254740991,
+                title: "Tool-loop Consecutive Error Threshold",
+                description:
+                  "Block a run after this many completed tool calls fail back-to-back, even when the failing tools differ (default: 10).",
               },
               detectors: {
                 type: "object",
@@ -25538,6 +25541,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Tool-loop Global Circuit Breaker Threshold",
       help: "Global no-progress breaker threshold (default: 30).",
       tags: ["reliability", "tools"],
+    },
+    "tools.loopDetection.consecutiveErrorThreshold": {
+      label: "Tool-loop Consecutive Error Threshold",
+      help: "Block a run after this many completed tool calls fail back-to-back, even when the failing tools differ (default: 10).",
+      tags: ["tools"],
     },
     "tools.loopDetection.detectors.genericRepeat": {
       label: "Tool-loop Generic Repeat Detection",

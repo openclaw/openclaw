@@ -125,6 +125,7 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
       warningThreshold: 10,
       criticalThreshold: 20,
       globalCircuitBreakerThreshold: 30,
+      consecutiveErrorThreshold: 10,
       detectors: {
         genericRepeat: true,
         knownPollNoProgress: true,
@@ -146,6 +147,9 @@ Tool-loop safety checks are **disabled by default**. Set `enabled: true` to acti
 </ParamField>
 <ParamField path="globalCircuitBreakerThreshold" type="number">
   Hard stop threshold for any no-progress run.
+</ParamField>
+<ParamField path="consecutiveErrorThreshold" type="number">
+  Block a run after this many completed tool calls fail back-to-back, even when the failing tools differ.
 </ParamField>
 <ParamField path="detectors.genericRepeat" type="boolean">
   Warn on repeated same-tool/same-args calls.
