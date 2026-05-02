@@ -145,7 +145,7 @@ describeLive("xai live", () => {
         expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
       }
     });
-  }, 45_000);
+  }, 90_000);
 
   it("runs Grok web_search live", async () => {
     await runXaiLiveCase("web-search", async () => {
