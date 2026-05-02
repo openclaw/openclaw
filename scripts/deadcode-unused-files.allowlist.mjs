@@ -10,6 +10,8 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/auto-reply/reply/get-reply.test-loader.ts",
   "src/cli/daemon-cli-compat.ts",
   "src/commands/doctor/shared/deprecation-compat.ts",
+  "src/commands/doctor/shared/legacy-config-runtime-migrate.ts",
+  "src/commands/doctor/shared/runtime-compat-api.ts",
   "src/config/doc-baseline.runtime.ts",
   "src/config/doc-baseline.ts",
   "src/gateway/gateway-cli-backend.live-helpers.ts",
