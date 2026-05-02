@@ -5,7 +5,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveConfigPathCandidate } from "../config/paths.js";
-import type { HookMappingConfig, HooksConfig } from "../config/types.hooks.js";
+import type { HookMappingConfig, HookSessionMode, HooksConfig } from "../config/types.hooks.js";
 import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import type { HookMessageChannel } from "./hooks.types.js";
 
@@ -18,6 +18,7 @@ export type HookMappingResolved = {
   name?: string;
   agentId?: string;
   sessionKey?: string;
+  sessionMode?: HookSessionMode;
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
@@ -56,6 +57,7 @@ type HookAction =
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
       sessionKeySource?: "static" | "templated";
+      sessionMode?: HookSessionMode;
       deliver?: boolean;
       allowUnsafeExternalContent?: boolean;
       channel?: HookMessageChannel;
@@ -99,6 +101,7 @@ type HookTransformResult = Partial<{
   name: string;
   sessionKey: string;
   sessionKeySource: HookSessionKeyTemplateSource;
+  sessionMode: HookSessionMode;
   deliver: boolean;
   allowUnsafeExternalContent: boolean;
   channel: HookMessageChannel;
@@ -217,6 +220,7 @@ function normalizeHookMapping(
     name: mapping.name,
     agentId: normalizeOptionalString(mapping.agentId),
     sessionKey: mapping.sessionKey,
+    sessionMode: mapping.sessionMode,
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
     deliver: mapping.deliver,
@@ -271,6 +275,7 @@ function buildActionFromMapping(
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
       sessionKeySource: getSessionKeyTemplateSource(mapping.sessionKey),
+      sessionMode: mapping.sessionMode,
       deliver: mapping.deliver,
       allowUnsafeExternalContent: mapping.allowUnsafeExternalContent,
       channel: mapping.channel,
@@ -310,6 +315,7 @@ function mergeAction(
     agentId: override.agentId ?? baseAgent?.agentId,
     sessionKey: override.sessionKey ?? baseAgent?.sessionKey,
     sessionKeySource: resolveMergedSessionKeySource(baseAgent, override),
+    sessionMode: resolveMergedSessionMode(baseAgent, override),
     deliver: typeof override.deliver === "boolean" ? override.deliver : baseAgent?.deliver,
     allowUnsafeExternalContent:
       typeof override.allowUnsafeExternalContent === "boolean"
@@ -360,6 +366,17 @@ function resolveMergedSessionKeySource(
     return override.sessionKeySource === "static" ? "static" : "templated";
   }
   return baseAgent?.sessionKeySource;
+}
+
+function isHookSessionMode(value: unknown): value is HookSessionMode {
+  return value === "isolated" || value === "persistent";
+}
+
+function resolveMergedSessionMode(
+  baseAgent: Extract<HookAction, { kind: "agent" }> | undefined,
+  override: Exclude<HookTransformResult, null>,
+): HookSessionMode | undefined {
+  return isHookSessionMode(override.sessionMode) ? override.sessionMode : baseAgent?.sessionMode;
 }
 
 export function hasHookTemplateExpressions(template: string): boolean {
