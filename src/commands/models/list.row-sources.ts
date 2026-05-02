@@ -118,14 +118,15 @@ export async function appendAllModelRowSources(
   if (params.context.filter.provider && params.entries && params.entries.length > 0) {
     const missingEntries = params.entries.filter((entry) => !seenKeys.has(entry.key));
     if (missingEntries.length > 0) {
+      const appendedRowsStart = params.rows.length;
       await appendConfiguredRows({
         rows: params.rows,
         entries: missingEntries,
         modelRegistry: params.modelRegistry,
         context: params.context,
       });
-      for (const entry of missingEntries) {
-        seenKeys.add(entry.key);
+      for (const row of params.rows.slice(appendedRowsStart)) {
+        seenKeys.add(row.key);
       }
     }
   }
