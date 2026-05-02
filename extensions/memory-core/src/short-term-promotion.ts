@@ -190,6 +190,10 @@ type RankShortTermPromotionOptions = {
   recencyHalfLifeDays?: number;
   weights?: Partial<PromotionWeights>;
   nowMs?: number;
+  /** Agent-scoped isolation: current agent identity for shared workspace filtering (Bug #65374). */
+  currentAgentId?: string;
+  /** Whether the workspace is shared across agents (Bug #65374). */
+  isShared?: boolean;
 };
 
 type ApplyShortTermPromotionsOptions = {
@@ -1235,9 +1239,23 @@ export async function rankShortTermPromotionCandidates(
     readStore(workspaceDir, nowIso),
     readPhaseSignalStore(workspaceDir, nowIso),
   ]);
+
+  // Bug #65374: Agent-scoped isolation on the promotion ranking path.
+  // In shared workspaces, only rank entries from the current agent's corpus path.
+  // Fail closed: shared workspace without identity returns no candidates.
+  let storeEntries = Object.values(store.entries);
+  if (options.isShared) {
+    if (!options.currentAgentId?.trim()) {
+      // Shared workspace with no identity: fail closed, no candidates
+      return [];
+    }
+    const agentCorpusPrefix = `memory/.dreams/session-corpus/${options.currentAgentId}/`;
+    storeEntries = storeEntries.filter((entry) => entry.path.startsWith(agentCorpusPrefix));
+  }
+
   const candidates: PromotionCandidate[] = [];
 
-  for (const entry of Object.values(store.entries)) {
+  for (const entry of storeEntries) {
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }

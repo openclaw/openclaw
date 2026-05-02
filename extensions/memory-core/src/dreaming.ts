@@ -538,6 +538,27 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     seenWorkspaces.add(workspaceDir);
     return true;
   });
+  // Bug #65374: Build per-workspace isolation metadata from workspace entries.
+  const workspaceMeta = new Map<string, { isShared: boolean; agentIds: string[] }>();
+  for (const entry of workspaceEntries) {
+    const existing = workspaceMeta.get(entry.workspaceDir);
+    if (existing) {
+      // Merge agent IDs for the same workspace
+      for (const id of entry.agentIds) {
+        if (!existing.agentIds.includes(id)) {
+          existing.agentIds.push(id);
+        }
+      }
+      if (entry.shared) {
+        existing.isShared = true;
+      }
+    } else {
+      workspaceMeta.set(entry.workspaceDir, {
+        isShared: entry.shared,
+        agentIds: [...entry.agentIds],
+      });
+    }
+  }
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
     workspaces.push(fallbackWorkspaceDir);
   }
@@ -594,6 +615,9 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         recencyHalfLifeDays,
         maxAgeDays: params.config.maxAgeDays,
         nowMs: sweepNowMs,
+        // Bug #65374: Use per-workspace isolation metadata instead of global .some()
+        currentAgentId: params.currentAgentId ?? workspaceMeta.get(workspaceDir)?.agentIds[0],
+        isShared: workspaceMeta.get(workspaceDir)?.isShared ?? false,
       });
       totalCandidates += candidates.length;
       reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
