@@ -88,6 +88,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Auth/CLI: add `openclaw models auth clean` to prune stale auth profile entries no longer referenced by `openclaw.json` (auth.profiles, auth.order, or tools.media model entries), with `--dry-run`, `--json`, and `--agent` flags, atomic file-locked writes, and sanitized profile-id display. (#66911) Thanks @amittell.
 - Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
 - Plugins/ClawHub: make diagnostics, onboarding, doctor repair, and channel setup carry ClawPack metadata through install records while keeping explicit `clawhub:` installs on ClawHub and bare package installs on npm for the launch cutover. Thanks @vincentkoc.
 - Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
