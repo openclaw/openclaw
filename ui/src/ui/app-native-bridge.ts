@@ -61,7 +61,7 @@ export function initNativeBridge(host: NativeBridgeHost): () => void {
     handleNativeMessage(host, event.data);
   };
 
-  // Register listener FIRST, then send ready — order matters.
+  bridge.postMessage({ type: "ready" });
   bridge.addEventListener("message", handler);
   sendToNative({ type: "ready" });
 
