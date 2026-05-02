@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Replies: strip legacy `[TOOL_CALL]{tool => ..., args => ...}[/TOOL_CALL]` pseudo-call text from user-facing replies and flag it in tool-call diagnostics instead of showing raw tool syntax in channels. Fixes #63610. Thanks @canh0chua.
 - WhatsApp: close long-lived web sockets through Baileys `end(error)` before falling back to raw websocket close, so listener teardown runs Baileys cleanup instead of leaving zombie sockets. Fixes #52442. Thanks @essendigitalgroup-cyber.
 - Gateway/sessions: move hot transcript reads and mirror appends onto async bounded IO with serialized parent-linked writes, keeping large session histories from stalling Gateway requests and channel replies. Fixes #75656. Thanks @DerFlash.
 - macOS/Voice Wake: accept trigger-only phrases in the built-in Voice Wake test, matching the settings UI and runtime trigger-only path instead of requiring extra command text after the wake word. Fixes #64986. Thanks @zoiks65.
