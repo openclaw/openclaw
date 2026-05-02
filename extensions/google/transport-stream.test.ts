@@ -768,7 +768,7 @@ describe("google transport stream", () => {
     });
   });
 
-  it("emits a thinking_signature event for thoughtSignature-only parts to keep the stream active", async () => {
+  it("emits thinking activity for thoughtSignature-only parts to keep the stream active", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
         {
@@ -810,12 +810,28 @@ describe("google transport stream", () => {
         { reasoning: "high" },
       ),
     );
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
     const result = await stream.result();
 
     expect(result.content).toEqual([
       { type: "thinking", thinking: "draft", thinkingSignature: "sig_2" },
       { type: "text", text: "answer" },
     ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "start",
+      "thinking_start",
+      "thinking_delta",
+      "thinking_delta",
+      "thinking_end",
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect(events[3]).toMatchObject({ type: "thinking_delta", delta: "" });
   });
 
   it("starts a thinking block for thoughtSignature-only parts that arrive before any text", async () => {

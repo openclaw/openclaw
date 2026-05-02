@@ -797,8 +797,11 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
           const candidate = chunk.candidates?.[0];
           if (candidate?.content?.parts) {
             for (const part of candidate.content.parts) {
-              if (typeof part.text === "string") {
-                const isThinking = part.thought === true;
+              const hasThoughtSignature =
+                typeof part.thoughtSignature === "string" && part.thoughtSignature.length > 0;
+              const hasText = typeof part.text === "string";
+              if (hasText || (hasThoughtSignature && !part.functionCall)) {
+                const isThinking = part.thought === true || !hasText;
                 const currentBlock = output.content[currentBlockIndex];
                 if (
                   currentBlockIndex < 0 ||
@@ -829,7 +832,8 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
                 }
                 const activeBlock = output.content[currentBlockIndex];
                 if (activeBlock?.type === "thinking") {
-                  activeBlock.thinking += part.text;
+                  const delta = hasText ? part.text : "";
+                  activeBlock.thinking += delta;
                   activeBlock.thinkingSignature = retainThoughtSignature(
                     activeBlock.thinkingSignature,
                     part.thoughtSignature,
@@ -837,7 +841,7 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
                   stream.push({
                     type: "thinking_delta",
                     contentIndex: currentBlockIndex,
-                    delta: part.text,
+                    delta,
                     partial: output as never,
                   });
                 } else if (activeBlock?.type === "text") {
@@ -891,45 +895,6 @@ function createGoogleTransportStreamFn(kind: GoogleTransportApi): StreamFn {
                   type: "toolcall_end",
                   contentIndex: blockIndex,
                   toolCall,
-                  partial: output as never,
-                });
-              }
-              // Gemini 3+ models can emit thoughtSignature-only parts during the
-              // thinking phase before user-visible text arrives. Emit a stream event
-              // so that idle-timeout wrappers detect model activity and don't kill
-              // the stream prematurely.
-              if (
-                typeof part.thoughtSignature === "string" &&
-                part.thoughtSignature.length > 0 &&
-                typeof part.text !== "string" &&
-                !part.functionCall
-              ) {
-                if (
-                  currentBlockIndex < 0 ||
-                  output.content[currentBlockIndex]?.type !== "thinking"
-                ) {
-                  if (currentBlockIndex >= 0) {
-                    pushTextBlockEnd(stream, output, currentBlockIndex);
-                  }
-                  output.content.push({ type: "thinking", thinking: "" });
-                  currentBlockIndex = output.content.length - 1;
-                  stream.push({
-                    type: "thinking_start",
-                    contentIndex: currentBlockIndex,
-                    partial: output as never,
-                  });
-                }
-                const activeBlock = output.content[currentBlockIndex];
-                if (activeBlock?.type === "thinking") {
-                  activeBlock.thinkingSignature = retainThoughtSignature(
-                    activeBlock.thinkingSignature,
-                    part.thoughtSignature,
-                  );
-                }
-                stream.push({
-                  type: "thinking_signature",
-                  contentIndex: currentBlockIndex,
-                  signature: part.thoughtSignature,
                   partial: output as never,
                 });
               }
