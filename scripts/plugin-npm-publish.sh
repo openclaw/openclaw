@@ -83,6 +83,10 @@ case "${mirror_auth_source}" in
 esac
 publish_auth_token="${mirror_auth_token}"
 publish_auth_source="${mirror_auth_source}"
+if [[ "${OPENCLAW_NPM_PUBLISH_AUTH_MODE:-}" == "trusted-publisher" ]]; then
+  publish_auth_token=""
+  publish_auth_source="trusted-publisher"
+fi
 if [[ -n "${publish_auth_token}" ]]; then
   log "Publish auth: ${publish_auth_source} with provenance"
 else
