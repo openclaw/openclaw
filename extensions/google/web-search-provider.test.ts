@@ -126,7 +126,8 @@ describe("google web search provider", () => {
 
     await tool?.execute({ query: "latest ai news", freshness: "week" });
 
-    const body = JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body)) as {
+    const requestInit = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(requestInit?.body as string) as {
       tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
     };
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
@@ -161,7 +162,8 @@ describe("google web search provider", () => {
       date_before: "2026-04-30",
     });
 
-    const body = JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body)) as {
+    const requestInit = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    const body = JSON.parse(requestInit?.body as string) as {
       tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
     };
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({

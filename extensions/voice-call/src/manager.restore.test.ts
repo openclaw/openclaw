@@ -127,8 +127,8 @@ describe("CallManager verification on restore", () => {
     vi.setSystemTime(now);
     const { manager, provider } = await initializeManager({
       callOverrides: {
-        startedAt: now.getTime() - 290_000,
-        answeredAt: now.getTime() - 290_000,
+        startedAt: Date.now() - 290_000,
+        answeredAt: Date.now() - 290_000,
         state: "answered",
       },
       configOverrides: { maxDurationSeconds: 300 },
