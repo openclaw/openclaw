@@ -8,11 +8,17 @@ These fixtures capture the default OpenAI/Codex happy path for prompt review:
 - `messages.visibleReplies: "message_tool"`, which is the Codex-harness default for visible source replies.
 - Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available.
 
-The Markdown files show the OpenClaw-owned developer instructions, selected thread start/resume params, turn input, and the critical message/heartbeat tool specs. The JSON files contain the complete Codex dynamic tool catalog for each scenario.
+The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, user turn input, and references to the complete dynamic tool catalog.
 
 The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.
 
-OpenClaw does not render the hidden base Codex system prompt or Codex collaboration-mode instructions here; those are owned by the Codex runtime. These snapshots are intended to make the OpenClaw-injected layers auditable and to catch drift when prompt construction changes.
+The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:
+
+```sh
+pnpm prompt:snapshots:sync-codex-model
+```
+
+These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned workspace context such as `AGENTS.md`, environment context, memories, app/plugin instructions, and future collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.
 
 Regenerate with:
 
@@ -34,3 +40,8 @@ Snapshots:
 - codex-dynamic-tools.telegram-direct.json
 - codex-dynamic-tools.discord-group.json
 - codex-dynamic-tools.heartbeat-turn.json
+
+Codex model prompt fixtures:
+
+- ../codex-model-catalog/gpt-5.5.pragmatic.instructions.md
+- ../codex-model-catalog/gpt-5.5.pragmatic.source.json

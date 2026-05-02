@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { HEARTBEAT_PROMPT } from "../../../src/auto-reply/heartbeat.js";
@@ -23,11 +24,26 @@ import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 export const HAPPY_PATH_PROMPT_SNAPSHOT_DIR = "test/fixtures/agents/prompt-snapshots/happy-path";
+export const CODEX_MODEL_PROMPT_FIXTURE_DIR =
+  "test/fixtures/agents/prompt-snapshots/codex-model-catalog";
 
 const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
 const SESSION_FILE = "/tmp/openclaw-happy-path/session.jsonl";
 const MODEL_ID = "gpt-5.5";
+const CODEX_PROMPT_PERSONALITY = "pragmatic";
+const CODEX_MODEL_PROMPT_FIXTURE_PATH = path.join(
+  CODEX_MODEL_PROMPT_FIXTURE_DIR,
+  `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.instructions.md`,
+);
+const CODEX_MODEL_PROMPT_SOURCE_PATH = path.join(
+  CODEX_MODEL_PROMPT_FIXTURE_DIR,
+  `${MODEL_ID}.${CODEX_PROMPT_PERSONALITY}.source.json`,
+);
+const CODEX_YOLO_PERMISSION_INSTRUCTIONS = [
+  "Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`: No filesystem sandboxing - all commands are permitted. Network access is enabled.",
+  "Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.",
+].join("\n");
 const HAPPY_PATH_TOOL_NAMES = new Set([
   "canvas",
   "nodes",
@@ -156,7 +172,28 @@ function stableJson(value: unknown): string {
 }
 
 function markdownFence(info: string, value: string): string {
-  return [`\`\`\`${info}`, value.trimEnd(), "```"].join("\n");
+  const body = value.trimEnd();
+  const longestBacktickRun = Math.max(
+    3,
+    ...(body.match(/`+/g) ?? []).map((match) => match.length + 1),
+  );
+  const fence = "`".repeat(longestBacktickRun);
+  return [`${fence}${info}`, body, fence].join("\n");
+}
+
+function readFixture(pathFromRepoRoot: string): string {
+  return fs.readFileSync(path.resolve(pathFromRepoRoot), "utf8");
+}
+
+function approximateTokens(value: string): number {
+  return Math.ceil(value.length / 4);
+}
+
+function textStats(value: string): { chars: number; roughTokens: number } {
+  return {
+    chars: value.length,
+    roughTokens: approximateTokens(value),
+  };
 }
 
 function createPrompt(ctx: TemplateContext, body: string): string {
@@ -424,7 +461,7 @@ function createScenarios(): PromptScenario[] {
 function selectedThreadStartParams(value: Record<string, unknown>): Record<string, unknown> {
   return {
     ...value,
-    developerInstructions: "<see Developer Instructions>",
+    developerInstructions: "<see Reconstructed Model-Bound Prompt Layers>",
     dynamicTools: Array.isArray(value.dynamicTools)
       ? value.dynamicTools.map((tool) =>
           tool && typeof tool === "object" && "name" in tool
@@ -438,7 +475,7 @@ function selectedThreadStartParams(value: Record<string, unknown>): Record<strin
 function selectedThreadResumeParams(value: Record<string, unknown>): Record<string, unknown> {
   return {
     ...value,
-    developerInstructions: "<see Developer Instructions>",
+    developerInstructions: "<see Reconstructed Model-Bound Prompt Layers>",
   };
 }
 
@@ -452,13 +489,99 @@ function selectedTurnStartParams(value: Record<string, unknown>): Record<string,
                 ...item,
                 text:
                   typeof (item as { text?: unknown }).text === "string"
-                    ? "<see User Input Text>"
+                    ? "<see Reconstructed Model-Bound Prompt Layers>"
                     : (item as { text?: unknown }).text,
               }
             : item,
         )
       : value.input,
   };
+}
+
+function renderModelBoundPromptLayers(params: {
+  scenario: PromptScenario;
+  codexSnapshot: ReturnType<CodexPromptSnapshotApi["buildCodexHarnessPromptSnapshot"]>;
+  dynamicToolsJson: string;
+}): string[] {
+  const codexModelInstructions = readFixture(CODEX_MODEL_PROMPT_FIXTURE_PATH);
+  const codexModelSource = JSON.parse(readFixture(CODEX_MODEL_PROMPT_SOURCE_PATH)) as unknown;
+  const openClawDeveloperInstructions = params.codexSnapshot.developerInstructions;
+  const textOnlyTotal = [
+    codexModelInstructions,
+    CODEX_YOLO_PERMISSION_INSTRUCTIONS,
+    openClawDeveloperInstructions,
+    params.scenario.prompt,
+  ].join("\n\n");
+  const totalWithDynamicToolJson = [textOnlyTotal, params.dynamicToolsJson].join("\n\n");
+
+  return [
+    "## Reconstructed Model-Bound Prompt Layers",
+    "",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, OpenClaw developer instructions, turn input, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and future collaboration-mode instructions inside the Codex runtime.",
+    "",
+    "### Layer Metadata",
+    "",
+    markdownFence(
+      "json",
+      stableJson({
+        codexModelInstructions: {
+          fixture: CODEX_MODEL_PROMPT_FIXTURE_PATH,
+          source: codexModelSource,
+        },
+        codexPermissions: {
+          sandbox: "danger-full-access",
+          approvalPolicy: "never",
+          networkAccess: "enabled",
+        },
+        openClawRuntime: {
+          developerInstructionsFrom:
+            "extensions/codex app-server thread/start developerInstructions",
+          userInputFrom: "extensions/codex app-server turn/start input",
+          dynamicToolsFrom: params.scenario.toolSnapshotFile,
+        },
+        limitations: [
+          "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
+          "Codex-owned workspace and app context is listed as a runtime-owned gap until Codex exposes a rendered-prompt inspection API.",
+        ],
+      }),
+    ),
+    "",
+    "### Rough Text Token Estimates",
+    "",
+    markdownFence(
+      "json",
+      stableJson({
+        codexModelInstructions: textStats(codexModelInstructions),
+        codexPermissionDeveloperInstructions: textStats(CODEX_YOLO_PERMISSION_INSTRUCTIONS),
+        openClawDeveloperInstructions: textStats(openClawDeveloperInstructions),
+        userInputText: textStats(params.scenario.prompt),
+        dynamicToolsJson: textStats(params.dynamicToolsJson),
+        totalTextOnly: textStats(textOnlyTotal),
+        totalWithDynamicToolsJson: textStats(totalWithDynamicToolJson),
+      }),
+    ),
+    "",
+    `### System: Codex Model Instructions (${MODEL_ID}, ${CODEX_PROMPT_PERSONALITY})`,
+    "",
+    markdownFence("text", codexModelInstructions),
+    "",
+    "### Developer: Codex Permission Instructions",
+    "",
+    markdownFence("text", CODEX_YOLO_PERMISSION_INSTRUCTIONS),
+    "",
+    "### Developer: OpenClaw Runtime Instructions",
+    "",
+    markdownFence("text", openClawDeveloperInstructions),
+    "",
+    "### User: Turn Input Text",
+    "",
+    markdownFence("text", params.scenario.prompt),
+    "",
+    "### Tools: Dynamic Tool Catalog",
+    "",
+    `Full JSON: \`${params.scenario.toolSnapshotFile}\``,
+    "",
+  ];
 }
 
 function renderScenarioSnapshot(scenario: PromptScenario): string {
@@ -480,6 +603,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
   const criticalToolSpecs = scenario.dynamicTools.filter((tool) =>
     ["message", "heartbeat_respond"].includes(tool.name),
   );
+  const dynamicToolsJson = stableJson(scenario.dynamicTools);
   return [
     `# ${scenario.title}`,
     "",
@@ -488,7 +612,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     "## Scope",
     "",
     ...scenario.notes.map((note) => `- ${note}`),
-    "- This captures OpenClaw-owned Codex app-server inputs. The hidden base Codex system prompt and any Codex app collaboration-mode turn instructions are owned by the Codex runtime and are not rendered by OpenClaw.",
+    "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
     "",
     "## Scenario Metadata",
     "",
@@ -504,6 +628,7 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
         channel: scenario.ctx.Provider,
         chatType: scenario.ctx.ChatType,
         toolSnapshot: scenario.toolSnapshotFile,
+        codexModelInstructionsFixture: CODEX_MODEL_PROMPT_FIXTURE_PATH,
       }),
     ),
     "",
@@ -519,18 +644,11 @@ function renderScenarioSnapshot(scenario: PromptScenario): string {
     "",
     markdownFence("json", stableJson(selectedThreadResumeParams(codexSnapshot.threadResumeParams))),
     "",
-    "## Developer Instructions",
-    "",
-    markdownFence("text", codexSnapshot.developerInstructions),
-    "",
     "## Turn Start Params",
     "",
     markdownFence("json", stableJson(selectedTurnStartParams(codexSnapshot.turnStartParams))),
     "",
-    "## User Input Text",
-    "",
-    markdownFence("text", scenario.prompt),
-    "",
+    ...renderModelBoundPromptLayers({ scenario, codexSnapshot, dynamicToolsJson }),
     "## Dynamic Tool Names",
     "",
     markdownFence("json", stableJson(scenario.dynamicTools.map((tool) => tool.name))),
@@ -554,11 +672,15 @@ function renderReadme(scenarios: PromptScenario[]): string {
     '- `messages.visibleReplies: "message_tool"`, which is the Codex-harness default for visible source replies.',
     "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available.",
     "",
-    "The Markdown files show the OpenClaw-owned developer instructions, selected thread start/resume params, turn input, and the critical message/heartbeat tool specs. The JSON files contain the complete Codex dynamic tool catalog for each scenario.",
+    "The Markdown files show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, user turn input, and references to the complete dynamic tool catalog.",
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",
-    "OpenClaw does not render the hidden base Codex system prompt or Codex collaboration-mode instructions here; those are owned by the Codex runtime. These snapshots are intended to make the OpenClaw-injected layers auditable and to catch drift when prompt construction changes.",
+    "The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:",
+    "",
+    markdownFence("sh", "pnpm prompt:snapshots:sync-codex-model"),
+    "",
+    "These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned workspace context such as `AGENTS.md`, environment context, memories, app/plugin instructions, and future collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.",
     "",
     "Regenerate with:",
     "",
@@ -572,6 +694,11 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     ...scenarios.map((scenario) => `- ${scenario.id}.md`),
     ...scenarios.map((scenario) => `- ${scenario.toolSnapshotFile}`),
+    "",
+    "Codex model prompt fixtures:",
+    "",
+    `- ${path.relative(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, CODEX_MODEL_PROMPT_FIXTURE_PATH)}`,
+    `- ${path.relative(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, CODEX_MODEL_PROMPT_SOURCE_PATH)}`,
     "",
   ].join("\n");
 }
