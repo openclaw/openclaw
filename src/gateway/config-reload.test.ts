@@ -372,6 +372,42 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartGateway).toBe(true);
   });
 
+  it("treats top-level auth.profiles changes as no-op (OAuth token refresh)", () => {
+    // Regression: an OAuth provider refreshing its token writes to
+    // `auth.profiles.<provider>:<email>` and previously matched no rule,
+    // falling through to the default "restart gateway" branch and dropping
+    // in-flight WebSocket work.  `auth.profiles.*` credentials are read per
+    // request by the auth token resolution path, so a restart is not needed.
+    const plan = buildGatewayReloadPlan([
+      "auth.profiles.openai-codex:user@example.com",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("auth.profiles.openai-codex:user@example.com");
+  });
+
+  it("treats auth.* changes as no-op even for nested paths", () => {
+    const plan = buildGatewayReloadPlan([
+      "auth.profiles.anthropic:user@example.com.lastRefreshedAt",
+      "auth.someFutureField",
+    ]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toEqual(
+      expect.arrayContaining([
+        "auth.profiles.anthropic:user@example.com.lastRefreshedAt",
+        "auth.someFutureField",
+      ]),
+    );
+  });
+
+  it("still restarts for gateway.auth.* changes (distinct from top-level auth.*)", () => {
+    // Defence in depth: the new `auth` no-op rule must NOT shadow the
+    // pre-existing `gateway.auth.token` / `gateway.auth.mode` restart behaviour.
+    const plan = buildGatewayReloadPlan(["gateway.auth.token", "auth.profiles.foo"]);
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.restartReasons).toContain("gateway.auth.token");
+    expect(plan.noopPaths).toContain("auth.profiles.foo");
+  });
+
   it.each([
     {
       path: "browser.enabled",
