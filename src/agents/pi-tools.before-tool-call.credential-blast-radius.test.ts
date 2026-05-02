@@ -107,6 +107,10 @@ describe("before_tool_call credential blast-radius guard", () => {
     'rm -rf "$HOME"/*',
     "rm -rf ${HOME:?}/*",
     "rm -rf / --no-preserve-root",
+    "rm -r -f /",
+    "rm -v -r /",
+    "rm -r -v /*",
+    "rm -f -R /",
   ])("blocks catastrophic shell deletion: %s", async (command) => {
     const result = await runBeforeToolCallHook({
       toolName: "exec",
@@ -135,22 +139,25 @@ describe("before_tool_call credential blast-radius guard", () => {
     expect(mockCallGateway).not.toHaveBeenCalled();
   });
 
-  it("fails closed as unavailable when approval request returns no route", async () => {
-    mockCallGateway.mockResolvedValueOnce({ id: "approval-1", decision: null });
+  it.each([null, undefined])(
+    "fails closed as unavailable when immediate approval decision is %s",
+    async (decision) => {
+      mockCallGateway.mockResolvedValueOnce({ id: "approval-1", decision });
 
-    const result = await runBeforeToolCallHook({
-      toolName: "exec",
-      params: { command: "psql -c 'DROP TABLE temp_review'" },
-      toolCallId: "tool-1",
-      ctx: { agentId: "rex", sessionKey: "session-1" },
-    });
+      const result = await runBeforeToolCallHook({
+        toolName: "exec",
+        params: { command: "psql -c 'DROP TABLE temp_review'" },
+        toolCallId: "tool-1",
+        ctx: { agentId: "rex", sessionKey: "session-1" },
+      });
 
-    expect(result).toEqual({
-      blocked: true,
-      reason: "Credential blast-radius approval unavailable",
-    });
-    expect(mockCallGateway).toHaveBeenCalledTimes(1);
-  });
+      expect(result).toEqual({
+        blocked: true,
+        reason: "Credential blast-radius approval unavailable",
+      });
+      expect(mockCallGateway).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("leaves safe read-only calls unaffected", async () => {
     const result = await runBeforeToolCallHook({

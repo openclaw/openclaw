@@ -327,8 +327,9 @@ export const DESTRUCTIVE_ACTION_PATTERNS: readonly DestructiveActionPattern[] = 
   {
     id: "shell/rm-rf-root",
     pattern:
-      /\brm\s+(?:(?:-[\w-]*r[\w-]*|-R|--recursive)\s+)+(?:--\s+)?(?:(?:\/(?:\*)?|["']\/["'])(?=\s*(?:$|[;&|]|--no-preserve-root\b))|(?:(?:~|\$HOME|\$\{HOME(?::[^}]*)?\}|["'](?:\$HOME|\$\{HOME(?::[^}]*)?\})["'])(?:\/(?:\*)?)?)(?=\s*(?:$|[;&|])))/i,
-    description: "rm -r(f?) targeting root or home root/glob — recursive filesystem deletion",
+      /\brm\s+(?=(?:(?:-[\w-]+|--[\w-]+)\s+)*?(?:-[\w-]*r[\w-]*|-R|--recursive)\b)(?:(?:-[\w-]+|--[\w-]+)\s+)+(?:--\s+)?(?:(?:\/(?:\*)?|["']\/["'])(?=\s*(?:$|[;&|]|--no-preserve-root\b))|(?:(?:~|\$HOME|\$\{HOME(?::[^}]*)?\}|["'](?:\$HOME|\$\{HOME(?::[^}]*)?\})["'])(?:\/(?:\*)?)?)(?=\s*(?:$|[;&|])))/i,
+    description:
+      "rm -r(f?) targeting root or home root/glob — recursive filesystem deletion across split flag groups",
     severity: "block",
   },
 ];

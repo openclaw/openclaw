@@ -383,6 +383,10 @@ describe("classifyDestructiveAction — shell", () => {
     "rm -rf ~/*",
     "rm -rf / --no-preserve-root",
     "rm --recursive -- /",
+    "rm -r -f /",
+    "rm -v -r /",
+    "rm -r -v /*",
+    "rm -f -R /",
   ])("detects catastrophic rm -r target: %s", (command) => {
     const result = classifyDestructiveAction("bash", { command });
     expect(result.isDestructive).toBe(true);
@@ -396,6 +400,8 @@ describe("classifyDestructiveAction — shell", () => {
     "rm -rf /home/openclaw/some-specific-dir",
     "rm -rf ~/important-dir",
     "rm -rf $HOME/important-dir",
+    "rm -f /",
+    "rm -v -f /",
   ])("does not block specific absolute/home cleanup target: %s", (command) => {
     const result = classifyDestructiveAction("bash", { command });
     expect(result.isDestructive).toBe(false);

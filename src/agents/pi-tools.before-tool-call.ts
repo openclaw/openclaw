@@ -449,7 +449,7 @@ async function applyCredentialBlastRadiusGuard(args: {
 
     const hasImmediateDecision = Object.prototype.hasOwnProperty.call(requestResult, "decision");
     let decision = requestResult.decision;
-    if (hasImmediateDecision && decision === null) {
+    if (hasImmediateDecision && (decision === null || decision === undefined)) {
       return { blocked: true, reason: "Credential blast-radius approval unavailable" };
     }
     if (!hasImmediateDecision) {
