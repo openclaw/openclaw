@@ -298,10 +298,13 @@ function getGoogleThinkingBudget(
     return customBudgets[normalizedEffort];
   }
   if (modelId.includes("2.5-pro")) {
-    return { minimal: 512, low: 2048, medium: 8192, high: 32768 }[normalizedEffort];
+    return { minimal: 128, low: 2048, medium: 8192, high: 32768 }[normalizedEffort];
+  }
+  if (modelId.includes("2.5-flash-lite")) {
+    return { minimal: 512, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
   }
   if (modelId.includes("2.5-flash")) {
-    return { minimal: 512, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
+    return { minimal: 128, low: 2048, medium: 8192, high: 24576 }[normalizedEffort];
   }
   return undefined;
 }

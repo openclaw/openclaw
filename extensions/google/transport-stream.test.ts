@@ -748,9 +748,9 @@ describe("google transport stream", () => {
   it.each([
     ["gemini-2.5-flash-lite", "minimal", 512],
     ["gemini-2.5-flash-lite", "low", 2048],
-    ["gemini-2.5-flash", "minimal", 512],
+    ["gemini-2.5-flash", "minimal", 128],
     ["gemini-2.5-flash", "low", 2048],
-    ["gemini-2.5-pro", "minimal", 512],
+    ["gemini-2.5-pro", "minimal", 128],
     ["gemini-2.5-pro", "low", 2048],
     ["gemini-2.5-flash", "medium", 8192],
     ["gemini-2.5-pro", "medium", 8192],
