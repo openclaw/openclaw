@@ -282,13 +282,19 @@ function resolveExactConfiguredProviderRef(params: {
     return null;
   }
   const [configuredProvider, providerConfig] = exactConfigured;
+  const rawProviderKey = normalizeLowercaseStringOrEmpty(configuredProvider);
   const normalizedConfiguredProvider = normalizeProviderId(configuredProvider);
+  // A custom provider key whose raw lowercased form differs from its normalized
+  // form (e.g. "kimi-code" → "kimi") would be silently routed to the built-in
+  // provider by parseModelRef. Preserve the raw key so the user's inline config
+  // entry is matched correctly at dispatch time.
+  const hasKeyAliasCollision = rawProviderKey !== normalizedConfiguredProvider;
   const apiOwner =
     typeof providerConfig?.api === "string" ? normalizeProviderId(providerConfig.api) : "";
-  if (!apiOwner || apiOwner === normalizedConfiguredProvider) {
+  if (!hasKeyAliasCollision && (!apiOwner || apiOwner === normalizedConfiguredProvider)) {
     return null;
   }
-  const provider = normalizeLowercaseStringOrEmpty(configuredProvider);
+  const provider = rawProviderKey;
   return {
     provider,
     model: normalizeStaticProviderModelId(provider, modelRaw.trim(), {

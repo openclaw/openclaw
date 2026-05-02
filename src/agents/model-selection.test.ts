@@ -963,6 +963,76 @@ describe("model-selection", () => {
         ref: { provider: "openai", model: "xiaomi/mimo-v2-pro-mit" },
       });
     });
+
+    it("preserves custom provider key when it collides with a built-in alias (#76155)", () => {
+      // "kimi-code" normalizes to "kimi" via normalizeProviderId, but the user
+      // has explicitly configured a custom provider named "kimi-code" in
+      // models.providers. resolveAllowedModelRef must preserve the raw key so
+      // dispatch can match the inline entry — not route to the built-in kimi extension.
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "kimi-code/kimi-for-coding": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            "kimi-code": {
+              models: [{ id: "kimi-for-coding" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "kimi-code/kimi-for-coding",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "kimi-code/kimi-for-coding",
+        ref: { provider: "kimi-code", model: "kimi-for-coding" },
+      });
+    });
+
+    it("preserves custom provider key without api field when it collides with a built-in alias (#76155)", () => {
+      // Same as above but the inline provider config has no explicit api field —
+      // the previous guard (!apiOwner) would have returned null and fallen through
+      // to parseModelRef which normalizes "kimi-code" → "kimi".
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "kimi-code/kimi-for-coding": {},
+            },
+          },
+        },
+        models: {
+          providers: {
+            "kimi-code": {
+              baseUrl: "https://api.kimi.com/coding/v1",
+              models: [{ id: "kimi-for-coding" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog: [],
+        raw: "kimi-code/kimi-for-coding",
+        defaultProvider: "anthropic",
+      });
+
+      expect(result).toEqual({
+        key: "kimi-code/kimi-for-coding",
+        ref: { provider: "kimi-code", model: "kimi-for-coding" },
+      });
+    });
   });
 
   describe("resolveModelRefFromString", () => {

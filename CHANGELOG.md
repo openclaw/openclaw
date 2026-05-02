@@ -309,6 +309,7 @@ Docs: https://docs.openclaw.ai
 - Cron: retry recurring wake-now main-session jobs through temporary heartbeat busy skips before recording success, so queued cron events no longer appear as ok ghost runs while the main lane is still busy. Fixes #75964. (#76083) Thanks @kshetrajna12 and @xuruiray.
 - Providers/Google: keep Gemini thinking-signature-only stream chunks active during reasoning, so Gemini 3.1 Pro Preview replies no longer hit idle timeouts before visible text. Fixes #76071. (#76080) Thanks @marcoschierhorn and @zhangguiping-xydt.
 - CLI/skills: show per-agent model and command visibility in `openclaw skills check --agent`, and let doctor report or disable unavailable skills allowed for the default agent. (#75983) Thanks @mbelinky.
+- Model/resolution: preserve custom `models.providers` keys whose names collide with built-in provider aliases (e.g. a user-configured `kimi-code` provider was silently normalized to the built-in `kimi` extension, routing cron-nested lane dispatches to the wrong backend and producing `Unknown model` errors). `resolveAllowedModelRef` now returns the raw configured key when the provider key and its normalized form differ and the provider carries a custom transport (`api` or `baseUrl`), so dispatch matches the inline provider entry correctly. Fixes #76155. Thanks @hclsys.
 
 ## 2026.4.30
 
