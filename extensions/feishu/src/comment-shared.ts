@@ -1,6 +1,4 @@
 import {
-  asOptionalRecord,
-  hasNonEmptyString as sharedHasNonEmptyString,
   isRecord as sharedIsRecord,
   normalizeOptionalString,
   readStringValue,
@@ -24,10 +22,6 @@ export const readString = readStringValue;
 export const normalizeString = normalizeOptionalString;
 
 export const isRecord = sharedIsRecord;
-
-export const asRecord = asOptionalRecord;
-
-export const hasNonEmptyString = sharedHasNonEmptyString;
 
 export function formatFeishuApiError(
   error: unknown,
@@ -67,18 +61,18 @@ export function formatFeishuApiError(
   });
 }
 
-export type ParsedCommentDocumentRef = {
+type ParsedCommentDocumentRef = {
   fileType?: CommentFileType;
   fileToken?: string;
 };
 
-export type ParsedCommentMention = {
+type ParsedCommentMention = {
   userId: string;
   displayText: string;
   isBotMention: boolean;
 };
 
-export type ParsedCommentLinkedDocumentKind =
+type ParsedCommentLinkedDocumentKind =
   | CommentFileType
   | "wiki"
   | "mindnote"
@@ -86,7 +80,7 @@ export type ParsedCommentLinkedDocumentKind =
   | "base"
   | "unknown";
 
-export type ParsedCommentResolvedDocumentType = Exclude<
+type ParsedCommentResolvedDocumentType = Exclude<
   ParsedCommentLinkedDocumentKind,
   "wiki" | "unknown"
 >;
@@ -357,10 +351,6 @@ export function parseCommentContentElements(params: {
     linkedDocuments,
     botMentioned,
   };
-}
-
-export function extractCommentElementText(element: unknown): string | undefined {
-  return parseCommentContentElements({ elements: [element] }).plainText;
 }
 
 export function extractReplyText(

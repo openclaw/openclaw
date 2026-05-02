@@ -79,6 +79,7 @@ export async function withTrustedWebSearchEndpoint<T>(
     url: string;
     timeoutSeconds: number;
     init: RequestInit;
+    signal?: AbortSignal;
   },
   run: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -88,6 +89,7 @@ export async function withTrustedWebSearchEndpoint<T>(
       url: params.url,
       init: params.init,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
     },
     async ({ response }) => run(response),
   );
@@ -102,6 +104,7 @@ export async function postTrustedWebToolsJson<T>(
     errorLabel: string;
     maxErrorBytes?: number;
     extraHeaders?: Record<string, string>;
+    signal?: AbortSignal;
   },
   parseResponse: (response: Response) => Promise<T>,
 ): Promise<T> {
@@ -110,6 +113,7 @@ export async function postTrustedWebToolsJson<T>(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {

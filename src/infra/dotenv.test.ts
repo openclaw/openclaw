@@ -41,6 +41,19 @@ const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
   (line) => line.split("=")[0] ?? "",
 );
 
+const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
+  "ComSpec",
+  "COMSPEC",
+  "ProgramFiles",
+  "PROGRAMFILES",
+  "ProgramW6432",
+  "PROGRAMW6432",
+  "SystemRoot",
+  "SYSTEMROOT",
+  "windir",
+  "WINDIR",
+] as const;
+
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, contents, "utf8");
@@ -209,9 +222,12 @@ describe("loadDotEnv", () => {
             "OPENCLAW_STATE_DIR=./evil-state",
             "OPENCLAW_CONFIG_PATH=./evil-config.json",
             "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
+            "CLOUDSDK_PYTHON=./attacker-python",
             "EXAMPLE_API_HOST=https://evil-api.example.com",
             "MINIMAX_API_HOST=https://evil.example.com",
             "HTTP_PROXY=http://evil-proxy:8080",
+            "HOMEBREW_BREW_FILE=./evil-brew/bin/brew",
+            "HOMEBREW_PREFIX=./evil-brew",
             "UV_PYTHON=./attacker-python",
             "uv_python=./attacker-python-lower",
           ].join("\n"),
@@ -223,9 +239,12 @@ describe("loadDotEnv", () => {
         delete process.env.NODE_OPTIONS;
         delete process.env.OPENCLAW_CONFIG_PATH;
         delete process.env.ANTHROPIC_BASE_URL;
+        delete process.env.CLOUDSDK_PYTHON;
         delete process.env.EXAMPLE_API_HOST;
         delete process.env.MINIMAX_API_HOST;
         delete process.env.HTTP_PROXY;
+        delete process.env.HOMEBREW_BREW_FILE;
+        delete process.env.HOMEBREW_PREFIX;
         delete process.env.UV_PYTHON;
         delete process.env.uv_python;
 
@@ -237,9 +256,12 @@ describe("loadDotEnv", () => {
         expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
         expect(process.env.ANTHROPIC_BASE_URL).toBeUndefined();
+        expect(process.env.CLOUDSDK_PYTHON).toBeUndefined();
         expect(process.env.EXAMPLE_API_HOST).toBeUndefined();
         expect(process.env.MINIMAX_API_HOST).toBeUndefined();
         expect(process.env.HTTP_PROXY).toBeUndefined();
+        expect(process.env.HOMEBREW_BREW_FILE).toBeUndefined();
+        expect(process.env.HOMEBREW_PREFIX).toBeUndefined();
         expect(process.env.UV_PYTHON).toBeUndefined();
         expect(process.env.uv_python).toBeUndefined();
       });
@@ -292,6 +314,34 @@ describe("loadDotEnv", () => {
 
         expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
         expect(process.env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+      });
+    });
+  });
+
+  it("blocks Windows shell trust-root vars from workspace .env", async () => {
+    await withIsolatedEnvAndCwd(async () => {
+      await withDotEnvFixture(async ({ cwdDir }) => {
+        await writeEnvFile(
+          path.join(cwdDir, ".env"),
+          [
+            "ComSpec=.\\evil-comspec",
+            "COMSPEC=.\\evil-comspec-upper",
+            "ProgramFiles=.\\evil-pfiles",
+            "PROGRAMFILES=.\\evil-pfiles-upper",
+            "ProgramW6432=.\\evil-pw6432",
+            "PROGRAMW6432=.\\evil-pw6432-upper",
+            "SystemRoot=.\\fake-root",
+            "SYSTEMROOT=.\\fake-root-upper",
+            "windir=.\\fake-windir",
+            "WINDIR=.\\fake-windir-upper",
+          ].join("\n"),
+        );
+
+        clearEnv(WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS);
+
+        loadWorkspaceDotEnvFile(path.join(cwdDir, ".env"), { quiet: true });
+
+        expectEnvUndefined(WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS);
       });
     });
   });
@@ -650,6 +700,8 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
           "OPENCLAW_BROWSER_EXECUTABLE_PATH",
           "EXAMPLE_API_HOST",
+          "HOMEBREW_BREW_FILE",
+          "HOMEBREW_PREFIX",
           "IRC_HOST",
           "MATTERMOST_URL",
           "MATRIX_HOMESERVER",
@@ -672,6 +724,14 @@ describe("workspace .env blocklist completeness", () => {
           "OPENCLAW_NODE_EXEC_HOST",
           "OPENCLAW_NODE_EXEC_FALLBACK",
           "OPENCLAW_ALLOW_PROJECT_LOCAL_BIN",
+          "PATH",
+          "HOMEBREW_BREW_FILE",
+          "HOMEBREW_PREFIX",
+          "SystemRoot",
+          "WINDIR",
+          "ProgramFiles",
+          "ProgramFiles(x86)",
+          "ProgramW6432",
           "SYNOLOGY_CHAT_INCOMING_URL",
           "SYNOLOGY_NAS_HOST",
         ];

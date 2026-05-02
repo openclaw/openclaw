@@ -169,6 +169,7 @@ Base manifest (Socket Mode default):
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
     "app_home": {
+      "home_tab_enabled": true,
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
     },
@@ -204,6 +205,7 @@ Base manifest (Socket Mode default):
         "pins:write",
         "reactions:read",
         "reactions:write",
+        "usergroups:read",
         "users:read"
       ]
     }
@@ -212,6 +214,7 @@ Base manifest (Socket Mode default):
     "socket_mode_enabled": true,
     "event_subscriptions": {
       "bot_events": [
+        "app_home_opened",
         "app_mention",
         "channel_rename",
         "member_joined_channel",
@@ -263,6 +266,8 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 ### Additional manifest settings
 
 Surface different features that extend the above defaults.
+
+The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The **Messages** tab remains enabled for Slack DMs.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -514,7 +519,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `allowlist`
     - `disabled`
 
-    Channel allowlist lives under `channels.slack.channels` and should use stable channel IDs.
+    Channel allowlist lives under `channels.slack.channels` and **must use stable Slack channel IDs** (for example `C12345678`) as config keys.
 
     Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
@@ -524,6 +529,42 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - unresolved channel-name entries are kept as configured but ignored for routing by default
     - inbound authorization and channel routing are ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
+    <Warning>
+    Name-based keys (`#channel-name` or `channel-name`) do **not** match under `groupPolicy: "allowlist"`. The channel lookup is ID-first by default, so a name-based key will never route successfully and all messages in that channel will be silently blocked. This differs from `groupPolicy: "open"`, where the channel key is not required for routing and a name-based key appears to work.
+
+    Always use the Slack channel ID as the key. To find it: right-click the channel in Slack → **Copy link** — the ID (`C...`) appears at the end of the URL.
+
+    Correct:
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          groupPolicy: "allowlist",
+          channels: {
+            C12345678: { allow: true, requireMention: true },
+          },
+        },
+      },
+    }
+    ```
+
+    Incorrect (silently blocked under `groupPolicy: "allowlist"`):
+
+    ```json5
+    {
+      channels: {
+        slack: {
+          groupPolicy: "allowlist",
+          channels: {
+            "#eng-my-channel": { allow: true, requireMention: true },
+          },
+        },
+      },
+    }
+    ```
+    </Warning>
+
   </Tab>
 
   <Tab title="Mentions and channel users">
@@ -532,6 +573,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     Mention sources:
 
     - explicit app mention (`<@botId>`)
+    - Slack user-group mention (`<!subteam^S...>`) when the bot user is a member of that user group; requires `usergroups:read`
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
@@ -546,12 +588,15 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `toolsBySender` key format: `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
 
+    `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
+
   </Tab>
 </Tabs>
 
 ## Threading, sessions, and reply tags
 
 - DMs route as `direct`; channels as `channel`; MPIMs as `group`.
+- Slack route bindings accept raw peer IDs plus Slack target forms such as `channel:C12345678`, `user:U12345678`, and `<@U12345678>`.
 - With default `session.dmScope=main`, Slack DMs collapse to agent main session.
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.
@@ -670,7 +715,7 @@ Notes:
     - `user:<id>` for DMs
     - `channel:<id>` for channels
 
-    Slack DMs are opened via Slack conversation APIs when sending to user targets.
+    Text/block-only Slack DMs can post directly to user IDs; file uploads and threaded sends open the DM via Slack conversation APIs first because those paths require a concrete conversation ID.
 
   </Accordion>
 </AccordionGroup>
@@ -852,7 +897,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
     Check, in order:
 
     - `groupPolicy`
-    - channel allowlist (`channels.slack.channels`)
+    - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
     - `requireMention`
     - per-channel `users` allowlist
 

@@ -67,6 +67,7 @@ There are two related systems:
 <ParamField path="commands.native" type='boolean | "auto"' default='"auto"'>
   Registers native commands. Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support. Set `channels.discord.commands.native`, `channels.telegram.commands.native`, or `channels.slack.commands.native` to override per provider (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
 </ParamField>
+On Discord, native command specs may include `descriptionLocalizations`, which OpenClaw publishes as Discord `description_localizations` and includes in reconcile comparisons.
 <ParamField path="commands.nativeSkills" type='boolean | "auto"' default='"auto"'>
   Registers **skill** commands natively when supported. Auto: on for Discord/Telegram; off for Slack (Slack requires creating a slash command per skill). Set `channels.discord.commands.nativeSkills`, `channels.telegram.commands.nativeSkills`, or `channels.slack.commands.nativeSkills` to override per provider (bool or `"auto"`).
 </ParamField>
@@ -142,7 +143,7 @@ Current source-of-truth:
     - `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` shows or sets exec defaults.
     - `/model [name|#|status]` shows or sets the model.
     - `/models [provider] [page] [limit=<n>|size=<n>|all]` lists configured/auth-available providers or models for a provider; add `all` to browse that provider's full catalog.
-    - `/queue <mode>` manages queue behavior (`steer`, `interrupt`, `followup`, `collect`, `steer-backlog`) plus options like `debounce:2s cap:25 drop:summarize`.
+    - `/queue <mode>` manages queue behavior (`steer`, legacy `queue`, `followup`, `collect`, `steer-backlog`, `interrupt`) plus options like `debounce:0.5s cap:25 drop:summarize`; `/queue default` or `/queue reset` clears the session override. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).
 
   </Accordion>
   <Accordion title="Discovery and status">
@@ -237,6 +238,7 @@ User-invocable skills are also exposed as slash commands:
 - `/skill <name> [input]` always works as the generic entrypoint.
 - skills may also appear as direct commands like `/prose` when the skill/plugin registers them.
 - native skill-command registration is controlled by `commands.nativeSkills` and `channels.<provider>.commands.nativeSkills`.
+- command specs can provide `descriptionLocalizations` for native surfaces that support localized descriptions, including Discord.
 
 <AccordionGroup>
   <Accordion title="Argument and parser notes">
@@ -247,7 +249,7 @@ User-invocable skills are also exposed as slash commands:
     - In multi-account channels, config-targeted `/allowlist --account <id>` and `/config set channels.<provider>.accounts.<id>...` also honor the target account's `configWrites`.
     - `/usage` controls the per-response usage footer; `/usage cost` prints a local cost summary from OpenClaw session logs.
     - `/restart` is enabled by default; set `commands.restart: false` to disable it.
-    - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, or `clawhub:<pkg>`.
+    - `/plugins install <spec>` accepts the same plugin specs as `openclaw plugins install`: local path/archive, npm package, `git:<repo>`, or `clawhub:<pkg>`.
     - `/plugins enable|disable` updates plugin config and may prompt for a restart.
 
   </Accordion>

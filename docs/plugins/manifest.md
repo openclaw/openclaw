@@ -255,24 +255,15 @@ embedded agent harness ids that do not already have an ownership field.
 This block is metadata only. It does not register runtime behavior, and it does
 not replace `register(...)`, `setupEntry`, or other runtime/plugin entrypoints.
 Current consumers use it as a narrowing hint before broader plugin loading, so
-missing activation metadata usually only costs performance; it should not
-change correctness while legacy manifest ownership fallbacks still exist.
+missing non-startup activation metadata usually only costs performance; it
+should not change correctness while manifest ownership fallbacks still exist.
 
-Every plugin should set `activation.onStartup` intentionally as OpenClaw moves
-away from implicit startup imports. Set it to `true` only when the plugin must
-run during Gateway startup. Set it to `false` when the plugin is inert at
-startup and should load only from narrower triggers. Omitting `onStartup` keeps
-the deprecated legacy implicit startup sidecar fallback for plugins with no
-static capability metadata; future versions may stop startup-loading those
-plugins unless they declare `activation.onStartup: true`. Plugin status and
-compatibility reports warn with `legacy-implicit-startup-sidecar` when a plugin
-still relies on that fallback.
-
-For migration testing, set
-`OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS=1` to disable only that
-deprecated fallback. This opt-in mode does not block explicit
-`activation.onStartup: true` plugins or plugins loaded by channel, config,
-agent-harness, memory, or other narrower activation triggers.
+Every plugin should set `activation.onStartup` intentionally. Set it to `true`
+only when the plugin must run during Gateway startup. Set it to `false` when
+the plugin is inert at startup and should load only from narrower triggers.
+Omitting `onStartup` no longer startup-loads the plugin implicitly; use explicit
+activation metadata for startup, channel, config, agent-harness, memory, or
+other narrower activation triggers.
 
 ```json
 {
@@ -288,21 +279,21 @@ agent-harness, memory, or other narrower activation triggers.
 }
 ```
 
-| Field              | Required | Type                                                 | What it means                                                                                                                                                                                                                      |
-| ------------------ | -------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `onStartup`        | No       | `boolean`                                            | Explicit Gateway startup activation. Every plugin should set this. `true` imports the plugin during startup; `false` opts out of the deprecated implicit sidecar startup fallback unless another matched trigger requires loading. |
-| `onProviders`      | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                                                                                                                                             |
-| `onAgentHarnesses` | No       | `string[]`                                           | Embedded agent harness runtime ids that should include this plugin in activation/load plans. Use top-level `cliBackends` for CLI backend aliases.                                                                                  |
-| `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                                                                                                              |
-| `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                                                                                                              |
-| `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                                                                                                              |
-| `onConfigPaths`    | No       | `string[]`                                           | Root-relative config paths that should include this plugin in startup/load plans when the path is present and not explicitly disabled.                                                                                             |
-| `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                                                                                                            |
+| Field              | Required | Type                                                 | What it means                                                                                                                                                                               |
+| ------------------ | -------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `onStartup`        | No       | `boolean`                                            | Explicit Gateway startup activation. Every plugin should set this. `true` imports the plugin during startup; `false` keeps it startup-lazy unless another matched trigger requires loading. |
+| `onProviders`      | No       | `string[]`                                           | Provider ids that should include this plugin in activation/load plans.                                                                                                                      |
+| `onAgentHarnesses` | No       | `string[]`                                           | Embedded agent harness runtime ids that should include this plugin in activation/load plans. Use top-level `cliBackends` for CLI backend aliases.                                           |
+| `onCommands`       | No       | `string[]`                                           | Command ids that should include this plugin in activation/load plans.                                                                                                                       |
+| `onChannels`       | No       | `string[]`                                           | Channel ids that should include this plugin in activation/load plans.                                                                                                                       |
+| `onRoutes`         | No       | `string[]`                                           | Route kinds that should include this plugin in activation/load plans.                                                                                                                       |
+| `onConfigPaths`    | No       | `string[]`                                           | Root-relative config paths that should include this plugin in startup/load plans when the path is present and not explicitly disabled.                                                      |
+| `onCapabilities`   | No       | `Array<"provider" \| "channel" \| "tool" \| "hook">` | Broad capability hints used by control-plane activation planning. Prefer narrower fields when possible.                                                                                     |
 
 Current live consumers:
 
 - Gateway startup planning uses `activation.onStartup` for explicit startup
-  import and opt-out of deprecated implicit sidecar startup fallback
+  import
 - command-triggered CLI planning falls back to legacy
   `commandAliases[].cliCommand` or `commandAliases[].name`
 - agent-runtime startup planning uses `activation.onAgentHarnesses` for
@@ -357,7 +348,16 @@ before runtime loads.
       {
         "id": "openai",
         "authMethods": ["api-key"],
-        "envVars": ["OPENAI_API_KEY"]
+        "envVars": ["OPENAI_API_KEY"],
+        "authEvidence": [
+          {
+            "type": "local-file-with-env",
+            "fileEnvVar": "OPENAI_CREDENTIALS_FILE",
+            "requiresAllEnv": ["OPENAI_PROJECT"],
+            "credentialMarker": "openai-local-credentials",
+            "source": "openai local credentials"
+          }
+        ]
       }
     ],
     "cliBackends": ["openai-cli"],
@@ -408,11 +408,29 @@ registration. These diagnostics are additive and do not reject legacy plugins.
 
 ### setup.providers reference
 
-| Field         | Required | Type       | What it means                                                                        |
-| ------------- | -------- | ---------- | ------------------------------------------------------------------------------------ |
-| `id`          | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique. |
-| `authMethods` | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.           |
-| `envVars`     | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.   |
+| Field          | Required | Type       | What it means                                                                                    |
+| -------------- | -------- | ---------- | ------------------------------------------------------------------------------------------------ |
+| `id`           | Yes      | `string`   | Provider id exposed during setup or onboarding. Keep normalized ids globally unique.             |
+| `authMethods`  | No       | `string[]` | Setup/auth method ids this provider supports without loading full runtime.                       |
+| `envVars`      | No       | `string[]` | Env vars that generic setup/status surfaces can check before plugin runtime loads.               |
+| `authEvidence` | No       | `object[]` | Cheap local auth evidence checks for providers that can authenticate through non-secret markers. |
+
+`authEvidence` is for provider-owned local credential markers that can be
+verified without loading runtime code. These checks must stay cheap and local:
+no network calls, no keychain or secret-manager reads, no shell commands, and no
+provider API probes.
+
+Supported evidence entries:
+
+| Field              | Required | Type       | What it means                                                                                                  |
+| ------------------ | -------- | ---------- | -------------------------------------------------------------------------------------------------------------- |
+| `type`             | Yes      | `string`   | Currently `local-file-with-env`.                                                                               |
+| `fileEnvVar`       | No       | `string`   | Env var containing an explicit credential file path.                                                           |
+| `fallbackPaths`    | No       | `string[]` | Local credential file paths checked when `fileEnvVar` is absent or empty. Supports `${HOME}` and `${APPDATA}`. |
+| `requiresAnyEnv`   | No       | `string[]` | At least one listed env var must be non-empty before the evidence is valid.                                    |
+| `requiresAllEnv`   | No       | `string[]` | Every listed env var must be non-empty before the evidence is valid.                                           |
+| `credentialMarker` | Yes      | `string`   | Non-secret marker returned when the evidence is present.                                                       |
+| `source`           | No       | `string`   | User-facing source label for auth/status output.                                                               |
 
 ### setup fields
 
@@ -997,14 +1015,14 @@ Important examples:
 | `openclaw.extensions`                                             | Declares native plugin entrypoints. Must stay inside the plugin package directory.                                                                                                   |
 | `openclaw.runtimeExtensions`                                      | Declares built JavaScript runtime entrypoints for installed packages. Must stay inside the plugin package directory.                                                                 |
 | `openclaw.setupEntry`                                             | Lightweight setup-only entrypoint used during onboarding, deferred channel startup, and read-only channel status/SecretRef discovery. Must stay inside the plugin package directory. |
-| `openclaw.runtimeSetupEntry`                                      | Declares the built JavaScript setup entrypoint for installed packages. Must stay inside the plugin package directory.                                                                |
+| `openclaw.runtimeSetupEntry`                                      | Declares the built JavaScript setup entrypoint for installed packages. Requires `setupEntry`, must exist, and must stay inside the plugin package directory.                         |
 | `openclaw.channel`                                                | Cheap channel catalog metadata like labels, docs paths, aliases, and selection copy.                                                                                                 |
 | `openclaw.channel.commands`                                       | Static native command and native skill auto-default metadata used by config, audit, and command-list surfaces before channel runtime loads.                                          |
 | `openclaw.channel.configuredState`                                | Lightweight configured-state checker metadata that can answer "does env-only setup already exist?" without loading the full channel runtime.                                         |
 | `openclaw.channel.persistedAuthState`                             | Lightweight persisted-auth checker metadata that can answer "is anything already signed in?" without loading the full channel runtime.                                               |
 | `openclaw.install.npmSpec` / `openclaw.install.localPath`         | Install/update hints for bundled and externally published plugins.                                                                                                                   |
 | `openclaw.install.defaultChoice`                                  | Preferred install path when multiple install sources are available.                                                                                                                  |
-| `openclaw.install.minHostVersion`                                 | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22`.                                                                                                    |
+| `openclaw.install.minHostVersion`                                 | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22` or `>=2026.5.1-beta.1`.                                                                             |
 | `openclaw.install.expectedIntegrity`                              | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                            |
 | `openclaw.install.allowInvalidConfigRecovery`                     | Allows a narrow bundled-plugin reinstall recovery path when config is invalid.                                                                                                       |
 | `openclaw.startup.deferConfiguredChannelFullLoadUntilAfterListen` | Lets setup-only channel surfaces load before the full channel plugin during startup.                                                                                                 |
@@ -1015,8 +1033,9 @@ onboarding how to fetch or enable that plugin when the user picks one of those
 choices. Do not move install hints into `openclaw.plugin.json`.
 
 `openclaw.install.minHostVersion` is enforced during install and manifest
-registry loading. Invalid values are rejected; newer-but-valid values skip the
-plugin on older hosts.
+registry loading for non-bundled plugin sources. Invalid values are rejected;
+newer-but-valid values skip external plugins on older hosts. Bundled source
+plugins are assumed to be co-versioned with the host checkout.
 
 Exact npm version pinning already lives in `npmSpec`, for example
 `"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Official external catalog

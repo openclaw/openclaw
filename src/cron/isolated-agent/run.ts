@@ -519,6 +519,7 @@ async function prepareCronRunContext(params: {
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !params.isFastTestEnv,
+    skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
   });
   const workspaceDir = workspace.dir;
 
@@ -957,6 +958,7 @@ async function finalizeCronRun(params: {
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
     synthesizedText,
+    ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,
     outputText,
     telemetry,

@@ -208,6 +208,39 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("Line 1\nLine 2")).toBe("Line 1\nLine 2");
   });
 
+  it("strips tool-call replay placeholders without trimming visible text", () => {
+    expect(sanitizeUserFacingText("[tool calls omitted]")).toBe("");
+    expect(sanitizeUserFacingText("  [tool calls omitted]\t")).toBe("");
+    expect(sanitizeUserFacingText("Hello\n\n[tool calls omitted]\nWorld\n")).toBe(
+      "Hello\n\nWorld\n",
+    );
+    expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
+  });
+
+  it("strips legacy uppercase TOOL_CALL blocks before user-facing delivery", () => {
+    const input = [
+      "Before",
+      '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("strips legacy uppercase TOOL_RESULT blocks before user-facing delivery", () => {
+    const input = ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join(
+      "\n",
+    );
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("keeps ordinary inline mentions of the replay placeholder", () => {
+    expect(sanitizeUserFacingText("What does [tool calls omitted] mean?")).toBe(
+      "What does [tool calls omitted] mean?",
+    );
+  });
+
   it("strips marked internal runtime context blocks but keeps real reply text", () => {
     const input = [
       INTERNAL_RUNTIME_CONTEXT_BEGIN,

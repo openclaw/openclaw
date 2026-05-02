@@ -29,11 +29,18 @@ import { startStaleCallReaper } from "./webhook/stale-call-reaper.js";
 
 const MAX_WEBHOOK_BODY_BYTES = WEBHOOK_BODY_READ_DEFAULTS.preAuth.maxBytes;
 const WEBHOOK_BODY_TIMEOUT_MS = WEBHOOK_BODY_READ_DEFAULTS.preAuth.timeoutMs;
+const MISSING_REMOTE_ADDRESS_IN_FLIGHT_KEY = "__voice_call_no_remote__";
 const STREAM_DISCONNECT_HANGUP_GRACE_MS = 2000;
 const TRANSCRIPT_LOG_MAX_CHARS = 200;
 
 type RealtimeTranscriptionRuntime = typeof import("./realtime-transcription.runtime.js");
 type ResponseGeneratorModule = typeof import("./response-generator.js");
+type Logger = {
+  info: (message: string) => void;
+  warn: (message: string) => void;
+  error: (message: string) => void;
+  debug?: (message: string) => void;
+};
 
 let realtimeTranscriptionRuntimePromise: Promise<RealtimeTranscriptionRuntime> | undefined;
 let responseGeneratorModulePromise: Promise<ResponseGeneratorModule> | undefined;
@@ -157,6 +164,7 @@ export class VoiceCallWebhookServer {
   private coreConfig: CoreConfig | null;
   private fullConfig: OpenClawConfig | null;
   private agentRuntime: CoreAgentDeps | null;
+  private logger: Logger;
   private stopStaleCallReaper: (() => void) | null = null;
   private readonly webhookInFlightLimiter = createWebhookInFlightLimiter();
 
@@ -174,6 +182,7 @@ export class VoiceCallWebhookServer {
     coreConfig?: CoreConfig,
     fullConfig?: OpenClawConfig,
     agentRuntime?: CoreAgentDeps,
+    logger?: Logger,
   ) {
     this.config = normalizeVoiceCallConfig(config);
     this.manager = manager;
@@ -181,6 +190,12 @@ export class VoiceCallWebhookServer {
     this.coreConfig = coreConfig ?? null;
     this.fullConfig = fullConfig ?? null;
     this.agentRuntime = agentRuntime ?? null;
+    this.logger = logger ?? {
+      info: console.log,
+      warn: console.warn,
+      error: console.error,
+      debug: console.debug,
+    };
   }
 
   /**
@@ -192,6 +207,13 @@ export class VoiceCallWebhookServer {
 
   getRealtimeHandler(): RealtimeCallHandler | null {
     return this.realtimeHandler;
+  }
+
+  speakRealtime(callId: string, instructions: string): { success: boolean; error?: string } {
+    if (!this.realtimeHandler) {
+      return { success: false, error: "Realtime voice handler is not configured" };
+    }
+    return this.realtimeHandler.speak(callId, instructions);
   }
 
   setRealtimeHandler(handler: RealtimeCallHandler): void {
@@ -382,8 +404,8 @@ export class VoiceCallWebhookServer {
         if (this.provider.name === "twilio") {
           (this.provider as TwilioProvider).registerCallStream(callId, streamSid);
         }
-
-        // Speak initial message immediately (no delay) to avoid stream timeout
+      },
+      onTranscriptionReady: (callId) => {
         this.manager.speakInitialMessage(callId).catch((err) => {
           console.warn(`[voice-call] Failed to speak initial message:`, err);
         });
@@ -484,12 +506,12 @@ export class VoiceCallWebhookServer {
         const url = this.resolveListeningUrl(bind, webhookPath);
         this.listeningUrl = url;
         this.startPromise = null;
-        console.log(`[voice-call] Webhook server listening on ${url}`);
+        this.logger.info(`[voice-call] Webhook server listening on ${url}`);
         if (this.mediaStreamHandler) {
           const address = this.server?.address();
           const actualPort =
             address && typeof address === "object" ? address.port : this.config.serve.port;
-          console.log(
+          this.logger.info(
             `[voice-call] Media stream WebSocket on ws://${bind}:${actualPort}${streamPath}`,
           );
         }
@@ -616,7 +638,16 @@ export class VoiceCallWebhookServer {
       return { statusCode: 401, body: "Unauthorized" };
     }
 
-    const inFlightKey = req.socket.remoteAddress ?? "";
+    // createWebhookInFlightLimiter intentionally treats an empty key as fail-open.
+    // Missing socket metadata must still share one bucket instead of bypassing
+    // the pre-auth limiter entirely.
+    const remoteAddress = req.socket.remoteAddress;
+    if (!remoteAddress) {
+      console.warn(
+        `[voice-call] Webhook accepted with no remote address; using shared fallback in-flight key`,
+      );
+    }
+    const inFlightKey = remoteAddress || MISSING_REMOTE_ADDRESS_IN_FLIGHT_KEY;
     if (!this.webhookInFlightLimiter.tryAcquire(inFlightKey)) {
       console.warn(`[voice-call] Webhook rejected before body read: too many in-flight requests`);
       return { statusCode: 429, body: "Too Many Requests" };
@@ -655,6 +686,19 @@ export class VoiceCallWebhookServer {
         return { statusCode: 401, body: "Unauthorized" };
       }
 
+      const initialTwiML = this.provider.consumeInitialTwiML?.(ctx);
+      if (initialTwiML !== undefined && initialTwiML !== null) {
+        const params = new URLSearchParams(ctx.rawBody);
+        console.log(
+          `[voice-call] Serving provider initial TwiML before realtime handling (callSid=${params.get("CallSid") ?? "unknown"}, direction=${params.get("Direction") ?? "unknown"})`,
+        );
+        return {
+          statusCode: 200,
+          headers: { "Content-Type": "application/xml" },
+          body: initialTwiML,
+        };
+      }
+
       const realtimeParams = this.getRealtimeTwimlParams(ctx);
       if (realtimeParams) {
         const direction = realtimeParams.get("Direction");
@@ -663,6 +707,9 @@ export class VoiceCallWebhookServer {
           console.log("[voice-call] Realtime inbound call rejected before stream setup");
           return buildRealtimeRejectedTwiML();
         }
+        console.log(
+          `[voice-call] Serving realtime TwiML for Twilio call ${realtimeParams.get("CallSid") ?? "unknown"} (direction=${direction ?? "unknown"})`,
+        );
         return this.realtimeHandler!.buildTwiMLPayload(req, realtimeParams);
       }
 

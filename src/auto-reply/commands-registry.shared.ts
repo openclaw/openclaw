@@ -49,11 +49,7 @@ export function defineChatCommand(command: DefineChatCommandInput): ChatCommandD
   };
 }
 
-export function registerAlias(
-  commands: ChatCommandDefinition[],
-  key: string,
-  ...aliases: string[]
-): void {
+function registerAlias(commands: ChatCommandDefinition[], key: string, ...aliases: string[]): void {
   const command = commands.find((entry) => entry.key === key);
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
@@ -892,7 +888,7 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "mode",
           description: "queue mode",
           type: "string",
-          choices: ["steer", "interrupt", "followup", "collect", "steer-backlog"],
+          choices: ["steer", "queue", "interrupt", "followup", "collect", "steer-backlog"],
         },
         {
           name: "debounce",

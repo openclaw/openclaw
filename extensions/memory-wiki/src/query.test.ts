@@ -314,6 +314,56 @@ describe("searchMemoryWiki", () => {
     expect(evidenceResults.map((result) => result.path)).toContain("sources/maintainers.md");
   });
 
+  it("keeps route-question relationship matches in compiled digest prefilter", async () => {
+    const { rootDir, config } = await createQueryVault({
+      initialize: true,
+    });
+    await fs.writeFile(
+      path.join(rootDir, "entities", "brad.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          entityType: "person",
+          id: "entity.brad",
+          title: "Brad Groux",
+          relationships: [
+            {
+              targetId: "entity.alice",
+              targetTitle: "Alice",
+              kind: "collaborates-with",
+              note: "Azure escalation buddy",
+            },
+          ],
+        },
+        body: "# Brad Groux\n\nAgent card summary.\n",
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "entities", "fallback.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "entity",
+          id: "entity.fallback",
+          title: "Fallback Router",
+          bestUsedFor: ["Azure escalation buddy"],
+        },
+        body: "# Fallback Router\n\nGeneric routing note.\n",
+      }),
+      "utf8",
+    );
+    await compileMemoryWikiVault(config);
+
+    const routeResults = await searchMemoryWiki({
+      config,
+      query: "who should I ask about Azure escalation buddy?",
+      mode: "route-question",
+      maxResults: 1,
+    });
+
+    expect(routeResults[0]?.path).toBe("entities/brad.md");
+  });
+
   it("uses body text instead of frontmatter for fallback snippets", async () => {
     const { rootDir, config } = await createQueryVault({
       initialize: true,

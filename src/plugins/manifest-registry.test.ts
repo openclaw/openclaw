@@ -1129,6 +1129,17 @@ describe("loadPluginManifestRegistry", () => {
             id: "openai",
             authMethods: ["api-key"],
             envVars: ["OPENAI_API_KEY"],
+            authEvidence: [
+              {
+                type: "local-file-with-env",
+                fileEnvVar: "OPENAI_CREDENTIALS_FILE",
+                fallbackPaths: ["${HOME}/.config/openai/credentials.json"],
+                requiresAnyEnv: ["OPENAI_PROJECT", "OPENAI_ORG"],
+                requiresAllEnv: ["OPENAI_REGION"],
+                credentialMarker: "openai-local-credentials",
+                source: "openai local credentials",
+              },
+            ],
           },
         ],
         cliBackends: ["openai-cli"],
@@ -1158,6 +1169,17 @@ describe("loadPluginManifestRegistry", () => {
           id: "openai",
           authMethods: ["api-key"],
           envVars: ["OPENAI_API_KEY"],
+          authEvidence: [
+            {
+              type: "local-file-with-env",
+              fileEnvVar: "OPENAI_CREDENTIALS_FILE",
+              fallbackPaths: ["${HOME}/.config/openai/credentials.json"],
+              requiresAnyEnv: ["OPENAI_PROJECT", "OPENAI_ORG"],
+              requiresAllEnv: ["OPENAI_REGION"],
+              credentialMarker: "openai-local-credentials",
+              source: "openai local credentials",
+            },
+          ],
         },
       ],
       cliBackends: ["openai-cli"],
@@ -1474,7 +1496,14 @@ describe("loadPluginManifestRegistry", () => {
       minHostVersion: ">=2026.3.22",
       env: { OPENCLAW_VERSION: "2026.3.21" } as NodeJS.ProcessEnv,
       expectedMessage: "plugin requires OpenClaw >=2026.3.22, but this host is 2026.3.21",
-      expectWarn: false,
+      expectWarn: true,
+    },
+    {
+      name: "skips plugins whose beta minHostVersion is newer than the current host",
+      minHostVersion: ">=2026.5.1-beta.1",
+      env: { OPENCLAW_VERSION: "2026.4.30" } as NodeJS.ProcessEnv,
+      expectedMessage: "plugin requires OpenClaw >=2026.5.1-beta.1, but this host is 2026.4.30",
+      expectWarn: true,
     },
     {
       name: "rejects invalid minHostVersion metadata",
@@ -1504,6 +1533,69 @@ describe("loadPluginManifestRegistry", () => {
     if (expectWarn) {
       expect(registry.diagnostics.some((diag) => diag.level === "warn")).toBe(true);
     }
+  });
+
+  it("accepts legacy bare minHostVersion metadata for recorded installed globals", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        codex: {
+          source: "npm",
+          installPath: dir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/codex",
+              minHostVersion: "2026.3.22",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["codex"]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("openclaw.install.minHostVersion must use"),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not runtime-gate bundled source plugins by install minHostVersion", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      candidates: [
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "bundled",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/codex",
+              minHostVersion: ">=2026.5.1-beta.1",
+            },
+          },
+        }),
+      ],
+      env: { OPENCLAW_VERSION: "2026.4.30" } as NodeJS.ProcessEnv,
+    });
+
+    expect(registry.plugins.some((plugin) => plugin.id === "codex")).toBe(true);
+    expect(registry.diagnostics.some((diag) => diag.message.includes("requires OpenClaw"))).toBe(
+      false,
+    );
   });
 
   it.each([

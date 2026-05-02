@@ -76,7 +76,21 @@
       {
         "id": "google-vertex",
         "authMethods": ["api-key"],
-        "envVars": ["GOOGLE_CLOUD_API_KEY"]
+        "envVars": ["GOOGLE_CLOUD_API_KEY"],
+        "authEvidence": [
+          {
+            "type": "local-file-with-env",
+            "fileEnvVar": "GOOGLE_APPLICATION_CREDENTIALS",
+            "fallbackPaths": [
+              "${HOME}/.config/gcloud/application_default_credentials.json",
+              "${APPDATA}/gcloud/application_default_credentials.json"
+            ],
+            "requiresAnyEnv": ["GOOGLE_CLOUD_PROJECT", "GCLOUD_PROJECT"],
+            "requiresAllEnv": ["GOOGLE_CLOUD_LOCATION"],
+            "credentialMarker": "gcp-vertex-credentials",
+            "source": "gcloud adc"
+          }
+        ]
       }
     ]
   },
@@ -119,6 +133,10 @@
     "webSearch.model": {
       "label": "Gemini Search Model",
       "help": "Gemini model override for web search grounding."
+    },
+    "webSearch.baseUrl": {
+      "label": "Gemini Search Base URL",
+      "help": "Optional Gemini API base URL for web search grounding proxies."
     }
   },
   "contracts": {
@@ -162,6 +180,9 @@
             "type": ["string", "object"]
           },
           "model": {
+            "type": "string"
+          },
+          "baseUrl": {
             "type": "string"
           }
         }

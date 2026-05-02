@@ -148,6 +148,7 @@ function createOpenAiCatalogProviderPlugin(
       { provider: "openai", id: "gpt-5.4-nano", name: "gpt-5.4-nano" },
       { provider: "openai-codex", id: "gpt-5.4", name: "gpt-5.4" },
       { provider: "openai-codex", id: "gpt-5.4-pro", name: "gpt-5.4-pro" },
+      { provider: "openai-codex", id: "gpt-5.4-mini", name: "gpt-5.4-mini" },
     ],
     ...overrides,
   };
@@ -436,6 +437,49 @@ describe("provider-runtime", () => {
     expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
   });
 
+  it("does not reuse runtime provider cache entries across env-resolved plugin roots", () => {
+    const firstProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo one",
+      auth: [],
+    };
+    const secondProvider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      label: "Demo two",
+      auth: [],
+    };
+    const config = {} as OpenClawConfig;
+    const originalHome = process.env.HOME;
+    const originalOpenClawHome = process.env.OPENCLAW_HOME;
+    try {
+      process.env.HOME = "/home/one";
+      delete process.env.OPENCLAW_HOME;
+      resolvePluginProvidersMock.mockReturnValueOnce([firstProvider]);
+      expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
+        firstProvider,
+      );
+
+      process.env.HOME = "/home/two";
+      resolvePluginProvidersMock.mockReturnValueOnce([secondProvider]);
+      expect(resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })).toBe(
+        secondProvider,
+      );
+    } finally {
+      if (originalHome === undefined) {
+        delete process.env.HOME;
+      } else {
+        process.env.HOME = originalHome;
+      }
+      if (originalOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = originalOpenClawHome;
+      }
+    }
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reuse auto-enabled runtime providers for synthetic auth fallback", () => {
     const runtimeProvider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
@@ -450,8 +494,7 @@ describe("provider-runtime", () => {
     resolvePluginProvidersMock.mockImplementation((params) =>
       params.applyAutoEnable === false &&
       params.bundledProviderAllowlistCompat === false &&
-      params.bundledProviderVitestCompat === false &&
-      params.installBundledRuntimeDeps === false
+      params.bundledProviderVitestCompat === false
         ? []
         : [runtimeProvider],
     );
@@ -1111,6 +1154,69 @@ describe("provider-runtime", () => {
         }),
       }),
     ).toBe(wrappedStreamFn);
+  });
+
+  it("does not run broad provider-hook scans for reasoning output mode", () => {
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      if (params.providerRefs?.includes("mock-openai")) {
+        return [];
+      }
+      throw new Error("unexpected broad provider hook scan");
+    });
+
+    expect(
+      resolveProviderReasoningOutputModeWithPlugin({
+        provider: "mock-openai",
+        context: createDemoResolvedModelContext({
+          provider: "mock-openai",
+          modelId: "gpt-5.5",
+        }),
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not run broad provider-hook scans for auth profile selection", () => {
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      if (params.providerRefs?.includes("mock-openai")) {
+        return [];
+      }
+      throw new Error("unexpected broad provider hook scan");
+    });
+
+    expect(
+      resolveProviderAuthProfileId({
+        provider: "mock-openai",
+        context: createDemoRuntimeContext({
+          provider: "mock-openai",
+          modelId: "gpt-5.5",
+          profileOrder: [],
+          authStore: { version: 1, profiles: {}, order: {} },
+        }),
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledOnce();
+  });
+
+  it("does not run broad provider-hook scans for transport extra params", () => {
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      if (params.providerRefs?.includes("mock-openai")) {
+        return [];
+      }
+      throw new Error("unexpected broad provider hook scan");
+    });
+
+    expect(
+      resolveProviderExtraParamsForTransport({
+        provider: "mock-openai",
+        context: createDemoRuntimeContext({
+          provider: "mock-openai",
+          modelId: "gpt-5.5",
+          extraParams: {},
+        }),
+      }),
+    ).toBeUndefined();
+    expect(resolvePluginProvidersMock).toHaveBeenCalledOnce();
   });
 
   it("normalizes transport hooks without needing provider ownership", () => {
@@ -1968,7 +2074,6 @@ describe("provider-runtime", () => {
       expect.objectContaining({
         onlyPluginIds: ["openai"],
         activate: false,
-        cache: false,
       }),
     );
     expect(resolveCatalogHookProviderPluginIdsMock).toHaveBeenCalledTimes(1);

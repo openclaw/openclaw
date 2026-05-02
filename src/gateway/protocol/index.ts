@@ -38,6 +38,17 @@ import {
   AgentsFilesSetParamsSchema,
   type AgentsFilesSetResult,
   AgentsFilesSetResultSchema,
+  type ArtifactsDownloadParams,
+  ArtifactsDownloadParamsSchema,
+  type ArtifactsDownloadResult,
+  type ArtifactsGetParams,
+  ArtifactsGetParamsSchema,
+  type ArtifactsGetResult,
+  type ArtifactsListParams,
+  ArtifactsListParamsSchema,
+  type ArtifactsListResult,
+  type ArtifactSummary,
+  ArtifactSummarySchema,
   type AgentsListParams,
   AgentsListParamsSchema,
   type AgentsListResult,
@@ -46,6 +57,8 @@ import {
   AgentWaitParamsSchema,
   type ChannelsStartParams,
   ChannelsStartParamsSchema,
+  type ChannelsStopParams,
+  ChannelsStopParamsSchema,
   type ChannelsLogoutParams,
   ChannelsLogoutParamsSchema,
   type TalkConfigParams,
@@ -300,6 +313,9 @@ import {
   type ToolsEffectiveParams,
   ToolsEffectiveParamsSchema,
   type ToolsEffectiveResult,
+  type ToolsInvokeParams,
+  ToolsInvokeParamsSchema,
+  type ToolsInvokeResult,
   type Snapshot,
   SnapshotSchema,
   type StateVersion,
@@ -366,6 +382,12 @@ export const validateAgentsFilesGetParams = ajv.compile<AgentsFilesGetParams>(
 );
 export const validateAgentsFilesSetParams = ajv.compile<AgentsFilesSetParams>(
   AgentsFilesSetParamsSchema,
+);
+export const validateArtifactsListParams =
+  ajv.compile<ArtifactsListParams>(ArtifactsListParamsSchema);
+export const validateArtifactsGetParams = ajv.compile<ArtifactsGetParams>(ArtifactsGetParamsSchema);
+export const validateArtifactsDownloadParams = ajv.compile<ArtifactsDownloadParams>(
+  ArtifactsDownloadParamsSchema,
 );
 export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
@@ -508,6 +530,7 @@ export const validateChannelsStatusParams = ajv.compile<ChannelsStatusParams>(
 );
 export const validateChannelsStartParams =
   ajv.compile<ChannelsStartParams>(ChannelsStartParamsSchema);
+export const validateChannelsStopParams = ajv.compile<ChannelsStopParams>(ChannelsStopParamsSchema);
 export const validateChannelsLogoutParams = ajv.compile<ChannelsLogoutParams>(
   ChannelsLogoutParamsSchema,
 );
@@ -517,6 +540,7 @@ export const validateToolsCatalogParams = ajv.compile<ToolsCatalogParams>(ToolsC
 export const validateToolsEffectiveParams = ajv.compile<ToolsEffectiveParams>(
   ToolsEffectiveParamsSchema,
 );
+export const validateToolsInvokeParams = ajv.compile<ToolsInvokeParams>(ToolsInvokeParamsSchema);
 export const validateSkillsBinsParams = ajv.compile<SkillsBinsParams>(SkillsBinsParamsSchema);
 export const validateSkillsInstallParams =
   ajv.compile<SkillsInstallParams>(SkillsInstallParamsSchema);
@@ -684,6 +708,10 @@ export {
   SessionsDeleteParamsSchema,
   SessionsCompactParamsSchema,
   SessionsUsageParamsSchema,
+  ArtifactSummarySchema,
+  ArtifactsListParamsSchema,
+  ArtifactsGetParamsSchema,
+  ArtifactsDownloadParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
   ConfigApplyParamsSchema,
@@ -715,6 +743,7 @@ export {
   ChannelsStatusParamsSchema,
   ChannelsStatusResultSchema,
   ChannelsStartParamsSchema,
+  ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
@@ -741,6 +770,7 @@ export {
   SkillsStatusParamsSchema,
   ToolsCatalogParamsSchema,
   ToolsEffectiveParamsSchema,
+  ToolsInvokeParamsSchema,
   SkillsInstallParamsSchema,
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
@@ -828,6 +858,7 @@ export type {
   ChannelsStatusParams,
   ChannelsStatusResult,
   ChannelsStartParams,
+  ChannelsStopParams,
   ChannelsLogoutParams,
   WebLoginStartParams,
   WebLoginWaitParams,
@@ -845,6 +876,13 @@ export type {
   AgentsFilesGetResult,
   AgentsFilesSetParams,
   AgentsFilesSetResult,
+  ArtifactSummary,
+  ArtifactsListParams,
+  ArtifactsListResult,
+  ArtifactsGetParams,
+  ArtifactsGetResult,
+  ArtifactsDownloadParams,
+  ArtifactsDownloadResult,
   AgentsListParams,
   AgentsListResult,
   CommandsListParams,
@@ -855,6 +893,8 @@ export type {
   ToolsCatalogResult,
   ToolsEffectiveParams,
   ToolsEffectiveResult,
+  ToolsInvokeParams,
+  ToolsInvokeResult,
   SkillsBinsParams,
   SkillsBinsResult,
   SkillsSearchParams,

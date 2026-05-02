@@ -28,6 +28,7 @@ import {
   type PluginManifestCommandAlias,
 } from "./manifest-command-aliases.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
+import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -42,7 +43,9 @@ type PluginManifestLoadCacheEntry = {
   ctimeMs: number;
 };
 
-const pluginManifestLoadCache = new Map<string, PluginManifestLoadCacheEntry>();
+const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>(
+  MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
+);
 
 export function clearPluginManifestLoadCache(): void {
   pluginManifestLoadCache.clear();
@@ -155,11 +158,9 @@ export type PluginManifestActivationCapability = "provider" | "channel" | "tool"
 
 export type PluginManifestActivation = {
   /**
-   * Explicit Gateway startup activation. Every plugin should set this as
-   * OpenClaw moves away from implicit startup sidecar loading. Set true when
-   * the plugin must be imported during Gateway startup; set false to opt out
-   * of the deprecated implicit startup sidecar fallback when no other
-   * activation trigger matches.
+   * Explicit Gateway startup activation. Set true when the plugin must be
+   * imported during Gateway startup; set false when narrower activation
+   * triggers should load it on demand.
    */
   onStartup?: boolean;
   /**
@@ -188,6 +189,29 @@ export type PluginManifestSetupProvider = {
   authMethods?: string[];
   /** Environment variables that can satisfy setup without runtime loading. */
   envVars?: string[];
+  /**
+   * Cheap local evidence that a provider can authenticate without loading
+   * runtime code. Evidence checks must not read secrets, shell out, or call
+   * provider APIs.
+   */
+  authEvidence?: PluginManifestSetupProviderAuthEvidence[];
+};
+
+export type PluginManifestSetupProviderAuthEvidence = {
+  /** Generic local file evidence gated by required environment metadata. */
+  type: "local-file-with-env";
+  /** Optional env var containing an explicit credential file path. */
+  fileEnvVar?: string;
+  /** Optional fallback credential file paths. Supports `${HOME}` and `${APPDATA}`. */
+  fallbackPaths?: string[];
+  /** At least one of these env vars must be non-empty when provided. */
+  requiresAnyEnv?: string[];
+  /** Every env var listed here must be non-empty when provided. */
+  requiresAllEnv?: string[];
+  /** Non-secret marker returned when this evidence is present. */
+  credentialMarker: string;
+  /** Human-readable auth source label. */
+  source?: string;
 };
 
 export type PluginManifestSetup = {
@@ -982,10 +1006,48 @@ function normalizeManifestSetupProviders(
     }
     const authMethods = normalizeTrimmedStringList(entry.authMethods);
     const envVars = normalizeTrimmedStringList(entry.envVars);
+    const authEvidence = normalizeManifestSetupProviderAuthEvidence(entry.authEvidence);
     normalized.push({
       id,
       ...(authMethods.length > 0 ? { authMethods } : {}),
       ...(envVars.length > 0 ? { envVars } : {}),
+      ...(authEvidence ? { authEvidence } : {}),
+    });
+  }
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeManifestSetupProviderAuthEvidence(
+  value: unknown,
+): PluginManifestSetupProviderAuthEvidence[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: PluginManifestSetupProviderAuthEvidence[] = [];
+  for (const entry of value) {
+    if (!isRecord(entry) || entry.type !== "local-file-with-env") {
+      continue;
+    }
+    const credentialMarker = normalizeOptionalString(entry.credentialMarker);
+    if (!credentialMarker) {
+      continue;
+    }
+    const fileEnvVar = normalizeOptionalString(entry.fileEnvVar);
+    const fallbackPaths = normalizeTrimmedStringList(entry.fallbackPaths);
+    if (!fileEnvVar && fallbackPaths.length === 0) {
+      continue;
+    }
+    const requiresAnyEnv = normalizeTrimmedStringList(entry.requiresAnyEnv);
+    const requiresAllEnv = normalizeTrimmedStringList(entry.requiresAllEnv);
+    const source = normalizeOptionalString(entry.source);
+    normalized.push({
+      type: "local-file-with-env",
+      ...(fileEnvVar ? { fileEnvVar } : {}),
+      ...(fallbackPaths.length > 0 ? { fallbackPaths } : {}),
+      ...(requiresAnyEnv.length > 0 ? { requiresAnyEnv } : {}),
+      ...(requiresAllEnv.length > 0 ? { requiresAllEnv } : {}),
+      credentialMarker,
+      ...(source ? { source } : {}),
     });
   }
   return normalized.length > 0 ? normalized : undefined;
@@ -1168,12 +1230,14 @@ function buildPluginManifestLoadCacheKey(params: {
   rootRealPath?: string;
   stats: fs.Stats;
 }): string {
-  return JSON.stringify([
-    path.resolve(params.manifestPath),
-    params.rejectHardlinks,
-    params.rootRealPath ?? "",
-    params.stats.dev,
-    params.stats.ino,
+  return createPluginCacheKey([
+    [
+      path.resolve(params.manifestPath),
+      params.rejectHardlinks,
+      params.rootRealPath ?? "",
+      params.stats.dev,
+      params.stats.ino,
+    ],
     params.stats.size,
     params.stats.mtimeMs,
     params.stats.ctimeMs,
@@ -1193,8 +1257,6 @@ function getCachedPluginManifestLoadResult(
   ) {
     return undefined;
   }
-  pluginManifestLoadCache.delete(key);
-  pluginManifestLoadCache.set(key, entry);
   return entry.result;
 }
 
@@ -1209,13 +1271,6 @@ function setCachedPluginManifestLoadResult(
     mtimeMs: stats.mtimeMs,
     ctimeMs: stats.ctimeMs,
   });
-  if (pluginManifestLoadCache.size <= MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES) {
-    return;
-  }
-  const oldestKey = pluginManifestLoadCache.keys().next().value;
-  if (typeof oldestKey === "string") {
-    pluginManifestLoadCache.delete(oldestKey);
-  }
 }
 
 function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {
@@ -1422,6 +1477,10 @@ export type PluginPackageChannel = {
   configuredState?: {
     specifier?: string;
     exportName?: string;
+    env?: {
+      allOf?: readonly string[];
+      anyOf?: readonly string[];
+    };
   };
   persistedAuthState?: {
     specifier?: string;
@@ -1467,6 +1526,10 @@ export type OpenClawPackageSetupFeatures = {
   legacySessionSurfaces?: boolean;
 };
 
+export type OpenClawPackageBundle = {
+  includeInCore?: boolean;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
@@ -1475,6 +1538,7 @@ export type OpenClawPackageManifest = {
   setupFeatures?: OpenClawPackageSetupFeatures;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
+  bundle?: OpenClawPackageBundle;
   startup?: OpenClawPackageStartup;
 };
 
@@ -1505,6 +1569,12 @@ export function getPackageManifestMetadata(
     return undefined;
   }
   return manifest[MANIFEST_KEY];
+}
+
+export function isPackageIncludedInCoreBundle(
+  manifest: OpenClawPackageManifest | undefined,
+): boolean {
+  return manifest?.bundle?.includeInCore !== false;
 }
 
 export function resolvePackageExtensionEntries(

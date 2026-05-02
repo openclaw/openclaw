@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   applyXaiModelCompat,
@@ -12,6 +12,7 @@ import {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import { createOpenClawTools } from "./openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js";
@@ -161,6 +162,22 @@ describe("createOpenClawCodingTools", () => {
         toolsEnabled: true,
       }),
     ).toBeNull();
+  });
+
+  it("uses runtime toolsAllow when materializing plugin tools", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      runtimeToolAllowlist: ["memory_search", "memory_get"],
+    });
+
+    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginToolAllowlist: expect.arrayContaining(["memory_search", "memory_get"]),
+      }),
+    );
   });
 
   it("preserves action enums in normalized schemas", () => {
@@ -476,6 +493,29 @@ describe("createOpenClawCodingTools", () => {
       forceMessageTool: true,
     });
     expect(cronTools.some((tool) => tool.name === "message")).toBe(true);
+  });
+
+  it("keeps heartbeat response available for heartbeat runs under the coding profile", () => {
+    const codingTools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+      trigger: "heartbeat",
+      enableHeartbeatTool: true,
+      forceHeartbeatTool: true,
+    });
+
+    expect(codingTools.some((tool) => tool.name === "heartbeat_respond")).toBe(true);
+  });
+
+  it("enables heartbeat response when visible replies are message-tool-only", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        messages: { visibleReplies: "message_tool" },
+        tools: { profile: "coding" },
+      } as OpenClawConfig,
+      trigger: "heartbeat",
+    });
+
+    expect(tools.some((tool) => tool.name === "heartbeat_respond")).toBe(true);
   });
 
   it("can keep message available when a cron route needs it under a provider coding profile", () => {

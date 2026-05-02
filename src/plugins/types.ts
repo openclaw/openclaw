@@ -191,6 +191,7 @@ export type {
 export type {
   CliBackendAuthEpochMode,
   CliBackendNormalizeConfigContext,
+  CliBackendNativeToolMode,
   CliBackendPreparedExecution,
   CliBackendPrepareExecutionContext,
   CliBackendPlugin,
@@ -260,6 +261,7 @@ export type {
   WebSearchProviderPlugin,
   WebSearchProviderSetupContext,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
   WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -1962,6 +1964,8 @@ export type OpenClawPluginCommandDefinition = {
   };
   /** Description shown in /help and command menus */
   description: string;
+  /** Localized descriptions for native command surfaces that support them. */
+  descriptionLocalizations?: Record<string, string>;
   /** Optional system-prompt guidance for agents when this command is registered. */
   agentPromptGuidance?: readonly string[];
   /** Whether this command accepts arguments */
@@ -2045,7 +2049,87 @@ export type OpenClawPluginReloadRegistration = {
 export type OpenClawPluginNodeHostCommand = {
   command: string;
   cap?: string;
+  dangerous?: boolean;
   handle: (paramsJSON?: string | null) => Promise<string>;
+};
+
+export type OpenClawPluginNodeInvokeTransportResult =
+  | {
+      ok: true;
+      payload?: unknown;
+      payloadJSON?: string | null;
+    }
+  | {
+      ok: false;
+      code?: string;
+      message: string;
+      details?: Record<string, unknown>;
+    };
+
+export type OpenClawPluginNodeInvokeApprovalDecision = "allow-once" | "allow-always" | "deny";
+
+export type OpenClawPluginNodeInvokePolicyApprovalRuntime = {
+  request: (input: {
+    title: string;
+    description: string;
+    severity?: "info" | "warning" | "critical";
+    toolName?: string;
+    toolCallId?: string;
+    agentId?: string;
+    sessionKey?: string;
+    timeoutMs?: number;
+  }) => Promise<{
+    id?: string;
+    decision?: OpenClawPluginNodeInvokeApprovalDecision | null;
+  }>;
+};
+
+export type OpenClawPluginNodeInvokePolicyContext = {
+  nodeId: string;
+  command: string;
+  params: unknown;
+  timeoutMs?: number;
+  idempotencyKey?: string;
+  config: OpenClawConfig;
+  pluginConfig?: Record<string, unknown>;
+  node?: {
+    nodeId: string;
+    displayName?: string;
+    platform?: string;
+    deviceFamily?: string;
+    commands?: string[];
+  };
+  client?: {
+    connId?: string;
+    scopes?: string[];
+  } | null;
+  approvals?: OpenClawPluginNodeInvokePolicyApprovalRuntime;
+  invokeNode: (input?: {
+    params?: unknown;
+    timeoutMs?: number;
+    idempotencyKey?: string;
+  }) => Promise<OpenClawPluginNodeInvokeTransportResult>;
+};
+
+export type OpenClawPluginNodeInvokePolicyResult =
+  | {
+      ok: true;
+      payload?: unknown;
+      payloadJSON?: string | null;
+    }
+  | {
+      ok: false;
+      message: string;
+      code?: string;
+      details?: Record<string, unknown>;
+      unavailable?: boolean;
+    };
+
+export type OpenClawPluginNodeInvokePolicy = {
+  commands: string[];
+  handle: (
+    ctx: OpenClawPluginNodeInvokePolicyContext,
+  ) => Promise<OpenClawPluginNodeInvokePolicyResult> | OpenClawPluginNodeInvokePolicyResult;
 };
 
 export type OpenClawPluginSecurityAuditContext = {
@@ -2136,6 +2220,7 @@ export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPlu
  *
  * - `full`: live runtime activation; long-lived side effects may start.
  * - `discovery`: read-only capability discovery; skip sockets/workers/clients.
+ * - `tool-discovery`: capability discovery for executable tools; skip channel runtime hydration.
  * - `setup-only`: lightweight channel setup entry only.
  * - `setup-runtime`: setup flow that also needs the runtime channel entry.
  * - `cli-metadata`: CLI command metadata collection.
@@ -2143,6 +2228,7 @@ export type OpenClawPluginModule = OpenClawPluginDefinition | ((api: OpenClawPlu
 export type PluginRegistrationMode =
   | "full"
   | "discovery"
+  | "tool-discovery"
   | "setup-only"
   | "setup-runtime"
   | "cli-metadata";
@@ -2318,6 +2404,7 @@ export type OpenClawPluginApi = {
   ) => void;
   registerReload: (registration: OpenClawPluginReloadRegistration) => void;
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
+  registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
   registerService: (service: OpenClawPluginService) => void;
   /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */

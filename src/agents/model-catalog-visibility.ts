@@ -3,7 +3,7 @@ import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
 import { buildAllowedModelSet, buildConfiguredModelCatalog, modelKey } from "./model-selection.js";
 
-export type ModelCatalogVisibilityView = "default" | "configured" | "all";
+type ModelCatalogVisibilityView = "default" | "configured" | "all";
 
 function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
   return entries.toSorted(
@@ -32,6 +32,7 @@ export function resolveVisibleModelCatalog(params: {
   defaultModel?: string;
   agentId?: string;
   agentDir?: string;
+  workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   view?: ModelCatalogVisibilityView;
 }): ModelCatalogEntry[] {
@@ -55,6 +56,7 @@ export function resolveVisibleModelCatalog(params: {
   );
   const hasAuth = createProviderAuthChecker({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     env: params.env,
   });

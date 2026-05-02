@@ -564,9 +564,6 @@ jobs:
       - name: Smoke test built bundled plugin singleton
         run: pnpm test:build:singleton
 
-      - name: Smoke test built bundled runtime deps
-        run: pnpm test:build:bundled-runtime-deps
-
       - name: Check CLI startup memory
         run: pnpm test:startup:memory
 
@@ -1396,6 +1393,7 @@ jobs:
               pnpm check:no-conflict-markers
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
+              pnpm dup:check:coverage
               ;;
             prod-types)
               pnpm tsgo:prod

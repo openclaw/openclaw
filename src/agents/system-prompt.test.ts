@@ -329,6 +329,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("uses provider-neutral web_search prompt metadata", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["web_search"],
+    });
+
+    expect(prompt).toContain("- web_search: Search the web using the configured provider");
+    expect(prompt).not.toContain("Brave API");
+  });
+
   it("documents ACP sessions_spawn agent targeting requirements", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -793,6 +803,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("use `message(action=send)` for visible channel output");
     expect(prompt).toContain("The target defaults to the current source channel");
     expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).not.toContain("## Silent Replies");
+    expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
     expect(prompt).not.toContain(
       `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
     );

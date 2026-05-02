@@ -12,6 +12,7 @@ import {
   toWikiPageSummary,
   type WikiClaim,
   type WikiPageSummary,
+  type WikiRelationship,
 } from "./markdown.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
@@ -98,6 +99,7 @@ type QueryDigestPage = {
   bestUsedFor?: string[];
   notEnoughFor?: string[];
   relationshipCount?: number;
+  topRelationships?: WikiRelationship[];
 };
 
 type QueryDigestClaim = {
@@ -125,7 +127,7 @@ type QueryDigestBundle = {
   claims: QueryDigestClaim[];
 };
 
-export type WikiSearchResult = {
+type WikiSearchResult = {
   corpus: "wiki" | "memory";
   path: string;
   title: string;
@@ -154,7 +156,7 @@ export type WikiSearchResult = {
   evidenceSourceIds?: string[];
 };
 
-export type WikiGetResult = {
+type WikiGetResult = {
   corpus: "wiki" | "memory";
   path: string;
   title: string;
@@ -396,6 +398,16 @@ function buildDigestPageSearchText(page: QueryDigestPage, claims: QueryDigestCla
     page.personCard?.avoidAskingFor.join(" ") ?? "",
     page.personCard?.bestUsedFor.join(" ") ?? "",
     page.personCard?.notEnoughFor.join(" ") ?? "",
+    page.topRelationships
+      ?.flatMap((relationship) => [
+        relationship.targetId ?? "",
+        relationship.targetPath ?? "",
+        relationship.targetTitle ?? "",
+        relationship.kind ?? "",
+        relationship.evidenceKind ?? "",
+        relationship.note ?? "",
+      ])
+      .join(" ") ?? "",
     claims.map((claim) => claim.text).join(" "),
     claims.map((claim) => claim.id ?? "").join(" "),
     claims.map((claim) => claim.evidenceKinds?.join(" ") ?? "").join(" "),
@@ -550,6 +562,11 @@ function buildDigestRouteQuestionFields(page: QueryDigestPage): string[] {
     ...(page.notEnoughFor ?? []),
     ...(page.personCard?.bestUsedFor ?? []),
     ...(page.personCard?.notEnoughFor ?? []),
+    ...(page.topRelationships?.flatMap((relationship) => [
+      relationship.kind,
+      relationship.targetTitle,
+      relationship.note,
+    ]) ?? []),
   ].filter((value): value is string => Boolean(value));
 }
 

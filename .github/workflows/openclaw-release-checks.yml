@@ -33,7 +33,7 @@ on:
       release_profile:
         description: Release coverage profile for live/Docker/provider breadth
         required: false
-        default: full
+        default: stable
         type: choice
         options:
           - minimum
@@ -89,8 +89,8 @@ jobs:
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
-            echo "Release checks must be dispatched from main or release/YYYY.M.D so workflow logic and secrets stay controlled." >&2
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]]; then
+            echo "Release checks must be dispatched from main, release/YYYY.M.D, or a Full Release Validation release-ci/<sha>-<timestamp> ref so workflow logic and secrets stay controlled." >&2
             exit 1
           fi
 
@@ -240,11 +240,12 @@ jobs:
   prepare_release_package:
     name: Prepare release package artifact
     needs: [resolve_target]
-    if: contains(fromJSON('["all","cross-os","live-e2e","package"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","cross-os","package"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
+      packages: write
     outputs:
       artifact_name: ${{ steps.artifact.outputs.name }}
       package_sha256: ${{ steps.package.outputs.sha256 }}
@@ -311,6 +312,7 @@ jobs:
     if: contains(fromJSON('["all","install-smoke"]'), needs.resolve_target.outputs.rerun_group)
     permissions:
       contents: read
+      packages: write
     uses: ./.github/workflows/install-smoke.yml
     with:
       ref: ${{ needs.resolve_target.outputs.revision }}
@@ -329,6 +331,7 @@ jobs:
       candidate_file_name: openclaw-current.tgz
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
+      openai_model: openai/gpt-5.5
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -405,7 +408,7 @@ jobs:
   docker_e2e_release_checks:
     name: Run Docker release-path validation
     needs: [resolve_target, prepare_release_package]
-    if: contains(fromJSON('["all","live-e2e"]'), needs.resolve_target.outputs.rerun_group)
+    if: contains(fromJSON('["all","live-e2e"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.live_suite_filter == ''
     permissions:
       actions: read
       contents: read
@@ -438,7 +441,9 @@ jobs:
       artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
       package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}
       suite_profile: custom
-      docker_lanes: bundled-channel-deps-compat plugins-offline
+      docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update
+      published_upgrade_survivor_baselines: release-history
+      published_upgrade_survivor_scenarios: reported-issues
       telegram_mode: mock-openai
       telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating
     secrets:

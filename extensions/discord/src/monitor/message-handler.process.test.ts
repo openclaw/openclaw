@@ -162,6 +162,17 @@ let processDiscordMessage: typeof import("./message-handler.process.js").process
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
   dispatchInboundMessage: (params: DispatchInboundParams) => dispatchInboundMessage(params),
+  settleReplyDispatcher: async (params: {
+    dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+    onSettled?: () => void | Promise<void>;
+  }) => {
+    params.dispatcher.markComplete();
+    try {
+      await params.dispatcher.waitForIdle();
+    } finally {
+      await params.onSettled?.();
+    }
+  },
   createReplyDispatcherWithTyping: (opts: {
     deliver: (payload: unknown, info: { kind: string }) => Promise<void> | void;
   }) => ({
@@ -187,6 +198,27 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
   recordInboundSession: (...args: unknown[]) => recordInboundSession(...args),
+  resolvePinnedMainDmOwnerFromAllowlist: (params: {
+    dmScope?: string | null;
+    allowFrom?: Array<string | number> | null;
+    normalizeEntry: (entry: string) => string | undefined;
+  }) => {
+    if ((params.dmScope ?? "main") !== "main") {
+      return null;
+    }
+    const allowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
+    if (allowFrom.some((entry) => String(entry).trim() === "*")) {
+      return null;
+    }
+    const owners = Array.from(
+      new Set(
+        allowFrom
+          .map((entry) => params.normalizeEntry(String(entry)))
+          .filter((entry): entry is string => Boolean(entry)),
+      ),
+    );
+    return owners.length === 1 ? owners[0] : null;
+  },
   registerSessionBindingAdapter: vi.fn(),
   unregisterSessionBindingAdapter: vi.fn(),
   resolveThreadBindingConversationIdFromBindingId: (bindingId: string) =>
@@ -295,7 +327,13 @@ beforeEach(() => {
 });
 
 function getLastRouteUpdate():
-  | { sessionKey?: string; channel?: string; to?: string; accountId?: string }
+  | {
+      sessionKey?: string;
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      mainDmOwnerPin?: { ownerRecipient?: string; senderRecipient?: string };
+    }
   | undefined {
   const callArgs = recordInboundSession.mock.calls.at(-1) as unknown[] | undefined;
   const params = callArgs?.[0] as
@@ -305,6 +343,7 @@ function getLastRouteUpdate():
           channel?: string;
           to?: string;
           accountId?: string;
+          mainDmOwnerPin?: { ownerRecipient?: string; senderRecipient?: string };
         };
       }
     | undefined;
@@ -314,12 +353,16 @@ function getLastRouteUpdate():
 function getLastDispatchCtx():
   | {
       BodyForAgent?: string;
+      ChatType?: string;
       CommandBody?: string;
+      From?: string;
       MediaTranscribedIndexes?: number[];
       MessageThreadId?: string | number;
       ModelParentSessionKey?: string;
+      OriginatingTo?: string;
       ParentSessionKey?: string;
       SessionKey?: string;
+      To?: string;
       Transcript?: string;
     }
   | undefined {
@@ -328,12 +371,16 @@ function getLastDispatchCtx():
     | {
         ctx?: {
           BodyForAgent?: string;
+          ChatType?: string;
           CommandBody?: string;
+          From?: string;
           MediaTranscribedIndexes?: number[];
           MessageThreadId?: string | number;
           ModelParentSessionKey?: string;
+          OriginatingTo?: string;
           ParentSessionKey?: string;
           SessionKey?: string;
+          To?: string;
           Transcript?: string;
         };
       }
@@ -768,6 +815,55 @@ describe("processDiscordMessage session routing", () => {
       channel: "discord",
       to: "user:U1",
       accountId: "default",
+    });
+    expect(getLastDispatchCtx()).toMatchObject({
+      ChatType: "direct",
+      From: "discord:U1",
+      To: "user:U1",
+      OriginatingTo: "user:U1",
+      SessionKey: "agent:main:discord:direct:u1",
+    });
+  });
+
+  it("pins Discord text DM main-route updates to the single configured DM owner", async () => {
+    const ctx = await createBaseContext({
+      ...createDirectMessageContextOverrides(),
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: {
+          store: "/tmp/openclaw-discord-process-test-sessions.json",
+          dmScope: "main",
+        },
+      },
+      channelConfig: { users: ["user:111"] },
+      baseSessionKey: "agent:main:main",
+      author: {
+        id: "222",
+        username: "bob",
+        discriminator: "0",
+        globalName: "Bob",
+      },
+      sender: { id: "222", label: "bob" },
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:main",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastRouteUpdate()).toMatchObject({
+      sessionKey: "agent:main:main",
+      channel: "discord",
+      to: "user:222",
+      accountId: "default",
+      mainDmOwnerPin: {
+        ownerRecipient: "111",
+        senderRecipient: "222",
+      },
     });
   });
 

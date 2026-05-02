@@ -503,8 +503,13 @@ export async function loadCompactHooksHarness(): Promise<{
     listAgentEntries: vi.fn(() => []),
     resolveAgentConfig: vi.fn(() => undefined),
     resolveDefaultAgentId: vi.fn(() => "main"),
+    resolveRunModelFallbacksOverride: vi.fn(() => undefined),
     resolveSessionAgentId: resolveSessionAgentIdMock,
     resolveSessionAgentIds: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
+  }));
+
+  vi.doMock("../auth-profiles/source-check.js", () => ({
+    hasAnyAuthProfileStoreSource: vi.fn(() => false),
   }));
 
   vi.doMock("../memory-search.js", () => ({

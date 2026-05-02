@@ -39,7 +39,7 @@ const EMBEDDED_FALLBACK_META = {
 } as const;
 const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
 
-export type AgentCliOpts = {
+type AgentCliOpts = {
   message: string;
   agent?: string;
   model?: string;

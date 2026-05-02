@@ -6,6 +6,7 @@ import {
   collectPublishablePluginPackages,
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
+  OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
   parsePluginReleaseArgs,
   parsePluginReleaseSelection,
   parsePluginReleaseSelectionMode,
@@ -90,6 +91,10 @@ describe("collectPublishablePluginPackageErrors", () => {
         packageJson: {
           name: "@openclaw/zalo",
           version: "2026.3.15",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
           openclaw: {
             extensions: ["./index.ts"],
             release: {
@@ -121,8 +126,30 @@ describe("collectPublishablePluginPackageErrors", () => {
     ).toEqual([
       'package name must start with "@openclaw/"; found "broken".',
       "package.json private must not be true.",
+      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
       'package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
+    ]);
+  });
+
+  it("requires the GitHub repository URL npm provenance validates for trusted publishing", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "twitch",
+        packageDir: bundledPluginRoot("twitch"),
+        packageJson: {
+          name: "@openclaw/twitch",
+          version: "2026.5.1-beta.1",
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToNpm: true,
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
     ]);
   });
 });
@@ -134,6 +161,10 @@ describe("collectPublishablePluginPackages", () => {
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
       openclaw: {
         extensions: ["./index.ts"],
         install: {
@@ -156,6 +187,71 @@ describe("collectPublishablePluginPackages", () => {
         installNpmSpec: "@openclaw/demo-plugin",
       },
     ]);
+  });
+
+  it("does not validate unselected publishable plugin manifests", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
+      name: "@openclaw/demo-plugin",
+      version: "2026.4.10-beta.1",
+      repository: {
+        type: "git",
+        url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    mkdirSync(join(repoDir, "extensions", "private-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "private-plugin", "package.json"), {
+      name: "@openclaw/private-plugin",
+      version: "2026.4.10-beta.1",
+      private: true,
+      openclaw: {
+        extensions: ["./index.ts"],
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(
+      collectPublishablePluginPackages(repoDir, {
+        packageNames: ["@openclaw/demo-plugin"],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        extensionId: "demo-plugin",
+        packageName: "@openclaw/demo-plugin",
+        publishTag: "beta",
+      }),
+    ]);
+  });
+
+  it("treats an explicit empty extension filter as no candidates", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
+    mkdirSync(join(repoDir, "extensions", "private-plugin"), { recursive: true });
+    writeJsonFile(join(repoDir, "extensions", "private-plugin", "package.json"), {
+      name: "@openclaw/private-plugin",
+      version: "2026.4.10-beta.1",
+      private: true,
+      openclaw: {
+        extensions: ["./index.ts"],
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    expect(
+      collectPublishablePluginPackages(repoDir, {
+        extensionIds: [],
+      }),
+    ).toEqual([]);
   });
 });
 

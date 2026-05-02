@@ -58,11 +58,11 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
   });
 }
 
-export function identityDeliveryContext(value: unknown) {
+function identityDeliveryContext(value: unknown) {
   return value;
 }
 
-export function createDefaultSessionHelperMocks() {
+function createDefaultSessionHelperMocks() {
   return {
     resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
     resolveInternalSessionKey: ({ key }: { key?: string }) => key ?? "agent:main:main",
@@ -117,6 +117,7 @@ export function expectPersistedRuntimeModel(params: {
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
+  ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
@@ -178,6 +179,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    ensureContextEnginesInitialized:
+      params.ensureContextEnginesInitializedMock ?? (() => undefined),
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
     resolveParentForkMaxTokens: params.resolveParentForkMaxTokensMock ?? (() => 100_000),
     mergeSessionEntry: (

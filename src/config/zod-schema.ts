@@ -49,6 +49,28 @@ const NodeHostSchema = z
   .strict()
   .optional();
 
+const AccessGroupsSchema = z
+  .record(
+    z.string().min(1),
+    z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("discord.channelAudience"),
+          guildId: z.string().min(1),
+          channelId: z.string().min(1),
+          membership: z.literal("canViewChannel").optional(),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("message.senders"),
+          members: z.record(z.string().min(1), z.array(z.string().min(1))),
+        })
+        .strict(),
+    ]),
+  )
+  .optional();
+
 const MemoryQmdPathSchema = z
   .object({
     path: z.string(),
@@ -254,6 +276,14 @@ const CrestodianSchema = z
   .strict()
   .optional();
 
+const CommitmentsSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    maxPerDay: z.number().int().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -455,6 +485,15 @@ export const OpenClawSchema = z
           )
           .optional(),
         extraArgs: z.array(z.string()).optional(),
+        tabCleanup: z
+          .object({
+            enabled: z.boolean().optional(),
+            idleMinutes: z.number().int().nonnegative().optional(),
+            maxTabsPerSession: z.number().int().nonnegative().optional(),
+            sweepMinutes: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -505,6 +544,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    accessGroups: AccessGroupsSchema,
     acp: z
       .object({
         enabled: z.boolean().optional(),
@@ -648,6 +688,7 @@ export const OpenClawSchema = z
         }
       })
       .optional(),
+    commitments: CommitmentsSchema,
     hooks: z
       .object({
         enabled: z.boolean().optional(),

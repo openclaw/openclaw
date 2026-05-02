@@ -681,6 +681,9 @@ Write colocated tests in `src/channel.test.ts`:
   <Card title="Runtime helpers" icon="settings" href="/plugins/sdk-runtime">
     TTS, STT, media, subagent via api.runtime
   </Card>
+  <Card title="Channel turn kernel" icon="bolt" href="/plugins/sdk-channel-turn">
+    Shared inbound turn lifecycle: ingest, resolve, record, dispatch, finalize
+  </Card>
 </CardGroup>
 
 <Note>

@@ -117,7 +117,7 @@ type TelegramQaScenarioResult = {
 
 type TelegramQaCanaryPhase = "sut_reply_timeout" | "sut_reply_not_threaded" | "sut_reply_empty";
 
-export type TelegramQaRunResult = {
+type TelegramQaRunResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -298,7 +298,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
   },
 ];
 
-export const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
+const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
   alwaysOnStandardScenarioIds: ["canary"],
   scenarios: TELEGRAM_QA_SCENARIOS,
 });
@@ -376,6 +376,13 @@ function resolveTelegramQaCanaryTimeoutMs(env: NodeJS.ProcessEnv = process.env) 
   );
 }
 
+function resolveTelegramQaScenarioTimeoutMs(
+  fallbackMs: number,
+  env: NodeJS.ProcessEnv = process.env,
+) {
+  return parsePositiveTelegramQaEnvMs(env, "OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS", fallbackMs);
+}
+
 function formatTelegramQaTimeoutSeconds(timeoutMs: number) {
   return `${Math.round(timeoutMs / 1_000)}s`;
 }
@@ -409,9 +416,7 @@ function formatTelegramQaProgressDetails(details: string): string {
   return `${sanitized.slice(0, TELEGRAM_QA_PROGRESS_DETAIL_LIMIT - 3).trimEnd()}...`;
 }
 
-export function resolveTelegramQaRuntimeEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): TelegramQaRuntimeEnv {
+function resolveTelegramQaRuntimeEnv(env: NodeJS.ProcessEnv = process.env): TelegramQaRuntimeEnv {
   const groupId = resolveEnvValue(env, "OPENCLAW_QA_TELEGRAM_GROUP_ID");
   if (!/^-?\d+$/u.test(groupId)) {
     throw new Error("OPENCLAW_QA_TELEGRAM_GROUP_ID must be a numeric Telegram chat id.");
@@ -465,9 +470,7 @@ function detectMediaKinds(message: TelegramMessage) {
   return kinds;
 }
 
-export function normalizeTelegramObservedMessage(
-  update: TelegramUpdate,
-): TelegramObservedMessage | null {
+function normalizeTelegramObservedMessage(update: TelegramUpdate): TelegramObservedMessage | null {
   const message = update.message;
   if (!message?.from?.id) {
     return null;
@@ -1308,6 +1311,9 @@ export async function runTelegramQaLive(params: {
           );
           assertLeaseHealthy();
           const scenarioRun = scenario.buildRun(sutUsername);
+          const scenarioTimeoutMs = scenarioRun.expectReply
+            ? resolveTelegramQaScenarioTimeoutMs(scenario.timeoutMs)
+            : scenario.timeoutMs;
           try {
             const requestStartedAtMs = Date.now();
             const sent = await sendGroupMessage(
@@ -1322,7 +1328,7 @@ export async function runTelegramQaLive(params: {
             const matched = await waitForObservedMessage({
               token: runtimeEnv.driverToken,
               initialOffset: driverOffset,
-              timeoutMs: scenario.timeoutMs,
+              timeoutMs: scenarioTimeoutMs,
               observedMessages,
               observationScenarioId: scenario.id,
               observationScenarioTitle: scenario.title,
@@ -1368,7 +1374,7 @@ export async function runTelegramQaLive(params: {
             if (!scenarioRun.expectReply) {
               const details = formatErrorMessage(error);
               if (
-                details === `timed out after ${scenario.timeoutMs}ms waiting for Telegram message`
+                details === `timed out after ${scenarioTimeoutMs}ms waiting for Telegram message`
               ) {
                 const result = {
                   id: scenario.id,
@@ -1537,6 +1543,7 @@ export const __testing = {
   parseTelegramQaProgressBooleanEnv,
   parseTelegramQaCredentialPayload,
   resolveTelegramQaCanaryTimeoutMs,
+  resolveTelegramQaScenarioTimeoutMs,
   resolveTelegramQaRuntimeEnv,
   sanitizeTelegramQaProgressValue,
   shouldLogTelegramQaLiveProgress,

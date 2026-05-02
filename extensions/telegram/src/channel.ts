@@ -691,6 +691,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     messaging: {
+      targetPrefixes: ["telegram", "tg"],
       normalizeTarget: normalizeTelegramMessagingTarget,
       resolveInboundConversation: ({ to, conversationId, threadId }) =>
         resolveTelegramInboundConversation({ to, conversationId, threadId }),

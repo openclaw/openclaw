@@ -22,7 +22,9 @@ falls back to npm automatically for packages that still use npm distribution.
 
 - Node >= 22 and a package manager (npm or pnpm)
 - Familiarity with TypeScript (ESM)
-- For in-repo plugins: repository cloned and `pnpm install` done
+- For in-repo plugins: repository cloned and `pnpm install` done. Source
+  checkout plugin development is pnpm-only because OpenClaw loads bundled
+  plugins from the `extensions/*` workspace packages.
 
 ## What kind of plugin?
 
@@ -252,6 +254,47 @@ Users enable optional tools in config:
 - Tools with malformed registration objects, including missing `parameters`, are skipped and reported in plugin diagnostics instead of breaking agent runs
 - Use `optional: true` for tools with side effects or extra binary requirements
 - Users can enable all tools from a plugin by adding the plugin id to `tools.allow`
+
+## Registering CLI commands
+
+Plugins can add root `openclaw` command groups with `api.registerCli`. Provide
+`descriptors` for every top-level command root so OpenClaw can show and route
+the command without eagerly loading every plugin runtime.
+
+```typescript
+register(api) {
+  api.registerCli(
+    ({ program }) => {
+      const demo = program
+        .command("demo-plugin")
+        .description("Run demo plugin commands");
+
+      demo
+        .command("ping")
+        .description("Check that the plugin CLI is executable")
+        .action(() => {
+          console.log("demo-plugin:pong");
+        });
+    },
+    {
+      descriptors: [
+        {
+          name: "demo-plugin",
+          description: "Run demo plugin commands",
+          hasSubcommands: true,
+        },
+      ],
+    },
+  );
+}
+```
+
+After install, verify the runtime registration and execute the command:
+
+```bash
+openclaw plugins inspect demo-plugin --runtime --json
+openclaw demo-plugin ping
+```
 
 ## Import conventions
 

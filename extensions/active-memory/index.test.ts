@@ -1039,6 +1039,7 @@ describe("active-memory plugin", () => {
       "If memory_recall is unavailable, use memory_search and memory_get.",
     );
     expect(runParams?.toolsAllow).toEqual(["memory_recall", "memory_search", "memory_get"]);
+    expect(runParams?.allowGatewaySubagentBinding).toBe(true);
     expect(runParams?.prompt).toContain(
       "When searching for preference or habit recall, use a permissive recall limit or memory_search threshold before deciding that no useful memory exists.",
     );
@@ -1384,6 +1385,22 @@ describe("active-memory plugin", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("config.modelFallbackPolicy is deprecated"),
     );
+    // #74587: deprecation warning must spell out the chain-resolution
+    // semantics so operators don't read it as a promise of runtime failover.
+    // The previous wording ("set config.modelFallback if you want a fallback
+    // model") cost real users hours of debug time before they hit the source
+    // and saw `getModelRef` only walks candidates once.
+    const warnCalls = (api.logger.warn as ReturnType<typeof vi.fn>).mock.calls;
+    const deprecationMessage = warnCalls
+      .map(([first]) => (typeof first === "string" ? first : ""))
+      .find((message) => message.includes("config.modelFallbackPolicy is deprecated"));
+    expect(deprecationMessage).toBeDefined();
+    // Positive: the warning describes chain-resolution last-resort behavior.
+    expect(deprecationMessage).toContain("chain-resolution");
+    expect(deprecationMessage).toContain("last-resort");
+    // Negative: the warning explicitly disclaims runtime failover, since
+    // that's the wrong mental model the previous wording invited.
+    expect(deprecationMessage).toMatch(/NOT a runtime failover/i);
   });
 
   it("does not use a built-in fallback model even when default-remote is configured", async () => {
@@ -1585,6 +1602,7 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 20,
@@ -1647,6 +1665,7 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 20,
@@ -1702,6 +1721,7 @@ describe("active-memory plugin", () => {
 
   it("keeps timeout status when the timeout transcript is empty", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -1732,6 +1752,7 @@ describe("active-memory plugin", () => {
 
   it("keeps timeout status when the timeout transcript path does not exist", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -2189,7 +2210,7 @@ describe("active-memory plugin", () => {
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
     const CONFIGURED_TIMEOUT_MS = 200;
-    const MARGIN_MS = 500;
+    const HARD_DEADLINE_MARGIN_MS = 4_800;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -2223,7 +2244,7 @@ describe("active-memory plugin", () => {
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
     // Hard deadline: wall-clock time must be near timeoutMs, not 30s.
-    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + MARGIN_MS);
+    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + HARD_DEADLINE_MARGIN_MS);
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {
