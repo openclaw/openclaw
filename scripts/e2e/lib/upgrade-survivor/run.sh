@@ -752,9 +752,9 @@ phase assert-legacy-plugin-dependency-debris assert_legacy_plugin_dependency_deb
 phase assert-baseline assert_baseline_state
 phase seed-legacy-runtime-deps-symlink seed_legacy_runtime_deps_symlink
 phase resolve-candidate resolve_candidate_version
+phase configured-plugin-installs-clawhub-fixture start_configured_plugin_installs_clawhub_fixture
 phase update-candidate update_candidate
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor
-phase configured-plugin-installs-clawhub-fixture start_configured_plugin_installs_clawhub_fixture
 phase doctor run_doctor
 phase configured-plugin-installs-clawhub-attempted assert_configured_plugin_installs_clawhub_attempted
 phase assert-legacy-plugin-dependency-debris-cleaned assert_legacy_plugin_dependency_debris_cleaned
