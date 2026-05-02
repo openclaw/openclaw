@@ -4,7 +4,6 @@ import {
   loadSessionStore,
   normalizeChannelId,
   normalizeE164,
-  readChannelAllowFromStoreSync,
   resolveStorePath,
   type OpenClawConfig,
 } from "./heartbeat-recipients.runtime.js";
@@ -63,14 +62,9 @@ export function resolveWhatsAppHeartbeatRecipients(
   )
     .filter((value) => value !== "*")
     .map(normalizeE164);
-  const storeAllowFrom = readChannelAllowFromStoreSync(
-    "whatsapp",
-    process.env,
-    resolvedAccountId,
-  ).map(normalizeE164);
 
   const unique = (list: string[]) => [...new Set(list.filter(Boolean))];
-  const allowFrom = unique([...configuredAllowFrom, ...storeAllowFrom]);
+  const allowFrom = unique(configuredAllowFrom);
 
   if (opts.all) {
     return {

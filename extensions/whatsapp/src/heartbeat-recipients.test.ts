@@ -3,12 +3,10 @@ import { resolveWhatsAppHeartbeatRecipients } from "./heartbeat-recipients.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 const loadSessionStoreMock = vi.hoisted(() => vi.fn());
-const readChannelAllowFromStoreSyncMock = vi.hoisted(() => vi.fn<() => string[]>(() => []));
 
 vi.mock("./heartbeat-recipients.runtime.js", () => ({
   DEFAULT_ACCOUNT_ID: "default",
   loadSessionStore: loadSessionStoreMock,
-  readChannelAllowFromStoreSync: readChannelAllowFromStoreSyncMock,
   resolveStorePath: vi.fn(() => "/tmp/test-sessions.json"),
   normalizeChannelId: (value?: string | null) => {
     const trimmed = value?.trim().toLowerCase();
@@ -36,10 +34,6 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     loadSessionStoreMock.mockReturnValue(store);
   }
 
-  function setAllowFromStore(entries: string[]) {
-    readChannelAllowFromStoreSyncMock.mockReturnValue(entries);
-  }
-
   function resolveWith(
     cfgOverrides: Partial<OpenClawConfig> = {},
     opts?: Parameters<typeof resolveWhatsAppHeartbeatRecipients>[1],
@@ -51,24 +45,22 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     setSessionStore({
       a: { lastChannel: "whatsapp", lastTo: "+15550000099", updatedAt: 2, sessionId: "a" },
     });
-    setAllowFromStore(["+15550000001"]);
   }
 
   beforeEach(() => {
     loadSessionStoreMock.mockReset();
-    readChannelAllowFromStoreSyncMock.mockReset();
     loadSessionStoreMock.mockReturnValue({});
-    setAllowFromStore([]);
   });
 
-  it("uses allowFrom store recipients when session recipients are ambiguous", () => {
+  it("uses configured allowFrom recipients when session recipients are ambiguous", () => {
     setSessionStore({
       a: { lastChannel: "whatsapp", lastTo: "+15550000001", updatedAt: 2, sessionId: "a" },
       b: { lastChannel: "whatsapp", lastTo: "+15550000002", updatedAt: 1, sessionId: "b" },
     });
-    setAllowFromStore(["+15550000001"]);
 
-    const result = resolveWith();
+    const result = resolveWith({
+      channels: { whatsapp: { allowFrom: ["+15550000001"] } as never },
+    });
 
     expect(result).toEqual({ recipients: ["+15550000001"], source: "session-single" });
   });
@@ -76,7 +68,9 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
   it("falls back to allowFrom when no session recipient is authorized", () => {
     setSingleUnauthorizedSessionWithAllowFrom();
 
-    const result = resolveWith();
+    const result = resolveWith({
+      channels: { whatsapp: { allowFrom: ["+15550000001"] } as never },
+    });
 
     expect(result).toEqual({ recipients: ["+15550000001"], source: "allowFrom" });
   });
@@ -84,7 +78,10 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
   it("includes both session and allowFrom recipients when --all is set", () => {
     setSingleUnauthorizedSessionWithAllowFrom();
 
-    const result = resolveWith({}, { all: true });
+    const result = resolveWith(
+      { channels: { whatsapp: { allowFrom: ["+15550000001"] } as never } },
+      { all: true },
+    );
 
     expect(result).toEqual({
       recipients: ["+15550000099", "+15550000001"],
@@ -126,8 +123,9 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
       b: { lastChannel: "whatsapp", lastTo: "+15550000002", updatedAt: 1, sessionId: "b" },
       c: { lastChannel: "whatsapp", lastTo: "+15550000003", updatedAt: 0, sessionId: "c" },
     });
-    setAllowFromStore(["+15550000001", "+15550000002"]);
-    const result = resolveWith();
+    const result = resolveWith({
+      channels: { whatsapp: { allowFrom: ["+15550000001", "+15550000002"] } as never },
+    });
     expect(result).toEqual({
       recipients: ["+15550000001", "+15550000002"],
       source: "session-ambiguous",
@@ -145,11 +143,10 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     expect(result).toEqual({ recipients: ["+15550000009"], source: "allowFrom" });
   });
 
-  it("uses the requested account allowFrom config and pairing store", () => {
+  it("uses the requested account allowFrom config without pairing-store recipients", () => {
     setSessionStore({
       a: { lastChannel: "whatsapp", lastTo: "+15550000077", updatedAt: 2, sessionId: "a" },
     });
-    setAllowFromStore(["+15550000002"]);
 
     const result = resolveWith(
       {
@@ -167,18 +164,16 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
       { accountId: "work" },
     );
 
-    expect(readChannelAllowFromStoreSyncMock).toHaveBeenCalledWith("whatsapp", process.env, "work");
     expect(result).toEqual({
-      recipients: ["+15550000003", "+15550000002"],
+      recipients: ["+15550000003"],
       source: "allowFrom",
     });
   });
 
-  it("uses configured defaultAccount allowFrom config and pairing store when accountId is omitted", () => {
+  it("uses configured defaultAccount allowFrom config when accountId is omitted", () => {
     setSessionStore({
       a: { lastChannel: "whatsapp", lastTo: "+15550000077", updatedAt: 2, sessionId: "a" },
     });
-    setAllowFromStore(["+15550000002"]);
 
     const result = resolveWith({
       channels: {
@@ -194,9 +189,8 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
       },
     });
 
-    expect(readChannelAllowFromStoreSyncMock).toHaveBeenCalledWith("whatsapp", process.env, "work");
     expect(result).toEqual({
-      recipients: ["+15550000003", "+15550000002"],
+      recipients: ["+15550000003"],
       source: "allowFrom",
     });
   });
