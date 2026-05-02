@@ -386,4 +386,44 @@ describe("cron service store seam coverage", () => {
 
     expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBeUndefined();
   });
+
+  it("does not throw when reloading a job with a malformed string-shaped schedule", async () => {
+    const { storePath } = await makeStorePath();
+    const jobId = "malformed-string-schedule-job";
+    const nextRunAtMs = STORE_TEST_NOW + 60_000;
+
+    await writeSingleJobStore(storePath, {
+      id: jobId,
+      name: "malformed string schedule",
+      enabled: true,
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      schedule: "0 6 * * *",
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs },
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await writeSingleJobStore(storePath, {
+      id: jobId,
+      name: "malformed string schedule",
+      enabled: true,
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW,
+      schedule: "0 6 * * *",
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "tick" },
+      state: { nextRunAtMs },
+    });
+
+    await expect(
+      ensureLoaded(state, { forceReload: true, skipRecompute: true }),
+    ).resolves.not.toThrow();
+    expect(findJobOrThrow(state, jobId).state.nextRunAtMs).toBe(nextRunAtMs);
+  });
 });

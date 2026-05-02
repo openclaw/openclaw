@@ -91,5 +91,10 @@ export function cronSchedulingInputsEqual(
   previous: Pick<CronJob, "schedule"> & { enabled?: boolean },
   next: Pick<CronJob, "schedule"> & { enabled?: boolean },
 ): boolean {
-  return cronScheduleIdentity(previous) === cronScheduleIdentity(next);
+  const prevId = tryCronScheduleIdentity(previous as unknown as Record<string, unknown>);
+  const nextId = tryCronScheduleIdentity(next as unknown as Record<string, unknown>);
+  if (prevId === undefined || nextId === undefined) {
+    return true;
+  }
+  return prevId === nextId;
 }
