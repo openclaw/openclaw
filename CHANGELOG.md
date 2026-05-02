@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Signal: support Note-to-Self chat in linked-device mode — when the operator's E.164 number appears in `channels.signal.allowFrom`, self-addressed `syncMessage.sentMessage` envelopes (`destination === source`) are promoted to inbound `dataMessage` so personal-account users can chat with their agent via Note-to-Self. Mirrors WhatsApp's `selfChatMode` opt-in pattern. Other syncMessages (sentTranscripts to third parties, read receipts, etc.) and direct own-account messages remain dropped, preserving loop protection for outbound replies. Fixes #75870, #5722. Thanks @jeffhu1.
 - Heartbeat: strip legacy `[TOOL_CALL]...[/TOOL_CALL]` and `[TOOL_RESULT]...[/TOOL_RESULT]` pseudo-call blocks from heartbeat replies before channel delivery. Fixes #54138. Thanks @Deniable9570.
 - macOS/Voice Wake: send wake-word and Push-to-Talk transcripts through the selected macOS session target instead of always falling back to main WebChat. Fixes #51040. Thanks @carl-jeffrolc.
 - Providers/xAI: give Grok `web_search` a 60s default timeout, harden malformed xAI Responses parsing, and return structured timeout errors instead of aborting the tool call. Fixes #58063 and #58733. Thanks @dnishimura, @marvcasasola-svg, and @Nanako0129.
