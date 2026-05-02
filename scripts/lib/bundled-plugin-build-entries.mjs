@@ -9,6 +9,7 @@ import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 export const NON_PACKAGED_BUNDLED_PLUGIN_DIRS = new Set(["qa-channel", "qa-lab", "qa-matrix"]);
+const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot"]);
 const toPosixPath = (value) => value.replaceAll("\\", "/");
 
 function readBundledPluginPackageJson(packageJsonPath) {
@@ -45,10 +46,6 @@ function collectPluginSourceEntries(packageJson) {
     packageEntries = Array.from(new Set([...packageEntries, setupEntry]));
   }
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
-}
-
-function shouldIncludeBundledPluginInCore(packageJson) {
-  return packageJson?.openclaw?.bundle?.includeInCore !== false;
 }
 
 function collectTopLevelPublicSurfaceEntries(pluginDir) {
@@ -115,7 +112,7 @@ export function collectBundledPluginBuildEntries(params = {}) {
     if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
       continue;
     }
-    if (!shouldIncludeBundledPluginInCore(packageJson)) {
+    if (EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS.has(dirent.name)) {
       continue;
     }
 

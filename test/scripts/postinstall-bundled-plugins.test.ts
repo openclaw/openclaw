@@ -152,14 +152,6 @@ describe("bundled plugin postinstall", () => {
       isSourceCheckoutRoot({
         packageRoot,
         existsSync: (value: string) => existingPaths.has(value),
-        readFileSync: () =>
-          JSON.stringify({
-            openclaw: {
-              bundle: {
-                mirroredRootRuntimeDependencies: ["json5"],
-              },
-            },
-          }),
       }),
     ).toBe(false);
   });
