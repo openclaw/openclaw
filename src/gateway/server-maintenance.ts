@@ -90,9 +90,15 @@ export function startGatewayMaintenanceTimers(params: {
       }
     }
     if (params.dedupe.size > DEDUPE_MAX) {
-      const entries = [...params.dedupe.entries()].toSorted((a, b) => a[1].ts - b[1].ts);
-      for (let i = 0; i < params.dedupe.size - DEDUPE_MAX; i++) {
-        params.dedupe.delete(entries[i][0]);
+      const excess = params.dedupe.size - DEDUPE_MAX;
+      // Keep overflow eviction aligned with the entry timestamp, not Map
+      // insertion order, so refresh/reinsert paths still prune the oldest data.
+      const oldestKeys = [...params.dedupe.entries()]
+        .toSorted(([, left], [, right]) => left.ts - right.ts)
+        .slice(0, excess)
+        .map(([key]) => key);
+      for (const key of oldestKeys) {
+        params.dedupe.delete(key);
       }
     }
 
