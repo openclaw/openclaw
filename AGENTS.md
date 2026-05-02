@@ -141,6 +141,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Test workers max 16. Memory pressure: `OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test`.
 - Live: `OPENCLAW_LIVE_TEST=1 pnpm test:live`; verbose `OPENCLAW_LIVE_TEST_QUIET=0`.
 - Guide: `docs/help/testing.md`.
+- Package manifest plugin-local assertions must agree with `pnpm deps:root-ownership:check`; intentionally internalized bundled plugin runtime deps are root-owned while the package acceptance path needs them.
 
 ## Docs / Changelog
 
