@@ -81,12 +81,12 @@ function buildPaginatedSessionHistory(params: {
   };
 }
 
-export function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
+function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
   const seq = message?.__openclaw?.seq;
   return typeof seq === "number" && Number.isFinite(seq) && seq > 0 ? seq : undefined;
 }
 
-export function paginateSessionMessages(
+function paginateSessionMessages(
   messages: SessionHistoryMessage[],
   limit: number | undefined,
   cursor: string | undefined,
