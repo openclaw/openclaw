@@ -19,7 +19,7 @@ export class TelegramPollingTransportState {
     this.#transportDirty = true;
   }
 
-  acquireForNextCycle(): TelegramTransport | undefined {
+  async acquireForNextCycle(): Promise<TelegramTransport | undefined> {
     if (this.#disposed) {
       return undefined;
     }
@@ -29,13 +29,18 @@ export class TelegramPollingTransportState {
       ? (this.opts.createTelegramTransport?.() ?? previous)
       : previous;
     // When the dirty flag triggered a rebuild, release the old transport's
-    // dispatchers. Without this, each network stall / recoverable error
-    // leaves a full pool of keep-alive sockets to api.telegram.org dangling
-    // forever — which over long-running sessions accumulates into the
-    // hundreds of ESTABLISHED connections that choke per-IP upstream quotas.
+    // dispatchers before using the replacement transport. Without this, the
+    // stale keep-alive socket may still be considered the active poll session
+    // by Telegram while a new getUpdates request races in on a fresh socket.
     if (this.#transportDirty && previous && nextTransport !== previous) {
       this.opts.log("[telegram][diag] closing stale transport before rebuild");
-      this.#closeTransportAsync(previous, "stale-transport rebuild");
+      try {
+        await previous.close();
+      } catch (err) {
+        this.opts.log(
+          `[telegram][diag] failed to close stale transport before rebuild: ${formatCloseError(err)}`,
+        );
+      }
     }
     if (this.#transportDirty && nextTransport) {
       this.opts.log("[telegram][diag] rebuilding transport for next polling cycle");
@@ -62,16 +67,6 @@ export class TelegramPollingTransportState {
         `[telegram][diag] failed to close transport during dispose: ${formatCloseError(err)}`,
       );
     }
-  }
-
-  // Fire-and-forget close used on the rebuild path so the polling cycle is not
-  // blocked by a slow destroy. The error path is logged but never rethrown.
-  #closeTransportAsync(transport: TelegramTransport, context: string) {
-    void transport.close().catch((err) => {
-      this.opts.log(
-        `[telegram][diag] failed to close transport (${context}): ${formatCloseError(err)}`,
-      );
-    });
   }
 }
 
