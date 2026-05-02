@@ -1016,7 +1016,7 @@ export class OpenClawApp extends LitElement {
         if (this.chatDictationRecorder !== recorder) {
           return;
         }
-        const chunks = this.chatDictationChunks;
+        const chunks = [...this.chatDictationChunks];
         this.chatDictationChunks = [];
         const canceledByRequest = this.chatDictationCancelNextStop;
         this.chatDictationCancelNextStop = false;

@@ -136,6 +136,10 @@ describe("OpenClawApp dictation recorder lifecycle", () => {
     await app.toggleChatDictation();
     const recorder = MockMediaRecorder.instances[0];
     recorder.emitData(new Blob(["audio"], { type: "audio/webm" }));
+    transcribeChatAudioMock.mockImplementationOnce(async () => {
+      expect(app.chatDictationChunks).toEqual([]);
+      return null;
+    });
 
     await app.toggleChatDictation();
 
