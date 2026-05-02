@@ -652,7 +652,6 @@ export class OpenClawApp extends LitElement {
     document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
     this.chatMobileControlsTrigger = null;
-    this.cancelChatDictation();
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
     super.disconnectedCallback();
   }

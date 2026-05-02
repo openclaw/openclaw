@@ -41,9 +41,7 @@ type LifecycleHost = {
   realtimeTalkStatus?: string;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
-  chatDictationRecorder?: { stop: () => void; state?: string } | null;
-  chatDictationStatus?: string;
-  chatDictationDetail?: string | null;
+  cancelChatDictation?: () => void;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
@@ -94,12 +92,7 @@ export function handleDisconnected(host: LifecycleHost) {
   host.realtimeTalkStatus = "idle";
   host.realtimeTalkDetail = null;
   host.realtimeTalkTranscript = null;
-  if (host.chatDictationRecorder?.state === "recording") {
-    host.chatDictationRecorder.stop();
-  }
-  host.chatDictationRecorder = null;
-  host.chatDictationStatus = "idle";
-  host.chatDictationDetail = null;
+  host.cancelChatDictation?.();
   host.client?.stop();
   host.client = null;
   host.connected = false;
