@@ -127,6 +127,7 @@ vi.mock("openclaw/plugin-sdk/file-lock", async () => {
 import { spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
+  type MemorySearchRuntimeDebug,
   requireNodeSqlite,
   resolveMemoryBackendConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -1647,6 +1648,94 @@ describe("QmdMemoryManager", () => {
       spawnMock.mock.calls.some((call: unknown[]) => (call[1] as string[])?.[0] === "query"),
     ).toBe(false);
     expect(maxResults).toBeGreaterThan(0);
+    await manager.close();
+  });
+
+  it("retries noisy lexical qmd searches with a relaxed keyword query after zero hits", async () => {
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "search",
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+    const expectedDocId = "relaxed-123";
+    const searchQueries: string[] = [];
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        searchQueries.push(args[1] ?? "");
+        const child = createMockChild({ autoClose: false });
+        if (args[1] === "memory active QMD Discord") {
+          emitAndClose(
+            child,
+            "stdout",
+            JSON.stringify([
+              {
+                docid: expectedDocId,
+                score: 0.91,
+                snippet: "@@ -9,1\nQMD memory is enabled for Discord.",
+              },
+            ]),
+          );
+          return child;
+        }
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager } = await createManager();
+    const inner = manager as unknown as {
+      db: { prepare: (query: string) => { all: (arg: unknown) => unknown }; close: () => void };
+    };
+    inner.db = {
+      prepare: (_query: string) => ({
+        all: (arg: unknown) => {
+          if (typeof arg === "string" && arg.startsWith(expectedDocId)) {
+            return [{ collection: "workspace-main", path: "memory/qmd.md" }];
+          }
+          return [];
+        },
+      }),
+      close: () => {},
+    };
+    const debug: MemorySearchRuntimeDebug[] = [];
+
+    await expect(
+      manager.search(
+        "thread memory retrieval active-memory QMD semantic memory search Discord test",
+        {
+          sessionKey: "agent:main:slack:dm:u123",
+          onDebug: (entry) => debug.push(entry),
+        },
+      ),
+    ).resolves.toEqual([
+      {
+        path: "memory/qmd.md",
+        startLine: 9,
+        endLine: 9,
+        score: 0.91,
+        snippet: "@@ -9,1\nQMD memory is enabled for Discord.",
+        source: "memory",
+      },
+    ]);
+
+    expect(searchQueries).toEqual([
+      "thread memory retrieval active-memory QMD semantic memory search Discord test",
+      "memory active QMD Discord",
+    ]);
+    expect(debug.at(-1)).toMatchObject({
+      backend: "qmd",
+      configuredMode: "search",
+      effectiveMode: "search",
+      fallback: "relaxed-lexical-zero-hit",
+    });
     await manager.close();
   });
 
@@ -3967,13 +4056,24 @@ describe("QmdMemoryManager", () => {
 
     logWarnMock.mockClear();
     const beforeCalls = spawnMock.mock.calls.length;
+    const debug: MemorySearchRuntimeDebug[] = [];
     await expect(
-      manager.search("blocked", { sessionKey: "agent:main:discord:channel:c123" }),
+      manager.search("blocked", {
+        sessionKey: "agent:main:discord:channel:c123",
+        onDebug: (entry) => debug.push(entry),
+      }),
     ).resolves.toEqual([]);
 
     expect(spawnMock.mock.calls.length).toBe(beforeCalls);
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("qmd search denied by scope"));
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("chatType=channel"));
+    expect(debug).toEqual([
+      {
+        backend: "qmd",
+        configuredMode: "search",
+        fallback: "scope-denied",
+      },
+    ]);
 
     await manager.close();
   });
