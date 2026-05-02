@@ -18,7 +18,7 @@ import { loadEmbeddedPiMcpConfig } from "./embedded-pi-mcp.js";
 const log = createSubsystemLogger("embedded-pi-settings");
 
 export const DEFAULT_EMBEDDED_PI_PROJECT_SETTINGS_POLICY = "sanitize";
-export const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as const;
+const SANITIZED_PROJECT_PI_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
 export type EmbeddedPiProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
