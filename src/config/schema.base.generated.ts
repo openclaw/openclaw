@@ -21780,18 +21780,18 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
-                    storepackSha256: {
+                    clawpackSha256: {
                       type: "string",
                     },
-                    storepackSpecVersion: {
+                    clawpackSpecVersion: {
                       type: "integer",
                       minimum: 0,
                       maximum: 9007199254740991,
                     },
-                    storepackManifestSha256: {
+                    clawpackManifestSha256: {
                       type: "string",
                     },
-                    storepackSize: {
+                    clawpackSize: {
                       type: "integer",
                       minimum: 0,
                       maximum: 9007199254740991,
