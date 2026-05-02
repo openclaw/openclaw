@@ -3,6 +3,8 @@ import { createEmptyPluginRegistry } from "../registry.js";
 
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
+  resolveCompatibleRuntimePluginRegistry:
+    vi.fn<typeof import("../loader.js").resolveCompatibleRuntimePluginRegistry>(),
   resolveRuntimePluginRegistry: vi.fn<typeof import("../loader.js").resolveRuntimePluginRegistry>(),
   getActivePluginRegistry: vi.fn<typeof import("../runtime.js").getActivePluginRegistry>(),
   resolveConfiguredChannelPluginIds:
@@ -27,14 +29,19 @@ let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.
 vi.mock("../loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
     mocks.loadOpenClawPlugins(...args),
+  resolveCompatibleRuntimePluginRegistry: (
+    ...args: Parameters<typeof mocks.resolveCompatibleRuntimePluginRegistry>
+  ) => mocks.resolveCompatibleRuntimePluginRegistry(...args),
   resolveRuntimePluginRegistry: (...args: Parameters<typeof mocks.resolveRuntimePluginRegistry>) =>
     mocks.resolveRuntimePluginRegistry(...args),
 }));
 
 vi.mock("../runtime.js", () => ({
   getActivePluginChannelRegistry: () => null,
+  getActivePluginHttpRouteRegistry: () => null,
   getActivePluginRegistry: (...args: Parameters<typeof mocks.getActivePluginRegistry>) =>
     mocks.getActivePluginRegistry(...args),
+  getActivePluginRegistryWorkspaceDir: () => undefined,
 }));
 
 vi.mock("../channel-plugin-ids.js", () => ({
@@ -69,6 +76,7 @@ describe("ensurePluginRegistryLoaded", () => {
 
   beforeEach(() => {
     mocks.loadOpenClawPlugins.mockReset();
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
@@ -79,7 +87,8 @@ describe("ensurePluginRegistryLoaded", () => {
     mocks.resolveDefaultAgentId.mockClear();
     resetPluginRegistryLoadedForTests();
 
-    mocks.getActivePluginRegistry.mockReturnValue(createEmptyPluginRegistry());
+    mocks.getActivePluginRegistry.mockReturnValue(null);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.loadOpenClawPlugins.mockReturnValue(createEmptyPluginRegistry());
     mocks.resolveRuntimePluginRegistry.mockImplementation(
       (...args: Parameters<typeof mocks.loadOpenClawPlugins>) => mocks.loadOpenClawPlugins(...args),
@@ -321,23 +330,15 @@ describe("ensurePluginRegistryLoaded", () => {
 
   it("reuses a compatible active registry instead of forcing a broad reload", () => {
     const activeRegistry = createEmptyPluginRegistry();
-    mocks.resolveRuntimePluginRegistry.mockReturnValue(activeRegistry);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(activeRegistry);
 
     ensurePluginRegistryLoaded({
       scope: "all",
       config: { plugins: { allow: ["demo"] } } as never,
     });
 
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        throwOnLoadError: true,
-      }),
-    );
-    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: expect.any(Array),
-      }),
-    );
+    expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 });

@@ -1,8 +1,9 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import type { PluginLoadOptions } from "./loader.js";
 import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
@@ -10,15 +11,10 @@ import {
 import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import type { PluginToolRegistration } from "./registry-types.js";
 import {
-  getActivePluginChannelRegistry,
-  getActivePluginRegistry,
-  getActivePluginRegistryKey,
-  getActivePluginRuntimeSubagentMode,
-} from "./runtime.js";
-import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
+import { ensureStandaloneRuntimePluginRegistryLoaded } from "./runtime/standalone-runtime-registry-loader.js";
 import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolFactoryCacheKey,
@@ -406,51 +402,32 @@ function resolvePluginToolRuntimePluginIds(params: {
   return [...pluginIds].toSorted((left, right) => left.localeCompare(right));
 }
 
-function registryContainsPluginIds(
-  registry: ReturnType<typeof getActivePluginRegistry>,
-  pluginIds?: readonly string[],
-): boolean {
-  if (!registry || pluginIds === undefined || pluginIds.length === 0) {
-    return false;
-  }
-  const loadedPluginIds = new Set(
-    (registry.plugins ?? [])
-      .filter((plugin) => plugin.status === undefined || plugin.status === "loaded")
-      .map((plugin) => plugin.id),
-  );
-  return pluginIds.every((pluginId) => loadedPluginIds.has(pluginId));
-}
-
 function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   onlyPluginIds?: readonly string[];
 }) {
-  const activeRegistry = getActivePluginRegistry();
-  const channelRegistry = getActivePluginChannelRegistry();
-  const activeRegistryIsGatewayBindable =
-    getActivePluginRegistryKey() && getActivePluginRuntimeSubagentMode() === "gateway-bindable";
-  const hasPinnedGatewayRegistry = Boolean(channelRegistry && channelRegistry !== activeRegistry);
-  if (
-    channelRegistry &&
-    (activeRegistryIsGatewayBindable || hasPinnedGatewayRegistry) &&
-    registryContainsPluginIds(channelRegistry, params.onlyPluginIds)
-  ) {
-    return channelRegistry;
-  }
-  return resolveRuntimePluginRegistry(params.loadOptions);
+  return getLoadedRuntimePluginRegistry({
+    env: params.loadOptions.env,
+    loadOptions: params.loadOptions,
+    workspaceDir: params.loadOptions.workspaceDir,
+    requiredPluginIds: params.onlyPluginIds,
+    surface: "channel",
+  });
 }
 
-export function resolvePluginTools(params: {
+function resolvePluginToolLoadState(params: {
   context: OpenClawPluginToolContext;
-  existingToolNames?: Set<string>;
   toolAllowlist?: string[];
-  suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
   hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
-}): AnyAgentTool[] {
-  // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
-  // This matters a lot for unit tests and for tool construction hot paths.
+}):
+  | {
+      context: ReturnType<typeof resolvePluginRuntimeLoadContext>;
+      loadOptions: PluginLoadOptions;
+      onlyPluginIds: string[];
+    }
+  | undefined {
   const env = params.env ?? process.env;
   const baseConfig = applyTestPluginDefaults(params.context.config ?? {}, env);
   const context = resolvePluginRuntimeLoadContext({
@@ -460,7 +437,7 @@ export function resolvePluginTools(params: {
   });
   const normalized = normalizePluginsConfig(context.config.plugins);
   if (!normalized.enabled) {
-    return [];
+    return undefined;
   }
 
   const runtimeOptions = params.allowGatewaySubagentBinding
@@ -480,6 +457,43 @@ export function resolvePluginTools(params: {
     ...(onlyPluginIds !== undefined ? { onlyPluginIds } : {}),
     runtimeOptions,
   });
+  return { context, loadOptions, onlyPluginIds };
+}
+
+export function ensureStandalonePluginToolRegistryLoaded(params: {
+  context: OpenClawPluginToolContext;
+  toolAllowlist?: string[];
+  allowGatewaySubagentBinding?: boolean;
+  hasAuthForProvider?: (providerId: string) => boolean;
+  env?: NodeJS.ProcessEnv;
+}): void {
+  const loadState = resolvePluginToolLoadState(params);
+  if (!loadState) {
+    return;
+  }
+  ensureStandaloneRuntimePluginRegistryLoaded({
+    surface: "channel",
+    requiredPluginIds: loadState.onlyPluginIds,
+    loadOptions: loadState.loadOptions,
+  });
+}
+
+export function resolvePluginTools(params: {
+  context: OpenClawPluginToolContext;
+  existingToolNames?: Set<string>;
+  toolAllowlist?: string[];
+  suppressNameConflicts?: boolean;
+  allowGatewaySubagentBinding?: boolean;
+  hasAuthForProvider?: (providerId: string) => boolean;
+  env?: NodeJS.ProcessEnv;
+}): AnyAgentTool[] {
+  // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
+  // This matters a lot for unit tests and for tool construction hot paths.
+  const loadState = resolvePluginToolLoadState(params);
+  if (!loadState) {
+    return [];
+  }
+  const { context, loadOptions, onlyPluginIds } = loadState;
   const registry = resolvePluginToolRegistry({
     loadOptions,
     onlyPluginIds,

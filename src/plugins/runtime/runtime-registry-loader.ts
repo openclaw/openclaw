@@ -1,11 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../activation-context.js";
+import { getLoadedRuntimePluginRegistry } from "../active-runtime-registry.js";
 import {
   resolveChannelPluginIds,
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../channel-plugin-ids.js";
-import { loadOpenClawPlugins, resolveRuntimePluginRegistry } from "../loader.js";
+import { loadOpenClawPlugins } from "../loader.js";
 import {
   hasExplicitPluginIdScope,
   hasNonEmptyPluginIdScope,
@@ -75,11 +76,16 @@ function shouldForwardChannelScope(params: {
 }
 
 function resolveOrLoadRuntimePluginRegistry(
-  loadOptions: Parameters<typeof loadOpenClawPlugins>[0],
+  loadOptions: NonNullable<Parameters<typeof loadOpenClawPlugins>[0]>,
 ): void {
-  // Prefer the runtime resolver so broad ensures can reuse compatible active
-  // registries, including gateway-bindable startup registries.
-  if (!resolveRuntimePluginRegistry(loadOptions)) {
+  if (
+    !getLoadedRuntimePluginRegistry({
+      env: loadOptions.env,
+      loadOptions,
+      workspaceDir: loadOptions.workspaceDir,
+      requiredPluginIds: loadOptions.onlyPluginIds,
+    })
+  ) {
     loadOpenClawPlugins(loadOptions);
   }
 }

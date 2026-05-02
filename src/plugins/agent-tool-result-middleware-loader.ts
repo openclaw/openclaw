@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareRuntime,
@@ -8,7 +9,6 @@ import {
   listAgentToolResultMiddlewares,
   normalizeAgentToolResultMiddlewareRuntimeIds,
 } from "./agent-tool-result-middleware.js";
-import { loadOpenClawPlugins } from "./loader.js";
 import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 
 const log = createSubsystemLogger("plugins/agent-tool-result-middleware");
@@ -67,15 +67,14 @@ export async function loadAgentToolResultMiddlewaresForRuntime(params: {
       return [];
     }
 
-    const registry = loadOpenClawPlugins({
-      config,
+    const registry = getLoadedRuntimePluginRegistry({
       workspaceDir: params.workspaceDir,
       env,
-      manifestRegistry,
-      onlyPluginIds: pluginIds,
-      activate: false,
-      throwOnLoadError: false,
+      requiredPluginIds: pluginIds,
     });
+    if (!registry) {
+      return [];
+    }
 
     return registry.agentToolResultMiddlewares
       .filter((entry) => entry.runtimes.includes(params.runtime))
