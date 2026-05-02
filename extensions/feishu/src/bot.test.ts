@@ -1542,6 +1542,79 @@ describe("handleFeishuMessage command authorization", () => {
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
 
+  it("dispatches topic thread message without mention when topicRequireMention=false (requireMention=true)", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          groups: {
+            "oc-topic-group": {
+              requireMention: true,
+              topicRequireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-topic-no-mention",
+        chat_id: "oc-topic-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "continuing the thread" }),
+        thread_id: "omt_thread_abc123",
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalled();
+  });
+
+  it("drops non-topic message without mention when requireMention=true and topicRequireMention=false", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "allowlist",
+          groups: {
+            "oc-topic-group-2": {
+              requireMention: true,
+              topicRequireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: { open_id: "ou-sender" },
+      },
+      message: {
+        message_id: "msg-normal-no-mention",
+        chat_id: "oc-topic-group-2",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello without mention" }),
+        // no thread_id — normal group message
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).not.toHaveBeenCalled();
+    expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
+  });
+
   it("drops message when groupConfig.enabled is false", async () => {
     const cfg: ClawdbotConfig = {
       channels: {

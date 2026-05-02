@@ -207,6 +207,12 @@ export function resolveFeishuReplyPolicy(params: {
    * @-mentions are still delivered to the agent.
    */
   groupPolicy?: "open" | "allowlist" | "disabled" | "allowall";
+  /**
+   * Whether the incoming message is inside a Feishu topic thread
+   * (event.message.thread_id is set). When true, topicRequireMention
+   * takes precedence over requireMention if configured.
+   */
+  isTopic?: boolean;
 }): { requireMention: boolean } {
   if (params.isDirectMessage) {
     return { requireMention: false };
@@ -220,11 +226,23 @@ export function resolveFeishuReplyPolicy(params: {
     normalizeAccountId,
     omitKeys: ["defaultAccount"],
   });
-  const groupRequireMention = resolveFeishuGroupConfig({
+  const groupCfg = resolveFeishuGroupConfig({
     cfg: resolvedCfg,
     groupId: params.groupId,
-  })?.requireMention;
+  });
 
+  if (params.isTopic) {
+    const groupTopicRequireMention = groupCfg?.topicRequireMention;
+    const topLevelTopicRequireMention = resolvedCfg.topicRequireMention;
+    if (typeof groupTopicRequireMention === "boolean") {
+      return { requireMention: groupTopicRequireMention };
+    }
+    if (typeof topLevelTopicRequireMention === "boolean") {
+      return { requireMention: topLevelTopicRequireMention };
+    }
+  }
+
+  const groupRequireMention = groupCfg?.requireMention;
   return {
     requireMention:
       typeof groupRequireMention === "boolean"
