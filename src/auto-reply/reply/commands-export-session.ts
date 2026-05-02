@@ -1,8 +1,13 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { SessionEntry as PiSessionEntry, SessionHeader } from "@mariozechner/pi-coding-agent";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  migrateSessionEntries,
+  parseSessionEntries,
+  type SessionEntry as PiSessionEntry,
+  type SessionHeader,
+} from "@mariozechner/pi-coding-agent";
 import type { ReplyPayload } from "../types.js";
 import {
   isReplyPayload,
@@ -116,6 +121,22 @@ function generateHtml(sessionData: SessionData): string {
   ].reduce((html, [name, value]) => replaceHtmlPlaceholder(html, name, value), template);
 }
 
+async function readSessionDataFromTranscript(sessionFile: string): Promise<{
+  header: SessionHeader | null;
+  entries: PiSessionEntry[];
+  leafId: string | null;
+}> {
+  const raw = await fsp.readFile(sessionFile, "utf-8");
+  const fileEntries = parseSessionEntries(raw);
+  migrateSessionEntries(fileEntries);
+  const header =
+    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = fileEntries.filter((entry): entry is PiSessionEntry => entry.type !== "session");
+  const lastEntry = entries.at(-1);
+  const leafId = typeof lastEntry?.id === "string" ? lastEntry.id : null;
+  return { header, entries, leafId };
+}
+
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
   const args = parseExportCommandOutputPath(params.command.commandBodyNormalized, [
     "export-session",
@@ -135,10 +156,7 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
   }
 
   // 2. Load session entries
-  const sessionManager = SessionManager.open(sessionFile);
-  const entries = sessionManager.getEntries();
-  const header = sessionManager.getHeader();
-  const leafId = sessionManager.getLeafId();
+  const { entries, header, leafId } = await readSessionDataFromTranscript(sessionFile);
 
   // 3. Build full system prompt
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
