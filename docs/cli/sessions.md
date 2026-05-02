@@ -9,6 +9,13 @@ title: "Sessions"
 
 List stored conversation sessions.
 
+Session lists are not channel/provider liveness checks. They show persisted
+conversation rows from session stores. A quiet Discord, Slack, Telegram, or
+other channel can reconnect successfully without creating a new session row
+until a message is processed. Use `openclaw channels status --probe`,
+`openclaw status --deep`, or `openclaw health --verbose` when you need live
+channel connectivity.
+
 ```bash
 openclaw sessions
 openclaw sessions --agent work
