@@ -66,10 +66,3 @@ export async function getBundledChannelPluginAsync(
   channelPluginPromiseCache.set(id, loading);
   return (await loading) ?? undefined;
 }
-
-export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
-  return listBundledChannelPluginIds().flatMap((id) => {
-    const plugin = getBundledChannelPlugin(id);
-    return plugin ? [plugin] : [];
-  });
-}
