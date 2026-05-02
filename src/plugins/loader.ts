@@ -147,6 +147,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginDefinition,
   OpenClawPluginModule,
+  PluginKind,
   PluginLogger,
   PluginRegistrationMode,
 } from "./types.js";
@@ -2280,10 +2281,13 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (typeof register !== "function") {
-        const resolvedModule = (resolved?.definition ?? {}) as { kind?: unknown };
-        const kind = resolvedModule.kind;
-        const isBundledChannelEntry = kind === "bundled-channel-entry";
-        const isBundledChannelSetupEntry = kind === "bundled-channel-setup-entry";
+        const kindStr = String(record.kind ?? "");
+        const isBundledChannelEntry =
+          kindStr === "bundled-channel-entry" ||
+          (Array.isArray(record.kind) && record.kind.includes("bundled-channel-entry" as PluginKind));
+        const isBundledChannelSetupEntry =
+          kindStr === "bundled-channel-setup-entry" ||
+          (Array.isArray(record.kind) && record.kind.includes("bundled-channel-setup-entry" as PluginKind));
         if (isBundledChannelEntry || isBundledChannelSetupEntry) {
           if (isBundledChannelSetupEntry) {
             pushPluginLoadError(
@@ -2741,10 +2745,13 @@ export async function loadOpenClawPluginCliRegistry(
     }
 
     if (typeof register !== "function") {
-      const resolvedModule = (resolved?.definition ?? {}) as { kind?: unknown };
-      const kind = resolvedModule.kind;
-      const isBundledChannelEntry = kind === "bundled-channel-entry";
-      const isBundledChannelSetupEntry = kind === "bundled-channel-setup-entry";
+      const kindStr = String(record.kind ?? "");
+      const isBundledChannelEntry =
+        kindStr === "bundled-channel-entry" ||
+        (Array.isArray(record.kind) && record.kind.includes("bundled-channel-entry" as PluginKind));
+      const isBundledChannelSetupEntry =
+        kindStr === "bundled-channel-setup-entry" ||
+        (Array.isArray(record.kind) && record.kind.includes("bundled-channel-setup-entry" as PluginKind));
       if (isBundledChannelEntry || isBundledChannelSetupEntry) {
         if (isBundledChannelSetupEntry) {
           logger.error(
