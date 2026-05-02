@@ -211,6 +211,17 @@ export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
 export type GatewayReloadConfig = {
   /** Reload strategy for config changes (default: hybrid). */
   mode?: GatewayReloadMode;
+  /**
+   * Whether to restore the last-known-good config when an invalid config is
+   * detected on disk (default: "on"). Set to "off" to log the validation errors
+   * and leave the file untouched — the running config is unaffected either way.
+   * Automatically defaults to "off" when mode is "off".
+   *
+   * Applies to both the live file-watcher reload path and gateway startup.
+   * When "off" and the config is invalid at startup, the gateway will fail to
+   * start rather than silently restoring a backup.
+   */
+  recovery?: "on" | "off";
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
   /**

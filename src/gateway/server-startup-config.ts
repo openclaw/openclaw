@@ -240,14 +240,21 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     if (!configSnapshot.valid) {
       const rejectedSnapshot = configSnapshot;
       const rejectedConfigIssues = collectConfigSnapshotIssueDetails(rejectedSnapshot);
-      const canRecoverFromLastKnownGood = shouldAttemptLastKnownGoodRecovery(configSnapshot);
+      const startupRecoveryEnabled =
+        rejectedSnapshot.sourceConfig?.gateway?.reload?.recovery !== "off";
+      const canRecoverFromLastKnownGood =
+        startupRecoveryEnabled && shouldAttemptLastKnownGoodRecovery(configSnapshot);
       const recovered = canRecoverFromLastKnownGood
         ? await recoverConfigFromLastKnownGood({
             snapshot: configSnapshot,
             reason: "startup-invalid-config",
           })
         : false;
-      if (!canRecoverFromLastKnownGood) {
+      if (!startupRecoveryEnabled) {
+        params.log.warn(
+          `gateway: last-known-good recovery skipped at startup (gateway.reload.recovery=off): ${configSnapshot.path}`,
+        );
+      } else if (!canRecoverFromLastKnownGood) {
         params.log.warn(
           `gateway: last-known-good recovery skipped for plugin-local config invalidity: ${configSnapshot.path}`,
         );

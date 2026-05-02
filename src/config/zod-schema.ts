@@ -873,6 +873,7 @@ export const OpenClawSchema = z
                 z.literal("hybrid"),
               ])
               .optional(),
+            recovery: z.enum(["on", "off"]).optional(),
             debounceMs: z.number().int().min(0).optional(),
             deferralTimeoutMs: z.number().int().min(0).optional(),
           })
