@@ -454,7 +454,7 @@ function normalizePositiveInt(
   min: number,
   max: number,
 ): number {
-  if (!Number.isInteger(value)) {
+  if (typeof value !== "number" || !Number.isInteger(value)) {
     return fallback;
   }
   return Math.min(Math.max(value, min), max);
