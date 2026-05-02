@@ -114,6 +114,7 @@ Docs: https://docs.openclaw.ai
 - Agents/subagents: initialize built-in context engines before native `sessions_spawn` resolves spawn preparation, so cliBackend-only cold starts no longer fail with an unregistered `legacy` context engine. Fixes #73095. (#73904) Thanks @brokemac79.
 - Plugins/Bonjour: ship the ciao runtime dependency with packaged OpenClaw so fresh OCM envs can start default mDNS discovery without a missing-module failure. Thanks @shakkernerd.
 - Agents/tools: scope reply plugin-tool discovery to manifest-declared tool owners and already-active matching tool entries, avoiding broad plugin runtime loading for narrow or core-only tool allowlists. Thanks @shakkernerd.
+- Agents/replies: defer implicit image model discovery and keep OAuth auth-store adoption on persisted profiles during reply startup, cutting OCM MarCodex warm prep to sub-second in live checks. Thanks @shakkernerd.
 - Plugins/tools: enforce `contracts.tools` as the manifest ownership contract for plugin tool registration, rejecting undeclared runtime tool names and adding bundled plugin drift coverage. Thanks @shakkernerd.
 - Agents/Codex: stop prompting message-tool-only source turns to finish with `NO_REPLY`, so quiet turns are represented by not calling the visible message tool instead of conflicting final-text instructions. Thanks @pashpashpash.
 - Gateway/config: report failed backup restores as failed in logs and config observe audit records instead of marking them valid. (#70515) Thanks @davidangularme.
