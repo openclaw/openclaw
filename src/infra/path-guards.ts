@@ -4,6 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 const NOT_FOUND_CODES = new Set(["ENOENT", "ENOTDIR"]);
 const SYMLINK_OPEN_CODES = new Set(["ELOOP", "EINVAL", "ENOTSUP"]);
 const PARENT_SEGMENT_PREFIX = /^\.\.(?:[\\/]|$)/u;
+const POSIX_SEPARATOR_CHAR_CODE = 0x2f;
 
 export function normalizeWindowsPathForComparison(input: string): string {
   let normalized = path.win32.normalize(input);
@@ -42,6 +43,25 @@ export function isPathInside(root: string, target: string): boolean {
     return (
       relative === "" || (!PARENT_SEGMENT_PREFIX.test(relative) && !path.win32.isAbsolute(relative))
     );
+  }
+
+  // Fast path: when both inputs are already absolute POSIX paths, target has no
+  // parent-reference (`..`) segments, and target is a literal prefix of root
+  // followed by a path separator (or equals root), the answer is unambiguously
+  // `true` — equivalent to running `path.resolve` + `path.relative` and finding
+  // the result has no leading `..`. This avoids per-call resolve/relative cost
+  // in hot loops (directory walkers, sandbox checks) where the caller has
+  // already produced canonical absolute paths.
+  if (
+    root.length > 0 &&
+    root.charCodeAt(0) === POSIX_SEPARATOR_CHAR_CODE &&
+    target.length >= root.length &&
+    target.charCodeAt(0) === POSIX_SEPARATOR_CHAR_CODE &&
+    !target.includes("/..") &&
+    (target === root ||
+      (target.startsWith(root) && target.charCodeAt(root.length) === POSIX_SEPARATOR_CHAR_CODE))
+  ) {
+    return true;
   }
 
   const resolvedRoot = path.resolve(root);

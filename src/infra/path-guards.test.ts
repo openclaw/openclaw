@@ -74,6 +74,21 @@ describe("isPathInside", () => {
     ["/workspace/root", "/workspace/root/nested/file.txt", true],
     ["/workspace/root", "/workspace/root/..file.txt", true],
     ["/workspace/root", "/workspace/root/../escape.txt", false],
+    // Sibling that shares a string prefix but is not under the root.
+    ["/workspace/root", "/workspace/rootless/file.txt", false],
+    // Deep canonical absolute path — exercises the literal-prefix fast path.
+    ["/workspace/root", "/workspace/root/a/b/c/d/e/file.txt", true],
+    // Trailing parent reference inside root — slow path catches the escape.
+    ["/workspace/root", "/workspace/root/a/..", true],
+    ["/workspace/root", "/workspace/root/a/../..", false],
+    // Nested parent-reference deeper in the path.
+    ["/workspace/root", "/workspace/root/a/b/../../../escape", false],
+    // Root is the filesystem root.
+    ["/", "/anything/at/all", true],
+    ["/", "/", true],
+    // Relative inputs still work via the slow-path resolve.
+    ["foo", "foo/bar", true],
+    ["foo", "../escape", false],
   ])("checks posix containment %s -> %s", (basePath, targetPath, expected) => {
     expect(isPathInside(basePath, targetPath)).toBe(expected);
   });
