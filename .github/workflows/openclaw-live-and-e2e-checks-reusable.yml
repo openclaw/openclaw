@@ -1248,6 +1248,9 @@ jobs:
           LANES: ${{ inputs.docker_lanes }}
           INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
           INCLUDE_OPENWEBUI: ${{ inputs.include_openwebui }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}
         run: |
           set -euo pipefail
           mkdir -p .artifacts/docker-tests

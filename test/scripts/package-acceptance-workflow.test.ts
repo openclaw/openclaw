@@ -220,6 +220,13 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("node .release-harness/scripts/test-docker-all.mjs --plan-json");
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
+    const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
+    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toMatchObject({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "${{ inputs.published_upgrade_survivor_baseline }}",
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:
+        "${{ inputs.published_upgrade_survivor_baselines }}",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "${{ inputs.published_upgrade_survivor_scenarios }}",
+    });
     expect(workflow).toContain("plan_docker_lane_groups:");
     expect(workflow).toContain("targeted_docker_lane_group_size:");
     expect(workflow).toContain("Docker E2E targeted lanes (${{ matrix.group.label }})");
