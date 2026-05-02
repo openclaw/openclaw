@@ -45,11 +45,11 @@ API-key traffic unless you also select the native Codex runtime.
 A common split is to keep a strong planner/personality model in front and route
 mechanical coding work to a subscription-backed coding executor:
 
-| Pattern | Planner / reviewer | Coding executor | Billing/auth path |
-| ------- | ------------------ | --------------- | ----------------- |
-| Claude plans, Codex codes | `anthropic/claude-*` using API key or `agentRuntime.id: "claude-cli"` | `openai/gpt-5.5` with `agentRuntime.id: "codex"` | Claude API/CLI for planning; ChatGPT/Codex sign-in for execution |
-| Codex-only coding agent | `openai/gpt-5.5` | `agentRuntime.id: "codex"` | ChatGPT/Codex sign-in |
-| PI runner with Codex OAuth | Any planner | `openai-codex/gpt-5.5` | ChatGPT/Codex OAuth through PI |
+| Pattern                    | Planner / reviewer                                                    | Coding executor                                  | Billing/auth path                                                |
+| -------------------------- | --------------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------- |
+| Claude plans, Codex codes  | `anthropic/claude-*` using API key or `agentRuntime.id: "claude-cli"` | `openai/gpt-5.5` with `agentRuntime.id: "codex"` | Claude API/CLI for planning; ChatGPT/Codex sign-in for execution |
+| Codex-only coding agent    | `openai/gpt-5.5`                                                      | `agentRuntime.id: "codex"`                       | ChatGPT/Codex sign-in                                            |
+| PI runner with Codex OAuth | Any planner                                                           | `openai-codex/gpt-5.5`                           | ChatGPT/Codex OAuth through PI                                   |
 
 Use the native Codex runtime for repo edits, shell work, debugging, and agentic
 coding sessions when you want subscription-backed Codex behavior. Use
