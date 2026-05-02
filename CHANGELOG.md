@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - Web search/MiniMax: allow `MINIMAX_OAUTH_TOKEN` to satisfy MiniMax Search credentials, so OAuth-authorized MiniMax Token Plan setups do not need a separate web-search key. Fixes #65768. Thanks @kikibrian and @zhouhe-xydt.
 - Subagents: honor `sessions_spawn` with `expectsCompletionMessage: false` by skipping parent completion handoff delivery while still running child cleanup. Fixes #75848. Thanks @alfredjbclaw.
 - Gateway/logging: keep deferred channel startup logs on the subsystem logger, so Slack, Discord, Telegram, and voice-call startup messages keep timestamped prefixes. Thanks @vincentkoc.
+- Replies/typing: keep typing alive for queued follow-up messages that are genuinely waiting behind an active run, instead of making chat surfaces look idle while work is queued. Fixes #65685. Thanks @papag00se.
 - ACP/Discord: suppress completion announce delivery for inline thread-bound ACP session runs, so Discord thread-bound ACP replies are not delivered twice. Fixes #60780. Thanks @solavrc.
 - Discord/threads: ignore webhook-authored copies in already-bound Discord session threads even when the webhook id differs, preventing PluralKit proxy copies from creating duplicate turn pressure. Fixes #52005. Thanks @acgh213.
 - Discord/threads: return the created thread as partial success when the follow-up initial message fails, so agents do not retry thread creation and create empty duplicate threads. Fixes #48450. Thanks @dahifi.
