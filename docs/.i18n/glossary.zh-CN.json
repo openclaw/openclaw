@@ -28,6 +28,10 @@
     "target": "Azure Speech provider"
   },
   {
+    "source": "Web tools",
+    "target": "Web 工具"
+  },
+  {
     "source": "Status",
     "target": "Status"
   },
