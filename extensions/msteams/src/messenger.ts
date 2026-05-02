@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalLowercaseString, sleep } from "openclaw/plugin-sdk/text-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-import type { MarkdownTableMode, MSTeamsReplyStyle, OpenClawConfig } from "../runtime-api.js";
+import type { MarkdownTableMode, MSTeamsReplyStyle } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
@@ -38,13 +38,10 @@ const MSTEAMS_MAX_MEDIA_BYTES = 100 * 1024 * 1024;
  */
 const FILE_CONSENT_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
-type SendContext = {
-  sendActivity: (textOrActivity: string | object) => Promise<unknown>;
-  updateActivity: (activity: object) => Promise<{ id?: string } | void>;
-  deleteActivity: (activityId: string) => Promise<void>;
-};
+import type { MSTeamsActivityLike } from "./sdk-types.js";
+import type { MSTeamsApp } from "./sdk.js";
 
-type MSTeamsConversationReference = {
+export type MSTeamsConversationReference = {
   activityId?: string;
   user?: { id?: string; name?: string; aadObjectId?: string };
   agent?: { id?: string; name?: string; aadObjectId?: string } | null;
@@ -66,22 +63,7 @@ type MSTeamsConversationReference = {
   aadObjectId?: string;
 };
 
-export type MSTeamsAdapter = {
-  continueConversation: (
-    appId: string,
-    reference: MSTeamsConversationReference,
-    logic: (context: SendContext) => Promise<void>,
-  ) => Promise<void>;
-  process: (
-    req: unknown,
-    res: unknown,
-    logic: (context: unknown) => Promise<void>,
-  ) => Promise<void>;
-  updateActivity: (context: unknown, activity: object) => Promise<void>;
-  deleteActivity: (context: unknown, reference: { activityId?: string }) => Promise<void>;
-};
-
-type MSTeamsReplyRenderOptions = {
+export type MSTeamsReplyRenderOptions = {
   textChunkLimit: number;
   chunkText?: boolean;
   mediaMode?: "split" | "inline";
@@ -98,13 +80,13 @@ export type MSTeamsRenderedMessage = {
   mediaUrl?: string;
 };
 
-type MSTeamsSendRetryOptions = {
+export type MSTeamsSendRetryOptions = {
   maxAttempts?: number;
   baseDelayMs?: number;
   maxDelayMs?: number;
 };
 
-type MSTeamsSendRetryEvent = {
+export type MSTeamsSendRetryEvent = {
   messageIndex: number;
   messageCount: number;
   nextAttempt: number;
@@ -238,7 +220,7 @@ export function renderReplyPayloadsToMessages(
   const tableMode =
     options.tableMode ??
     getMSTeamsRuntime().channel.text.resolveMarkdownTableMode({
-      cfg: getMSTeamsRuntime().config.current() as OpenClawConfig,
+      cfg: getMSTeamsRuntime().config.loadConfig(),
       channel: "msteams",
     });
 
@@ -423,10 +405,10 @@ export async function buildActivity(
 
 export async function sendMSTeamsMessages(params: {
   replyStyle: MSTeamsReplyStyle;
-  adapter: MSTeamsAdapter;
+  app: MSTeamsApp;
   appId: string;
   conversationRef: StoredConversationReference;
-  context?: SendContext;
+  context?: { sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown> };
   messages: MSTeamsRenderedMessage[];
   retry?: false | MSTeamsSendRetryOptions;
   onRetry?: (event: MSTeamsSendRetryEvent) => void;
@@ -485,7 +467,7 @@ export async function sendMSTeamsMessages(params: {
   };
 
   const sendMessageInContext = async (
-    ctx: SendContext,
+    sendFn: (activity: MSTeamsActivityLike) => Promise<unknown>,
     message: MSTeamsRenderedMessage,
     messageIndex: number,
   ): Promise<string> => {
@@ -508,7 +490,7 @@ export async function sendMSTeamsMessages(params: {
           delete activity._pendingUploadId;
         }
 
-        return await ctx.sendActivity(activity);
+        return await sendFn(activity);
       },
       {
         messageIndex,
@@ -526,13 +508,13 @@ export async function sendMSTeamsMessages(params: {
   };
 
   const sendMessageBatchInContext = async (
-    ctx: SendContext,
+    sendFn: (activity: MSTeamsActivityLike) => Promise<unknown>,
     batch: MSTeamsRenderedMessage[],
     startIndex: number,
   ): Promise<string[]> => {
     const messageIds: string[] = [];
     for (const [idx, message] of batch.entries()) {
-      messageIds.push(await sendMessageInContext(ctx, message, startIndex + idx));
+      messageIds.push(await sendMessageInContext(sendFn, message, startIndex + idx));
     }
     return messageIds;
   };
@@ -551,17 +533,9 @@ export async function sendMSTeamsMessages(params: {
       isChannel && threadActivityId
         ? `${baseRef.conversation.id};messageid=${threadActivityId}`
         : baseRef.conversation.id;
-    const proactiveRef: MSTeamsConversationReference = {
-      ...baseRef,
-      activityId: undefined,
-      conversation: { ...baseRef.conversation, id: conversationId },
-    };
 
-    const messageIds: string[] = [];
-    await params.adapter.continueConversation(params.appId, proactiveRef, async (ctx) => {
-      messageIds.push(...(await sendMessageBatchInContext(ctx, batch, startIndex)));
-    });
-    return messageIds;
+    const sendFn = (activity: MSTeamsActivityLike) => params.app.send(conversationId, activity);
+    return await sendMessageBatchInContext(sendFn, batch, startIndex);
   };
 
   // Resolve the thread root message ID for channel thread routing.
@@ -574,11 +548,12 @@ export async function sendMSTeamsMessages(params: {
     if (!ctx) {
       throw new Error("Missing context for replyStyle=thread");
     }
+    const sendFn = ctx.sendActivity;
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
       const result = await withRevokedProxyFallback({
         run: async () => ({
-          ids: [await sendMessageInContext(ctx, message, idx)],
+          ids: [await sendMessageInContext(sendFn, message, idx)],
           fellBack: false,
         }),
         onRevoked: async () => {

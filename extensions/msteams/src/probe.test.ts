@@ -7,19 +7,22 @@ const hostMockState = vi.hoisted(() => ({
 
 vi.mock("@microsoft/teams.apps", () => ({
   App: class {
-    protected async getBotToken() {
-      if (hostMockState.tokenError) {
-        throw hostMockState.tokenError;
-      }
-      return { value: "token" };
-    }
-    protected async getAppGraphToken() {
-      if (hostMockState.tokenError) {
-        throw hostMockState.tokenError;
-      }
-      return { value: "token" };
-    }
+    tokenManager = {
+      getBotToken: async () => {
+        if (hostMockState.tokenError) {
+          throw hostMockState.tokenError;
+        }
+        return { toString: () => "token" };
+      },
+      getGraphToken: async () => {
+        if (hostMockState.tokenError) {
+          throw hostMockState.tokenError;
+        }
+        return { toString: () => "token" };
+      },
+    };
   },
+  ExpressAdapter: vi.fn(),
 }));
 
 vi.mock("@microsoft/teams.api", () => ({

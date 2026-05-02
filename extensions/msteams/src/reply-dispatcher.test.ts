@@ -127,12 +127,7 @@ describe("createMSTeamsReplyDispatcher", () => {
       sessionKey: "agent:main:main",
       runtime: { error: vi.fn() } as never,
       log: { debug: vi.fn(), error: vi.fn(), warn: vi.fn() } as never,
-      adapter: {
-        continueConversation: vi.fn(),
-        process: vi.fn(),
-        updateActivity: vi.fn(),
-        deleteActivity: vi.fn(),
-      } as never,
+      app: { send: vi.fn(async () => ({})) } as never,
       appId: "app",
       conversationRef: {
         conversation: { id: "conv", conversationType },

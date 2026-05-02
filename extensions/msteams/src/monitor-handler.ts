@@ -301,7 +301,7 @@ async function handleFeedbackInvoke(
     // provides additional signal.
     runFeedbackReflection({
       cfg: deps.cfg,
-      adapter: deps.adapter,
+      app: deps.app,
       appId: deps.appId,
       conversationRef,
       sessionKey: route.sessionKey,
@@ -338,7 +338,7 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
 
       // Handle feedback invokes (thumbs up/down on AI-generated messages).
       // Just return after handling — the process() handler sends HTTP 200 automatically.
-      // Do NOT call sendActivity with invokeResponse; our custom adapter would POST
+      // Do NOT call sendActivity with invokeResponse; the SDK would POST
       // a new activity to Bot Framework instead of responding to the HTTP request.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "message/submitAction") {
         const handled = await handleFeedbackInvoke(ctx, deps);
@@ -347,6 +347,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
         }
       }
 
+      // Non-poll adaptiveCard/action invokes get dispatched here as text so the
+      // agent can react. Poll votes are intercepted in monitor.ts's
+      // app.on("card.action") handler which returns the InvokeResponse to Teams.
       if (ctx.activity?.type === "invoke" && ctx.activity?.name === "adaptiveCard/action") {
         const text = serializeAdaptiveCardActionValue(ctx.activity?.value);
         if (text) {
@@ -358,9 +361,8 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
               text,
             },
           });
-          return;
         }
-        deps.log.debug?.("skipping adaptive card action invoke without value payload");
+        return;
       }
 
       // Bot Framework OAuth SSO: Teams sends signin/tokenExchange (with a
