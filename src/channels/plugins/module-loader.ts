@@ -2,48 +2,60 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { openBoundaryFileSync } from "../../infra/boundary-file-read.js";
+import { isJavaScriptModulePath } from "../../plugins/native-module-require.js";
 import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../../plugins/jiti-loader-cache.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../../plugins/plugin-module-loader-cache.js";
 
 const nodeRequire = createRequire(import.meta.url);
+const SOURCE_MODULE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts"]);
+const jitiLoaders: PluginModuleLoaderCache = new Map();
 
-function createModuleLoader() {
-  const jitiLoaders: PluginJitiLoaderCache = new Map();
+function hasNativeSourceRequireHook(modulePath: string): boolean {
+  const extension = path.extname(modulePath).toLowerCase();
+  return (
+    SOURCE_MODULE_EXTENSIONS.has(extension) &&
+    typeof nodeRequire.extensions?.[extension] === "function"
+  );
+}
 
-  return (modulePath: string) => {
-    return getCachedPluginJitiLoader({
-      cache: jitiLoaders,
-      modulePath,
-      importerUrl: import.meta.url,
-      argvEntry: process.argv[1],
-      preferBuiltDist: true,
-      jitiFilename: import.meta.url,
+function isSourceModulePath(modulePath: string): boolean {
+  return SOURCE_MODULE_EXTENSIONS.has(path.extname(modulePath).toLowerCase());
+}
+
+function loadModuleWithJiti(modulePath: string): unknown {
+  const loadWithJiti = getCachedPluginModuleLoader({
+    cache: jitiLoaders,
+    modulePath,
+    importerUrl: import.meta.url,
+    loaderFilename: import.meta.url,
+    tryNative: false,
+    cacheScopeKey: "channel-plugin-module-loader",
+  });
+  return loadWithJiti(modulePath);
+}
+
+function loadModule(modulePath: string): unknown {
+  if (!isJavaScriptModulePath(modulePath) && !hasNativeSourceRequireHook(modulePath)) {
+    if (isSourceModulePath(modulePath)) {
+      return loadModuleWithJiti(modulePath);
+    }
+    throw new Error(`channel plugin module must be built JavaScript: ${modulePath}`);
+  }
+  try {
+    return nodeRequire(modulePath);
+  } catch (error) {
+    if (isSourceModulePath(modulePath)) {
+      return loadModuleWithJiti(modulePath);
+    }
+    throw new Error(`failed to load channel plugin module with native require: ${modulePath}`, {
+      cause: error,
     });
-  };
+  }
 }
 
-let loadModule = createModuleLoader();
-
-export function isJavaScriptModulePath(modulePath: string): boolean {
-  return [".js", ".mjs", ".cjs"].includes(
-    normalizeLowercaseStringOrEmpty(path.extname(modulePath)),
-  );
-}
-
-export function resolveCompiledBundledModulePath(modulePath: string): string {
-  const compiledDistModulePath = modulePath.replace(
-    `${path.sep}dist-runtime${path.sep}`,
-    `${path.sep}dist${path.sep}`,
-  );
-  return compiledDistModulePath !== modulePath && fs.existsSync(compiledDistModulePath)
-    ? compiledDistModulePath
-    : modulePath;
-}
-
-export function resolvePluginModuleCandidates(rootDir: string, specifier: string): string[] {
+function resolvePluginModuleCandidates(rootDir: string, specifier: string): string[] {
   const normalizedSpecifier = specifier.replace(/\\/g, "/");
   const resolvedPath = path.resolve(rootDir, normalizedSpecifier);
   const ext = path.extname(resolvedPath);
@@ -75,7 +87,6 @@ export function loadChannelPluginModule(params: {
   rootDir: string;
   boundaryRootDir?: string;
   boundaryLabel?: string;
-  shouldTryNativeRequire?: (safePath: string) => boolean;
 }): unknown {
   const opened = openBoundaryFileSync({
     absolutePath: params.modulePath,
@@ -91,12 +102,5 @@ export function loadChannelPluginModule(params: {
   }
   const safePath = opened.path;
   fs.closeSync(opened.fd);
-  if (process.platform === "win32" && params.shouldTryNativeRequire?.(safePath)) {
-    try {
-      return nodeRequire(safePath);
-    } catch {
-      // Fall back to the Jiti loader path when require() cannot handle the entry.
-    }
-  }
-  return loadModule(safePath)(safePath);
+  return loadModule(safePath);
 }

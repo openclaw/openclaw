@@ -134,18 +134,21 @@ For the generic Docker flow, see [Docker](/install/docker).
 
     ```bash
     OPENCLAW_IMAGE=openclaw:latest
-    OPENCLAW_GATEWAY_TOKEN=change-me-now
+    OPENCLAW_GATEWAY_TOKEN=
     OPENCLAW_GATEWAY_BIND=lan
     OPENCLAW_GATEWAY_PORT=18789
 
     OPENCLAW_CONFIG_DIR=/root/.openclaw
     OPENCLAW_WORKSPACE_DIR=/root/.openclaw/workspace
 
-    GOG_KEYRING_PASSWORD=change-me-now
+    GOG_KEYRING_PASSWORD=
     XDG_CONFIG_HOME=/home/node/.openclaw
     ```
 
-    Generate strong secrets:
+    Leave `OPENCLAW_GATEWAY_TOKEN` blank unless you explicitly want to
+    manage it through `.env`; OpenClaw writes a random gateway token to
+    config on first start. Generate a keyring password and paste it into
+    `GOG_KEYRING_PASSWORD`:
 
     ```bash
     openssl rand -hex 32
@@ -215,7 +218,22 @@ For the generic Docker flow, see [Docker](/install/docker).
   </Step>
 
   <Step title="Hetzner-specific access">
-    After the shared build and launch steps, tunnel from your laptop:
+    After the shared build and launch steps, complete the following setup to open the tunnel:
+
+    **Prerequisite:** Ensure your VPS sshd config allows TCP forwarding. If you
+    have hardened your SSH config, check `/etc/ssh/sshd_config` and set:
+
+    ```
+    AllowTcpForwarding local
+    ```
+
+    `local` allows `ssh -L` local forwards from your laptop while blocking
+    remote forwards from the server. Setting it to `no` will fail the tunnel
+    with:
+    `channel 3: open failed: administratively prohibited: open failed`
+
+    After confirming TCP forwarding is enabled, restart the SSH service
+    (`systemctl restart ssh`) and run the tunnel from your laptop:
 
     ```bash
     ssh -N -L 18789:127.0.0.1:18789 root@YOUR_VPS_IP
@@ -250,10 +268,19 @@ For teams preferring infrastructure-as-code workflows, a community-maintained Te
 
 This approach complements the Docker setup above with reproducible deployments, version-controlled infrastructure, and automated disaster recovery.
 
-> **Note:** Community-maintained. For issues or contributions, see the repository links above.
+<Note>
+Community-maintained. For issues or contributions, see the repository links above.
+</Note>
 
 ## Next steps
 
 - Set up messaging channels: [Channels](/channels)
 - Configure the Gateway: [Gateway configuration](/gateway/configuration)
 - Keep OpenClaw up to date: [Updating](/install/updating)
+
+## Related
+
+- [Install overview](/install)
+- [Fly.io](/install/fly)
+- [Docker](/install/docker)
+- [VPS hosting](/vps)

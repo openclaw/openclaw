@@ -1,6 +1,6 @@
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
-import type { ReasoningLevel, VerboseLevel } from "../auto-reply/thinking.js";
+import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AgentInternalEvent } from "./internal-events.js";
@@ -16,6 +16,7 @@ export type SubscribeEmbeddedPiSessionParams = {
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
   reasoningMode?: ReasoningLevel;
+  thinkingLevel?: ThinkLevel;
   toolResultFormat?: ToolResultFormat;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;
@@ -30,7 +31,13 @@ export type SubscribeEmbeddedPiSessionParams = {
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
-  onAgentEvent?: (evt: { stream: string; data: Record<string, unknown> }) => void | Promise<void>;
+  onAgentEvent?: (evt: {
+    stream: string;
+    data: Record<string, unknown>;
+    sessionKey?: string;
+  }) => void | Promise<void>;
+  /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
+  onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
   config?: OpenClawConfig;
@@ -39,5 +46,11 @@ export type SubscribeEmbeddedPiSessionParams = {
   sessionId?: string;
   /** Agent identity for hook context — resolved from session config in attempt.ts. */
   agentId?: string;
+  /**
+   * Exact raw names of non-plugin OpenClaw tools registered for this run.
+   * When provided, MEDIA: passthrough requires an exact match instead of only
+   * a normalized-name collision with a trusted built-in.
+   */
+  builtinToolNames?: ReadonlySet<string>;
   internalEvents?: AgentInternalEvent[];
 };

@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   drainFileLockStateForTest,
   resetFileLockStateForTest,
-} from "openclaw/plugin-sdk/infra-runtime";
+} from "openclaw/plugin-sdk/file-lock";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { persistIdbToDisk, restoreIdbFromDisk } from "./idb-persistence.js";
 import {
@@ -91,6 +91,13 @@ describe("Matrix IndexedDB persistence", () => {
 
     const dbs = await indexedDB.databases();
     expect(dbs).toEqual([]);
+  });
+
+  it("returns false without warning when the snapshot does not exist yet", async () => {
+    const restored = await restoreIdbFromDisk(path.join(tmpDir, "missing-snapshot.json"));
+
+    expect(restored).toBe(false);
+    expect(warnSpy).not.toHaveBeenCalled();
   });
 
   it("serializes concurrent persist operations via file lock", async () => {

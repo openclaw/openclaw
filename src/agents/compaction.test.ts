@@ -1,12 +1,18 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
-import {
-  estimateMessagesTokens,
-  pruneHistoryForContextShare,
-  splitMessagesByTokenShare,
-} from "./compaction.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import "./test-helpers/pi-coding-agent-token-mock.js";
+
+let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
+let pruneHistoryForContextShare: typeof import("./compaction.js").pruneHistoryForContextShare;
+let splitMessagesByTokenShare: typeof import("./compaction.js").splitMessagesByTokenShare;
+
+beforeAll(async () => {
+  vi.resetModules();
+  ({ estimateMessagesTokens, pruneHistoryForContextShare, splitMessagesByTokenShare } =
+    await import("./compaction.js"));
+});
 
 function makeMessage(id: number, size: number): AgentMessage {
   return {
@@ -18,6 +24,10 @@ function makeMessage(id: number, size: number): AgentMessage {
 
 function makeMessages(count: number, size: number): AgentMessage[] {
   return Array.from({ length: count }, (_, index) => makeMessage(index + 1, size));
+}
+
+function compareTimestampIds(left: AgentMessage["timestamp"], right: AgentMessage["timestamp"]) {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function makeAssistantToolCall(
@@ -263,8 +273,8 @@ describe("pruneHistoryForContextShare", () => {
     const allIds = [
       ...pruned.droppedMessagesList.map((m) => m.timestamp),
       ...pruned.messages.map((m) => m.timestamp),
-    ].toSorted((a, b) => a - b);
-    const originalIds = messages.map((m) => m.timestamp).toSorted((a, b) => a - b);
+    ].toSorted(compareTimestampIds);
+    const originalIds = messages.map((m) => m.timestamp).toSorted(compareTimestampIds);
     expect(allIds).toEqual(originalIds);
   });
 

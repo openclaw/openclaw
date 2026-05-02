@@ -1,6 +1,6 @@
 ---
-title: "Threat Model (MITRE ATLAS)"
 summary: "OpenClaw threat model mapped to the MITRE ATLAS framework"
+title: "Threat model (MITRE ATLAS)"
 read_when:
   - Reviewing security posture or threat scenarios
   - Working on security features or audit responses
@@ -15,7 +15,7 @@ read_when:
 **Methodology:** MITRE ATLAS + Data Flow Diagrams
 **Framework:** [MITRE ATLAS](https://atlas.mitre.org/) (Adversarial Threat Landscape for AI Systems)
 
-### Framework Attribution
+### Framework attribution
 
 This threat model is built on [MITRE ATLAS](https://atlas.mitre.org/), the industry-standard framework for documenting adversarial threats to AI/ML systems. ATLAS is maintained by [MITRE](https://www.mitre.org/) in collaboration with the AI security community.
 
@@ -606,3 +606,8 @@ T-EXEC-002 → T-EXFIL-001 → External exfiltration
 ---
 
 _This threat model is a living document. Report security issues to security@openclaw.ai_
+
+## Related
+
+- [Formal verification](/security/formal-verification)
+- [Contributing to the threat model](/security/CONTRIBUTING-THREAT-MODEL)

@@ -1,12 +1,10 @@
 ---
-title: "Creating Skills"
 summary: "Build and test custom workspace skills with SKILL.md"
+title: "Creating skills"
 read_when:
   - You are creating a new custom skill in your workspace
   - You need a quick starter workflow for SKILL.md-based skills
 ---
-
-# Creating Skills
 
 Skills teach the agent how and when to use tools. Each skill is a directory
 containing a `SKILL.md` file with YAML frontmatter and markdown instructions.
@@ -31,7 +29,7 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
     ```markdown
     ---
-    name: hello_world
+    name: hello-world
     description: A simple skill that says hello.
     ---
 
@@ -40,6 +38,9 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
     When the user asks for a greeting, use the `echo` tool to say
     "Hello from your custom skill!".
     ```
+
+    Use hyphen-case with lowercase letters, digits, and hyphens for the skill
+    `name`. Keep the folder name and frontmatter `name` aligned.
 
   </Step>
 
@@ -85,13 +86,13 @@ For how skills are loaded and prioritized, see [Skills](/tools/skills).
 
 The YAML frontmatter supports these fields:
 
-| Field                               | Required | Description                                 |
-| ----------------------------------- | -------- | ------------------------------------------- |
-| `name`                              | Yes      | Unique identifier (snake_case)              |
-| `description`                       | Yes      | One-line description shown to the agent     |
-| `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.) |
-| `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                   |
-| `metadata.openclaw.requires.config` | No       | Required config keys                        |
+| Field                               | Required | Description                                                    |
+| ----------------------------------- | -------- | -------------------------------------------------------------- |
+| `name`                              | Yes      | Unique identifier using lowercase letters, digits, and hyphens |
+| `description`                       | Yes      | One-line description shown to the agent                        |
+| `metadata.openclaw.os`              | No       | OS filter (`["darwin"]`, `["linux"]`, etc.)                    |
+| `metadata.openclaw.requires.bins`   | No       | Required binaries on PATH                                      |
+| `metadata.openclaw.requires.config` | No       | Required config keys                                           |
 
 ## Best practices
 

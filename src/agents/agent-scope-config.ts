@@ -1,12 +1,14 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
-import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type {
+  AgentContextLimitsConfig,
+  AgentDefaultsConfig,
+} from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
+import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
@@ -23,6 +25,8 @@ export type ResolvedAgentConfig = {
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
+  tts?: AgentEntry["tts"];
+  contextLimits?: AgentContextLimitsConfig;
   heartbeat?: AgentEntry["heartbeat"];
   identity?: AgentEntry["identity"];
   groupChat?: AgentEntry["groupChat"];
@@ -32,12 +36,16 @@ export type ResolvedAgentConfig = {
   tools?: AgentEntry["tools"];
 };
 
-let log: ReturnType<typeof createSubsystemLogger> | null = null;
 let defaultAgentWarned = false;
 
-function getLog(): ReturnType<typeof createSubsystemLogger> {
-  log ??= createSubsystemLogger("agent-scope");
-  return log;
+function warnMultipleDefaultAgents(): void {
+  void import("../logging/subsystem.js")
+    .then(({ createSubsystemLogger }) => {
+      createSubsystemLogger("agent-scope").warn(
+        "Multiple agents marked default=true; using the first entry as default.",
+      );
+    })
+    .catch(() => undefined);
 }
 
 /** Strip null bytes from paths to prevent ENOTDIR errors. */
@@ -79,7 +87,7 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const defaults = agents.filter((agent) => agent?.default);
   if (defaults.length > 1 && !defaultAgentWarned) {
     defaultAgentWarned = true;
-    getLog().warn("Multiple agents marked default=true; using the first entry as default.");
+    warnMultipleDefaultAgents();
   }
   const chosen = (defaults[0] ?? agents[0])?.id?.trim();
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
@@ -116,6 +124,11 @@ export function resolveAgentConfig(
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
+    tts: entry.tts,
+    contextLimits:
+      typeof entry.contextLimits === "object" && entry.contextLimits
+        ? { ...agentDefaults?.contextLimits, ...entry.contextLimits }
+        : agentDefaults?.contextLimits,
     heartbeat: entry.heartbeat,
     identity: entry.identity,
     groupChat: entry.groupChat,
@@ -127,24 +140,39 @@ export function resolveAgentConfig(
   };
 }
 
-export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
+export function resolveAgentContextLimits(
+  cfg: OpenClawConfig | undefined,
+  agentId?: string | null,
+): AgentContextLimitsConfig | undefined {
+  const defaults = cfg?.agents?.defaults?.contextLimits;
+  if (!cfg || !agentId) {
+    return defaults;
+  }
+  return resolveAgentConfig(cfg, agentId)?.contextLimits ?? defaults;
+}
+
+export function resolveAgentWorkspaceDir(
+  cfg: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv = process.env,
+) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
-    return stripNullBytes(resolveUserPath(configured));
+    return stripNullBytes(resolveUserPath(configured, env));
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   const fallback = cfg.agents?.defaults?.workspace?.trim();
   if (id === defaultAgentId) {
     if (fallback) {
-      return stripNullBytes(resolveUserPath(fallback));
+      return stripNullBytes(resolveUserPath(fallback, env));
     }
-    return stripNullBytes(resolveDefaultAgentWorkspaceDir(process.env));
+    return stripNullBytes(resolveDefaultAgentWorkspaceDir(env));
   }
   if (fallback) {
-    return stripNullBytes(path.join(resolveUserPath(fallback), id));
+    return stripNullBytes(path.join(resolveUserPath(fallback, env), id));
   }
-  const stateDir = resolveStateDir(process.env);
+  const stateDir = resolveStateDir(env);
   return stripNullBytes(path.join(stateDir, `workspace-${id}`));
 }
 

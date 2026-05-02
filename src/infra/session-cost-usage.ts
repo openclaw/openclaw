@@ -38,28 +38,24 @@ import type {
   SessionLogEntry,
   SessionMessageCounts,
   SessionModelUsage,
+  SessionUtcQuarterHourMessageCounts,
+  SessionUtcQuarterHourTokenUsage,
   SessionToolUsage,
   SessionUsageTimePoint,
   SessionUsageTimeSeries,
 } from "./session-cost-usage.types.js";
 
 export type {
-  CostUsageDailyEntry,
   CostUsageSummary,
   CostUsageTotals,
   DiscoveredSession,
   SessionCostSummary,
   SessionDailyLatency,
-  SessionDailyMessageCounts,
   SessionDailyModelUsage,
-  SessionDailyUsage,
   SessionLatencyStats,
-  SessionLogEntry,
   SessionMessageCounts,
   SessionModelUsage,
   SessionToolUsage,
-  SessionUsageTimePoint,
-  SessionUsageTimeSeries,
 } from "./session-cost-usage.types.js";
 
 const emptyTotals = (): CostUsageTotals => ({
@@ -165,6 +161,47 @@ const parseTranscriptEntry = (entry: Record<string, unknown>): ParsedTranscriptE
 const formatDayKey = (date: Date): string =>
   date.toLocaleDateString("en-CA", { timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone });
 
+const formatUtcDayKey = (date: Date): string =>
+  `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(date.getUTCDate()).padStart(2, "0")}`;
+
+const getUtcQuarterHourBucketKey = (
+  date: Date,
+): { date: string; quarterIndex: number; key: string } => {
+  const quarterIndex = Math.floor((date.getUTCHours() * 60 + date.getUTCMinutes()) / 15);
+  const utcDayKey = formatUtcDayKey(date);
+  return { date: utcDayKey, quarterIndex, key: `${utcDayKey}::${quarterIndex}` };
+};
+
+/**
+ * Accumulate message-level counts into a bucket (daily or UTC quarter-hour).
+ * Avoids duplicating the same logic for both daily and quarter-hour message counts.
+ */
+const accumulateMessageCounts = (
+  bucket: {
+    total: number;
+    user: number;
+    assistant: number;
+    toolCalls: number;
+    toolResults: number;
+    errors: number;
+  },
+  entry: ParsedTranscriptEntry,
+  errorStopReasons: Set<string>,
+) => {
+  bucket.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
+  if (entry.role === "user") {
+    bucket.user += 1;
+  } else if (entry.role === "assistant") {
+    bucket.assistant += 1;
+  }
+  bucket.toolCalls += entry.toolNames.length;
+  bucket.toolResults += entry.toolResultCounts.total;
+  bucket.errors += entry.toolResultCounts.errors;
+  if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
+    bucket.errors += 1;
+  }
+};
+
 const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined => {
   if (!values.length) {
     return undefined;
@@ -182,15 +219,29 @@ const computeLatencyStats = (values: number[]): SessionLatencyStats | undefined 
   };
 };
 
+const computeUsageTokenTotals = (usage: NormalizedUsage) => {
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const componentTotal = input + output + cacheRead + cacheWrite;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    componentTotal,
+    totalTokens: usage.total ?? componentTotal,
+  };
+};
+
 const applyUsageTotals = (totals: CostUsageTotals, usage: NormalizedUsage) => {
-  totals.input += usage.input ?? 0;
-  totals.output += usage.output ?? 0;
-  totals.cacheRead += usage.cacheRead ?? 0;
-  totals.cacheWrite += usage.cacheWrite ?? 0;
-  const totalTokens =
-    usage.total ??
-    (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  totals.totalTokens += totalTokens;
+  const usageTotals = computeUsageTokenTotals(usage);
+  totals.input += usageTotals.input;
+  totals.output += usageTotals.output;
+  totals.cacheRead += usageTotals.cacheRead;
+  totals.cacheWrite += usageTotals.cacheWrite;
+  totals.totalTokens += usageTotals.totalTokens;
 };
 
 const applyCostBreakdown = (totals: CostUsageTotals, costBreakdown: CostBreakdown | undefined) => {
@@ -249,13 +300,23 @@ async function scanTranscriptFile(params: {
       continue;
     }
 
-    if (entry.usage && entry.costTotal === undefined) {
+    if (entry.usage) {
       const cost = resolveModelCostConfig({
         provider: entry.provider,
         model: entry.model,
         config: params.config,
       });
-      entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+      if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
+        // When tiered pricing is configured, always recompute to override
+        // the flat-rate cost that the transport layer wrote into the transcript.
+        // Clear costBreakdown so downstream aggregation uses the recomputed total
+        // instead of the stale flat-rate breakdown from the transport layer.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
+      } else if (entry.costTotal === undefined) {
+        // Fill in missing cost estimates.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+      }
     }
 
     params.onEntry(entry);
@@ -352,7 +413,8 @@ export function resolveExistingUsageSessionFile(params: {
 export async function loadCostUsageSummary(params?: {
   startMs?: number;
   endMs?: number;
-  days?: number; // Deprecated, for backwards compatibility
+  /** @deprecated Use startMs/endMs. */
+  days?: number;
   config?: OpenClawConfig;
   agentId?: string;
 }): Promise<CostUsageSummary> {
@@ -561,6 +623,8 @@ export async function loadSessionCostSummary(params: {
   const activityDatesSet = new Set<string>();
   const dailyMap = new Map<string, { tokens: number; cost: number }>();
   const dailyMessageMap = new Map<string, SessionDailyMessageCounts>();
+  const utcQuarterHourMessageMap = new Map<string, SessionUtcQuarterHourMessageCounts>();
+  const utcQuarterHourTokenMap = new Map<string, SessionUtcQuarterHourTokenUsage>();
   const dailyLatencyMap = new Map<string, number[]>();
   const dailyModelUsageMap = new Map<string, SessionDailyModelUsage>();
   const messageCounts: SessionMessageCounts = {
@@ -658,19 +722,23 @@ export async function loadSessionCostSummary(params: {
           toolResults: 0,
           errors: 0,
         };
-        daily.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
-        if (entry.role === "user") {
-          daily.user += 1;
-        } else if (entry.role === "assistant") {
-          daily.assistant += 1;
-        }
-        daily.toolCalls += entry.toolNames.length;
-        daily.toolResults += entry.toolResultCounts.total;
-        daily.errors += entry.toolResultCounts.errors;
-        if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
-          daily.errors += 1;
-        }
+        accumulateMessageCounts(daily, entry, errorStopReasons);
         dailyMessageMap.set(dayKey, daily);
+
+        // Per-quarter-hour message counts for precise hourly stats (UTC-based)
+        const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
+        const utcQuarterHour = utcQuarterHourMessageMap.get(quarterBucket.key) ?? {
+          date: quarterBucket.date,
+          quarterIndex: quarterBucket.quarterIndex,
+          total: 0,
+          user: 0,
+          assistant: 0,
+          toolCalls: 0,
+          toolResults: 0,
+          errors: 0,
+        };
+        accumulateMessageCounts(utcQuarterHour, entry, errorStopReasons);
+        utcQuarterHourMessageMap.set(quarterBucket.key, utcQuarterHour);
       }
 
       if (!entry.usage) {
@@ -686,11 +754,11 @@ export async function loadSessionCostSummary(params: {
 
       if (entry.timestamp) {
         const dayKey = formatDayKey(entry.timestamp);
-        const entryTokens =
-          (entry.usage.input ?? 0) +
-          (entry.usage.output ?? 0) +
-          (entry.usage.cacheRead ?? 0) +
-          (entry.usage.cacheWrite ?? 0);
+        const entryTokenTotals = computeUsageTokenTotals(entry.usage);
+        // Preserve the legacy dailyBreakdown token basis until daily metrics are
+        // refactored separately. The precise quarter-hour bucket below uses
+        // entryTokenTotals.totalTokens so Usage Mosaic matches session totals.
+        const entryTokens = entryTokenTotals.componentTotal;
         const entryCost =
           entry.costBreakdown?.total ??
           (entry.costBreakdown
@@ -699,6 +767,25 @@ export async function loadSessionCostSummary(params: {
               (entry.costBreakdown.cacheRead ?? 0) +
               (entry.costBreakdown.cacheWrite ?? 0)
             : (entry.costTotal ?? 0));
+
+        const quarterBucket = getUtcQuarterHourBucketKey(entry.timestamp);
+        const utcQuarterHourToken = utcQuarterHourTokenMap.get(quarterBucket.key) ?? {
+          date: quarterBucket.date,
+          quarterIndex: quarterBucket.quarterIndex,
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          totalCost: 0,
+        };
+        utcQuarterHourToken.input += entryTokenTotals.input;
+        utcQuarterHourToken.output += entryTokenTotals.output;
+        utcQuarterHourToken.cacheRead += entryTokenTotals.cacheRead;
+        utcQuarterHourToken.cacheWrite += entryTokenTotals.cacheWrite;
+        utcQuarterHourToken.totalTokens += entryTokenTotals.totalTokens;
+        utcQuarterHourToken.totalCost += entryCost;
+        utcQuarterHourTokenMap.set(quarterBucket.key, utcQuarterHourToken);
 
         const existing = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
         dailyMap.set(dayKey, {
@@ -756,13 +843,21 @@ export async function loadSessionCostSummary(params: {
     dailyMessageMap.values(),
   ).toSorted((a, b) => a.date.localeCompare(b.date));
 
+  const utcQuarterHourMessageCounts: SessionUtcQuarterHourMessageCounts[] = Array.from(
+    utcQuarterHourMessageMap.values(),
+  ).toSorted((a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex);
+
+  const utcQuarterHourTokenUsage: SessionUtcQuarterHourTokenUsage[] = Array.from(
+    utcQuarterHourTokenMap.values(),
+  ).toSorted((a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex);
+
   const dailyLatency: SessionDailyLatency[] = Array.from(dailyLatencyMap.entries())
     .map(([date, values]) => {
       const stats = computeLatencyStats(values);
       if (!stats) {
         return null;
       }
-      return { date, ...stats };
+      return Object.assign({ date }, stats);
     })
     .filter((entry): entry is SessionDailyLatency => Boolean(entry))
     .toSorted((a, b) => a.date.localeCompare(b.date));
@@ -803,6 +898,12 @@ export async function loadSessionCostSummary(params: {
     activityDates: Array.from(activityDatesSet).toSorted(),
     dailyBreakdown,
     dailyMessageCounts,
+    utcQuarterHourMessageCounts: utcQuarterHourMessageCounts.length
+      ? utcQuarterHourMessageCounts
+      : undefined,
+    utcQuarterHourTokenUsage: utcQuarterHourTokenUsage.length
+      ? utcQuarterHourTokenUsage
+      : undefined,
     dailyLatency: dailyLatency.length ? dailyLatency : undefined,
     dailyModelUsage: dailyModelUsage.length ? dailyModelUsage : undefined,
     messageCounts,
@@ -839,11 +940,9 @@ export async function loadSessionUsageTimeSeries(params: {
         return;
       }
 
-      const input = entry.usage.input ?? 0;
-      const output = entry.usage.output ?? 0;
-      const cacheRead = entry.usage.cacheRead ?? 0;
-      const cacheWrite = entry.usage.cacheWrite ?? 0;
-      const totalTokens = entry.usage.total ?? input + output + cacheRead + cacheWrite;
+      const { input, output, cacheRead, cacheWrite, totalTokens } = computeUsageTokenTotals(
+        entry.usage,
+      );
       const cost = entry.costTotal ?? 0;
 
       cumulativeTokens += totalTokens;

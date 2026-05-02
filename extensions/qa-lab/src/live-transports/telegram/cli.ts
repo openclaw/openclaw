@@ -1,4 +1,3 @@
-import type { Command } from "commander";
 import {
   createLazyCliRuntimeLoader,
   createLiveTransportQaCliRegistration,
@@ -22,7 +21,8 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "telegram",
     credentialOptions: {
       sourceDescription: "Credential source for Telegram QA: env or convex (default: env)",
-      roleDescription: "Credential role for convex auth: maintainer or ci (default: maintainer)",
+      roleDescription:
+        "Credential role for convex auth: maintainer or ci (default: ci in CI, maintainer otherwise)",
     },
     description: "Run the manual Telegram live QA lane against a private bot-to-bot group harness",
     outputDirHelp: "Telegram QA artifact directory",
@@ -30,7 +30,3 @@ export const telegramQaCliRegistration: LiveTransportQaCliRegistration =
     sutAccountHelp: "Temporary Telegram account id inside the QA gateway config",
     run: runQaTelegram,
   });
-
-export function registerTelegramQaCli(qa: Command) {
-  telegramQaCliRegistration.register(qa);
-}

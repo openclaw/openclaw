@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import {
   BILLING_ERROR_USER_MESSAGE,
   formatBillingErrorMessage,
@@ -7,6 +8,7 @@ import {
   getApiErrorPayloadFingerprint,
   formatRawAssistantErrorForUi,
   isRawApiErrorPayload,
+  sanitizeUserFacingText,
 } from "./pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
@@ -64,10 +66,22 @@ describe("formatAssistantErrorText", () => {
       "The AI service is temporarily overloaded. Please try again in a moment.",
     );
   });
+  it("returns a model-switch hint for OpenAI model capacity errors", () => {
+    const msg = makeAssistantError("Selected model is at capacity. Please try a different model.");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+    );
+  });
   it("returns a recovery hint when tool call input is missing", () => {
     const msg = makeAssistantError("tool_use.input: Field required");
     const result = formatAssistantErrorText(msg);
     expect(result).toContain("Session history looks corrupted");
+    expect(result).toContain("/new");
+  });
+  it("returns a recovery hint for replay-invalid connection mismatch errors", () => {
+    const msg = makeAssistantError("401 input item ID does not belong to this connection");
+    const result = formatAssistantErrorText(msg);
+    expect(result).toContain("Session history or replay state is invalid");
     expect(result).toContain("/new");
   });
   it("handles JSON-wrapped role errors", () => {
@@ -122,6 +136,16 @@ describe("formatAssistantErrorText", () => {
     expect(result).toContain("API provider");
     expect(result).toBe(BILLING_ERROR_USER_MESSAGE);
   });
+  it("returns a friendly billing message for flat JSON insufficient_balance payloads (#74079)", () => {
+    const msg = makeAssistantError(
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}',
+    );
+    const result = formatAssistantErrorText(msg, {
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(result).toBe(formatBillingErrorMessage("google", "gemini-3.1-pro-preview"));
+  });
   it("returns a friendly message for rate limit errors", () => {
     const msg = makeAssistantError("429 rate limit reached");
     expect(formatAssistantErrorText(msg)).toContain("rate limit reached");
@@ -161,21 +185,38 @@ describe("formatAssistantErrorText", () => {
     expect(result).toBe("⚠️ Your quota has been exhausted, try again in 24 hours");
   });
 
-  it("falls back to generic copy for HTML quota pages", () => {
+  it("returns upstream HTML copy for HTML quota pages", () => {
     const msg = makeAssistantError(
       "429 <!DOCTYPE html><html><body>Your quota is exhausted</body></html>",
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 
-  it("falls back to generic copy for prefixed HTML rate-limit pages", () => {
+  it("returns upstream HTML copy for prefixed 521 HTML rate-limit pages", () => {
     const msg = makeAssistantError(
       "Error: 521 <!DOCTYPE html><html><body>rate limit</body></html>",
     );
     expect(formatAssistantErrorText(msg)).toBe(
-      "⚠️ API rate limit reached. Please try again later.",
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+    );
+  });
+
+  it("does not misdiagnose standalone Cloudflare challenge HTML as DNS", () => {
+    const msg = makeAssistantError(`<!DOCTYPE html>
+<html>
+  <head>
+    <title>Just a moment...</title>
+    <link rel="dns-prefetch" href="//chatgpt.com">
+  </head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`);
+    expect(formatAssistantErrorText(msg)).toBe(
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
 
@@ -221,6 +262,22 @@ describe("formatAssistantErrorText", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh failed. Re-authenticate this provider and try again.",
+    );
+  });
+
+  it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
+    const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
+    );
+  });
+
+  it("returns a timeout-specific message for OAuth refresh hard timeouts", () => {
+    const msg = makeAssistantError(
+      'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai-codex)" exceeded hard timeout (120000ms)',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication refresh timed out before the provider completed. Retry in a moment; re-authenticate only if it keeps failing.",
     );
   });
 
@@ -294,6 +351,34 @@ describe("formatAssistantErrorText", () => {
       "LLM request failed: provider returned an invalid streaming response. Please try again.",
     );
   });
+
+  it("sanitizes transport-classified malformed streaming fragments (#59076)", () => {
+    const msg = makeAssistantError(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE);
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM streaming response contained a malformed fragment. Please try again.",
+    );
+  });
+
+  it("does not broadly rewrite non-streaming 'Unexpected token' JSON parse errors", () => {
+    const msg = makeAssistantError("Unexpected token < in JSON at position 0");
+    expect(formatAssistantErrorText(msg)).toBe("Unexpected token < in JSON at position 0");
+  });
+
+  it("does not rewrite non-streaming provider JSON request-validation diagnostics", () => {
+    const msg = makeAssistantError("Expected value in JSON at position 12 for messages.0.content");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Expected value in JSON at position 12 for messages.0.content",
+    );
+  });
+
+  it("keeps provider request-validation JSON diagnostics actionable", () => {
+    const msg = makeAssistantError(
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Expected value in JSON at position 12 for messages.0.content"}}',
+    );
+    expect(formatAssistantErrorText(msg)).toBe(
+      "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
+    );
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
@@ -333,6 +418,21 @@ describe("formatRawAssistantErrorForUi", () => {
       "The AI service is temporarily unavailable (HTTP 521). Please try again in a moment.",
     );
   });
+
+  it("formats standalone Cloudflare challenge HTML into a clean provider error", () => {
+    const htmlError = `<!DOCTYPE html>
+<html lang="en-US">
+  <head><title>Just a moment...</title></head>
+  <body>
+    <span id="challenge-error-text">Enable JavaScript and cookies to continue</span>
+    <script src="/cdn-cgi/challenge-platform/h/g/orchestrate/chl_page/v1"></script>
+  </body>
+</html>`;
+
+    expect(formatRawAssistantErrorForUi(htmlError)).toBe(
+      "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
+    );
+  });
 });
 
 describe("raw API error payload helpers", () => {
@@ -343,5 +443,32 @@ describe("raw API error payload helpers", () => {
     expect(isRawApiErrorPayload(raw)).toBe(true);
     expect(getApiErrorPayloadFingerprint(raw)).toContain("server_error");
     expect(getApiErrorPayloadFingerprint(raw)).toContain("req_123");
+  });
+
+  it("recognizes flat JSON payloads with string error code and message (#74079)", () => {
+    const raw =
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
+    expect(isRawApiErrorPayload(raw)).toBe(true);
+    expect(formatRawAssistantErrorForUi(raw)).toBe(
+      "LLM error insufficient_balance: Insufficient MBT balance. Top up or upgrade your subscription to continue.",
+    );
+  });
+});
+
+describe("sanitizeUserFacingText — streaming JSON parse error (#59076)", () => {
+  it("rewrites transport-classified malformed streaming fragments in error context", () => {
+    const result = sanitizeUserFacingText(MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE, {
+      errorContext: true,
+    });
+    expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
+
+  it("does not rewrite JSON parse error when not in error context", () => {
+    // When not in error context, the text could be legitimate assistant content
+    // mentioning JSON errors. Don't rewrite.
+    const text =
+      "Expected ',' or '}' after property value in JSON at position 334 (line 1 column 335)";
+    const result = sanitizeUserFacingText(text, { errorContext: false });
+    expect(result).toBe(text);
   });
 });

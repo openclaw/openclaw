@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
@@ -6,6 +7,7 @@ const loadChatHistoryMock = vi.fn();
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
   flushChatQueueForEvent: vi.fn(),
+  refreshChatAvatar: vi.fn(),
 }));
 vi.mock("./app-settings.ts", () => ({
   applySettings: vi.fn(),
@@ -41,6 +43,7 @@ vi.mock("./controllers/nodes.ts", () => ({
   loadNodes: vi.fn(),
 }));
 vi.mock("./controllers/sessions.ts", () => ({
+  applySessionsChangedEvent: vi.fn(),
   loadSessions: loadSessionsMock,
   subscribeSessions: vi.fn(),
 }));
@@ -140,6 +143,22 @@ describe("handleGatewayEvent session.message", () => {
 
     expect(loadChatHistoryMock).toHaveBeenCalledTimes(1);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+  });
+
+  it("skips history reload while a chat run is active", () => {
+    loadChatHistoryMock.mockReset();
+    const host = createHost();
+    host.sessionKey = "agent:qa:main";
+    host.chatRunId = "run-123";
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "session.message",
+      payload: { sessionKey: "agent:qa:main" },
+      seq: 1,
+    });
+
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
   it("ignores transcript updates for other sessions", () => {

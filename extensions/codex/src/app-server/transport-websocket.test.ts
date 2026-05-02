@@ -33,7 +33,7 @@ describe("Codex app-server websocket transport", () => {
         const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
         if (message.method === "initialize") {
           socket.send(
-            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.118.0" } }),
+            JSON.stringify({ id: message.id, result: { userAgent: "openclaw/0.125.0" } }),
           );
           return;
         }
@@ -61,11 +61,11 @@ describe("Codex app-server websocket transport", () => {
 });
 
 function rawDataToText(data: RawData): string {
-  if (Buffer.isBuffer(data)) {
-    return data.toString("utf8");
-  }
   if (Array.isArray(data)) {
     return Buffer.concat(data).toString("utf8");
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(data)).toString("utf8");
   }
   return Buffer.from(data).toString("utf8");
 }

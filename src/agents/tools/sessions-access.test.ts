@@ -5,9 +5,9 @@ import {
   createSessionVisibilityGuard,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxSessionToolsVisibility,
-  resolveSandboxedSessionToolContext,
   resolveSessionToolsVisibility,
-} from "./sessions-access.js";
+} from "../../plugin-sdk/session-visibility.js";
+import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
 import { __testing as sessionsResolutionTesting } from "./sessions-resolution.js";
 
 describe("resolveSessionToolsVisibility", () => {
@@ -166,7 +166,7 @@ describe("createSessionVisibilityGuard", () => {
     });
 
     expect(guard.check("agent:main:main")).toEqual({ allowed: true });
-    expect(guard.check("agent:main:telegram:group:1")).toEqual({
+    expect(guard.check("agent:main:forum:group:1")).toEqual({
       allowed: false,
       status: "forbidden",
       error:

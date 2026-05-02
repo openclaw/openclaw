@@ -5,7 +5,10 @@ export function mergeDmAllowFromSources(params: {
   storeAllowFrom?: Array<string | number>;
   dmPolicy?: string;
 }): string[] {
-  const storeEntries = params.dmPolicy === "allowlist" ? [] : (params.storeAllowFrom ?? []);
+  const storeEntries =
+    params.dmPolicy === "allowlist" || params.dmPolicy === "open"
+      ? []
+      : (params.storeAllowFrom ?? []);
   return normalizeStringEntries([...(params.allowFrom ?? []), ...storeEntries]);
 }
 
@@ -28,7 +31,7 @@ export function resolveGroupAllowFromSources(params: {
 
 export function firstDefined<T>(...values: Array<T | undefined>) {
   for (const value of values) {
-    if (typeof value !== "undefined") {
+    if (value !== undefined) {
       return value;
     }
   }

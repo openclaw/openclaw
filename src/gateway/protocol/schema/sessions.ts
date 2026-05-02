@@ -1,4 +1,5 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
+import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
 
 export const SessionCompactionCheckpointReasonSchema = Type.Union([
@@ -59,11 +60,31 @@ export const SessionsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsCleanupParamsSchema = Type.Object(
+  {
+    agent: Type.Optional(NonEmptyString),
+    allAgents: Type.Optional(Type.Boolean()),
+    enforce: Type.Optional(Type.Boolean()),
+    activeKey: Type.Optional(NonEmptyString),
+    fixMissing: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsPreviewParamsSchema = Type.Object(
   {
     keys: Type.Array(NonEmptyString, { minItems: 1 }),
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 20 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsDescribeParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    includeDerivedTitles: Type.Optional(Type.Boolean()),
+    includeLastMessage: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -122,7 +143,7 @@ export const SessionsMessagesUnsubscribeParamsSchema = Type.Object(
 
 export const SessionsAbortParamsSchema = Type.Object(
   {
-    key: NonEmptyString,
+    key: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
@@ -168,6 +189,26 @@ export const SessionsPatchParamsSchema = Type.Object(
     groupActivation: Type.Optional(
       Type.Union([Type.Literal("mention"), Type.Literal("always"), Type.Null()]),
     ),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsPluginPatchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    pluginId: NonEmptyString,
+    namespace: NonEmptyString,
+    value: Type.Optional(PluginJsonValueSchema),
+    unset: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsPluginPatchResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    value: Type.Optional(PluginJsonValueSchema),
   },
   { additionalProperties: false },
 );

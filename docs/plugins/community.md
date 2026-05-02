@@ -3,15 +3,14 @@ summary: "Community-maintained OpenClaw plugins: browse, install, and submit you
 read_when:
   - You want to find third-party OpenClaw plugins
   - You want to publish or list your own plugin
-title: "Community Plugins"
+title: "Community plugins"
 ---
-
-# Community Plugins
 
 Community plugins are third-party packages that extend OpenClaw with new
 channels, tools, providers, or other capabilities. They are built and maintained
-by the community, published on [ClawHub](/tools/clawhub) or npm, and
-installable with a single command.
+by the community, usually published on [ClawHub](/tools/clawhub), and installable
+with a single command. Npm remains a supported fallback for packages that have
+not moved to ClawHub yet.
 
 ClawHub is the canonical discovery surface for community plugins. Do not open
 docs-only PRs just to add your plugin here for discoverability; publish it on
@@ -24,6 +23,19 @@ openclaw plugins install <package-name>
 OpenClaw checks ClawHub first and falls back to npm automatically.
 
 ## Listed plugins
+
+### Apify
+
+Scrape data from any website with 20,000+ ready-made scrapers. Let your agent
+extract data from Instagram, Facebook, TikTok, YouTube, Google Maps, Google
+Search, e-commerce sites, and more — just by asking.
+
+- **npm:** `@apify/apify-openclaw-plugin`
+- **repo:** [github.com/apify/apify-openclaw-plugin](https://github.com/apify/apify-openclaw-plugin)
+
+```bash
+openclaw plugins install @apify/apify-openclaw-plugin
+```
 
 ### Codex App Server Bridge
 
@@ -75,11 +87,28 @@ cost, tokens, errors, and more.
 openclaw plugins install @opik/opik-openclaw
 ```
 
+### Prometheus Avatar
+
+Give your OpenClaw agent a Live2D avatar with real-time lip-sync, emotion
+expressions, and text-to-speech. Includes creator tools for AI asset generation
+and one-click deployment to the Prometheus Marketplace. Currently in alpha.
+
+- **npm:** `@prometheusavatar/openclaw-plugin`
+- **repo:** [github.com/myths-labs/prometheus-avatar](https://github.com/myths-labs/prometheus-avatar)
+
+```bash
+openclaw plugins install @prometheusavatar/openclaw-plugin
+```
+
 ### QQbot
 
 Connect OpenClaw to QQ via the QQ Bot API. Supports private chats, group
 mentions, channel messages, and rich media including voice, images, videos,
 and files.
+
+Current OpenClaw releases bundle QQ Bot. Use the bundled setup in
+[QQ Bot](/channels/qqbot) for normal installs; install this external plugin only
+when you intentionally want the Tencent-maintained standalone package.
 
 - **npm:** `@tencent-connect/openclaw-qqbot`
 - **repo:** [github.com/tencent-connect/openclaw-qqbot](https://github.com/tencent-connect/openclaw-qqbot)
@@ -102,6 +131,20 @@ formatting, built-in access control, and document/meeting/messaging skills.
 openclaw plugins install @wecom/wecom-openclaw-plugin
 ```
 
+### Yuanbao
+
+Yuanbao channel plugin for OpenClaw by the Tencent Yuanbao team. Powered by
+WebSocket persistent connections, it supports direct messages & group chats,
+streaming replies, proactive messaging, image/file/audio/video processing,
+Markdown formatting, built-in access control, and slash-command menus.
+
+- **npm:** `openclaw-plugin-yuanbao`
+- **repo:** [github.com/YuanbaoTeam/yuanbao-openclaw-plugin](https://github.com/YuanbaoTeam/yuanbao-openclaw-plugin)
+
+```bash
+openclaw plugins install openclaw-plugin-yuanbao
+```
+
 ## Submit your plugin
 
 We welcome community plugins that are useful, documented, and safe to operate.
@@ -109,7 +152,8 @@ We welcome community plugins that are useful, documented, and safe to operate.
 <Steps>
   <Step title="Publish to ClawHub or npm">
     Your plugin must be installable via `openclaw plugins install \<package-name\>`.
-    Publish to [ClawHub](/tools/clawhub) (preferred) or npm.
+    Publish to [ClawHub](/tools/clawhub) unless you specifically need npm-only
+    distribution.
     See [Building Plugins](/plugins/building-plugins) for the full guide.
 
   </Step>

@@ -226,32 +226,28 @@ function toResolvedPlanTarget(
 }
 
 export function listSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
-  return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.map((entry) => ({
-    id: entry.id,
-    targetType: entry.targetType,
-    ...(entry.targetTypeAliases ? { targetTypeAliases: [...entry.targetTypeAliases] } : {}),
-    configFile: entry.configFile,
-    pathPattern: entry.pathPattern,
-    ...(entry.refPathPattern ? { refPathPattern: entry.refPathPattern } : {}),
-    secretShape: entry.secretShape,
-    expectedResolvedValue: entry.expectedResolvedValue,
-    includeInPlan: entry.includeInPlan,
-    includeInConfigure: entry.includeInConfigure,
-    includeInAudit: entry.includeInAudit,
-    ...(entry.providerIdPathSegmentIndex !== undefined
-      ? { providerIdPathSegmentIndex: entry.providerIdPathSegmentIndex }
-      : {}),
-    ...(entry.accountIdPathSegmentIndex !== undefined
-      ? { accountIdPathSegmentIndex: entry.accountIdPathSegmentIndex }
-      : {}),
-    ...(entry.authProfileType ? { authProfileType: entry.authProfileType } : {}),
-    ...(entry.trackProviderShadowing ? { trackProviderShadowing: true } : {}),
-  }));
-}
-
-export function isKnownSecretTargetType(value: unknown): value is string {
-  return (
-    typeof value === "string" && getCompiledSecretTargetRegistryState().targetsByType.has(value)
+  return getCompiledSecretTargetRegistryState().compiledSecretTargetRegistry.map((entry) =>
+    Object.assign(
+      { id: entry.id, targetType: entry.targetType },
+      entry.targetTypeAliases ? { targetTypeAliases: [...entry.targetTypeAliases] } : {},
+      { configFile: entry.configFile, pathPattern: entry.pathPattern },
+      entry.refPathPattern ? { refPathPattern: entry.refPathPattern } : {},
+      {
+        secretShape: entry.secretShape,
+        expectedResolvedValue: entry.expectedResolvedValue,
+        includeInPlan: entry.includeInPlan,
+        includeInConfigure: entry.includeInConfigure,
+        includeInAudit: entry.includeInAudit,
+      },
+      entry.providerIdPathSegmentIndex !== undefined
+        ? { providerIdPathSegmentIndex: entry.providerIdPathSegmentIndex }
+        : {},
+      entry.accountIdPathSegmentIndex !== undefined
+        ? { accountIdPathSegmentIndex: entry.accountIdPathSegmentIndex }
+        : {},
+      entry.authProfileType ? { authProfileType: entry.authProfileType } : {},
+      entry.trackProviderShadowing ? { trackProviderShadowing: true } : {},
+    ),
   );
 }
 
@@ -394,11 +390,7 @@ export function discoverConfigSecretTargetsByIds(
   return discoverSecretTargetsFromEntries(config, discoveryEntries);
 }
 
-export function discoverAuthProfileSecretTargets(store: unknown): DiscoveredConfigSecretTarget[] {
-  return discoverAuthProfileSecretTargetsByIds(store);
-}
-
-export function discoverAuthProfileSecretTargetsByIds(
+export function discoverAuthProfileSecretTargets(
   store: unknown,
   targetIds?: Iterable<string>,
 ): DiscoveredConfigSecretTarget[] {

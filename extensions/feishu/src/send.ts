@@ -1,4 +1,4 @@
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import {
   convertMarkdownTables,
   normalizeLowercaseStringOrEmpty,
@@ -7,6 +7,7 @@ import {
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
+import { createFeishuApiError, requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
 import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
 import { parsePostContent } from "./post.js";
@@ -15,6 +16,8 @@ import { resolveFeishuSendTarget } from "./send-target.js";
 import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./types.js";
 
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
+const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
+const POST_FALLBACK_TEXT = "[Rich text message]";
 const FEISHU_CARD_TEMPLATES = new Set([
   "blue",
   "green",
@@ -58,6 +61,10 @@ function isWithdrawnReplyError(err: unknown): boolean {
     return true;
   }
   return false;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 type FeishuCreateMessageClient = {
@@ -111,14 +118,19 @@ async function sendFallbackDirect(
   },
   errorPrefix: string,
 ): Promise<FeishuSendResult> {
-  const response = await client.im.message.create({
-    params: { receive_id_type: params.receiveIdType },
-    data: {
-      receive_id: params.receiveId,
-      content: params.content,
-      msg_type: params.msgType,
-    },
-  });
+  const response = await requestFeishuApi(
+    () =>
+      client.im.message.create({
+        params: { receive_id_type: params.receiveIdType },
+        data: {
+          receive_id: params.receiveId,
+          content: params.content,
+          msg_type: params.msgType,
+        },
+      }),
+    errorPrefix,
+    { includeNestedErrorLogId: true },
+  );
   assertFeishuMessageApiSuccess(response, errorPrefix);
   return toFeishuSendResult(response, params.receiveId);
 }
@@ -162,7 +174,7 @@ async function sendReplyOrFallbackDirect(
     });
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
-      throw err;
+      throw createFeishuApiError(err, params.replyErrorPrefix, { includeNestedErrorLogId: true });
     }
     if (threadReplyFallbackError) {
       throw threadReplyFallbackError;
@@ -179,41 +191,121 @@ async function sendReplyOrFallbackDirect(
   return toFeishuSendResult(response, params.directParams.receiveId);
 }
 
-function parseInteractiveCardContent(parsed: unknown): string {
-  if (!parsed || typeof parsed !== "object") {
-    return "[Interactive Card]";
+function normalizeCardTemplateVariable(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
   }
-
-  // Support both schema 1.0 (top-level `elements`) and 2.0 (`body.elements`).
-  const candidate = parsed as { elements?: unknown; body?: { elements?: unknown } };
-  const elements = Array.isArray(candidate.elements)
-    ? candidate.elements
-    : Array.isArray(candidate.body?.elements)
-      ? candidate.body.elements
-      : null;
-  if (!elements) {
-    return "[Interactive Card]";
+  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
+    return String(value);
   }
+  return undefined;
+}
 
+function readCardTemplateVariables(parsed: Record<string, unknown>): Map<string, string> {
+  const variables = new Map<string, string>();
+  for (const source of [parsed.template_variable, parsed.template_variables]) {
+    if (!isRecord(source)) {
+      continue;
+    }
+    for (const [key, value] of Object.entries(source)) {
+      const normalized = normalizeCardTemplateVariable(value);
+      if (normalized !== undefined) {
+        variables.set(key, normalized);
+      }
+    }
+  }
+  return variables;
+}
+
+function applyCardTemplateVariables(text: string, variables: Map<string, string>): string {
+  if (variables.size === 0) {
+    return text;
+  }
+  return text.replace(/\$\{([A-Za-z0-9_.-]+)\}|\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, (match, a, b) => {
+    const variableName = typeof a === "string" ? a : b;
+    return variables.get(variableName) ?? match;
+  });
+}
+
+function extractInteractiveElementText(
+  element: unknown,
+  variables: Map<string, string>,
+): string | undefined {
+  if (!isRecord(element)) {
+    return undefined;
+  }
+  const tag = typeof element.tag === "string" ? element.tag : "";
+  const text = isRecord(element.text) ? element.text : undefined;
+
+  if (tag === "div" && typeof text?.content === "string") {
+    return applyCardTemplateVariables(text.content, variables);
+  }
+  if ((tag === "markdown" || tag === "lark_md") && typeof element.content === "string") {
+    return applyCardTemplateVariables(element.content, variables);
+  }
+  if (tag === "plain_text" && typeof element.content === "string") {
+    return applyCardTemplateVariables(element.content, variables);
+  }
+  return undefined;
+}
+
+function extractInteractiveElementsText(
+  elements: unknown[],
+  variables: Map<string, string>,
+): string {
   const texts: string[] = [];
   for (const element of elements) {
-    if (!element || typeof element !== "object") {
-      continue;
-    }
-    const item = element as {
-      tag?: string;
-      content?: string;
-      text?: { content?: string };
-    };
-    if (item.tag === "div" && typeof item.text?.content === "string") {
-      texts.push(item.text.content);
-      continue;
-    }
-    if (item.tag === "markdown" && typeof item.content === "string") {
-      texts.push(item.content);
+    const text = extractInteractiveElementText(element, variables);
+    if (text !== undefined) {
+      texts.push(text);
     }
   }
-  return texts.join("\n").trim() || "[Interactive Card]";
+  return texts.join("\n").trim();
+}
+
+function readInteractiveElementArrays(parsed: Record<string, unknown>): unknown[][] {
+  const body = isRecord(parsed.body) ? parsed.body : undefined;
+  const elementArrays: unknown[][] = [];
+
+  for (const candidate of [parsed.elements, body?.elements]) {
+    if (Array.isArray(candidate)) {
+      elementArrays.push(candidate);
+    }
+  }
+
+  for (const candidate of [parsed.i18n_elements, body?.i18n_elements]) {
+    if (!isRecord(candidate)) {
+      continue;
+    }
+    for (const localeElements of Object.values(candidate)) {
+      if (Array.isArray(localeElements)) {
+        elementArrays.push(localeElements);
+      }
+    }
+  }
+
+  return elementArrays;
+}
+
+function parseInteractivePostFallback(parsed: unknown): string | undefined {
+  const textContent = parsePostContent(JSON.stringify(parsed)).textContent.trim();
+  return textContent && textContent !== POST_FALLBACK_TEXT ? textContent : undefined;
+}
+
+function parseInteractiveCardContent(parsed: unknown): string {
+  if (!isRecord(parsed)) {
+    return INTERACTIVE_CARD_FALLBACK_TEXT;
+  }
+
+  const variables = readCardTemplateVariables(parsed);
+  for (const elements of readInteractiveElementArrays(parsed)) {
+    const text = extractInteractiveElementsText(elements, variables);
+    if (text) {
+      return text;
+    }
+  }
+
+  return parseInteractivePostFallback(parsed) ?? INTERACTIVE_CARD_FALLBACK_TEXT;
 }
 
 function parseFeishuMessageContent(rawContent: string, msgType: string): string {
@@ -268,7 +360,10 @@ function parseFeishuMessageItem(
     messageId: item.message_id ?? fallbackMessageId ?? "",
     chatId: item.chat_id ?? "",
     chatType:
-      item.chat_type === "group" || item.chat_type === "private" || item.chat_type === "p2p"
+      item.chat_type === "group" ||
+      item.chat_type === "topic_group" ||
+      item.chat_type === "private" ||
+      item.chat_type === "p2p"
         ? item.chat_type
         : undefined,
     senderId: item.sender?.id,
@@ -276,7 +371,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
-    createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
+    createTime: item.create_time ? Number.parseInt(item.create_time, 10) : undefined,
     threadId: item.thread_id || undefined,
   };
 }

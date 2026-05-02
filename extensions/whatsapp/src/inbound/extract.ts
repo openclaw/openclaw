@@ -9,6 +9,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveComparableIdentity, type WhatsAppReplyContext } from "../identity.js";
 import { jidToE164 } from "../text-runtime.js";
 import { parseVcard } from "../vcard.js";
+import type { WhatsAppStructuredContactContext } from "./types.js";
 
 const MESSAGE_WRAPPER_KEYS = [
   "botInvokeMessage",
@@ -196,7 +197,9 @@ function extractContextInfoFromMessage(message: proto.IMessage): proto.IContextI
   return undefined;
 }
 
-function extractContextInfo(message: proto.IMessage | undefined): proto.IContextInfo | undefined {
+export function extractContextInfo(
+  message: proto.IMessage | undefined,
+): proto.IContextInfo | undefined {
   for (const candidate of buildMessageChain(message)) {
     const contextInfo = extractContextInfoFromMessage(candidate);
     if (contextInfo) {
@@ -293,6 +296,20 @@ export function extractMediaPlaceholder(
 }
 
 function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): string | undefined {
+  const contactContext = extractContactContext(rawMessage);
+  if (!contactContext) {
+    return undefined;
+  }
+  if (contactContext.kind === "contact") {
+    return "<contact>";
+  }
+  const suffix = contactContext.total === 1 ? "contact" : "contacts";
+  return `<contacts: ${contactContext.total} ${suffix}>`;
+}
+
+export function extractContactContext(
+  rawMessage: proto.IMessage | undefined,
+): WhatsAppStructuredContactContext | undefined {
   const message = unwrapMessage(rawMessage);
   if (!message) {
     return undefined;
@@ -303,17 +320,23 @@ function extractContactPlaceholder(rawMessage: proto.IMessage | undefined): stri
       displayName: contact.displayName,
       vcard: contact.vcard,
     });
-    return formatContactPlaceholder(name, phones);
+    return {
+      kind: "contact",
+      total: 1,
+      contacts: [{ name, phones }],
+    };
   }
   const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
   if (!contactsArray || contactsArray.length === 0) {
     return undefined;
   }
-  const labels = contactsArray
-    .map((entry) => describeContact({ displayName: entry.displayName, vcard: entry.vcard }))
-    .map((entry) => formatContactLabel(entry.name, entry.phones))
-    .filter((value): value is string => Boolean(value));
-  return formatContactsPlaceholder(labels, contactsArray.length);
+  return {
+    kind: "contacts",
+    total: contactsArray.length,
+    contacts: contactsArray.map((entry) =>
+      describeContact({ displayName: entry.displayName, vcard: entry.vcard }),
+    ),
+  };
 }
 
 function describeContact(input: { displayName?: string | null; vcard?: string | null }): {
@@ -324,60 +347,6 @@ function describeContact(input: { displayName?: string | null; vcard?: string | 
   const parsed = parseVcard(input.vcard ?? undefined);
   const name = displayName || parsed.name;
   return { name, phones: parsed.phones };
-}
-
-function formatContactPlaceholder(name?: string, phones?: string[]): string {
-  const label = formatContactLabel(name, phones);
-  if (!label) {
-    return "<contact>";
-  }
-  return `<contact: ${label}>`;
-}
-
-function formatContactsPlaceholder(labels: string[], total: number): string {
-  const cleaned = labels.map((label) => label.trim()).filter(Boolean);
-  if (cleaned.length === 0) {
-    const suffix = total === 1 ? "contact" : "contacts";
-    return `<contacts: ${total} ${suffix}>`;
-  }
-  const remaining = Math.max(total - cleaned.length, 0);
-  const suffix = remaining > 0 ? ` +${remaining} more` : "";
-  return `<contacts: ${cleaned.join(", ")}${suffix}>`;
-}
-
-function formatContactLabel(name?: string, phones?: string[]): string | undefined {
-  const phoneLabel = formatPhoneList(phones);
-  const parts = [name, phoneLabel].filter((value): value is string => Boolean(value));
-  if (parts.length === 0) {
-    return undefined;
-  }
-  return parts.join(", ");
-}
-
-function formatPhoneList(phones?: string[]): string | undefined {
-  const cleaned = phones?.map((phone) => phone.trim()).filter(Boolean) ?? [];
-  if (cleaned.length === 0) {
-    return undefined;
-  }
-  const { shown, remaining } = summarizeList(cleaned, cleaned.length, 1);
-  const [primary] = shown;
-  if (!primary) {
-    return undefined;
-  }
-  if (remaining === 0) {
-    return primary;
-  }
-  return `${primary} (+${remaining} more)`;
-}
-
-function summarizeList(
-  values: string[],
-  total: number,
-  maxShown: number,
-): { shown: string[]; remaining: number } {
-  const shown = values.slice(0, maxShown);
-  const remaining = Math.max(total - shown.length, 0);
-  return { shown, remaining };
 }
 
 export function extractLocationData(
@@ -470,4 +439,50 @@ export function describeReplyContext(
     body,
     sender,
   };
+}
+
+function hasInteractiveResponseContent(message: proto.IMessage | undefined): boolean {
+  if (!message) {
+    return false;
+  }
+  // Button/list/template/interactive selections that the existing four
+  // extractors do not cover. Treat any presence of these keys as user
+  // content — Baileys never delivers these as receipts or protocol
+  // envelopes, only as explicit user choices.
+  return Boolean(
+    message.buttonsResponseMessage ||
+    message.listResponseMessage ||
+    message.templateButtonReplyMessage ||
+    message.interactiveResponseMessage,
+  );
+}
+
+/**
+ * Fast check that a Baileys message carries user-visible inbound content
+ * (text, media, contact, location, button/list selection). Returns false for
+ * protocol/receipt/typing notifications that arrive on the same
+ * `messages.upsert` stream as real messages but should not trigger pairing
+ * access-control side effects.
+ */
+export function hasInboundUserContent(rawMessage: proto.IMessage | undefined): boolean {
+  if (!rawMessage) {
+    return false;
+  }
+  if (extractText(rawMessage)) {
+    return true;
+  }
+  if (extractMediaPlaceholder(rawMessage)) {
+    return true;
+  }
+  if (extractLocationData(rawMessage)) {
+    return true;
+  }
+  // Walk wrappers (ephemeral, viewOnce, etc.) — interactive responses
+  // can arrive nested.
+  for (const candidate of buildMessageChain(rawMessage)) {
+    if (hasInteractiveResponseContent(candidate)) {
+      return true;
+    }
+  }
+  return false;
 }

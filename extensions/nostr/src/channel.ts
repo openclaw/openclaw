@@ -25,7 +25,7 @@ import {
   nostrPairingTextAdapter,
   startNostrGatewayAccount,
 } from "./gateway.js";
-import { normalizePubkey } from "./nostr-bus.js";
+import { normalizePubkey } from "./nostr-key-utils.js";
 import type { ProfilePublishResult } from "./nostr-profile.js";
 import { resolveNostrOutboundSessionRoute } from "./session-route.js";
 import { nostrSetupAdapter, nostrSetupWizard } from "./setup-surface.js";
@@ -118,6 +118,7 @@ export const nostrPlugin: ChannelPlugin<ResolvedNostrAccount> = createChatChanne
         }),
     },
     messaging: {
+      targetPrefixes: ["nostr"],
       normalizeTarget: (target) => {
         // Strip nostr: prefix if present
         const cleaned = target.trim().replace(/^nostr:/i, "");
@@ -204,5 +205,3 @@ export async function getNostrProfileState(accountId: string = DEFAULT_ACCOUNT_I
   }
   return bus.getProfileState();
 }
-
-export { getActiveNostrBuses, getNostrMetrics } from "./gateway.js";

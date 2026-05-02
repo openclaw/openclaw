@@ -1,3 +1,4 @@
+import { isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -6,9 +7,7 @@ import {
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
   isPluginCommandRegistryLocked,
-  listProviderPluginCommandSpecs,
   pluginCommands,
   type RegisteredPluginCommand,
 } from "./command-registry-state.js";
@@ -22,30 +21,15 @@ import type { OpenClawPluginCommandDefinition } from "./types.js";
  * output chunk, so any module-level const/let would be uninitialized when
  * first accessed during plugin registration.
  */
-var reservedCommands: Set<string> | undefined;
+let reservedCommands: Set<string> | undefined;
 
-export type CommandRegistrationResult = {
-  ok: boolean;
-  error?: string;
-};
-
-export function validateCommandName(name: string): string | null {
-  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
-
-  if (!trimmed) {
-    return "Command name cannot be empty";
-  }
-
-  // Must start with a letter, contain only letters, numbers, hyphens, underscores
-  // Note: trimmed is already lowercased, so no need for /i flag
-  if (!/^[a-z][a-z0-9_-]*$/.test(trimmed)) {
-    return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
-  }
-
+function getReservedCommands(): Set<string> {
   reservedCommands ??= new Set([
     "help",
     "commands",
     "status",
+    "diagnostics",
+    "codex",
     "whoami",
     "context",
     "btw",
@@ -75,8 +59,36 @@ export function validateCommandName(name: string): string | null {
     "elevated",
     "usage",
   ]);
+  return reservedCommands;
+}
 
-  if (reservedCommands.has(trimmed)) {
+export type CommandRegistrationResult = {
+  ok: boolean;
+  error?: string;
+};
+
+export function isReservedCommandName(name: string): boolean {
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
+  return Boolean(trimmed && getReservedCommands().has(trimmed));
+}
+
+export function validateCommandName(
+  name: string,
+  opts?: { allowReservedCommandNames?: boolean },
+): string | null {
+  const trimmed = normalizeOptionalLowercaseString(name) ?? "";
+
+  if (!trimmed) {
+    return "Command name cannot be empty";
+  }
+
+  // Must start with a letter, contain only letters, numbers, hyphens, underscores
+  // Note: trimmed is already lowercased, so no need for /i flag
+  if (!/^[a-z][a-z0-9_-]*$/.test(trimmed)) {
+    return "Command name must start with a letter and contain only letters, numbers, hyphens, and underscores";
+  }
+
+  if (!opts?.allowReservedCommandNames && getReservedCommands().has(trimmed)) {
     return `Command name "${trimmed}" is reserved by a built-in command`;
   }
 
@@ -90,6 +102,7 @@ export function validateCommandName(name: string): string | null {
  */
 export function validatePluginCommandDefinition(
   command: OpenClawPluginCommandDefinition,
+  opts?: { allowReservedCommandNames?: boolean },
 ): string | null {
   if (typeof command.handler !== "function") {
     return "Command handler must be a function";
@@ -103,7 +116,39 @@ export function validatePluginCommandDefinition(
   if (!command.description.trim()) {
     return "Command description cannot be empty";
   }
-  const nameError = validateCommandName(command.name.trim());
+  if (command.ownership === "reserved") {
+    if (!opts?.allowReservedCommandNames) {
+      return "Reserved command ownership is only available to bundled reserved commands";
+    }
+    if (!isReservedCommandName(command.name)) {
+      return `Reserved command ownership requires a reserved command name: ${normalizeOptionalLowercaseString(command.name) ?? ""}`;
+    }
+  }
+  if (command.agentPromptGuidance !== undefined && !Array.isArray(command.agentPromptGuidance)) {
+    return "Agent prompt guidance must be an array of strings";
+  }
+  for (const [index, guidance] of (command.agentPromptGuidance ?? []).entries()) {
+    if (typeof guidance !== "string") {
+      return `Agent prompt guidance ${index + 1} must be a string`;
+    }
+    if (!guidance.trim()) {
+      return `Agent prompt guidance ${index + 1} cannot be empty`;
+    }
+  }
+  if (command.requiredScopes !== undefined) {
+    if (!Array.isArray(command.requiredScopes)) {
+      return "Command requiredScopes must be an array of operator scopes";
+    }
+    const unknownScope = (command.requiredScopes as readonly unknown[]).find(
+      (scope) => !isOperatorScope(scope),
+    );
+    if (unknownScope) {
+      return typeof unknownScope === "string"
+        ? `Command requiredScopes contains unknown operator scope: ${unknownScope}`
+        : "Command requiredScopes contains unknown operator scope";
+    }
+  }
+  const nameError = validateCommandName(command.name.trim(), opts);
   if (nameError) {
     return nameError;
   }
@@ -122,6 +167,14 @@ export function validatePluginCommandDefinition(
     }
     if (!message.trim()) {
       return `Native progress message "${label}" cannot be empty`;
+    }
+  }
+  for (const [locale, description] of Object.entries(command.descriptionLocalizations ?? {})) {
+    if (typeof description !== "string") {
+      return `Description localization "${locale}" must be a string`;
+    }
+    if (!description.trim()) {
+      return `Description localization "${locale}" cannot be empty`;
     }
   }
   return null;
@@ -150,27 +203,37 @@ export function listPluginInvocationKeys(command: OpenClawPluginCommandDefinitio
 export function registerPluginCommand(
   pluginId: string,
   command: OpenClawPluginCommandDefinition,
-  opts?: { pluginName?: string; pluginRoot?: string },
+  opts?: { pluginName?: string; pluginRoot?: string; allowReservedCommandNames?: boolean },
 ): CommandRegistrationResult {
   // Prevent registration while commands are being processed
   if (isPluginCommandRegistryLocked()) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }
+  if (command.ownership === "reserved") {
+    return {
+      ok: false,
+      error: "Reserved command ownership is only available to bundled reserved commands",
+    };
+  }
 
-  const definitionError = validatePluginCommandDefinition(command);
+  const definitionError = validatePluginCommandDefinition(command, opts);
   if (definitionError) {
     return { ok: false, error: definitionError };
   }
 
   const name = command.name.trim();
+  const normalizedName = normalizeLowercaseStringOrEmpty(name);
   const description = command.description.trim();
   const normalizedCommand = {
     ...command,
     name,
     description,
+    ...(command.agentPromptGuidance
+      ? { agentPromptGuidance: command.agentPromptGuidance.map((line) => line.trim()) }
+      : {}),
   };
   const invocationKeys = listPluginInvocationKeys(normalizedCommand);
-  const key = `/${normalizeLowercaseStringOrEmpty(name)}`;
+  const key = `/${normalizedName}`;
 
   // Check for duplicate registration
   for (const invocationKey of invocationKeys) {
@@ -197,10 +260,5 @@ export function registerPluginCommand(
   return { ok: true };
 }
 
-export {
-  clearPluginCommands,
-  clearPluginCommandsForPlugin,
-  getPluginCommandSpecs,
-  listProviderPluginCommandSpecs,
-};
+export { clearPluginCommands, clearPluginCommandsForPlugin };
 export type { RegisteredPluginCommand };

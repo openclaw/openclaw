@@ -6,25 +6,15 @@ import {
   resolveBundledWebFetchResolutionConfig,
   sortWebFetchProviders,
 } from "./web-fetch-providers.shared.js";
+import { resolveBundledWebFetchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.js";
 import {
   mapRegistryProviders,
   resolveManifestDeclaredWebProviderCandidatePluginIds,
 } from "./web-provider-resolution-shared.js";
 import {
-  createWebProviderSnapshotCache,
   resolvePluginWebProviders,
   resolveRuntimeWebProviders,
 } from "./web-provider-runtime-shared.js";
-
-let webFetchProviderSnapshotCache = createWebProviderSnapshotCache<PluginWebFetchProviderEntry>();
-
-function resetWebFetchProviderSnapshotCacheForTests() {
-  webFetchProviderSnapshotCache = createWebProviderSnapshotCache<PluginWebFetchProviderEntry>();
-}
-
-export const __testing = {
-  resetWebFetchProviderSnapshotCacheForTests,
-} as const;
 
 function resolveWebFetchCandidatePluginIds(params: {
   config?: PluginLoadOptions["config"];
@@ -67,10 +57,10 @@ export function resolvePluginWebFetchProviders(params: {
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebProviders(params, {
-    snapshotCache: webFetchProviderSnapshotCache,
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
     resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebFetchProviders,
+    resolveBundledPublicArtifactProviders: resolveBundledWebFetchProvidersFromPublicArtifacts,
   });
 }
 
@@ -83,7 +73,6 @@ export function resolveRuntimeWebFetchProviders(params: {
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {
   return resolveRuntimeWebProviders(params, {
-    snapshotCache: webFetchProviderSnapshotCache,
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
     resolveCandidatePluginIds: resolveWebFetchCandidatePluginIds,
     mapRegistryProviders: mapRegistryWebFetchProviders,

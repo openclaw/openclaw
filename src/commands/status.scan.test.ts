@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -20,11 +20,15 @@ let originalForceStderr: boolean;
 let loggingStateRef: typeof import("../logging/state.js").loggingState;
 let scanStatus: typeof import("./status.scan.js").scanStatus;
 
-beforeEach(async () => {
-  vi.clearAllMocks();
+beforeAll(async () => {
   configureScanStatus();
   ({ scanStatus } = await loadStatusScanModuleForTest(mocks));
   ({ loggingState: loggingStateRef } = await import("../logging/state.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  configureScanStatus();
   originalForceStderr = loggingStateRef.forceConsoleToStderr;
   loggingStateRef.forceConsoleToStderr = false;
 });
@@ -86,8 +90,62 @@ describe("scanStatus", () => {
     expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
       expect.objectContaining({ marker: "resolved" }),
       expect.objectContaining({
+        includeSetupFallbackPlugins: false,
         sourceConfig: expect.objectContaining({ marker: "source" }),
       }),
+    );
+  });
+
+  it("keeps default text status off live channel status and setup runtime fallback", async () => {
+    configureScanStatus({ hasConfiguredChannels: true });
+    mocks.probeGateway.mockResolvedValue({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 12,
+      error: null,
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    await scanStatus({ json: false }, {} as never);
+
+    expect(mocks.callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "channels.status" }),
+    );
+    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ includeSetupFallbackPlugins: false }),
+    );
+  });
+
+  it("uses live channel status and setup fallback for deep text status", async () => {
+    configureScanStatus({ hasConfiguredChannels: true });
+    mocks.probeGateway.mockResolvedValue({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 12,
+      error: null,
+      close: null,
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    await scanStatus({ json: false, deep: true, timeoutMs: 5000 }, {} as never);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "channels.status",
+        timeoutMs: 2500,
+      }),
+    );
+    expect(mocks.buildChannelsTable).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ includeSetupFallbackPlugins: true }),
     );
   });
 
@@ -164,6 +222,15 @@ describe("scanStatus", () => {
     expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
   });
 
+  it("keeps default text status off plugin compatibility and memory scans", async () => {
+    configureScanStatus({ memoryConfigured: true });
+
+    await scanStatus({ json: false }, {} as never);
+
+    expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
+    expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
+  });
+
   it("inspects memory backend when memory search is explicitly configured", async () => {
     configureScanStatus({ memoryConfigured: true });
 
@@ -182,7 +249,7 @@ describe("scanStatus", () => {
     });
   });
 
-  it("preloads configured channel plugins for status --json when channel config exists", async () => {
+  it("keeps status --json on read-only channel metadata when channel config exists", async () => {
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
@@ -200,13 +267,7 @@ describe("scanStatus", () => {
 
     await scanStatus({ json: true }, {} as never);
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "configured-channels",
-        config: expect.objectContaining({ marker: "resolved-preload" }),
-        activationSourceConfig: expect.objectContaining({ marker: "source-preload" }),
-      }),
-    );
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
     // Verify plugin logs were routed to stderr during loading and restored after
     expect(loggingStateRef.forceConsoleToStderr).toBe(false);
     expect(mocks.probeGateway).toHaveBeenCalledWith(
@@ -217,7 +278,7 @@ describe("scanStatus", () => {
     );
   });
 
-  it("preloads configured channel plugins for status --json when channel auth is env-only", async () => {
+  it("keeps status --json on read-only channel metadata when channel auth is env-only", async () => {
     configureScanStatus({
       hasConfiguredChannels: true,
       sourceConfig: createStatusScanConfig({
@@ -235,12 +296,6 @@ describe("scanStatus", () => {
       await scanStatus({ json: true }, {} as never);
     });
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        scope: "configured-channels",
-        config: expect.objectContaining({ marker: "resolved-env-only" }),
-        activationSourceConfig: expect.objectContaining({ marker: "source-env-only" }),
-      }),
-    );
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
   });
 });

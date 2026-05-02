@@ -11,7 +11,10 @@ import { coreGatewayHandlers } from "./server-methods.js";
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
 
-function setPluginGatewayMethodScope(method: string, scope: "operator.read" | "operator.write") {
+function setPluginGatewayMethodScope(
+  method: string,
+  scope: "operator.read" | "operator.write" | "operator.admin",
+) {
   const registry = createEmptyPluginRegistry();
   registry.gatewayMethodScopes = {
     [method]: scope,
@@ -30,11 +33,15 @@ describe("method scope resolution", () => {
     ["sessions.create", ["operator.write"]],
     ["sessions.send", ["operator.write"]],
     ["sessions.abort", ["operator.write"]],
+    ["tools.invoke", ["operator.write"]],
     ["sessions.messages.subscribe", ["operator.read"]],
     ["sessions.messages.unsubscribe", ["operator.read"]],
+    ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
+    ["update.status", ["operator.admin"]],
     ["config.patch", ["operator.admin"]],
+    ["nativeHook.invoke", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
   ])("resolves least-privilege scopes for %s", (method, expected) => {
@@ -52,12 +59,12 @@ describe("method scope resolution", () => {
   it("reads plugin-registered gateway method scopes from the active plugin registry", () => {
     const registry = createEmptyPluginRegistry();
     registry.gatewayMethodScopes = {
-      "browser.request": "operator.write",
+      "browser.request": "operator.admin",
     };
     setActivePluginRegistry(registry);
 
     expect(resolveLeastPrivilegeOperatorScopesForMethod("browser.request")).toEqual([
-      "operator.write",
+      "operator.admin",
     ]);
   });
 
@@ -84,6 +91,18 @@ describe("operator scope authorization", () => {
     expect(authorizeOperatorScopesForMethod("send", ["operator.read"])).toEqual({
       allowed: false,
       missingScope: "operator.write",
+    });
+  });
+
+  it("requires admin for browser.request", () => {
+    setPluginGatewayMethodScope("browser.request", "operator.admin");
+
+    expect(authorizeOperatorScopesForMethod("browser.request", ["operator.write"])).toEqual({
+      allowed: false,
+      missingScope: "operator.admin",
+    });
+    expect(authorizeOperatorScopesForMethod("browser.request", ["operator.admin"])).toEqual({
+      allowed: true,
     });
   });
 

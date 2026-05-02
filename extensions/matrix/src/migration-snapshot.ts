@@ -1,11 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 import { detectLegacyMatrixState } from "./legacy-state.js";
 import {
   maybeCreateMatrixMigrationSnapshot,
   resolveMatrixMigrationSnapshotMarkerPath,
   resolveMatrixMigrationSnapshotOutputDir,
-  type MatrixMigrationSnapshotResult,
 } from "./migration-snapshot-backup.js";
 
 export type MatrixMigrationStatus = {
@@ -52,4 +51,3 @@ export {
   resolveMatrixMigrationSnapshotMarkerPath,
   resolveMatrixMigrationSnapshotOutputDir,
 };
-export type { MatrixMigrationSnapshotResult };

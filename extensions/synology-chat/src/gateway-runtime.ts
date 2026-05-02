@@ -16,6 +16,7 @@ type SynologyGatewayStartupIssueCode =
   | "disabled"
   | "missing-credentials"
   | "empty-allowlist"
+  | "empty-open-allowlist"
   | "inherited-shared-webhook-path"
   | "duplicate-webhook-path";
 type SynologyGatewayStartupIssue = {
@@ -67,7 +68,7 @@ function createUnknownArgsLogAdapter(
   };
 }
 
-export function collectSynologyGatewayStartupIssues(params: {
+function collectSynologyGatewayStartupIssues(params: {
   cfg: OpenClawConfig;
   account: ResolvedSynologyChatAccount;
   accountId: string;
@@ -94,6 +95,14 @@ export function collectSynologyGatewayStartupIssues(params: {
       buildStartupIssue(
         "empty-allowlist",
         `account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
+      ),
+    );
+  }
+  if (account.dmPolicy === "open" && account.allowedUserIds.length === 0) {
+    issues.push(
+      buildStartupIssue(
+        "empty-open-allowlist",
+        `account ${accountId} has dmPolicy=open but empty allowedUserIds; add allowedUserIds=["*"] for public DMs or set explicit user IDs`,
       ),
     );
   }

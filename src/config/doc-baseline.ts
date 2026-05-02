@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
-import { FIELD_HELP } from "./schema.help.js";
 import type { ConfigSchemaResponse } from "./schema.js";
 import { schemaHasChildren } from "./schema.shared.js";
 
@@ -26,7 +25,7 @@ type JsonSchemaObject = JsonSchemaNode & {
   oneOf?: JsonSchemaObject[];
 };
 
-export type ConfigDocBaselineKind = "core" | "channel" | "plugin";
+type ConfigDocBaselineKind = "core" | "channel" | "plugin";
 
 export type ConfigDocBaselineEntry = {
   path: string;
@@ -43,39 +42,39 @@ export type ConfigDocBaselineEntry = {
   hasChildren: boolean;
 };
 
-export type ConfigDocBaseline = {
+type ConfigDocBaseline = {
   generatedBy: "scripts/generate-config-doc-baseline.ts";
   coreEntries: ConfigDocBaselineEntry[];
   channelEntries: ConfigDocBaselineEntry[];
   pluginEntries: ConfigDocBaselineEntry[];
 };
 
-export type ConfigDocBaselineKindBaseline = {
+type ConfigDocBaselineKindBaseline = {
   generatedBy: "scripts/generate-config-doc-baseline.ts";
   kind: ConfigDocBaselineKind;
   entries: ConfigDocBaselineEntry[];
 };
 
-export type ConfigDocBaselineArtifacts = {
+type ConfigDocBaselineArtifacts = {
   combined: string;
   core: string;
   channel: string;
   plugin: string;
 };
 
-export type ConfigDocBaselineArtifactsRender = {
+type ConfigDocBaselineArtifactsRender = {
   baseline: ConfigDocBaseline;
   json: ConfigDocBaselineArtifacts;
 };
 
-export type ConfigDocBaselineArtifactPaths = {
+type ConfigDocBaselineArtifactPaths = {
   combined: string;
   core: string;
   channel: string;
   plugin: string;
 };
 
-export type ConfigDocBaselineArtifactsWriteResult = {
+type ConfigDocBaselineArtifactsWriteResult = {
   changed: boolean;
   wrote: boolean;
   jsonPaths: ConfigDocBaselineArtifactPaths;
@@ -365,9 +364,9 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
   };
 
   const manifestRegistry = runtime.loadPluginManifestRegistry({
-    cache: false,
     env,
     config: {},
+    bundledChannelConfigCollector: runtime.collectBundledChannelConfigs,
   });
   logConfigDocBaselineDebug(`loaded ${manifestRegistry.plugins.length} bundled plugin manifests`);
   const bundledRegistry = {
@@ -380,7 +379,6 @@ async function loadBundledConfigSchemaResponse(): Promise<ConfigSchemaResponse> 
   );
 
   return runtime.buildConfigSchema({
-    cache: false,
     plugins: runtime.collectPluginSchemaMetadata(bundledRegistry),
     channels: channelPlugins,
   });
@@ -492,7 +490,7 @@ export function dedupeConfigDocBaselineEntries(
   return [...byPath.values()].toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
-export function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
+function splitConfigDocBaselineEntries(entries: ConfigDocBaselineEntry[]): {
   coreEntries: ConfigDocBaselineEntry[];
   channelEntries: ConfigDocBaselineEntry[];
   pluginEntries: ConfigDocBaselineEntry[];
@@ -522,7 +520,7 @@ export function flattenConfigDocBaselineEntries(
   return [...baseline.coreEntries, ...baseline.channelEntries, ...baseline.pluginEntries];
 }
 
-export async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
+async function buildConfigDocBaseline(): Promise<ConfigDocBaseline> {
   if (cachedConfigDocBaselinePromise) {
     return await cachedConfigDocBaselinePromise;
   }
@@ -608,7 +606,7 @@ function sha256(content: string): string {
 }
 
 /** Build the sha256 hash file content for all config baseline artifacts. */
-export function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts): string {
+function computeConfigBaselineHashFileContent(json: ConfigDocBaselineArtifacts): string {
   const lines = [
     `${sha256(json.combined)}  config-baseline.json`,
     `${sha256(json.core)}  config-baseline.core.json`,
@@ -689,12 +687,4 @@ export async function writeConfigDocBaselineArtifacts(params?: {
 
 export function normalizeConfigDocBaselineHelpPath(pathValue: string): string {
   return normalizeBaselinePath(pathValue);
-}
-
-export function getNormalizedFieldHelp(): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(FIELD_HELP)
-      .map(([configPath, help]) => [normalizeBaselinePath(configPath), help] as const)
-      .toSorted(([left], [right]) => left.localeCompare(right)),
-  );
 }

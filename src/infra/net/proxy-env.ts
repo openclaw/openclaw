@@ -25,6 +25,11 @@ function normalizeProxyEnvValue(value: string | undefined): string | null | unde
   return trimmed.length > 0 ? trimmed : null;
 }
 
+export type EnvHttpProxyAgentProxyOptions = {
+  httpProxy?: string;
+  httpsProxy?: string;
+};
+
 /**
  * Match undici EnvHttpProxyAgent semantics for env-based HTTP/S proxy selection:
  * - lower-case vars take precedence over upper-case
@@ -52,6 +57,58 @@ export function hasEnvHttpProxyConfigured(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   return resolveEnvHttpProxyUrl(protocol, env) !== undefined;
+}
+
+function resolveEnvAllProxyUrl(env: NodeJS.ProcessEnv): string | undefined {
+  const lowerAllProxy = normalizeProxyEnvValue(env.all_proxy);
+  const allProxy =
+    lowerAllProxy !== undefined ? lowerAllProxy : normalizeProxyEnvValue(env.ALL_PROXY);
+  return allProxy ?? undefined;
+}
+
+/**
+ * Build explicit options for undici's EnvHttpProxyAgent.
+ *
+ * EnvHttpProxyAgent does not read ALL_PROXY itself, but it accepts explicit
+ * HTTP/HTTPS proxy overrides. Keep this helper separate from the
+ * HTTP(S)-only URL helpers so SSRF trusted-env proxy gates do not widen.
+ */
+export function resolveEnvHttpProxyAgentOptions(
+  env: NodeJS.ProcessEnv = process.env,
+): EnvHttpProxyAgentProxyOptions | undefined {
+  const allProxy = resolveEnvAllProxyUrl(env);
+  const httpProxy = resolveEnvHttpProxyUrl("http", env) ?? allProxy;
+  const httpsProxy = resolveEnvHttpProxyUrl("https", env) ?? httpProxy;
+  const options: EnvHttpProxyAgentProxyOptions = {
+    ...(httpProxy ? { httpProxy } : {}),
+    ...(httpsProxy ? { httpsProxy } : {}),
+  };
+  return options.httpProxy || options.httpsProxy ? options : undefined;
+}
+
+export function hasEnvHttpProxyAgentConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return resolveEnvHttpProxyAgentOptions(env) !== undefined;
+}
+
+export function shouldUseEnvHttpProxyForUrl(
+  targetUrl: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  let protocol: "http" | "https";
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol === "http:") {
+      protocol = "http";
+    } else if (parsed.protocol === "https:") {
+      protocol = "https";
+    } else {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+
+  return hasEnvHttpProxyConfigured(protocol, env) && !matchesNoProxy(targetUrl, env);
 }
 
 /**

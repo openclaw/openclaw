@@ -9,7 +9,7 @@ import type { AllowlistMatch, ChannelGroupContext } from "../runtime-api.js";
 import { detectIdType } from "./targets.js";
 import type { FeishuConfig } from "./types.js";
 
-export type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
+type FeishuAllowlistMatch = AllowlistMatch<"wildcard" | "id">;
 
 const FEISHU_PROVIDER_PREFIX_RE = /^(feishu|lark):/i;
 
@@ -146,6 +146,25 @@ export function resolveFeishuGroupConfig(params: { cfg?: FeishuConfig; groupId?:
     return groups[matchKey];
   }
   return wildcard;
+}
+
+export function hasExplicitFeishuGroupConfig(params: {
+  cfg?: FeishuConfig;
+  groupId?: string | null;
+}): boolean {
+  const groups = params.cfg?.groups ?? {};
+  const groupId = params.groupId?.trim();
+  if (!groupId) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(groups, groupId) && groupId !== "*") {
+    return true;
+  }
+
+  const lowered = normalizeOptionalLowercaseString(groupId) ?? "";
+  return Object.keys(groups).some(
+    (key) => key !== "*" && normalizeOptionalLowercaseString(key) === lowered,
+  );
 }
 
 export function resolveFeishuGroupToolPolicy(params: ChannelGroupContext) {

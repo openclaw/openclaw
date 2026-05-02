@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
+import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import { bundledPluginRoot } from "../../test/helpers/bundled-plugin-paths.js";
 import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
@@ -25,10 +26,18 @@ type TsdownOnLog = (
 ) => void;
 
 type TsdownInputOptions = (
-  options: { onLog?: TsdownOnLog },
+  options: { external?: TsdownExternalOption; onLog?: TsdownOnLog },
   format?: unknown,
   context?: unknown,
-) => { onLog?: TsdownOnLog } | undefined;
+) => { external?: TsdownExternalOption; onLog?: TsdownOnLog } | undefined;
+
+type TsdownExternalOption = string | RegExp | Array<string | RegExp> | TsdownExternalFunction;
+
+type TsdownExternalFunction = (
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+) => boolean | null | undefined;
 
 function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
@@ -41,36 +50,44 @@ function entryKeys(config: TsdownConfigEntry): string[] {
   return Object.keys(config.entry);
 }
 
+function entrySources(config: TsdownConfigEntry): Record<string, string> {
+  if (!config.entry || Array.isArray(config.entry)) {
+    return {};
+  }
+  return config.entry;
+}
+
 function bundledEntry(pluginId: string): string {
   return `${bundledPluginRoot(pluginId)}/index`;
 }
 
 function unifiedDistGraph(): TsdownConfigEntry | undefined {
-  return asConfigArray(tsdownConfig).find((config) => entryKeys(config).includes("index"));
+  return asConfigArray(tsdownConfig).find((config) =>
+    entryKeys(config).includes("plugins/runtime/index"),
+  );
+}
+
+function readGatewayRunLoopSource(): string {
+  return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
 describe("tsdown config", () => {
-  it("keeps core, plugin runtime, plugin-sdk, bundled plugins, and bundled hooks in one dist graph", () => {
-    const configs = asConfigArray(tsdownConfig);
-    const distGraphs = configs.filter((config) => {
-      const keys = entryKeys(config);
-      return (
-        keys.includes("index") ||
-        keys.includes("plugins/runtime/index") ||
-        keys.includes("plugin-sdk/index") ||
-        keys.includes(bundledEntry("openai")) ||
-        keys.includes("bundled/boot-md/handler")
-      );
-    });
+  it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
+    const distGraph = unifiedDistGraph();
 
-    expect(distGraphs).toHaveLength(1);
-    expect(entryKeys(distGraphs[0])).toEqual(
+    expect(distGraph).toBeDefined();
+    expect(entryKeys(distGraph as TsdownConfigEntry)).toEqual(
       expect.arrayContaining([
         "agents/auth-profiles.runtime",
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
+        "cli/gateway-lifecycle.runtime",
+        "plugins/memory-state",
         "subagent-registry.runtime",
+        "task-registry-control.runtime",
         "agents/pi-model-discovery-runtime",
+        "link-understanding/apply.runtime",
+        "media-understanding/apply.runtime",
         "index",
         "commands/status.summary.runtime",
         "plugins/provider-discovery.runtime",
@@ -78,13 +95,36 @@ describe("tsdown config", () => {
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",
-        bundledEntry("openai"),
-        bundledEntry("matrix"),
-        bundledEntry("msteams"),
-        bundledEntry("whatsapp"),
+        bundledEntry("active-memory"),
         "bundled/boot-md/handler",
       ]),
     );
+  });
+
+  it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
+    const distGraph = unifiedDistGraph();
+
+    expect(entrySources(distGraph as TsdownConfigEntry)).toEqual(
+      expect.objectContaining({
+        "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
+      }),
+    );
+  });
+
+  it("routes gateway run-loop lifecycle imports through the stable runtime boundary", () => {
+    const importSpecifiers = [
+      ...readGatewayRunLoopSource().matchAll(/import\(["']([^"']+)["']\)/gu),
+    ].map((match) => match[1]);
+
+    expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));
+  });
+
+  it("keeps bundled plugins out of separate dependency-staging graphs", () => {
+    const extensionGraphs = asConfigArray(tsdownConfig).filter(
+      (config) => typeof config.outDir === "string" && config.outDir.startsWith("dist/extensions/"),
+    );
+
+    expect(extensionGraphs).toEqual([]);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
@@ -100,18 +140,25 @@ describe("tsdown config", () => {
     ).toBe(false);
   });
 
-  it("externalizes staged bundled plugin runtime dependencies", () => {
+  it("externalizes known heavy native dependencies", () => {
     const unifiedGraph = unifiedDistGraph();
     const neverBundle = unifiedGraph?.deps?.neverBundle;
+    const external = unifiedGraph?.inputOptions?.({})?.external;
 
     if (typeof neverBundle === "function") {
-      expect(neverBundle("silk-wasm")).toBe(true);
-      expect(neverBundle("ws")).toBe(true);
-      expect(neverBundle("ws/lib/websocket.js")).toBe(true);
+      expect(neverBundle("@lancedb/lancedb")).toBe(true);
+      expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
+      expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
+      expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
-      expect(neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
+      expect(neverBundle).toEqual(
+        expect.arrayContaining(["@lancedb/lancedb", "matrix-js-sdk", "qrcode-terminal"]),
+      );
     }
+    expect(typeof external).toBe("function");
+    const externalize = external as TsdownExternalFunction;
+    expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
   });
 
   it("suppresses unresolved imports from extension source", () => {

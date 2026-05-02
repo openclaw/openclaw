@@ -42,6 +42,8 @@ export interface MediaStreamConfig {
   onPartialTranscript?: (callId: string, partial: string) => void;
   /** Callback when stream connects */
   onConnect?: (callId: string, streamSid: string) => void;
+  /** Callback when realtime transcription is ready for the stream */
+  onTranscriptionReady?: (callId: string, streamSid: string) => void;
   /** Callback when speech starts (barge-in) */
   onSpeechStart?: (callId: string) => void;
   /** Callback when stream disconnects */
@@ -213,7 +215,7 @@ export class MediaStreamHandler {
             break;
 
           case "start":
-            session = await this.handleStart(ws, message, streamToken);
+            session = this.handleStart(ws, message, streamToken);
             if (session) {
               this.clearPendingConnection(ws);
             }
@@ -232,6 +234,10 @@ export class MediaStreamHandler {
               this.handleStop(session);
               session = null;
             }
+            break;
+
+          case "clear":
+          case "mark":
             break;
         }
       } catch (error) {
@@ -259,11 +265,11 @@ export class MediaStreamHandler {
   /**
    * Handle stream start event.
    */
-  private async handleStart(
+  private handleStart(
     ws: WebSocket,
     message: TwilioMediaMessage,
     streamToken?: string,
-  ): Promise<StreamSession | null> {
+  ): StreamSession | null {
     const streamSid = message.streamSid || "";
     const callSid = message.start?.callSid || "";
 
@@ -311,16 +317,40 @@ export class MediaStreamHandler {
     };
 
     this.sessions.set(streamSid, session);
-
-    // Notify connection BEFORE STT connect so TTS can work even if STT fails
     this.config.onConnect?.(callSid, streamSid);
-
-    // Connect to transcription service (non-blocking, log errors but don't fail the call)
-    sttSession.connect().catch((err) => {
-      console.warn(`[MediaStream] STT connection failed (TTS still works):`, err.message);
-    });
+    void this.connectTranscriptionAndNotify(session);
 
     return session;
+  }
+
+  private async connectTranscriptionAndNotify(session: StreamSession): Promise<void> {
+    try {
+      await session.sttSession.connect();
+    } catch (error) {
+      console.warn(
+        "[MediaStream] STT connection failed; closing media stream:",
+        error instanceof Error ? error.message : String(error),
+      );
+      if (
+        this.sessions.get(session.streamSid) === session &&
+        session.ws.readyState === WebSocket.OPEN
+      ) {
+        session.ws.close(1011, "STT connection failed");
+      } else {
+        session.sttSession.close();
+      }
+      return;
+    }
+
+    if (
+      this.sessions.get(session.streamSid) !== session ||
+      session.ws.readyState !== WebSocket.OPEN
+    ) {
+      session.sttSession.close();
+      return;
+    }
+
+    this.config.onTranscriptionReady?.(session.callId, session.streamSid);
   }
 
   /**
@@ -557,7 +587,7 @@ export class MediaStreamHandler {
    */
   clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
     const queue = this.getTtsQueue(streamSid);
-    queue.length = 0;
+    this.resolveQueuedTtsEntries(queue);
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.clearAudio(streamSid);
   }
@@ -630,12 +660,20 @@ export class MediaStreamHandler {
   private clearTtsState(streamSid: string): void {
     const queue = this.ttsQueues.get(streamSid);
     if (queue) {
-      queue.length = 0;
+      this.resolveQueuedTtsEntries(queue);
     }
     this.ttsActiveControllers.get(streamSid)?.abort();
     this.ttsActiveControllers.delete(streamSid);
     this.ttsPlaying.delete(streamSid);
     this.ttsQueues.delete(streamSid);
+  }
+
+  private resolveQueuedTtsEntries(queue: TtsQueueEntry[]): void {
+    const pending = queue.splice(0);
+    for (const entry of pending) {
+      entry.controller.abort();
+      entry.resolve();
+    }
   }
 }
 

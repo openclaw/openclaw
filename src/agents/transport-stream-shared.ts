@@ -1,6 +1,6 @@
 import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 
-export type TransportUsage = {
+type TransportUsage = {
   input: number;
   output: number;
   cacheRead: number;
@@ -19,11 +19,20 @@ type TransportOutputShape = {
   errorMessage?: string;
 };
 
+const EMPTY_TOOL_RESULT_TEXT = "(no output)";
 export function sanitizeTransportPayloadText(text: string): string {
   return text.replace(
     /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
     "",
   );
+}
+
+export function sanitizeNonEmptyTransportPayloadText(
+  text: string,
+  fallback = EMPTY_TOOL_RESULT_TEXT,
+): string {
+  const sanitized = sanitizeTransportPayloadText(text);
+  return sanitized.trim().length > 0 ? sanitized : fallback;
 }
 
 export function coerceTransportToolCallArguments(argumentsValue: unknown): Record<string, unknown> {

@@ -3,7 +3,7 @@ summary: "CLI reference for `openclaw channels` (accounts, status, login/logout,
 read_when:
   - You want to add/remove channel accounts (WhatsApp/Telegram/Discord/Google Chat/Slack/Mattermost (plugin)/Signal/iMessage/Matrix)
   - You want to check channel status or tail channel logs
-title: "channels"
+title: "Channels"
 ---
 
 # `openclaw channels`
@@ -12,7 +12,7 @@ Manage chat channel accounts and their runtime status on the Gateway.
 
 Related docs:
 
-- Channel guides: [Channels](/channels/index)
+- Channel guides: [Channels](/channels)
 - Gateway configuration: [Configuration](/gateway/configuration)
 
 ## Common commands
@@ -39,6 +39,12 @@ state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit 
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
 
+Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
+`sessions_list` tool as a channel socket-health signal. Those surfaces report
+stored conversation rows, not provider runtime state. After a Discord provider
+restart, a connected but quiet account may be healthy while no Discord session
+row appears until the next inbound or outbound conversation event.
+
 ## Add / remove accounts
 
 ```bash
@@ -47,7 +53,12 @@ openclaw channels add --channel nostr --private-key "$NOSTR_PRIVATE_KEY"
 openclaw channels remove --channel telegram --delete
 ```
 
-Tip: `openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
+<Tip>
+`openclaw channels add --help` shows per-channel flags (token, private key, app token, signal-cli paths, etc).
+</Tip>
+
+`channels remove` only operates on installed/configured channel plugins. Use `channels add` first for installable catalog channels.
+For runtime-backed channel plugins, `channels remove` also asks the running Gateway to stop the selected account before it updates config, so disabling or deleting an account does not leave the old listener active until restart.
 
 Common non-interactive add surfaces include:
 
@@ -58,6 +69,8 @@ Common non-interactive add surfaces include:
 - Nostr fields: `--private-key`, `--relay-urls`
 - Tlon fields: `--ship`, `--url`, `--code`, `--group-channels`, `--dm-allowlist`, `--auto-discover-channels`
 - `--use-env` for default-account env-backed auth where supported
+
+If a channel plugin needs to be installed during a flag-driven add command, OpenClaw uses the channel's default install source without opening the interactive plugin install prompt.
 
 When you run `openclaw channels add` without flags, the interactive wizard can prompt:
 
@@ -79,17 +92,17 @@ Routing behavior stays consistent:
 
 If your config was already in a mixed state (named accounts present and top-level single-account values still set), run `openclaw doctor --fix` to move account-scoped values into the promoted account chosen for that channel. Most channels promote into `accounts.default`; Matrix can preserve an existing named/default target instead.
 
-## Login / logout (interactive)
+## Login and logout (interactive)
 
 ```bash
 openclaw channels login --channel whatsapp
 openclaw channels logout --channel whatsapp
 ```
 
-Notes:
-
 - `channels login` supports `--verbose`.
-- `channels login` / `logout` can infer the channel when only one supported login target is configured.
+- `channels login` and `logout` can infer the channel when only one supported login target is configured.
+- `channels logout` prefers the live Gateway path when reachable, so logout stops any active listener before clearing channel auth state. If a local Gateway is not reachable, it falls back to local auth cleanup.
+- Run `channels login` from a terminal on the gateway host. Agent `exec` blocks this interactive login flow; channel-native agent login tools, such as `whatsapp_login`, should be used from chat when available.
 
 ## Troubleshooting
 
@@ -129,3 +142,9 @@ Notes:
 - Use `--kind user|group|auto` to force the target type.
 - Resolution prefers active matches when multiple entries share the same name.
 - `channels resolve` is read-only. If a selected account is configured via SecretRef but that credential is unavailable in the current command path, the command returns degraded unresolved results with notes instead of aborting the entire run.
+- `channels resolve` does not install channel plugins. Use `channels add --channel <name>` before resolving names for an installable catalog channel.
+
+## Related
+
+- [CLI reference](/cli)
+- [Channels overview](/channels)

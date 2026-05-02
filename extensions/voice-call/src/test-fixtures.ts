@@ -1,4 +1,5 @@
 import type { VoiceCallConfig } from "./config.js";
+import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 export function createVoiceCallBaseConfig(params?: {
   provider?: "telnyx" | "twilio" | "plivo" | "mock";
@@ -10,6 +11,7 @@ export function createVoiceCallBaseConfig(params?: {
     fromNumber: "+15550001234",
     inboundPolicy: "disabled",
     allowFrom: [],
+    numbers: {},
     outbound: { defaultMode: "notify", notifyHangupDelaySec: 3 },
     maxDurationSeconds: 300,
     staleCallReaperSeconds: 600,
@@ -17,6 +19,7 @@ export function createVoiceCallBaseConfig(params?: {
     transcriptTimeoutMs: 180000,
     ringTimeoutMs: 30000,
     maxConcurrentCalls: 1,
+    sessionScope: "per-phone",
     serve: { port: 3334, bind: "127.0.0.1", path: "/voice/webhook" },
     tailscale: { mode: "off", path: "/voice/webhook" },
     tunnel: {
@@ -46,7 +49,16 @@ export function createVoiceCallBaseConfig(params?: {
     realtime: {
       enabled: false,
       streamPath: "/voice/stream/realtime",
+      instructions: DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS,
+      toolPolicy: "safe-read-only",
       tools: [],
+      fastContext: {
+        enabled: false,
+        timeoutMs: 800,
+        maxResults: 3,
+        sources: ["memory", "sessions"],
+        fallbackToConsult: false,
+      },
       providers: {},
     },
     skipSignatureVerification: false,

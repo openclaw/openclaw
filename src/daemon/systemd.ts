@@ -22,15 +22,12 @@ import type {
   GatewayServiceControlArgs,
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
+  GatewayServiceEnvironmentValueSource,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
   GatewayServiceRestartResult,
 } from "./service-types.js";
-import {
-  enableSystemdUserLinger,
-  readSystemdUserLingerStatus,
-  type SystemdUserLingerStatus,
-} from "./systemd-linger.js";
+import { enableSystemdUserLinger, readSystemdUserLingerStatus } from "./systemd-linger.js";
 import {
   classifySystemdUnavailableDetail,
   isSystemctlMissingDetail,
@@ -66,7 +63,6 @@ export function resolveSystemdUserUnitPath(env: GatewayServiceEnv): string {
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
-export type { SystemdUserLingerStatus };
 
 // Unit file parsing/rendering: see systemd-unit.ts
 
@@ -114,10 +110,10 @@ export async function readSystemdServiceExecStart(
       ...inlineEnvironment,
       ...environmentFromFiles.environment,
     };
-    const mergedEnvironmentSources = {
-      ...buildEnvironmentValueSources(inlineEnvironment, "inline"),
-      ...buildEnvironmentValueSources(environmentFromFiles.environment, "file"),
-    };
+    const mergedEnvironmentSources = mergeEnvironmentValueSources(
+      inlineEnvironment,
+      environmentFromFiles.environment,
+    );
     const programArguments = parseSystemdExecStart(execStart);
     return {
       programArguments,
@@ -136,8 +132,19 @@ export async function readSystemdServiceExecStart(
 function buildEnvironmentValueSources(
   environment: Record<string, string>,
   source: "inline" | "file",
-): Record<string, "inline" | "file"> {
+): Record<string, GatewayServiceEnvironmentValueSource> {
   return Object.fromEntries(Object.keys(environment).map((key) => [key, source]));
+}
+
+function mergeEnvironmentValueSources(
+  inlineEnvironment: Record<string, string>,
+  fileEnvironment: Record<string, string>,
+): Record<string, GatewayServiceEnvironmentValueSource> {
+  const sources = buildEnvironmentValueSources(inlineEnvironment, "inline");
+  for (const key of Object.keys(fileEnvironment)) {
+    sources[key] = Object.hasOwn(inlineEnvironment, key) ? "inline-and-file" : "file";
+  }
+  return sources;
 }
 
 function expandSystemdSpecifier(input: string, env: GatewayServiceEnv): string {
@@ -223,7 +230,7 @@ async function resolveSystemdEnvironmentFiles(params: {
   return { environment: resolved };
 }
 
-export type SystemdServiceInfo = {
+type SystemdServiceInfo = {
   activeState?: string;
   subState?: string;
   mainPid?: number;
@@ -263,6 +270,8 @@ export function parseSystemdShow(output: string): SystemdServiceInfo {
   return info;
 }
 
+export type SystemdUnitScope = "system" | "user";
+
 async function execSystemctl(
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -291,6 +300,18 @@ function isSystemdUnitNotEnabled(detail: string): boolean {
     normalized.includes("not-found") ||
     normalized.includes("could not be found") ||
     normalized.includes("failed to get unit file state")
+  );
+}
+
+function isSystemdUnitMissingDetail(detail: string): boolean {
+  if (!detail) {
+    return false;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(detail);
+  return (
+    (normalized.includes("unit file") && normalized.includes("does not exist")) ||
+    normalized.includes("not-found") ||
+    normalized.includes("could not be found")
   );
 }
 
@@ -330,20 +351,54 @@ function resolveSystemctlDirectUserScopeArgs(): string[] {
   return ["--user"];
 }
 
-function resolveSystemctlMachineScopeUser(env: GatewayServiceEnv): string | null {
-  const sudoUser = env.SUDO_USER?.trim();
-  if (sudoUser && sudoUser !== "root") {
-    return sudoUser;
-  }
-  const fromEnv = env.USER?.trim() || env.LOGNAME?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
+function readSystemctlEnvUser(env: GatewayServiceEnv): string | null {
+  return env.USER?.trim() || env.LOGNAME?.trim() || null;
+}
+
+function readSystemctlEffectiveUser(): string | null {
   try {
     return os.userInfo().username;
   } catch {
     return null;
   }
+}
+
+function readSystemctlEffectiveUid(): number | null {
+  if (typeof process.geteuid !== "function") {
+    return null;
+  }
+  try {
+    return process.geteuid();
+  } catch {
+    return null;
+  }
+}
+
+function isNonRootUser(user: string | null): user is string {
+  return Boolean(user && user !== "root");
+}
+
+function resolveSystemctlUserScope(env: GatewayServiceEnv): {
+  machineUser: string | null;
+  preferMachineScope: boolean;
+} {
+  const sudoUser = env.SUDO_USER?.trim() || null;
+  const envUser = readSystemctlEnvUser(env);
+  const effectiveUid = readSystemctlEffectiveUid();
+  const effectiveUser = readSystemctlEffectiveUser();
+  const isEffectiveRoot = effectiveUid === null ? effectiveUser === "root" : effectiveUid === 0;
+  const isSudoToRoot = isEffectiveRoot && isNonRootUser(sudoUser);
+  const machineUser = isSudoToRoot
+    ? sudoUser
+    : isNonRootUser(envUser)
+      ? envUser
+      : isNonRootUser(sudoUser)
+        ? sudoUser
+        : effectiveUser || envUser || sudoUser || null;
+  return {
+    machineUser,
+    preferMachineScope: isSudoToRoot,
+  };
 }
 
 function resolveSystemctlMachineUserScopeArgs(user: string): string[] {
@@ -368,11 +423,10 @@ async function execSystemctlUser(
   env: GatewayServiceEnv,
   args: string[],
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  const machineUser = resolveSystemctlMachineScopeUser(env);
-  const sudoUser = env.SUDO_USER?.trim();
+  const { machineUser, preferMachineScope } = resolveSystemctlUserScope(env);
 
-  // Under sudo, prefer the invoking non-root user's scope directly via machine scope.
-  if (sudoUser && sudoUser !== "root" && machineUser) {
+  // Under sudo-to-root, prefer the invoking non-root user's scope directly via machine scope.
+  if (preferMachineScope && machineUser) {
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
       // Do not fall through to bare --user: under sudo that can target root's user manager.
@@ -409,6 +463,20 @@ export async function isSystemdUserServiceAvailable(
     return false;
   }
   return !isSystemdUserScopeUnavailable(detail);
+}
+
+export async function isSystemdUnitActive(
+  env: GatewayServiceEnv,
+  unitName: string,
+  scope: SystemdUnitScope = "user",
+): Promise<boolean> {
+  const normalizedUnit = unitName.trim();
+  if (!normalizedUnit) {
+    return false;
+  }
+  const args = ["is-active", "--quiet", normalizedUnit];
+  const res = scope === "system" ? await execSystemctl(args) : await execSystemctlUser(env, args);
+  return res.code === 0;
 }
 
 async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as GatewayServiceEnv) {
@@ -539,21 +607,44 @@ export async function stageSystemdService({
 }
 
 async function activateSystemdService(params: { env: GatewayServiceEnv }) {
-  const serviceName = resolveGatewaySystemdServiceName(params.env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(params.env);
   const unitName = `${serviceName}.service`;
-  const reload = await execSystemctlUser(params.env, ["daemon-reload"]);
+  const reloadSystemd = async () => await execSystemctlUser(params.env, ["daemon-reload"]);
+  const throwActivationFailure = (
+    action: "daemon-reload" | "enable" | "restart",
+    result: { stdout: string; stderr: string },
+  ): never => {
+    const detail = readSystemctlDetail(result);
+    if (isSystemdUserScopeUnavailable(detail)) {
+      throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+    }
+    throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
+  };
+  const reload = await reloadSystemd();
   if (reload.code !== 0) {
-    throw new Error(`systemctl daemon-reload failed: ${reload.stderr || reload.stdout}`.trim());
+    throwActivationFailure("daemon-reload", reload);
   }
 
-  const enable = await execSystemctlUser(params.env, ["enable", unitName]);
+  const runAfterReloadRetry = async (action: "enable" | "restart") => {
+    const result = await execSystemctlUser(params.env, [action, unitName]);
+    if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
+      return result;
+    }
+    const retryReload = await reloadSystemd();
+    if (retryReload.code !== 0) {
+      throwActivationFailure("daemon-reload", retryReload);
+    }
+    return await execSystemctlUser(params.env, [action, unitName]);
+  };
+
+  const enable = await runAfterReloadRetry("enable");
   if (enable.code !== 0) {
-    throw new Error(`systemctl enable failed: ${enable.stderr || enable.stdout}`.trim());
+    throwActivationFailure("enable", enable);
   }
 
-  const restart = await execSystemctlUser(params.env, ["restart", unitName]);
+  const restart = await runAfterReloadRetry("restart");
   if (restart.code !== 0) {
-    throw new Error(`systemctl restart failed: ${restart.stderr || restart.stdout}`.trim());
+    throwActivationFailure("restart", restart);
   }
 }
 
@@ -588,7 +679,7 @@ export async function uninstallSystemdService({
   stdout,
 }: GatewayServiceManageArgs): Promise<void> {
   await assertSystemdAvailable(env);
-  const serviceName = resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE);
+  const serviceName = resolveSystemdServiceName(env);
   const unitName = `${serviceName}.service`;
   await execSystemctlUser(env, ["disable", "--now", unitName]);
 
@@ -708,7 +799,7 @@ export async function readSystemdServiceRuntime(
     lastExitReason: parsed.execMainCode,
   };
 }
-export type LegacySystemdUnit = {
+type LegacySystemdUnit = {
   name: string;
   unitPath: string;
   enabled: boolean;
@@ -723,7 +814,7 @@ async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<boolean> {
   return !isSystemctlMissing(readSystemctlDetail(res));
 }
 
-export async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
+async function findLegacySystemdUnits(env: GatewayServiceEnv): Promise<LegacySystemdUnit[]> {
   const results: LegacySystemdUnit[] = [];
   const systemctlAvailable = await isSystemctlAvailable(env);
   for (const name of LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES) {

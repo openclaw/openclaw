@@ -1,8 +1,10 @@
 import type { messagingApi } from "@line/bot-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { FlexContainer } from "./flex-templates.js";
 import type { ProcessedLineMessage } from "./markdown-to-line.js";
+import { buildLineQuickReplyFallbackText } from "./quick-reply-fallback.js";
 import type { SendLineReplyChunksParams } from "./reply-chunks.js";
 import type { LineChannelData, LineTemplateMessagePayload } from "./types.js";
 
@@ -17,7 +19,7 @@ export type LineAutoReplyDeps = {
   pushMessagesLine: (
     to: string,
     messages: messagingApi.Message[],
-    opts?: { accountId?: string },
+    opts: { cfg: OpenClawConfig; accountId?: string },
   ) => Promise<unknown>;
   createFlexMessage: (altText: string, contents: FlexContainer) => messagingApi.FlexMessage;
   createImageMessage: (
@@ -46,6 +48,7 @@ export async function deliverLineAutoReply(params: {
   replyToken?: string | null;
   replyTokenUsed: boolean;
   accountId?: string;
+  cfg: OpenClawConfig;
   textLimit: number;
   deps: LineAutoReplyDeps;
 }): Promise<{ replyTokenUsed: boolean }> {
@@ -58,6 +61,7 @@ export async function deliverLineAutoReply(params: {
     }
     for (let i = 0; i < messages.length; i += 5) {
       await deps.pushMessagesLine(to, messages.slice(i, i + 5), {
+        cfg: params.cfg,
         accountId,
       });
     }
@@ -76,6 +80,7 @@ export async function deliverLineAutoReply(params: {
       const replyBatch = remaining.slice(0, 5);
       try {
         await deps.replyMessageLine(replyToken, replyBatch, {
+          cfg: params.cfg,
           accountId,
         });
       } catch (err) {
@@ -145,6 +150,7 @@ export async function deliverLineAutoReply(params: {
       quickReplies: lineData.quickReplies,
       replyToken,
       replyTokenUsed,
+      cfg: params.cfg,
       accountId,
       replyMessageLine: deps.replyMessageLine,
       pushMessageLine: deps.pushMessageLine,
@@ -160,16 +166,34 @@ export async function deliverLineAutoReply(params: {
     }
   } else {
     const combined = [...richMessages, ...mediaMessages];
-    if (hasQuickReplies && combined.length > 0) {
-      const quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
-      const targetIndex =
-        replyToken && !replyTokenUsed ? Math.min(4, combined.length - 1) : combined.length - 1;
-      const target = combined[targetIndex] as messagingApi.Message & {
-        quickReply?: messagingApi.QuickReply;
-      };
-      combined[targetIndex] = { ...target, quickReply };
+    if (hasQuickReplies && combined.length === 0) {
+      const { replyTokenUsed: nextReplyTokenUsed } = await deps.sendLineReplyChunks({
+        to,
+        chunks: [buildLineQuickReplyFallbackText(lineData.quickReplies)],
+        quickReplies: lineData.quickReplies,
+        replyToken,
+        replyTokenUsed,
+        cfg: params.cfg,
+        accountId,
+        replyMessageLine: deps.replyMessageLine,
+        pushMessageLine: deps.pushMessageLine,
+        pushTextMessageWithQuickReplies: deps.pushTextMessageWithQuickReplies,
+        createTextMessageWithQuickReplies: deps.createTextMessageWithQuickReplies,
+        onReplyError: deps.onReplyError,
+      });
+      replyTokenUsed = nextReplyTokenUsed;
+    } else {
+      if (hasQuickReplies && combined.length > 0) {
+        const quickReply = deps.createQuickReplyItems(lineData.quickReplies!);
+        const targetIndex =
+          replyToken && !replyTokenUsed ? Math.min(4, combined.length - 1) : combined.length - 1;
+        const target = combined[targetIndex] as messagingApi.Message & {
+          quickReply?: messagingApi.QuickReply;
+        };
+        combined[targetIndex] = { ...target, quickReply };
+      }
+      await sendLineMessages(combined, true);
     }
-    await sendLineMessages(combined, true);
   }
 
   return { replyTokenUsed };

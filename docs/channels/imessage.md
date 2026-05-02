@@ -6,8 +6,6 @@ read_when:
 title: "iMessage"
 ---
 
-# iMessage (legacy: imsg)
-
 <Warning>
 For new iMessage deployments, use <a href="/channels/bluebubbles">BlueBubbles</a>.
 
@@ -23,7 +21,7 @@ Status: legacy external CLI integration. Gateway spawns `imsg rpc` and communica
   <Card title="Pairing" icon="link" href="/channels/pairing">
     iMessage DMs default to pairing mode.
   </Card>
-  <Card title="Configuration reference" icon="settings" href="/gateway/configuration-reference#imessage">
+  <Card title="Configuration reference" icon="settings" href="/gateway/config-channels#imessage">
     Full iMessage field reference.
   </Card>
 </CardGroup>
@@ -50,7 +48,7 @@ imsg rpc --help
     imessage: {
       enabled: true,
       cliPath: "/usr/local/bin/imsg",
-      dbPath: "/Users/<you>/Library/Messages/chat.db",
+      dbPath: "/Users/user/Library/Messages/chat.db",
     },
   },
 }
@@ -308,6 +306,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
       - default root pattern: `/Users/*/Library/Messages/Attachments`
     - SCP uses strict host-key checking (`StrictHostKeyChecking=yes`)
     - outbound media size uses `channels.imessage.mediaMaxMb` (default 16 MB)
+
   </Accordion>
 
   <Accordion title="Outbound chunking">
@@ -315,6 +314,7 @@ exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
     - chunk mode: `channels.imessage.chunkMode`
       - `length` (default)
       - `newline` (paragraph-first splitting)
+
   </Accordion>
 
   <Accordion title="Addressing formats">
@@ -413,7 +413,7 @@ imsg send <handle> "test"
 
 ## Configuration reference pointers
 
-- [Configuration reference - iMessage](/gateway/configuration-reference#imessage)
+- [Configuration reference - iMessage](/gateway/config-channels#imessage)
 - [Gateway configuration](/gateway/configuration)
 - [Pairing](/channels/pairing)
 - [BlueBubbles](/channels/bluebubbles)

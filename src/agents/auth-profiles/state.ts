@@ -9,19 +9,18 @@ function normalizeAuthProfileOrder(raw: unknown): AuthProfileState["order"] {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
-  const normalized = Object.entries(raw as Record<string, unknown>).reduce(
-    (acc, [provider, value]) => {
-      if (!Array.isArray(value)) {
-        return acc;
-      }
-      const list = value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
-      if (list.length > 0) {
-        acc[provider] = list;
-      }
+  const normalized = Object.entries(raw as Record<string, unknown>).reduce<
+    Record<string, string[]>
+  >((acc, [provider, value]) => {
+    if (!Array.isArray(value)) {
       return acc;
-    },
-    {} as Record<string, string[]>,
-  );
+    }
+    const list = value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
+    if (list.length > 0) {
+      acc[provider] = list;
+    }
+    return acc;
+  }, {});
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -71,9 +70,7 @@ export function loadPersistedAuthProfileState(agentDir?: string): AuthProfileSta
   return coerceAuthProfileState(loadJsonFile(resolveAuthStatePath(agentDir)));
 }
 
-export function buildPersistedAuthProfileState(
-  store: AuthProfileState,
-): AuthProfileStateStore | null {
+function buildPersistedAuthProfileState(store: AuthProfileState): AuthProfileStateStore | null {
   const state = coerceAuthProfileState(store);
   if (!state.order && !state.lastGood && !state.usageStats) {
     return null;

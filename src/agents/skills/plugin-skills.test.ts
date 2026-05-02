@@ -1,16 +1,46 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  __testing as acpRuntimeTesting,
+  registerAcpRuntimeBackend,
+} from "../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 
-const hoisted = vi.hoisted(() => ({
-  loadPluginManifestRegistry: vi.fn(),
+const hoisted = vi.hoisted(() => {
+  const loadManifestRegistry = vi.fn();
+  const loadPluginMetadataSnapshot = vi.fn(() => {
+    const manifestRegistry = loadManifestRegistry();
+    return {
+      manifestRegistry,
+      plugins: manifestRegistry.plugins,
+      normalizePluginId: (pluginId: string) =>
+        manifestRegistry.plugins.find((plugin: { id: string; legacyPluginIds?: string[] }) =>
+          plugin.legacyPluginIds?.includes(pluginId),
+        )?.id ?? pluginId,
+    };
+  });
+  return {
+    loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
+    loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
+    loadPluginMetadataSnapshot,
+    loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
+  };
+});
+
+vi.mock("../../plugins/manifest-registry-installed.js", () => ({
+  loadPluginManifestRegistryForInstalledIndex: hoisted.loadPluginManifestRegistryForInstalledIndex,
 }));
 
-vi.mock("../../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: (...args: unknown[]) => hoisted.loadPluginManifestRegistry(...args),
+vi.mock("../../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: hoisted.loadPluginManifestRegistryForPluginRegistry,
+  loadPluginRegistrySnapshot: hoisted.loadPluginRegistrySnapshot,
+}));
+
+vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: hoisted.loadPluginMetadataSnapshot,
 }));
 
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
@@ -85,7 +115,9 @@ async function setupAcpxAndHelperRegistry() {
   const helperRoot = await tempDirs.make("openclaw-helper-plugin-");
   await fs.mkdir(path.join(acpxRoot, "skills"), { recursive: true });
   await fs.mkdir(path.join(helperRoot, "skills"), { recursive: true });
-  hoisted.loadPluginManifestRegistry.mockReturnValue(buildRegistry({ acpxRoot, helperRoot }));
+  hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+    buildRegistry({ acpxRoot, helperRoot }),
+  );
   return { workspaceDir, acpxRoot, helperRoot };
 }
 
@@ -97,8 +129,31 @@ async function setupPluginOutsideSkills() {
   return { workspaceDir, pluginRoot, outsideSkills };
 }
 
+function registerHealthyAcpBackend() {
+  registerAcpRuntimeBackend({
+    id: "acpx",
+    runtime: {
+      async ensureSession(input) {
+        return {
+          sessionKey: input.sessionKey,
+          backend: "acpx",
+          runtimeSessionName: input.sessionKey,
+        };
+      },
+      async *runTurn() {
+        yield { type: "done" as const };
+      },
+      async cancel() {},
+      async close() {},
+    },
+  });
+}
+
 afterEach(async () => {
-  hoisted.loadPluginManifestRegistry.mockReset();
+  hoisted.loadPluginManifestRegistryForInstalledIndex.mockReset();
+  hoisted.loadPluginMetadataSnapshot.mockClear();
+  hoisted.loadPluginRegistrySnapshot.mockReset();
+  acpRuntimeTesting.resetAcpRuntimeBackendsForTests();
   await tempDirs.cleanup();
 });
 
@@ -108,13 +163,21 @@ describe("resolvePluginSkillDirs", () => {
   });
 
   beforeEach(() => {
-    hoisted.loadPluginManifestRegistry.mockReset();
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReset();
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
+      diagnostics: [],
+      plugins: [],
+    });
+    hoisted.loadPluginMetadataSnapshot.mockClear();
+    hoisted.loadPluginRegistrySnapshot.mockReset();
+    hoisted.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
   });
 
   it.each([
     {
-      name: "keeps acpx plugin skills when ACP is enabled",
+      name: "keeps acpx plugin skills when ACP runtime is available",
       acpEnabled: true,
+      backendAvailable: true,
       expectedDirs: ({ acpxRoot, helperRoot }: { acpxRoot: string; helperRoot: string }) => [
         path.resolve(acpxRoot, "skills"),
         path.resolve(helperRoot, "skills"),
@@ -123,12 +186,24 @@ describe("resolvePluginSkillDirs", () => {
     {
       name: "skips acpx plugin skills when ACP is disabled",
       acpEnabled: false,
+      backendAvailable: true,
       expectedDirs: ({ helperRoot }: { acpxRoot: string; helperRoot: string }) => [
         path.resolve(helperRoot, "skills"),
       ],
     },
-  ])("$name", async ({ acpEnabled, expectedDirs }) => {
+    {
+      name: "skips acpx plugin skills when no ACP runtime backend is loaded",
+      acpEnabled: true,
+      backendAvailable: false,
+      expectedDirs: ({ helperRoot }: { acpxRoot: string; helperRoot: string }) => [
+        path.resolve(helperRoot, "skills"),
+      ],
+    },
+  ])("$name", async ({ acpEnabled, backendAvailable, expectedDirs }) => {
     const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
+    if (backendAvailable) {
+      registerHealthyAcpBackend();
+    }
 
     const dirs = resolvePluginSkillDirs({
       workspaceDir,
@@ -152,7 +227,7 @@ describe("resolvePluginSkillDirs", () => {
     await fs.mkdir(outsideSkills, { recursive: true });
     const escapePath = path.relative(pluginRoot, outsideSkills);
 
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createSinglePluginRegistry({
         pluginRoot,
         skills: ["./skills", escapePath],
@@ -183,7 +258,7 @@ describe("resolvePluginSkillDirs", () => {
       process.platform === "win32" ? ("junction" as const) : ("dir" as const),
     );
 
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createSinglePluginRegistry({
         pluginRoot,
         skills: ["./skills-link"],
@@ -210,7 +285,7 @@ describe("resolvePluginSkillDirs", () => {
     await fs.mkdir(path.join(pluginRoot, "commands"), { recursive: true });
     await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
 
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createSinglePluginRegistry({
         pluginRoot,
         format: "bundle",
@@ -240,7 +315,7 @@ describe("resolvePluginSkillDirs", () => {
     const pluginRoot = await tempDirs.make("openclaw-legacy-plugin-");
     await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
 
-    hoisted.loadPluginManifestRegistry.mockReturnValue(
+    hoisted.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
       createSinglePluginRegistry({
         pluginRoot,
         skills: ["./skills"],

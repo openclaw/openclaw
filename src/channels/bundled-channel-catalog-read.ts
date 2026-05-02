@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { listChannelCatalogEntries } from "../plugins/channel-catalog-registry.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
@@ -10,7 +11,7 @@ type ChannelCatalogEntryLike = {
   };
 };
 
-export type BundledChannelCatalogEntry = {
+type BundledChannelCatalogEntry = {
   id: string;
   channel: PluginPackageChannel;
   aliases: readonly string[];
@@ -18,6 +19,7 @@ export type BundledChannelCatalogEntry = {
 };
 
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
+const officialCatalogFileCache = new Map<string, ChannelCatalogEntryLike[] | null>();
 
 function listPackageRoots(): string[] {
   return [
@@ -26,60 +28,57 @@ function listPackageRoots(): string[] {
   ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
 }
 
-function listBundledExtensionPackageJsonPaths(): string[] {
-  for (const packageRoot of listPackageRoots()) {
-    const extensionsRoot = path.join(packageRoot, "extensions");
-    if (!fs.existsSync(extensionsRoot)) {
-      continue;
-    }
-    try {
-      return fs
-        .readdirSync(extensionsRoot, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory())
-        .map((entry) => path.join(extensionsRoot, entry.name, "package.json"))
-        .filter((entry) => fs.existsSync(entry));
-    } catch {
-      continue;
-    }
+function readBundledExtensionCatalogEntriesSync(): PluginPackageChannel[] {
+  try {
+    return listChannelCatalogEntries({ origin: "bundled" }).map((entry) => entry.channel);
+  } catch {
+    return [];
   }
-  return [];
-}
-
-function readBundledExtensionCatalogEntriesSync(): ChannelCatalogEntryLike[] {
-  const entries: ChannelCatalogEntryLike[] = [];
-  for (const packageJsonPath of listBundledExtensionPackageJsonPaths()) {
-    try {
-      const payload = JSON.parse(
-        fs.readFileSync(packageJsonPath, "utf8"),
-      ) as ChannelCatalogEntryLike;
-      entries.push(payload);
-    } catch {
-      continue;
-    }
-  }
-  return entries;
 }
 
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {
   for (const packageRoot of listPackageRoots()) {
     const candidate = path.join(packageRoot, OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH);
+    const cached = officialCatalogFileCache.get(candidate);
+    if (cached !== undefined) {
+      if (cached) {
+        return cached;
+      }
+      continue;
+    }
     if (!fs.existsSync(candidate)) {
+      officialCatalogFileCache.set(candidate, null);
       continue;
     }
     try {
       const payload = JSON.parse(fs.readFileSync(candidate, "utf8")) as {
         entries?: unknown;
       };
-      return Array.isArray(payload.entries) ? (payload.entries as ChannelCatalogEntryLike[]) : [];
+      const entries = Array.isArray(payload.entries)
+        ? (payload.entries as ChannelCatalogEntryLike[])
+        : [];
+      officialCatalogFileCache.set(candidate, entries);
+      return entries;
     } catch {
+      officialCatalogFileCache.set(candidate, null);
       continue;
     }
   }
   return [];
 }
 
-function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCatalogEntry | null {
-  const channel = entry.openclaw?.channel;
+function isChannelCatalogEntryLike(
+  entry: ChannelCatalogEntryLike | PluginPackageChannel,
+): entry is ChannelCatalogEntryLike {
+  return "openclaw" in entry;
+}
+
+function toBundledChannelEntry(
+  entry: ChannelCatalogEntryLike | PluginPackageChannel,
+): BundledChannelCatalogEntry | null {
+  const channel: PluginPackageChannel | undefined = isChannelCatalogEntryLike(entry)
+    ? entry.openclaw?.channel
+    : entry;
   const id = normalizeOptionalLowercaseString(channel?.id);
   if (!id || !channel) {
     return null;
@@ -102,13 +101,18 @@ function toBundledChannelEntry(entry: ChannelCatalogEntryLike): BundledChannelCa
 }
 
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
-  const bundledEntries = readBundledExtensionCatalogEntriesSync()
+  const entries = new Map<string, BundledChannelCatalogEntry>();
+  for (const entry of readOfficialCatalogFileSync()
     .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
-  if (bundledEntries.length > 0) {
-    return bundledEntries;
+    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
+    entries.set(entry.id, entry);
   }
-  return readOfficialCatalogFileSync()
+  for (const entry of readBundledExtensionCatalogEntriesSync()
     .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry));
+    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
+    entries.set(entry.id, entry);
+  }
+  return Array.from(entries.values()).toSorted(
+    (left, right) => left.order - right.order || left.id.localeCompare(right.id),
+  );
 }

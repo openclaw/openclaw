@@ -26,10 +26,13 @@ export function getCliSessionBinding(
   if (bindingSessionId) {
     return {
       sessionId: bindingSessionId,
+      ...(fromBindings?.forceReuse === true ? { forceReuse: true } : {}),
       authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
       authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
+      authEpochVersion: fromBindings?.authEpochVersion,
       extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
       mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
+      mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
     };
   }
   const fromMap = entry.cliSessionIds?.[normalized];
@@ -71,17 +74,24 @@ export function setCliSessionBinding(
     ...entry.cliSessionBindings,
     [normalized]: {
       sessionId: trimmed,
+      ...(binding.forceReuse === true ? { forceReuse: true } : {}),
       ...(normalizeOptionalString(binding.authProfileId)
         ? { authProfileId: normalizeOptionalString(binding.authProfileId) }
         : {}),
       ...(normalizeOptionalString(binding.authEpoch)
         ? { authEpoch: normalizeOptionalString(binding.authEpoch) }
         : {}),
+      ...(typeof binding.authEpochVersion === "number" && Number.isFinite(binding.authEpochVersion)
+        ? { authEpochVersion: binding.authEpochVersion }
+        : {}),
       ...(normalizeOptionalString(binding.extraSystemPromptHash)
         ? { extraSystemPromptHash: normalizeOptionalString(binding.extraSystemPromptHash) }
         : {}),
       ...(normalizeOptionalString(binding.mcpConfigHash)
         ? { mcpConfigHash: normalizeOptionalString(binding.mcpConfigHash) }
+        : {}),
+      ...(normalizeOptionalString(binding.mcpResumeHash)
+        ? { mcpResumeHash: normalizeOptionalString(binding.mcpResumeHash) }
         : {}),
     },
   };
@@ -104,22 +114,24 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
     entry.cliSessionIds = Object.keys(next).length > 0 ? next : undefined;
   }
   if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    delete entry.claudeCliSessionId;
+    entry.claudeCliSessionId = undefined;
   }
 }
 
 export function clearAllCliSessions(entry: SessionEntry): void {
-  delete entry.cliSessionBindings;
-  delete entry.cliSessionIds;
-  delete entry.claudeCliSessionId;
+  entry.cliSessionBindings = undefined;
+  entry.cliSessionIds = undefined;
+  entry.claudeCliSessionId = undefined;
 }
 
 export function resolveCliSessionReuse(params: {
   binding?: CliSessionBinding;
   authProfileId?: string;
   authEpoch?: string;
+  authEpochVersion: number;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
 }): {
   sessionId?: string;
   invalidatedReason?: "auth-profile" | "auth-epoch" | "system-prompt" | "mcp";
@@ -129,21 +141,35 @@ export function resolveCliSessionReuse(params: {
   if (!sessionId) {
     return {};
   }
+  if (binding?.forceReuse === true) {
+    return { sessionId };
+  }
   const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
+  const currentMcpResumeHash = normalizeOptionalString(params.mcpResumeHash);
   const storedAuthProfileId = normalizeOptionalString(binding?.authProfileId);
   if (storedAuthProfileId !== currentAuthProfileId) {
     return { invalidatedReason: "auth-profile" };
   }
   const storedAuthEpoch = normalizeOptionalString(binding?.authEpoch);
-  if (storedAuthEpoch !== currentAuthEpoch) {
+  if (
+    binding?.authEpochVersion === params.authEpochVersion &&
+    storedAuthEpoch !== currentAuthEpoch
+  ) {
     return { invalidatedReason: "auth-epoch" };
   }
   const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
   if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
     return { invalidatedReason: "system-prompt" };
+  }
+  const storedMcpResumeHash = normalizeOptionalString(binding?.mcpResumeHash);
+  if (storedMcpResumeHash && currentMcpResumeHash) {
+    if (storedMcpResumeHash !== currentMcpResumeHash) {
+      return { invalidatedReason: "mcp" };
+    }
+    return { sessionId };
   }
   const storedMcpConfigHash = normalizeOptionalString(binding?.mcpConfigHash);
   if (storedMcpConfigHash !== currentMcpConfigHash) {
