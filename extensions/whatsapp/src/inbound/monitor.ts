@@ -149,6 +149,10 @@ type MonitorWebInboxOptions = {
   disconnectRetryAbortSignal?: AbortSignal;
   /** Shared group metadata cache used only for inbound metadata fallback after fetch failures. */
   groupMetadataCache?: WhatsAppGroupMetadataCache;
+  /** Process offline/catch-up messages (upsert.type === "append") instead of skipping them. */
+  replyToOfflineMessages?: boolean;
+  /** Maximum age (seconds) for offline messages to process. Default: 300. */
+  offlineMessageMaxAgeSeconds?: number;
 };
 
 export async function attachWebInboxToSocket(
@@ -750,14 +754,29 @@ export async function attachWebInboxToSocket(
 
       await maybeMarkInboundAsRead(inbound);
 
-      // If this is history/offline catch-up, mark read above but skip auto-reply.
+      // If this is history/offline catch-up, decide whether to process or skip.
       if (upsert.type === "append") {
-        const APPEND_RECENT_GRACE_MS = 60_000;
-        const msgTsRaw = msg.messageTimestamp;
-        const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
-        const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
-        if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
-          continue;
+        if (!options.replyToOfflineMessages) {
+          const APPEND_RECENT_GRACE_MS = 60_000;
+          const msgTsRaw = msg.messageTimestamp;
+          const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
+          const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
+          if (msgTsMs < connectedAtMs - APPEND_RECENT_GRACE_MS) {
+            continue;
+          }
+        } else {
+          // Skip messages older than the configured threshold.
+          const maxAgeMs = (options.offlineMessageMaxAgeSeconds ?? 300) * 1000;
+          const msgTsRaw = msg.messageTimestamp;
+          const msgTsNum = msgTsRaw != null ? Number(msgTsRaw) : Number.NaN;
+          const msgTsMs = Number.isFinite(msgTsNum) ? msgTsNum * 1000 : 0;
+          if (msgTsMs && Date.now() - msgTsMs > maxAgeMs) {
+            logWhatsAppVerbose(
+              options.verbose,
+              `Skipping offline message ${inbound.id ?? "unknown"} (age ${Math.floor((Date.now() - msgTsMs) / 1000)}s > ${options.offlineMessageMaxAgeSeconds ?? 300}s)`,
+            );
+            continue;
+          }
         }
       }
 
