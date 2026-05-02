@@ -8,15 +8,34 @@ import {
   registerChatAttachmentPayload,
   resetChatAttachmentPayloadStoreForTest,
 } from "./chat/attachment-payload-store.ts";
+import type { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
-const { setLastActiveSessionKeyMock } = vi.hoisted(() => ({
+type ExecuteSlashCommand = typeof executeSlashCommand;
+
+const { executeSlashCommandMock, setLastActiveSessionKeyMock } = vi.hoisted(() => ({
+  executeSlashCommandMock: vi.fn(),
   setLastActiveSessionKeyMock: vi.fn(),
 }));
 
 vi.mock("./app-last-active-session.ts", () => ({
   setLastActiveSessionKey: (...args: unknown[]) => setLastActiveSessionKeyMock(...args),
 }));
+
+vi.mock("./chat/slash-command-executor.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat/slash-command-executor.ts")>();
+  return {
+    ...actual,
+    executeSlashCommand: (...args: Parameters<ExecuteSlashCommand>) => {
+      const implementation = executeSlashCommandMock.getMockImplementation() as
+        | ExecuteSlashCommand
+        | undefined;
+      return implementation
+        ? executeSlashCommandMock(...args)
+        : actual.executeSlashCommand(...args);
+    },
+  };
+});
 
 let handleSendChat: typeof import("./app-chat.ts").handleSendChat;
 let steerQueuedChatMessage: typeof import("./app-chat.ts").steerQueuedChatMessage;
@@ -420,6 +439,7 @@ describe("handleSendChat", () => {
   });
 
   beforeEach(() => {
+    executeSlashCommandMock.mockReset();
     setLastActiveSessionKeyMock.mockReset();
   });
 
@@ -617,6 +637,48 @@ describe("handleSendChat", () => {
       value: "openai/gpt-5-mini",
     });
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
+  });
+
+  it("shows local slash-command feedback when the gateway client is unavailable", async () => {
+    const host = makeHost({
+      client: null,
+      chatMessage: "/think",
+      connected: true,
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("");
+    expect(host.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "system",
+        content: "Cannot run `/think`: Control UI is not connected to the Gateway.",
+      }),
+    ]);
+  });
+
+  it("shows local slash-command feedback when dispatch fails unexpectedly", async () => {
+    executeSlashCommandMock.mockRejectedValue(new Error("dispatch failed"));
+    const request = vi.fn(async (method: string) => {
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "/think",
+      connected: true,
+    });
+
+    await handleSendChat(host);
+
+    expect(executeSlashCommandMock).toHaveBeenCalledTimes(1);
+    expect(host.chatMessage).toBe("");
+    expect(host.lastError).toBe("Error: dispatch failed");
+    expect(host.chatMessages).toEqual([
+      expect.objectContaining({
+        role: "system",
+        content: "Command `/think` failed unexpectedly.",
+      }),
+    ]);
   });
 
   it("sends /btw immediately while a main run is active without queueing it", async () => {
