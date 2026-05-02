@@ -194,6 +194,32 @@ describe("handleSlackMessageAction", () => {
     );
   });
 
+  it("forwards messageId for read actions", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "read",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "1712345678.654321",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "readMessages",
+        channelId: "C1",
+        messageId: "1712345678.654321",
+      }),
+      {},
+    );
+  });
+
   it("requires filePath, path, or media for upload-file", async () => {
     await expect(
       handleSlackMessageAction({

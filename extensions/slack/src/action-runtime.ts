@@ -366,12 +366,14 @@ export async function handleSlackAction(
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
+        const messageId = readStringParam(params, "messageId");
         const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
           threadId: threadId ?? undefined,
+          messageId: messageId ?? undefined,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(

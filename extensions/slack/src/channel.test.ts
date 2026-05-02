@@ -268,6 +268,7 @@ describe("slackPlugin actions", () => {
       params: {
         channelId: "C123",
         threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
       },
     });
 
@@ -276,6 +277,7 @@ describe("slackPlugin actions", () => {
         action: "readMessages",
         channelId: "C123",
         threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
       }),
       {},
       undefined,

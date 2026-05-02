@@ -122,6 +122,7 @@ export async function handleSlackMessageAction(params: {
       limit,
       before: readStringParam(actionParams, "before"),
       after: readStringParam(actionParams, "after"),
+      messageId: readStringParam(actionParams, "messageId"),
       accountId,
     };
     if (includeReadThreadId) {

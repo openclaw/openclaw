@@ -689,6 +689,29 @@ describe("handleSlackAction", () => {
     );
   });
 
+  it("passes messageId through to readSlackMessages", async () => {
+    readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
+
+    await handleSlackAction(
+      {
+        action: "readMessages",
+        channelId: "C1",
+        threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
+      },
+      slackConfig(),
+    );
+
+    expect(readSlackMessages).toHaveBeenCalledWith(
+      "C1",
+      expect.objectContaining({
+        cfg: expect.any(Object),
+        threadId: "1712345678.123456",
+        messageId: "1712345678.654321",
+      }),
+    );
+  });
+
   it("adds normalized timestamps to pin payloads", async () => {
     listSlackPins.mockResolvedValueOnce([{ message: { ts: "1712345678.123456", text: "pin" } }]);
 
