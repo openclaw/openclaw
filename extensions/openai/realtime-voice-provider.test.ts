@@ -166,6 +166,27 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
         }),
       }),
     );
+    const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
+      | { init?: { body?: string } }
+      | undefined;
+    const body = JSON.parse(request?.init?.body ?? "{}") as {
+      session?: {
+        audio?: {
+          input?: {
+            turn_detection?: Record<string, unknown>;
+            transcription?: Record<string, unknown>;
+          };
+        };
+      };
+    };
+    expect(body.session?.audio?.input).toEqual({
+      turn_detection: {
+        type: "server_vad",
+        create_response: true,
+        interrupt_response: true,
+      },
+      transcription: { model: "whisper-1" },
+    });
     expect(session).toMatchObject({
       provider: "openai",
       transport: "webrtc-sdp",

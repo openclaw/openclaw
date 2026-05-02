@@ -753,6 +753,14 @@ async function createOpenAIRealtimeBrowserSession(
     model,
     instructions: req.instructions,
     audio: {
+      input: {
+        turn_detection: {
+          type: "server_vad",
+          create_response: true,
+          interrupt_response: true,
+        },
+        transcription: { model: "whisper-1" },
+      },
       output: { voice },
     },
   };
