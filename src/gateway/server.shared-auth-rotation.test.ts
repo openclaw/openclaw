@@ -218,6 +218,7 @@ describe("gateway shared auth rotation with unchanged SecretRefs", () => {
     const ws = await openSecretRefAuthenticatedWs();
     try {
       const closed = waitForGatewayWsClose(ws);
+      process.env[SECRET_REF_TOKEN_ID] = NEW_TOKEN;
       const res = await applyCurrentConfig(ws);
       expect(res.ok).toBe(true);
       await expect(closed).resolves.toEqual({
