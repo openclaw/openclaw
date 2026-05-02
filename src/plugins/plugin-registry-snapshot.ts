@@ -137,9 +137,7 @@ function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
         plugin.manifestPath,
         plugin.manifestFile,
       );
-      if (manifestSignatureMatches === true) {
-        // Stored stat signature is unchanged; avoid hashing on startup.
-      } else if (manifestSignatureMatches === false) {
+      if (manifestSignatureMatches === false) {
         const manifestHash = hashExistingFile(plugin.manifestPath);
         if (manifestHash && manifestHash !== plugin.manifestHash) {
           return true;
@@ -162,12 +160,10 @@ function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
       packageJsonPath,
       plugin.packageJson.fileSignature,
     );
-    if (packageJsonSignatureMatches === true) {
-      return false;
-    }
     if (packageJsonSignatureMatches === false) {
       return hashExistingFile(packageJsonPath) !== plugin.packageJson.hash;
     }
+    // Fast same-size rewrites can preserve observable stat fields on some filesystems.
     const packageJsonHash = hashExistingFile(packageJsonPath);
     return packageJsonHash !== plugin.packageJson.hash;
   });
