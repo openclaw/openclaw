@@ -10,9 +10,10 @@
 
 ---
 
-### Task 1: Add the detector config and runtime logic
+## Task 1: Add the detector config and runtime logic
 
 **Files:**
+
 - Modify: `src/agents/tool-loop-detection.ts`
 - Modify: `src/config/types.tools.ts`
 - Modify: `src/config/zod-schema.agent-runtime.ts`
@@ -33,9 +34,10 @@ Add a helper that counts the current run-scoped trailing streak of error outcome
 
 Do not add any per-turn or session-level counters, and do not edit `src/logging/diagnostic-session-state.ts`.
 
-### Task 2: Lock behavior with tests
+## Task 2: Lock behavior with tests
 
 **Files:**
+
 - Modify: `src/agents/tool-loop-detection.test.ts`
 - Modify: `src/agents/pi-tools.before-tool-call.e2e.test.ts`
 
@@ -53,9 +55,10 @@ Run: `pnpm test src/agents/tool-loop-detection.test.ts src/agents/pi-tools.befor
 
 Expected: PASS
 
-### Task 3: Update docs and release note
+## Task 3: Update docs and release note
 
 **Files:**
+
 - Modify: `docs/tools/loop-detection.md`
 - Modify: `CHANGELOG.md`
 
@@ -73,9 +76,10 @@ Run: `pnpm exec oxfmt --check --threads=1 docs/tools/loop-detection.md CHANGELOG
 
 Expected: PASS
 
-### Task 4: Build, redeploy, and manual verification
+## Task 4: Build, redeploy, and manual verification
 
 **Files:**
+
 - No source changes expected unless verification exposes a bug
 
 - [ ] **Step 1: Build the touched runtime**
@@ -96,9 +100,10 @@ Verify the local gateway comes back cleanly and the runtime is healthy. If feasi
 
 Capture the exact commands and the observed result for later PR/issue drafting.
 
-### Task 5: Rewrite local issue/PR drafts
+## Task 5: Rewrite local issue/PR drafts
 
 **Files:**
+
 - Modify: `/Users/shockang/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI/github/pr-001-control-ui-browser-white-screen.md`
 - Modify: `/Users/shockang/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI/github/pr-002-tool-loop-consecutive-errors-detector.md`
 - Modify: `/Users/shockang/Library/Mobile Documents/iCloud~md~obsidian/Documents/AI/github/pr-003-test-lint-and-type-fixes.md`
@@ -115,9 +120,10 @@ Rewrite it around `consecutive_errors` only, with the final validated file list,
 
 Mark it as non-upstreamable standalone cleanup unless a real failing gate justifies piggybacking it later.
 
-### Task 6: Commit
+## Task 6: Commit
 
 **Files:**
+
 - Stage only the intended docs and source changes
 
 - [ ] **Step 1: Review diff**
