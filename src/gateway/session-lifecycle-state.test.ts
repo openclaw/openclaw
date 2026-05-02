@@ -175,6 +175,34 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("does not leak sessions_yield onto error end events even when yielded is set", () => {
+    expect(
+      deriveGatewaySessionLifecycleSnapshot({
+        session: {
+          updatedAt: 1_000,
+          status: "running",
+          startedAt: 1_100,
+        },
+        event: {
+          ts: 2_000,
+          data: {
+            phase: "error",
+            endedAt: 1_700,
+            yielded: true,
+          },
+        },
+      }),
+    ).toEqual({
+      updatedAt: 1_700,
+      status: "failed",
+      startedAt: 1_100,
+      endedAt: 1_700,
+      runtimeMs: 600,
+      abortedLastRun: false,
+      pauseReason: undefined,
+    });
+  });
+
   it("clears pauseReason when a fresh run starts on a paused session", () => {
     expect(
       deriveGatewaySessionLifecycleSnapshot({
