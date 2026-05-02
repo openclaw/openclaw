@@ -85,10 +85,3 @@ export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
     return plugin ? [plugin] : [];
   });
 }
-
-export async function listBundledChannelPluginsAsync(): Promise<readonly ChannelPlugin[]> {
-  const plugins = await Promise.all(
-    listBundledChannelPluginIds().map((id) => getBundledChannelPluginAsync(id)),
-  );
-  return plugins.filter((plugin): plugin is ChannelPlugin => Boolean(plugin));
-}
