@@ -3,7 +3,6 @@ import {
   createStatusReactionController,
   DEFAULT_TIMING,
   logAckFailure,
-  logTypingFailure,
   shouldAckReaction as shouldAckReactionGate,
 } from "openclaw/plugin-sdk/channel-feedback";
 import { deliverFinalizableDraftPreview } from "openclaw/plugin-sdk/channel-lifecycle";
@@ -43,11 +42,11 @@ import { createDiscordDraftPreviewController } from "./message-handler.draft-pre
 import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
 import { resolveForwardedMediaList, resolveMediaList } from "./message-utils.js";
 import { deliverDiscordReply } from "./reply-delivery.js";
+import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 import {
   DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
   DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
 } from "./timeouts.js";
-import { sendTyping } from "./typing.js";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -55,7 +54,6 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-const DISCORD_TYPING_MAX_DURATION_MS = 20 * 60_000;
 let replyRuntimePromise: Promise<typeof import("openclaw/plugin-sdk/reply-runtime")> | undefined;
 
 async function loadReplyRuntime() {
@@ -108,6 +106,17 @@ export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
 ) {
+  try {
+    await processDiscordMessageInner(ctx, observer);
+  } finally {
+    ctx.replyTypingFeedback?.onCleanup?.();
+  }
+}
+
+async function processDiscordMessageInner(
+  ctx: DiscordMessagePreflightContext,
+  observer?: DiscordMessageProcessObserver,
+) {
   const {
     cfg,
     discordConfig,
@@ -135,6 +144,7 @@ export async function processDiscordMessage(
     route,
     discordRestFetch,
     abortSignal,
+    replyTypingFeedback,
   } = ctx;
   if (isProcessAborted(abortSignal)) {
     return;
@@ -363,25 +373,24 @@ export async function processDiscordMessage(
   const typingChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
     : messageChannelId;
+  const typingFeedback =
+    replyTypingFeedback ??
+    createDiscordReplyTypingFeedback({
+      cfg,
+      token,
+      accountId,
+      channelId: typingChannelId,
+      rest: feedbackRest,
+      log: logVerbose,
+    });
+  typingFeedback.updateChannelId(typingChannelId);
 
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg,
     agentId: route.agentId,
     channel: "discord",
     accountId: route.accountId,
-    typing: {
-      start: () => sendTyping({ rest: feedbackRest, channelId: typingChannelId }),
-      onStartError: (err) => {
-        logTypingFailure({
-          log: logVerbose,
-          channel: "discord",
-          target: typingChannelId,
-          error: err,
-        });
-      },
-      // Long tool-heavy runs are expected on Discord; keep heartbeats alive.
-      maxDurationMs: DISCORD_TYPING_MAX_DURATION_MS,
-    },
+    typingCallbacks: typingFeedback,
   });
   const tableMode = resolveMarkdownTableMode({
     cfg,

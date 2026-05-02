@@ -27,6 +27,7 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
   const maxDurationMs = params.maxDurationMs ?? 60_000; // Default 60s TTL
   let stopSent = false;
   let closed = false;
+  let started = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
   const startGuard = createTypingStartGuard({
@@ -73,17 +74,14 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       return;
     }
     stopSent = false;
-    startGuard.reset();
-    keepaliveLoop.stop();
-    clearTtlTimer();
-    const startPromise = fireStart();
-    void startPromise.then(() => {
-      if (closed || startGuard.isTripped()) {
-        return;
-      }
+    if (!started) {
+      started = true;
+      startGuard.reset();
+      clearTtlTimer();
       keepaliveLoop.start();
-      startTtlTimer();
-    });
+    }
+    startTtlTimer();
+    void keepaliveLoop.tick();
     await Promise.resolve();
   };
 

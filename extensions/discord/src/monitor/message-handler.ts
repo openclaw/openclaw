@@ -2,9 +2,8 @@ import {
   createChannelInboundDebouncer,
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { resolveOpenProviderRuntimeGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
-import { createDiscordRestClient } from "../client.js";
 import type { Client } from "../internal/discord.js";
 import {
   buildDiscordInboundReplayKey,
@@ -17,8 +16,10 @@ import {
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import type { DiscordMessageEvent, DiscordMessageHandler } from "./listeners.js";
 import { applyImplicitReplyBatchGate } from "./message-handler.batch-gate.js";
-import type { DiscordMessagePreflightContext } from "./message-handler.preflight.js";
-import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
+import type {
+  DiscordMessagePreflightContext,
+  DiscordMessagePreflightParams,
+} from "./message-handler.preflight.types.js";
 import {
   createDiscordMessageRunQueue,
   type DiscordMessageRunQueueTestingHooks,
@@ -28,11 +29,15 @@ import {
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
 } from "./message-utils.js";
+import {
+  createDiscordReplyTypingFeedback,
+  type DiscordReplyTypingFeedback,
+} from "./reply-typing-feedback.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
-import { sendTyping } from "./typing.js";
 
 type PreflightDiscordMessage =
   typeof import("./message-handler.preflight.js").preflightDiscordMessage;
+type CreateDiscordReplyTypingFeedback = typeof createDiscordReplyTypingFeedback;
 
 type DiscordMessageHandlerParams = Omit<
   DiscordMessagePreflightParams,
@@ -45,6 +50,7 @@ type DiscordMessageHandlerParams = Omit<
 
 type DiscordMessageHandlerTestingHooks = DiscordMessageRunQueueTestingHooks & {
   preflightDiscordMessage?: PreflightDiscordMessage;
+  createReplyTypingFeedback?: CreateDiscordReplyTypingFeedback;
 };
 
 let messagePreflightRuntimePromise:
@@ -56,42 +62,57 @@ async function loadMessagePreflightRuntime() {
   return await messagePreflightRuntimePromise;
 }
 
-export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
-  deactivate: () => void;
-};
-
-function isNonEmptyString(value: string | undefined): value is string {
-  return typeof value === "string" && value.length > 0;
+function shouldSkipInitialTypingSignal(createFeedback?: CreateDiscordReplyTypingFeedback): boolean {
+  return !createFeedback && Boolean(process.env.VITEST || process.env.NODE_ENV === "test");
 }
 
-function shouldSendAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext): boolean {
+function shouldStartAcceptedTypingFeedback(ctx: DiscordMessagePreflightContext): boolean {
   if (ctx.abortSignal?.aborted) {
-    return false;
-  }
-  if (!ctx.isDirectMessage || ctx.isGuildMessage || ctx.isGroupDm) {
     return false;
   }
   if (!ctx.messageText.trim()) {
     return false;
   }
   const configuredTypingMode = ctx.cfg.session?.typingMode ?? ctx.cfg.agents?.defaults?.typingMode;
-  return configuredTypingMode === undefined || configuredTypingMode === "instant";
+  return configuredTypingMode !== "never";
 }
 
-function queueAcceptedDiscordTypingCue(ctx: DiscordMessagePreflightContext): void {
-  if (!shouldSendAcceptedDiscordTypingCue(ctx)) {
+function startAcceptedTypingFeedback(params: {
+  ctx: DiscordMessagePreflightContext;
+  createFeedback?: CreateDiscordReplyTypingFeedback;
+}): DiscordReplyTypingFeedback | undefined {
+  const { ctx, createFeedback } = params;
+  if (shouldSkipInitialTypingSignal(createFeedback) || !shouldStartAcceptedTypingFeedback(ctx)) {
     return;
   }
-  const { rest } = createDiscordRestClient({
+  if (ctx.replyTypingFeedback) {
+    void ctx.replyTypingFeedback.onReplyStart().catch((err) => {
+      ctx.runtime.error?.(danger(`discord accepted typing failed: ${String(err)}`));
+    });
+    return ctx.replyTypingFeedback;
+  }
+  const replyTypingFeedback = (createFeedback ?? createDiscordReplyTypingFeedback)({
     cfg: ctx.cfg,
     token: ctx.token,
     accountId: ctx.accountId,
+    channelId: ctx.messageChannelId,
+    log: (message) => {
+      ctx.runtime.error?.(danger(message));
+    },
   });
-  void sendTyping({ rest, channelId: ctx.messageChannelId }).catch((err) => {
-    logVerbose(
-      `discord early typing cue failed for channel ${ctx.messageChannelId}: ${String(err)}`,
-    );
+  ctx.replyTypingFeedback = replyTypingFeedback;
+  void replyTypingFeedback.onReplyStart().catch((err) => {
+    ctx.runtime.error?.(danger(`discord accepted typing failed: ${String(err)}`));
   });
+  return replyTypingFeedback;
+}
+
+export type DiscordMessageHandlerWithLifecycle = DiscordMessageHandler & {
+  deactivate: () => void;
+};
+
+function isNonEmptyString(value: string | undefined): value is string {
+  return typeof value === "string" && value.length > 0;
 }
 
 export function createDiscordMessageHandler(
@@ -185,8 +206,11 @@ export function createDiscordMessageHandler(
             await commitDiscordInboundReplay({ replayKeys, replayGuard });
             return;
           }
+          startAcceptedTypingFeedback({
+            ctx,
+            createFeedback: params.__testing?.createReplyTypingFeedback,
+          });
           applyImplicitReplyBatchGate(ctx, params.replyToMode, false);
-          queueAcceptedDiscordTypingCue(ctx);
           messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
           return;
         }
@@ -235,6 +259,10 @@ export function createDiscordMessageHandler(
           await commitDiscordInboundReplay({ replayKeys, replayGuard });
           return;
         }
+        startAcceptedTypingFeedback({
+          ctx,
+          createFeedback: params.__testing?.createReplyTypingFeedback,
+        });
         applyImplicitReplyBatchGate(ctx, params.replyToMode, true);
         if (entries.length > 1) {
           const ids = entries.map((entry) => entry.data.message?.id).filter(isNonEmptyString);
@@ -249,7 +277,6 @@ export function createDiscordMessageHandler(
             ctxBatch.MessageSidLast = ids[ids.length - 1];
           }
         }
-        queueAcceptedDiscordTypingCue(ctx);
         messageRunQueue.enqueue(buildDiscordInboundJob(ctx, { replayKeys }));
       } catch (error) {
         if (error instanceof DiscordRetryableInboundError) {

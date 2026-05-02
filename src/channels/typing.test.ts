@@ -125,6 +125,22 @@ describe("createTypingCallbacks", () => {
     });
   });
 
+  it("reuses an active keepalive loop on repeated reply starts", async () => {
+    await withFakeTimers(async () => {
+      const { start, callbacks } = createTypingHarness();
+
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      await callbacks.onReplyStart();
+      expect(start).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(start).toHaveBeenCalledTimes(3);
+    });
+  });
+
   it("stops keepalive after consecutive start failures", async () => {
     await withFakeTimers(async () => {
       const { start, onStartError, callbacks } = createTypingHarness({
