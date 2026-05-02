@@ -27,7 +27,7 @@ function loadSessionForkRuntime(): Promise<typeof import("./session-fork.runtime
   return sessionForkRuntimePromise;
 }
 
-export function formatParentForkTooLargeMessage(params: {
+function formatParentForkTooLargeMessage(params: {
   parentTokens: number;
   maxTokens: number;
 }): string {
@@ -71,7 +71,7 @@ export async function forkSessionFromParent(params: {
   return runtime.forkSessionFromParentRuntime(params);
 }
 
-export async function resolveParentForkTokenCount(params: {
+async function resolveParentForkTokenCount(params: {
   parentEntry: SessionEntry;
   storePath: string;
 }): Promise<number | undefined> {

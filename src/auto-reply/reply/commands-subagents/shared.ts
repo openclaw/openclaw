@@ -81,11 +81,11 @@ export function stopWithText(text: string): CommandHandlerResult {
   return { shouldContinue: false, reply: { text } };
 }
 
-export function stopWithUnknownTargetError(error?: string): CommandHandlerResult {
+function stopWithUnknownTargetError(error?: string): CommandHandlerResult {
   return stopWithText(`⚠️ ${error ?? "Unknown subagent."}`);
 }
 
-export function resolveSubagentTarget(
+function resolveSubagentTarget(
   runs: SubagentRunRecord[],
   token: string | undefined,
 ): SubagentTargetResolution {
