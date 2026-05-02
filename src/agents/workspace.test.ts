@@ -291,6 +291,34 @@ describe("ensureAgentWorkspace", () => {
     ).resolves.toContain("# BOOTSTRAP.md");
   });
 
+  it("fires substitute_template even when templates were previously cached without hooks", async () => {
+    // Uses the top-level ensureAgentWorkspace import which shares the module-level
+    // template cache with earlier tests that loaded templates without a hookRunner.
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const events: PluginHookSubstituteTemplateEvent[] = [];
+    const hookRunner = {
+      hasHooks: (hookName: string) => hookName === "substitute_template",
+      runSubstituteTemplate: async (event: PluginHookSubstituteTemplateEvent) => {
+        events.push(event);
+        if (path.basename(event.sourcePath) === DEFAULT_USER_FILENAME) {
+          return { content: "# USER.md\n\nHook-replaced after stale cache\n" };
+        }
+        return undefined;
+      },
+    };
+
+    await ensureAgentWorkspace({
+      dir: tempDir,
+      ensureBootstrapFiles: true,
+      hookRunner,
+    });
+
+    expect(events.length).toBeGreaterThan(0);
+    await expect(fs.readFile(path.join(tempDir, DEFAULT_USER_FILENAME), "utf-8")).resolves.toBe(
+      "# USER.md\n\nHook-replaced after stale cache\n",
+    );
+  });
+
   it("migrates legacy onboardingCompletedAt markers to setupCompletedAt", async () => {
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     await fs.mkdir(path.join(tempDir, ".openclaw"), { recursive: true });

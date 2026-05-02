@@ -38,6 +38,10 @@ const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
 type TemplateSubstitutionHookRunner = Pick<HookRunner, "hasHooks" | "runSubstituteTemplate">;
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
+const hookedTemplateCache = new WeakMap<
+  TemplateSubstitutionHookRunner,
+  Map<string, Promise<string>>
+>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
 const MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES = 2 * 1024 * 1024;
 
@@ -107,7 +111,20 @@ async function loadTemplate(
   name: string,
   hookRunner?: TemplateSubstitutionHookRunner,
 ): Promise<string> {
-  const cached = workspaceTemplateCache.get(name);
+  const hasSubstituteHooks = hookRunner?.hasHooks("substitute_template") === true;
+
+  // Use a hookRunner-specific cache when substitute_template hooks are
+  // registered so that a prior no-hook load cannot shadow hook results.
+  const cache = hasSubstituteHooks
+    ? (hookedTemplateCache.get(hookRunner!) ??
+      (() => {
+        const m = new Map<string, Promise<string>>();
+        hookedTemplateCache.set(hookRunner!, m);
+        return m;
+      })())
+    : workspaceTemplateCache;
+
+  const cached = cache.get(name);
   if (cached) {
     return cached;
   }
@@ -118,8 +135,8 @@ async function loadTemplate(
     try {
       let content = await fs.readFile(templatePath, "utf-8");
 
-      if (hookRunner?.hasHooks("substitute_template") === true) {
-        const hookResult = await hookRunner.runSubstituteTemplate(
+      if (hasSubstituteHooks) {
+        const hookResult = await hookRunner!.runSubstituteTemplate(
           {
             sourcePath: templatePath,
             content: content,
@@ -138,11 +155,11 @@ async function loadTemplate(
     }
   })();
 
-  workspaceTemplateCache.set(name, pending);
+  cache.set(name, pending);
   try {
     return await pending;
   } catch (error) {
-    workspaceTemplateCache.delete(name);
+    cache.delete(name);
     throw error;
   }
 }

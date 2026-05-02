@@ -346,7 +346,8 @@ source of truth for due checks and execution.
 `sourcePath` and `content`; `content` is the raw loaded template text before
 front matter stripping. Return `{ content }` to replace the loaded template text;
 OpenClaw strips front matter from the final content before writing it to disk.
-The transformed content is cached by template name.
+The transformed content is cached per hook runner instance, so a
+template loaded without hooks does not shadow later hook-enabled loads.
 
 ## Upcoming deprecations
 
