@@ -26,6 +26,16 @@ describe("ChannelsSchema bundled runtime loading", () => {
     vi.doMock("../plugins/plugin-registry.js", () => ({
       loadPluginManifestRegistryForPluginRegistry: (options?: Record<string, unknown>) =>
         loadPluginManifestRegistryMock(options),
+      loadPluginRegistrySnapshotWithMetadata: () => ({
+        source: "derived",
+        snapshot: { plugins: [] },
+        diagnostics: [],
+      }),
+    }));
+    vi.doMock("../plugins/plugin-metadata-snapshot.js", () => ({
+      loadPluginMetadataSnapshot: () => ({
+        manifestRegistry: loadPluginManifestRegistryMock({ includeDisabled: true }),
+      }),
     }));
     vi.doMock("../plugins/bundled-channel-config-metadata.js", () => ({
       collectBundledChannelConfigs: (params: unknown) => collectBundledChannelConfigsMock(params),
