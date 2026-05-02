@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Subagents: honor `sessions_spawn` with `expectsCompletionMessage: false` by skipping parent completion handoff delivery while still running child cleanup. Fixes #75848. Thanks @alfredjbclaw.
 - Media/completions: treat media-only message-tool sends as delivered async completion output, avoiding duplicate raw `MEDIA:` fallback posts after video or music generation finishes.
 - Gateway/logging: keep deferred channel startup logs on the subsystem logger, so Slack, Discord, Telegram, and voice-call startup messages keep timestamped prefixes. Thanks @vincentkoc.
+- Codex/app-server: recover JSON-RPC frames split by raw command-output newlines and include a redacted preview when malformed app-server messages still reach the console. Thanks @vincentkoc.
 - Replies/typing: keep typing alive for queued follow-up messages that are genuinely waiting behind an active run, instead of making chat surfaces look idle while work is queued. Fixes #65685. Thanks @papag00se.
 - ACP/Discord: suppress completion announce delivery for inline thread-bound ACP session runs, so Discord thread-bound ACP replies are not delivered twice. Fixes #60780. Thanks @solavrc.
 - Discord/threads: ignore webhook-authored copies in already-bound Discord session threads even when the webhook id differs, preventing PluralKit proxy copies from creating duplicate turn pressure. Fixes #52005. Thanks @acgh213.
