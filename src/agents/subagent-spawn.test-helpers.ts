@@ -184,15 +184,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     resolveContextEngine: params.resolveContextEngineMock ?? (async () => ({})),
     resolveParentForkDecision:
       params.resolveParentForkDecisionMock ??
-      (async (forkParams: {
-        cfg?: { session?: { parentForkMaxTokens?: unknown } };
-        parentEntry?: { totalTokens?: unknown };
-      }) => {
-        const configured = forkParams.cfg?.session?.parentForkMaxTokens;
-        const maxTokens =
-          typeof configured === "number" && Number.isFinite(configured) && configured >= 0
-            ? Math.floor(configured)
-            : 100_000;
+      (async (forkParams: { parentEntry?: { totalTokens?: unknown } }) => {
+        const maxTokens = 100_000;
         const parentTokens =
           typeof forkParams.parentEntry?.totalTokens === "number" &&
           Number.isFinite(forkParams.parentEntry.totalTokens)

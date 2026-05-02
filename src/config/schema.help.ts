@@ -1427,8 +1427,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Controls interval for repeated typing indicators while replies are being prepared in typing-capable channels. Increase to reduce chatty updates or decrease for more active typing feedback.",
   "session.typingMode":
     'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
-  "session.parentForkMaxTokens":
-    "Deprecated compatibility guard for the historical parent-session fork ceiling. OpenClaw now shares the parent fork decision between channel threads and subagents and falls back to isolated context when the active parent branch is too large; set 0 only to disable that guard intentionally.",
   "session.mainKey":
     'Overrides the canonical main session key used for continuity when dmScope or routing logic points to "main". Use a stable value only if you intentionally need custom session anchoring.',
   "session.sendPolicy":

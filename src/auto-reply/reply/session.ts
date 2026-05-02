@@ -701,7 +701,6 @@ export async function initSessionState(params: {
   ) {
     const parentEntry = sessionStore[parentSessionKey];
     const forkDecision = await resolveParentForkDecision({
-      cfg,
       parentEntry,
       storePath,
     });

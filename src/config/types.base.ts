@@ -181,14 +181,6 @@ export type SessionConfig = {
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
-  /**
-   * @deprecated Compatibility guard for the historical parent fork ceiling.
-   * OpenClaw now uses a shared parent fork decision path for channel threads
-   * and subagents, and falls back to isolated context when the active parent
-   * branch is too large. Set to 0 only if you intentionally want to disable
-   * that compatibility guard.
-   */
-  parentForkMaxTokens?: number;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   agentToAgent?: {

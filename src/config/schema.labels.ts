@@ -706,7 +706,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.store": "Session Store Path",
   "session.typingIntervalSeconds": "Session Typing Interval (seconds)",
   "session.typingMode": "Session Typing Mode",
-  "session.parentForkMaxTokens": "Deprecated Session Parent Fork Max Tokens",
   "session.mainKey": "Session Main Key",
   "session.sendPolicy": "Session Send Policy",
   "session.sendPolicy.default": "Session Send Policy Default Action",

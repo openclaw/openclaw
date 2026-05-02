@@ -20692,14 +20692,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
           },
-          parentForkMaxTokens: {
-            type: "integer",
-            minimum: 0,
-            maximum: 9007199254740991,
-            title: "Deprecated Session Parent Fork Max Tokens",
-            description:
-              "Deprecated compatibility guard for the historical parent-session fork ceiling. OpenClaw now shares the parent fork decision between channel threads and subagents and falls back to isolated context when the active parent branch is too large; set 0 only to disable that guard intentionally.",
-          },
           mainKey: {
             type: "string",
             title: "Session Main Key",
@@ -27840,11 +27832,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Session Typing Mode",
       help: 'Controls typing behavior timing: "never", "instant", "thinking", or "message" based emission points. Keep conservative modes in high-volume channels to avoid unnecessary typing noise.',
       tags: ["storage"],
-    },
-    "session.parentForkMaxTokens": {
-      label: "Deprecated Session Parent Fork Max Tokens",
-      help: "Deprecated compatibility guard for the historical parent-session fork ceiling. OpenClaw now shares the parent fork decision between channel threads and subagents and falls back to isolated context when the active parent branch is too large; set 0 only to disable that guard intentionally.",
-      tags: ["security", "auth", "performance", "storage"],
     },
     "session.mainKey": {
       label: "Session Main Key",

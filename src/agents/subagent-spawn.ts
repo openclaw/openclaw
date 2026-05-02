@@ -364,7 +364,6 @@ async function prepareSubagentSessionContext(params: {
         );
       }
       const forkDecision = await subagentSpawnDeps.resolveParentForkDecision({
-        cfg: params.cfg,
         parentEntry,
         storePath: parentTarget.storePath,
       });
