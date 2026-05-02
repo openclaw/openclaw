@@ -13,6 +13,7 @@ type DoctorConfigResult = {
   path?: string;
   shouldWriteConfig?: boolean;
   sourceConfigValid?: boolean;
+  sourceLastTouchedVersion?: string;
 };
 
 type DoctorHealthFlowContext = {
@@ -266,6 +267,43 @@ async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<vo
     env: process.env,
     prompter: ctx.prompter,
   });
+}
+
+async function runReleaseConfiguredPluginInstallsHealth(
+  ctx: DoctorHealthFlowContext,
+): Promise<void> {
+  if (!ctx.sourceConfigValid) {
+    return;
+  }
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
+  const { maybeRunConfiguredPluginInstallReleaseStep } =
+    await import("../commands/doctor/shared/release-configured-plugin-installs.js");
+  const { note } = await import("../terminal/note.js");
+  const { VERSION } = await import("../version.js");
+  const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    cfg: ctx.cfg,
+    env: ctx.env ?? process.env,
+    touchedVersion: ctx.configResult.sourceLastTouchedVersion ?? ctx.cfg.meta?.lastTouchedVersion,
+  });
+  if (result.changes.length > 0) {
+    note(result.changes.join("\n"), "Doctor changes");
+  }
+  if (result.warnings.length > 0) {
+    note(result.warnings.join("\n"), "Doctor warnings");
+  }
+  if (!result.touchedConfig) {
+    return;
+  }
+  ctx.cfg = {
+    ...ctx.cfg,
+    meta: {
+      ...ctx.cfg.meta,
+      lastTouchedVersion: VERSION,
+      lastTouchedAt: new Date().toISOString(),
+    },
+  };
 }
 
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -598,6 +636,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:legacy-plugin-manifests",
       label: "Legacy plugin manifests",
       run: runLegacyPluginManifestHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:release-configured-plugin-installs",
+      label: "Configured plugin installs",
+      run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:plugin-registry",

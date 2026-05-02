@@ -74,6 +74,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "feishu-channel",
   "bootstrap-persona",
   "plugin-deps-cleanup",
+  "configured-plugin-installs",
   "tilde-log-path",
   "versioned-runtime-deps",
 ];

@@ -95,61 +95,13 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
-  it("installs a missing configured downloadable channel plugin", async () => {
+  it("installs a missing configured OpenClaw channel plugin from ClawHub", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "matrix",
         pluginId: "matrix",
         meta: { label: "Matrix" },
         install: {
-          npmSpec: "@openclaw/plugin-matrix@1.2.3",
-          expectedIntegrity: "sha512-test",
-        },
-      },
-    ]);
-
-    const { repairMissingConfiguredPluginInstalls } =
-      await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        channels: {
-          matrix: { enabled: true },
-        },
-      },
-      env: {},
-    });
-
-    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
-      expect.objectContaining({
-        spec: "@openclaw/plugin-matrix@1.2.3",
-        extensionsDir: "/tmp/openclaw-plugins",
-        expectedPluginId: "matrix",
-        expectedIntegrity: "sha512-test",
-      }),
-    );
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
-      expect.objectContaining({
-        matrix: expect.objectContaining({
-          source: "npm",
-          spec: "@openclaw/plugin-matrix@1.2.3",
-          installPath: "/tmp/openclaw-plugins/matrix",
-        }),
-      }),
-      { env: {} },
-    );
-    expect(result.changes).toEqual([
-      'Installed missing configured plugin "matrix" from @openclaw/plugin-matrix@1.2.3.',
-    ]);
-  });
-
-  it("installs a missing configured channel plugin from ClawHub before npm", async () => {
-    mocks.listChannelPluginCatalogEntries.mockReturnValue([
-      {
-        id: "matrix",
-        pluginId: "matrix",
-        meta: { label: "Matrix" },
-        install: {
-          clawhubSpec: "clawhub:@openclaw/plugin-matrix@1.2.3",
           npmSpec: "@openclaw/plugin-matrix@1.2.3",
           expectedIntegrity: "sha512-test",
         },
@@ -180,8 +132,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         matrix: expect.objectContaining({
           source: "clawhub",
           spec: "clawhub:@openclaw/plugin-matrix@1.2.3",
+          clawhubPackage: "@openclaw/plugin-matrix",
           installPath: "/tmp/openclaw-plugins/matrix",
-          clawpackSha256: "0".repeat(64),
         }),
       }),
       { env: {} },
@@ -192,19 +144,16 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.warnings).toEqual([]);
   });
 
-  it("falls back to npm when a missing configured ClawHub package is absent", async () => {
-    mocks.installPluginFromClawHub.mockResolvedValue({
-      ok: false,
-      code: "package_not_found",
-      error: "Package not found on ClawHub.",
-    });
-    mocks.resolveProviderInstallCatalogEntries.mockReturnValue([
+  it("uses an explicit ClawHub install spec before npm", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
+        id: "matrix",
         pluginId: "matrix",
-        label: "Matrix",
+        meta: { label: "Matrix" },
         install: {
-          clawhubSpec: "clawhub:@openclaw/plugin-matrix@1.2.3",
+          clawhubSpec: "clawhub:@openclaw/plugin-matrix@stable",
           npmSpec: "@openclaw/plugin-matrix@1.2.3",
+          expectedIntegrity: "sha512-test",
         },
       },
     ]);
@@ -213,27 +162,136 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       await import("./missing-configured-plugin-install.js");
     const result = await repairMissingConfiguredPluginInstalls({
       cfg: {
-        plugins: {
-          entries: {
-            matrix: { enabled: true },
-          },
+        channels: {
+          matrix: { enabled: true },
         },
       },
       env: {},
     });
 
     expect(mocks.installPluginFromClawHub).toHaveBeenCalledWith(
-      expect.objectContaining({ spec: "clawhub:@openclaw/plugin-matrix@1.2.3" }),
+      expect.objectContaining({
+        spec: "clawhub:@openclaw/plugin-matrix@stable",
+        expectedPluginId: "matrix",
+      }),
     );
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "matrix" from clawhub:@openclaw/plugin-matrix@stable.',
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("falls back to npm when an OpenClaw channel plugin is not on ClawHub", async () => {
+    mocks.installPluginFromClawHub.mockResolvedValueOnce({
+      ok: false,
+      code: "package_not_found",
+      error: "Package not found on ClawHub.",
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: {
+          npmSpec: "@openclaw/plugin-matrix@1.2.3",
+        },
+      },
+    ]);
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg: {},
+      pluginIds: [],
+      channelIds: ["matrix"],
+      env: {},
+    });
+
     expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
-      expect.objectContaining({ spec: "@openclaw/plugin-matrix@1.2.3" }),
+      expect.objectContaining({
+        spec: "@openclaw/plugin-matrix@1.2.3",
+        expectedPluginId: "matrix",
+      }),
     );
     expect(result.changes).toEqual([
+      'ClawHub clawhub:@openclaw/plugin-matrix@1.2.3 unavailable for "matrix"; falling back to npm @openclaw/plugin-matrix@1.2.3.',
       'Installed missing configured plugin "matrix" from @openclaw/plugin-matrix@1.2.3.',
     ]);
-    expect(result.warnings).toEqual([
-      "ClawHub clawhub:@openclaw/plugin-matrix@1.2.3 unavailable for matrix; falling back to npm @openclaw/plugin-matrix@1.2.3.",
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("installs a missing third-party downloadable plugin from npm only", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "wecom",
+      targetDir: "/tmp/openclaw-plugins/wecom",
+      version: "2026.4.23",
+      npmResolution: {
+        name: "@wecom/wecom-openclaw-plugin",
+        version: "2026.4.23",
+        resolvedSpec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+        integrity: "sha512-third-party",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "wecom",
+        pluginId: "wecom",
+        meta: { label: "WeCom" },
+        install: {
+          npmSpec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+        },
+      },
     ]);
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg: {},
+      pluginIds: [],
+      channelIds: ["wecom"],
+      env: {},
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@wecom/wecom-openclaw-plugin@2026.4.23",
+        expectedPluginId: "wecom",
+      }),
+    );
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "wecom" from @wecom/wecom-openclaw-plugin@2026.4.23.',
+    ]);
+  });
+
+  it("does not install a blocked downloadable plugin from explicit channel ids", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: {
+          npmSpec: "@openclaw/plugin-matrix@1.2.3",
+        },
+      },
+    ]);
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg: {},
+      pluginIds: [],
+      channelIds: ["matrix"],
+      blockedPluginIds: ["matrix"],
+      env: {},
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [] });
   });
 
   it("reinstalls a missing configured plugin from its persisted install record", async () => {
