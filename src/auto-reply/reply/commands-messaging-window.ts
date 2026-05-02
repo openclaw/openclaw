@@ -1,5 +1,5 @@
 import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
-import { normalizeChannelId } from "../../channels/registry.js";
+import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
   setConfigValueAtPath,
@@ -11,6 +11,7 @@ import {
   validateConfigObjectWithPlugins,
 } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveInboundDebounceMs } from "../inbound-debounce.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import {
@@ -42,9 +43,25 @@ function formatMs(ms: number | undefined): string {
 
 function resolveCurrentChannel(params: Parameters<CommandHandler>[0], raw: string): string | null {
   if (raw === "current" || raw === "this") {
-    return params.command.channelId ?? normalizeChannelId(params.command.channel) ?? null;
+    return (
+      params.command.channelId ??
+      normalizeAnyChannelId(params.command.channel) ??
+      normalizeChannelId(params.command.channel) ??
+      null
+    );
   }
-  return normalizeChannelId(raw);
+  return normalizeAnyChannelId(raw) ?? normalizeChannelId(raw) ?? normalizeSafeChannelId(raw);
+}
+
+function normalizeSafeChannelId(raw: string): string | null {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized || normalized.length > 80) {
+    return null;
+  }
+  if (!/^[a-z0-9][a-z0-9._-]*$/.test(normalized)) {
+    return null;
+  }
+  return normalized;
 }
 
 function buildStatusText(cfg: OpenClawConfig, channel: string): string {

@@ -139,6 +139,35 @@ describe("handleMessagingWindowCommand", () => {
     });
   });
 
+  it("sets a safe external channel id even when it is not bundled", async () => {
+    const result = await handleMessagingWindowCommand(
+      buildParams("/messaging_window custom-sms 4s"),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("custom-sms set to 4s");
+    expect(resolveConfigWriteDeniedTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "channel", scope: { channelId: "custom-sms" } },
+      }),
+    );
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
+      nextConfig: { messages: { inbound: { byChannel: { "custom-sms": 4000 } } } },
+      afterWrite: { mode: "auto" },
+    });
+  });
+
+  it("rejects unsafe external channel ids", async () => {
+    const result = await handleMessagingWindowCommand(
+      buildParams("/messaging_window ../telegram 4s"),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("Unknown channel: ../telegram");
+    expect(resolveConfigWriteDeniedTextMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("requires commands.config before writing the messaging window", async () => {
     const result = await handleMessagingWindowCommand(
       buildParams("/messaging_window global 3s", {}),
