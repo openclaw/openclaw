@@ -183,7 +183,6 @@ describe("persistPluginInstall", () => {
     expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: enabledConfig,
-        installRecords: {},
       }),
     );
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
@@ -254,7 +253,6 @@ describe("persistPluginInstall", () => {
     expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: enabledConfig,
-        installRecords: {},
       }),
     );
     expect(next.plugins?.entries?.["legacy-memory-a"]?.enabled).toBe(true);
@@ -311,7 +309,6 @@ describe("persistPluginInstall", () => {
     expect(loadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
         config: enabledConfig,
-        installRecords: {},
       }),
     );
     expect(next).toEqual(enabledConfig);

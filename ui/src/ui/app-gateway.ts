@@ -20,6 +20,7 @@ import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
+import { recordControlUiRpcTiming } from "./control-ui-performance.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
   loadAssistantIdentity,
@@ -510,6 +511,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       handleGatewayEvent(host, evt);
+    },
+    onRequestTiming: (timing) => {
+      if (host.client !== client) {
+        return;
+      }
+      recordControlUiRpcTiming(host, timing);
     },
     onGap: ({ expected, received }) => {
       if (host.client !== client) {

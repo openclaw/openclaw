@@ -1279,7 +1279,7 @@ describe("cron controller", () => {
       client: { request } as unknown as CronState["client"],
     });
 
-    await loadCronRuns(state, "job-1");
+    await expect(loadCronRuns(state, "job-1")).resolves.toBe("ok");
     expect(state.cronRuns).toHaveLength(1);
     expect(state.cronRunsHasMore).toBe(true);
 
@@ -1287,6 +1287,19 @@ describe("cron controller", () => {
     expect(state.cronRuns).toHaveLength(2);
     expect(state.cronRuns[0]?.summary).toBe("newest");
     expect(state.cronRuns[1]?.summary).toBe("older");
+  });
+
+  it("returns an error status when run history loading fails", async () => {
+    const request = vi.fn(async () => {
+      throw new Error("cron.runs unavailable");
+    });
+    const state = createState({
+      client: { request } as unknown as CronState["client"],
+    });
+
+    await expect(loadCronRuns(state, null)).resolves.toBe("error");
+
+    expect(state.cronError).toBe("Error: cron.runs unavailable");
   });
 
   it("runs cron job in due mode when requested", async () => {
