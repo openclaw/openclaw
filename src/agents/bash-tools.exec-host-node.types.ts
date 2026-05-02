@@ -1,4 +1,5 @@
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
+import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 
 export type ExecuteNodeHostCommandParams = {
   command: string;
@@ -24,4 +25,11 @@ export type ExecuteNodeHostCommandParams = {
   notifySessionKey?: string;
   notifyOnExit?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  /**
+   * Elevated-tool defaults captured from the originating turn. Forwarded to
+   * the followup target so the spawned agent run after `/approve` keeps the
+   * same `tools.elevated` availability (default level "ask" still requires a
+   * fresh approval per command).
+   */
+  bashElevated?: ExecElevatedDefaults;
 };

@@ -543,6 +543,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       inputProvenance?: InputProvenance;
       workspaceDir?: string;
       voiceWakeTrigger?: string;
+      bashElevated?: {
+        enabled: boolean;
+        allowed: boolean;
+        defaultLevel: "on" | "off" | "ask" | "full";
+        fullAccessAvailable?: boolean;
+        fullAccessBlockedReason?: "sandbox" | "host-policy" | "channel" | "runtime";
+      };
     };
     const senderIsOwner = resolveSenderIsOwnerFromClient(client);
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
@@ -1374,6 +1381,7 @@ export const agentHandlers: GatewayRequestHandlers = {
             internalEvents: request.internalEvents,
             inputProvenance,
             cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
+            ...(request.bashElevated ? { bashElevated: request.bashElevated } : {}),
             abortSignal: activeRunAbort.controller.signal,
             // Internal-only: allow workspace override for spawned subagent runs.
             workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({

@@ -1705,6 +1705,7 @@ export function createExecTool(
           notifySessionKey,
           notifyOnExit,
           trustedSafeBinDirs,
+          bashElevated: elevatedDefaults,
         });
       }
 
@@ -1743,6 +1744,7 @@ export function createExecTool(
           maxOutput,
           pendingMaxOutput,
           trustedSafeBinDirs,
+          bashElevated: elevatedDefaults,
         });
         if (gatewayResult.pendingResult) {
           return gatewayResult.pendingResult;

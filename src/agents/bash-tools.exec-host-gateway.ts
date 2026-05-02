@@ -45,6 +45,7 @@ import {
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
+  ExecElevatedDefaults,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 
@@ -78,6 +79,13 @@ export type ProcessGatewayAllowlistParams = {
   maxOutput: number;
   pendingMaxOutput: number;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  /**
+   * Elevated-tool defaults captured from the originating turn. Snapshotted
+   * here so the followup target can re-attach them to the spawned agent run
+   * after `/approve`, keeping the next elevated exec in the same conversation
+   * available without re-deriving sender identity.
+   */
+  bashElevated?: ExecElevatedDefaults;
 };
 
 export type ProcessGatewayAllowlistResult = {
@@ -457,6 +465,7 @@ export async function processGatewayAllowlist(
       turnSourceTo: params.turnSourceTo,
       turnSourceAccountId: params.turnSourceAccountId,
       turnSourceThreadId: params.turnSourceThreadId,
+      bashElevated: params.bashElevated,
       direct: params.approvalFollowupMode === "direct",
     });
 

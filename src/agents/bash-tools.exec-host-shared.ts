@@ -23,7 +23,7 @@ import {
 } from "./bash-tools.exec-approval-request.js";
 import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
@@ -88,6 +88,13 @@ export type ExecApprovalFollowupTarget = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  /**
+   * Elevated-tool availability captured from the originating turn. Threaded
+   * through the followup so the spawned agent run inherits the same
+   * `tools.elevated` defaults; without it, a second elevated exec in the
+   * same conversation fails the enabled gate before reaching approval.
+   */
+  bashElevated?: ExecElevatedDefaults;
   direct?: boolean;
 };
 
@@ -323,6 +330,7 @@ export function buildExecApprovalFollowupTarget(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    bashElevated: params.bashElevated,
     direct: params.direct,
   };
 }
@@ -415,6 +423,7 @@ export async function sendExecApprovalFollowupResult(
     turnSourceTo: target.turnSourceTo,
     turnSourceAccountId: target.turnSourceAccountId,
     turnSourceThreadId: target.turnSourceThreadId,
+    bashElevated: target.bashElevated,
     resultText,
     direct: target.direct,
   }).catch((error) => {

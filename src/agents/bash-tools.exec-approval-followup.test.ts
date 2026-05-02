@@ -274,6 +274,58 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("forwards a captured bashElevated snapshot to the spawned agent followup run", async () => {
+    // Regression: #75832 — second elevated exec in the same approved turn fails
+    // the enabled gate because the followup agent run did not inherit the
+    // original turn's elevated availability. Snapshot is availability-only:
+    // defaultLevel "ask" keeps the next command behind a fresh approval.
+    await sendExecApprovalFollowup({
+      approvalId: "req-elevated-75832",
+      sessionKey: "agent:main:telegram:direct:42",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "42",
+      turnSourceAccountId: "default",
+      turnSourceThreadId: "thread-1",
+      bashElevated: {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "ask",
+        fullAccessAvailable: false,
+        fullAccessBlockedReason: "sandbox",
+      },
+      resultText: 'Exec completed: echo "first"',
+    });
+
+    expect(callGatewayTool).toHaveBeenCalledWith(
+      "agent",
+      expect.any(Object),
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:42",
+        bashElevated: {
+          enabled: true,
+          allowed: true,
+          defaultLevel: "ask",
+          fullAccessAvailable: false,
+          fullAccessBlockedReason: "sandbox",
+        },
+      }),
+      { expectFinal: true },
+    );
+  });
+
+  it("omits bashElevated from followup args when the original turn had no snapshot", async () => {
+    await sendExecApprovalFollowup({
+      approvalId: "req-no-elevated",
+      sessionKey: "agent:main:telegram:direct:42",
+      turnSourceChannel: "telegram",
+      resultText: "Exec completed: ls",
+    });
+
+    const callArgs = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as Record<string, unknown>;
+    expect(callArgs).toBeDefined();
+    expect(Object.hasOwn(callArgs, "bashElevated")).toBe(false);
+  });
+
   it("throws when neither a session nor a deliverable route is available", async () => {
     await expect(
       sendExecApprovalFollowup({

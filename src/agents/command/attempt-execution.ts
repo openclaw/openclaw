@@ -12,6 +12,7 @@ import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
+import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
@@ -350,6 +351,15 @@ export function runAgentAttempt(params: {
   allowTransientCooldownProbe?: boolean;
   modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
+  /**
+   * Snapshot of `tools.elevated` defaults for the embedded run. Set by the
+   * exec-approval followup path (via `agentCommandFromIngress`) so a second
+   * elevated exec in the same conversation keeps the original turn's
+   * elevated availability without re-deriving sender identity. Carries
+   * availability only — `defaultLevel: "ask"` keeps each command behind a
+   * fresh per-command approval, preserving the one-shot allow-once contract.
+   */
+  bashElevated?: ExecElevatedDefaults;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
   const claudeCliFallbackPrelude =
@@ -558,6 +568,7 @@ export function runAgentAttempt(params: {
     trigger: "user",
     messageChannel: params.messageChannel,
     messageProvider: params.opts.messageProvider ?? params.messageChannel,
+    bashElevated: params.bashElevated,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,

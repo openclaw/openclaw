@@ -6,6 +6,7 @@ import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 import {
   formatExecDeniedUserMessage,
   isExecDeniedResultText,
@@ -21,6 +22,14 @@ type ExecApprovalFollowupParams = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  /**
+   * Snapshot of the elevated-tool defaults active on the originating approved
+   * turn. Re-attached to the spawned approval-followup agent run so a second
+   * elevated exec in the same conversation still reaches the approval-request
+   * path instead of failing the `enabled` gate. Carries availability only:
+   * defaultLevel="ask" still requires a fresh per-command approval.
+   */
+  bashElevated?: ExecElevatedDefaults;
   resultText: string;
   direct?: boolean;
 };
@@ -149,6 +158,7 @@ function buildAgentFollowupArgs(params: {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  bashElevated?: ExecElevatedDefaults;
 }) {
   const { deliveryTarget, sessionOnlyOriginChannel } = params;
   // When the followup run has no deliverable route and no gateway-internal channel,
@@ -176,6 +186,7 @@ function buildAgentFollowupArgs(params: {
       : sessionOnlyOriginChannel
         ? params.turnSourceThreadId
         : undefined,
+    ...(params.bashElevated ? { bashElevated: params.bashElevated } : {}),
     idempotencyKey: `exec-approval-followup:${params.approvalId}`,
   };
 }
@@ -250,6 +261,7 @@ export async function sendExecApprovalFollowup(
           turnSourceTo: params.turnSourceTo,
           turnSourceAccountId: params.turnSourceAccountId,
           turnSourceThreadId: params.turnSourceThreadId,
+          bashElevated: params.bashElevated,
         }),
         { expectFinal: true },
       );

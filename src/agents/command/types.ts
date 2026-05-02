@@ -4,6 +4,7 @@ import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
 /** Image content block for Claude API multimodal messages. */
@@ -116,6 +117,14 @@ export type AgentCommandOpts = {
   promptMode?: PromptMode;
   /** Internal ACP-ready session turn source. Manual spawn turns bypass only the dispatch gate. */
   acpTurnSource?: AcpTurnSource;
+  /**
+   * Snapshot of `tools.elevated` defaults for the spawned run. Set by the
+   * exec-approval followup path so a second elevated exec in the same
+   * conversation keeps the original turn's elevated availability. Carries
+   * availability only — `defaultLevel: "ask"` still requires a fresh
+   * per-command approval, preserving the one-shot allow-once contract.
+   */
+  bashElevated?: ExecElevatedDefaults;
 };
 
 export type AgentCommandIngressOpts = Omit<

@@ -148,6 +148,7 @@ export async function executeNodeHostCommand(
         turnSourceTo: params.turnSourceTo,
         turnSourceAccountId: params.turnSourceAccountId,
         turnSourceThreadId: params.turnSourceThreadId,
+        bashElevated: params.bashElevated,
       });
 
       void (async () => {

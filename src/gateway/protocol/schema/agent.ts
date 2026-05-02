@@ -130,6 +130,36 @@ export const PollParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/**
+ * Snapshot of `tools.elevated` defaults captured from an originating turn so
+ * an approval-followup agent run can keep elevated availability in the same
+ * conversation. Carries availability only (`enabled` / `allowed` / default
+ * level); the spawned run still issues a fresh per-command approval request
+ * for `on`/`ask` modes.
+ */
+export const AgentBashElevatedDefaultsSchema = Type.Object(
+  {
+    enabled: Type.Boolean(),
+    allowed: Type.Boolean(),
+    defaultLevel: Type.Union([
+      Type.Literal("on"),
+      Type.Literal("off"),
+      Type.Literal("ask"),
+      Type.Literal("full"),
+    ]),
+    fullAccessAvailable: Type.Optional(Type.Boolean()),
+    fullAccessBlockedReason: Type.Optional(
+      Type.Union([
+        Type.Literal("sandbox"),
+        Type.Literal("host-policy"),
+        Type.Literal("channel"),
+        Type.Literal("runtime"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentParamsSchema = Type.Object(
   {
     message: NonEmptyString,
@@ -172,6 +202,7 @@ export const AgentParamsSchema = Type.Object(
     internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
     inputProvenance: Type.Optional(InputProvenanceSchema),
     voiceWakeTrigger: Type.Optional(Type.String()),
+    bashElevated: Type.Optional(AgentBashElevatedDefaultsSchema),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
   },
