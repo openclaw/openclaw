@@ -617,9 +617,19 @@ export function loadPluginManifestRegistry(
       continue;
     }
     const manifest = manifestRes.manifest;
+    const allowLegacyBareMinHostVersion =
+      candidate.origin === "global" &&
+      matchesInstalledPluginRecord({
+        pluginId: manifest.id,
+        candidate,
+        config,
+        env,
+        installRecords: getInstallRecords(),
+      });
     const minHostVersionCheck = checkMinHostVersion({
       currentVersion: currentHostVersion,
       minHostVersion: candidate.packageManifest?.install?.minHostVersion,
+      allowLegacyBareSemver: allowLegacyBareMinHostVersion,
     });
     if (!minHostVersionCheck.ok) {
       const packageManifestSource = path.join(
