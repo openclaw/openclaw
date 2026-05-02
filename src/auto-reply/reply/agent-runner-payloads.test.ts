@@ -46,6 +46,22 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads[0]?.text).toBe("Before\n\n\nAfter");
   });
 
+  it("drops reasoning payloads before final channel delivery", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [
+        { text: "Reasoning:\n_internal chain of thought_", isReasoning: true },
+        { text: "Visible answer" },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]).toMatchObject({ text: "Visible answer" });
+    expect(replyPayloads[0]?.text).not.toContain("internal chain of thought");
+  });
+
+
+
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

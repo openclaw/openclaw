@@ -1111,11 +1111,14 @@ export async function runAgentTurnWithFallback(params: {
   while (true) {
     try {
       const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-        let text = payload.text;
-        const reply = resolveSendableOutboundReplyParts(payload);
+        if (payload.isReasoning === true) {
+          return { skip: true };
+        }
         if (params.followupRun.run.silentExpected) {
           return { skip: true };
         }
+        let text = payload.text;
+        const reply = resolveSendableOutboundReplyParts(payload);
         if (!params.isHeartbeat && text?.includes("HEARTBEAT_OK")) {
           const stripped = stripHeartbeatToken(text, {
             mode: "message",
