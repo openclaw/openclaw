@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/externalization: keep diagnostics ClawHub packages and persisted bundled-plugin relocation on npm-first install metadata for launch, and omit Discord from the core package now that its external package is published. Thanks @vincentkoc.
 - Plugins/Codex: allow the official npm Codex plugin to install without the unsafe-install override, keep `/codex` command ownership, and cover the real npm Docker live path through managed `.openclaw/npm` dependencies plus uninstall failure proof.
 - Gateway/status: add concrete service, config, listener-owner, and log collection next steps when gateway probes fail and Bonjour finds no local gateway, so frozen or port-conflict reports include the data needed for root-cause triage. Refs #49012. Thanks @vincentkoc.
+- Cron/service: reject `cron add` and `cron edit` operations whose target name collides with any existing job (enabled or disabled), preventing silent dual-fire when two rows with identical names are both enabled. (#76180) Thanks @hclsys.
 
 ## 2026.5.2
 
@@ -318,7 +319,6 @@ Docs: https://docs.openclaw.ai
 - Cron: retry recurring wake-now main-session jobs through temporary heartbeat busy skips before recording success, so queued cron events no longer appear as ok ghost runs while the main lane is still busy. Fixes #75964. (#76083) Thanks @kshetrajna12 and @xuruiray.
 - Providers/Google: keep Gemini thinking-signature-only stream chunks active during reasoning, so Gemini 3.1 Pro Preview replies no longer hit idle timeouts before visible text. Fixes #76071. (#76080) Thanks @marcoschierhorn and @zhangguiping-xydt.
 - CLI/skills: show per-agent model and command visibility in `openclaw skills check --agent`, and let doctor report or disable unavailable skills allowed for the default agent. (#75983) Thanks @mbelinky.
-- Cron/service: reject `cron add` and `cron edit` operations whose target name collides with any existing job (enabled or disabled), preventing silent dual-fire when two rows with identical names are both enabled. Fixes #76160. Thanks @hclsys.
 
 ## 2026.4.30
 
