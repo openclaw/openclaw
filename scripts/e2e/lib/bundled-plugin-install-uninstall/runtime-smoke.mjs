@@ -109,12 +109,14 @@ function buildPluginPlan(manifest) {
     ? contracts.speechProviders.filter(isNonEmptyString)
     : [];
   const tools = Array.isArray(contracts.tools) ? contracts.tools.filter(isNonEmptyString) : [];
+  const toolMetadata =
+    manifest.toolMetadata && typeof manifest.toolMetadata === "object" ? manifest.toolMetadata : {};
   const activeInThisProbe =
     manifest.activation?.onStartup === true || channels.length > 0 || speechProviders.length > 0;
   return {
     channels,
     speechProviders,
-    tools,
+    tools: tools.filter((tool) => !toolMetadata[tool]),
     activeInThisProbe,
     runtimeSlashAliases: commandAliases
       .filter((alias) => alias?.kind === "runtime-slash")

@@ -136,11 +136,12 @@ export function isInstalledPluginEnabled(
     return record.enabled;
   }
   const normalizedConfig = normalizePluginsConfig(config?.plugins);
-  return resolveEffectiveEnableState({
+  const state = resolveEffectiveEnableState({
     id: record.pluginId,
     origin: record.origin,
     config: normalizedConfig,
     rootConfig: config,
     enabledByDefault: record.enabledByDefault,
-  }).enabled;
+  });
+  return state.enabled && (record.enabled || state.explicitlyEnabled === true);
 }

@@ -152,6 +152,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     'channel "kitchen-sink-channel-probe" registration missing required config helpers',
     "cli registration missing explicit commands metadata",
     "only bundled plugins can register Codex app-server extension factories",
+    "only bundled plugins can register agent tool result middleware",
     'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
     "context engine registration missing id",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
