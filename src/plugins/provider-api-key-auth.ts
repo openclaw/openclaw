@@ -66,6 +66,7 @@ async function applyApiKeyConfig(params: {
 }) {
   const { applyAuthProfileConfig, applyPrimaryModel } = await loadProviderApiKeyAuthRuntime();
   let next = params.ctx.config;
+  const originalDefaultModel = params.ctx.config.agents?.defaults?.model;
   for (const profileId of params.profileIds) {
     next = applyAuthProfileConfig(next, {
       profileId,
@@ -76,7 +77,21 @@ async function applyApiKeyConfig(params: {
   if (params.applyConfig) {
     next = params.applyConfig(next);
   }
-  return params.defaultModel ? applyPrimaryModel(next, params.defaultModel) : next;
+  if (originalDefaultModel !== undefined) {
+    next = {
+      ...next,
+      agents: {
+        ...next.agents,
+        defaults: {
+          ...next.agents?.defaults,
+          model: originalDefaultModel,
+        },
+      },
+    };
+  }
+  return params.defaultModel
+    ? applyPrimaryModel(next, params.defaultModel, { preserveExistingPrimary: true })
+    : next;
 }
 
 export function createProviderApiKeyAuthMethod(

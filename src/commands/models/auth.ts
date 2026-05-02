@@ -254,6 +254,7 @@ async function persistProviderAuthResult(params: {
     if (params.result.configPatch) {
       next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
         replaceDefaultModels: params.result.replaceDefaultModels,
+        preserveExistingDefaultModel: params.setDefault !== true,
       });
     }
     for (const profile of params.result.profiles) {

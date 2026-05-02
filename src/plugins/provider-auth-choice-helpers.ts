@@ -68,7 +68,85 @@ function sanitizeConfigPatchValue(value: unknown): unknown {
   return next;
 }
 
-function mergeConfigPatch<T>(base: T, patch: unknown): T {
+function resolveDefaultModelPrimary(model: unknown): string | undefined {
+  if (typeof model === "string") {
+    return normalizeOptionalString(model);
+  }
+  if (!isPlainRecord(model)) {
+    return undefined;
+  }
+  return normalizeOptionalString(model.primary);
+}
+
+function resolveDefaultModelFallbacks(model: unknown): string[] | undefined {
+  if (!isPlainRecord(model) || !Array.isArray(model.fallbacks)) {
+    return undefined;
+  }
+  return model.fallbacks.map((fallback) => String(fallback));
+}
+
+function extractPatchedDefaultModel(patch: unknown): unknown {
+  if (!isPlainRecord(patch)) {
+    return undefined;
+  }
+  const agents = patch.agents;
+  if (!isPlainRecord(agents)) {
+    return undefined;
+  }
+  const defaults = agents.defaults;
+  if (!isPlainRecord(defaults) || !Object.prototype.hasOwnProperty.call(defaults, "model")) {
+    return undefined;
+  }
+  return defaults.model;
+}
+
+function preserveExistingDefaultModelSelection(
+  base: OpenClawConfig,
+  merged: OpenClawConfig,
+  patch: unknown,
+): OpenClawConfig {
+  if (extractPatchedDefaultModel(patch) === undefined) {
+    return merged;
+  }
+
+  const existingModel = base.agents?.defaults?.model;
+  const existingPrimary = resolveDefaultModelPrimary(existingModel);
+  const existingFallbacks = resolveDefaultModelFallbacks(existingModel);
+  if (!existingPrimary && existingFallbacks === undefined) {
+    return merged;
+  }
+
+  const mergedModel = merged.agents?.defaults?.model;
+  const mergedPrimary = resolveDefaultModelPrimary(mergedModel);
+  const nextModel = {
+    ...(mergedPrimary ? { primary: mergedPrimary } : undefined),
+    ...(existingFallbacks !== undefined ? { fallbacks: existingFallbacks } : undefined),
+    ...(existingPrimary ? { primary: existingPrimary } : undefined),
+  };
+
+  return {
+    ...merged,
+    agents: {
+      ...merged.agents,
+      defaults: {
+        ...merged.agents?.defaults,
+        model: nextModel,
+      },
+    },
+  };
+}
+
+export function mergeConfigPatch<T>(base: T, patch: unknown): T {
+  const merged = originalMergeConfigPatch(base, patch);
+  return preserveExistingDefaultModelSelection(
+    base as OpenClawConfig,
+    merged as OpenClawConfig,
+    patch,
+  ) as T;
+}
+
+// Placeholder so TypeScript doesn't complain - actual implementation below
+function originalMergeConfigPatch<T>(base: T, patch: unknown): T {
   if (!isPlainRecord(base) || !isPlainRecord(patch)) {
     return sanitizeConfigPatchValue(patch) as T;
   }
@@ -91,25 +169,29 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
 export function applyProviderAuthConfigPatch(
   cfg: OpenClawConfig,
   patch: unknown,
-  options?: { replaceDefaultModels?: boolean },
+  options?: { replaceDefaultModels?: boolean; preserveExistingDefaultModel?: boolean },
 ): OpenClawConfig {
   const merged = mergeConfigPatch(cfg, patch);
+  const next =
+    options?.preserveExistingDefaultModel === true
+      ? preserveExistingDefaultModelSelection(cfg, merged, patch)
+      : merged;
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
-    return merged;
+    return next;
   }
 
   const patchModels = (patch.agents as { defaults?: { models?: unknown } } | undefined)?.defaults
     ?.models;
   if (!isPlainRecord(patchModels)) {
-    return merged;
+    return next;
   }
 
   return {
-    ...merged,
+    ...next,
     agents: {
-      ...merged.agents,
+      ...next.agents,
       defaults: {
-        ...merged.agents?.defaults,
+        ...next.agents?.defaults,
         // Opt-in replacement for migrations that rename/remove model keys.
         models: sanitizeConfigPatchValue(patchModels) as NonNullable<
           NonNullable<OpenClawConfig["agents"]>["defaults"]

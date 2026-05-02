@@ -37,6 +37,10 @@ export type ProviderOnboardPresetAppliers<TArgs extends unknown[]> = {
   applyConfig: (cfg: OpenClawConfig, ...args: TArgs) => OpenClawConfig;
 };
 
+export type ApplyAgentDefaultModelPrimaryOptions = {
+  preserveExistingPrimary?: boolean;
+};
+
 function extractAgentDefaultModelFallbacks(model: unknown): string[] | undefined {
   if (!model || typeof model !== "object") {
     return undefined;
@@ -205,7 +209,9 @@ export function applyOnboardAuthAgentModelsAndProviders(
 export function applyAgentDefaultModelPrimary(
   cfg: OpenClawConfig,
   primary: string,
+  options?: ApplyAgentDefaultModelPrimaryOptions,
 ): OpenClawConfig {
+  const existingPrimary = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
   const existingFallbacks = extractAgentDefaultModelFallbacks(cfg.agents?.defaults?.model);
   return {
     ...cfg,
@@ -215,7 +221,8 @@ export function applyAgentDefaultModelPrimary(
         ...cfg.agents?.defaults,
         model: {
           ...(existingFallbacks ? { fallbacks: existingFallbacks } : undefined),
-          primary,
+          primary:
+            options?.preserveExistingPrimary === true ? (existingPrimary ?? primary) : primary,
         },
       },
     },
@@ -316,7 +323,9 @@ export function applyProviderConfigWithDefaultModelPreset(
     defaultModelId: params.defaultModelId,
   });
   return params.primaryModelRef
-    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef, {
+        preserveExistingPrimary: true,
+      })
     : next;
 }
 
@@ -358,7 +367,9 @@ export function applyProviderConfigWithDefaultModelsPreset(
     defaultModelId: params.defaultModelId,
   });
   return params.primaryModelRef
-    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef, {
+        preserveExistingPrimary: true,
+      })
     : next;
 }
 
@@ -430,7 +441,9 @@ export function applyProviderConfigWithModelCatalogPreset(
     catalogModels: params.catalogModels,
   });
   return params.primaryModelRef
-    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef)
+    ? applyAgentDefaultModelPrimary(next, params.primaryModelRef, {
+        preserveExistingPrimary: true,
+      })
     : next;
 }
 

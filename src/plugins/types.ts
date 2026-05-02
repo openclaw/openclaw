@@ -301,7 +301,8 @@ export type ProviderAuthResult = {
    *
    * Use this for provider-owned onboarding defaults such as
    * `models.providers.<id>` entries, default aliases, or agent model helpers.
-   * The caller still persists auth-profile bindings separately.
+   * Callers preserve existing default model selection unless the user requested
+   * an explicit default-model replacement.
    */
   configPatch?: Partial<OpenClawConfig>;
   defaultModel?: string;
