@@ -59,6 +59,7 @@ import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
+  SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
   SignalReactionMessage,
@@ -543,10 +544,23 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     // truthiness — required to avoid replaying the bot's own sent messages on
     // daemon restart (see related work in the loop-protection / sentTranscript
     // bug fixes).
-    const sentSyncMessage = envelope.syncMessage?.sentMessage;
+    // signal-cli's `syncMessage` envelope is typed as `unknown` since its shape
+    // varies across versions; cast through a narrow shape we care about. The
+    // `sentMessage` shape is the same as a regular dataMessage plus the
+    // destination* fields that identify the recipient of the sent message.
+    type SyncSentMessage = SignalDataMessage & {
+      destinationNumber?: string | null;
+      destination?: string | null;
+      destinationUuid?: string | null;
+    };
+    const syncMessage = envelope.syncMessage as
+      | { sentMessage?: SyncSentMessage | null }
+      | null
+      | undefined;
+    const sentSyncMessage = syncMessage?.sentMessage;
     if (sentSyncMessage) {
       const destNum = sentSyncMessage.destinationNumber ?? sentSyncMessage.destination;
-      const srcNum = envelope.sourceNumber ?? envelope.source;
+      const srcNum = envelope.sourceNumber;
       const destUuid = sentSyncMessage.destinationUuid;
       const srcUuid = envelope.sourceUuid;
       const isNoteToSelf =
