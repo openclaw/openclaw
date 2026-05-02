@@ -17,7 +17,9 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Discord: allow explicitly configured ack reactions in tool-only guild channels while keeping automatic lifecycle/status reactions suppressed. Fixes #74922. Thanks @samvilian.
+- WhatsApp: close long-lived web sockets through Baileys `end(error)` before falling back to raw websocket close, so listener teardown runs Baileys cleanup instead of leaving zombie sockets. Fixes #52442. Thanks @essendigitalgroup-cyber.
 - Gateway/sessions: move hot transcript reads and mirror appends onto async bounded IO with serialized parent-linked writes, keeping large session histories from stalling Gateway requests and channel replies. Fixes #75656. Thanks @DerFlash.
+- macOS/Voice Wake: accept trigger-only phrases in the built-in Voice Wake test, matching the settings UI and runtime trigger-only path instead of requiring extra command text after the wake word. Fixes #64986. Thanks @zoiks65.
 - Cron/TTS: run cron announce payloads through the normal TTS directive transform before outbound delivery, so scheduled `[[tts]]` replies generate voice payloads instead of leaking raw tags. Fixes #52125. Thanks @kenchen3000.
 - WhatsApp: save downloadable quoted image media from reply context as inbound media, so agents can inspect an image that a user replied to instead of only seeing `<media:image>`. Fixes #59174. Thanks @gaffner.
 - Doctor/WhatsApp: warn when Linux crontabs still run the legacy `ensure-whatsapp.sh` health check, which can misreport `Gateway inactive` when cron lacks the systemd user-bus environment. Fixes #60204. Thanks @mySebbe.
@@ -34,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - Channels/status reactions: remove stale non-terminal lifecycle reactions when a run reaches done or error, so Discord does not leave a permanent thinking emoji after completion. Fixes #75458. Thanks @davelutztx.
 - Discord/doctor: migrate unsupported per-channel `agentId` entries under guild channel config into top-level `bindings[]` routes, so `openclaw doctor --fix` preserves the intended agent route instead of stripping it as an unknown key. Fixes #62455. Thanks @lobster-biscuit.
 - Discord/DMs: set inbound direct-message `ctx.To` to the semantic `user:<id>` target while keeping delivery routed through the DM channel, so mirror and recovery paths do not treat DMs as channel conversations. Fixes #68126. Thanks @illuminate0623.
+- Discord/DMs: keep no-guild inbound messages on direct-message routing when Discord channel lookup is temporarily unavailable, preventing degraded DMs from forking into channel sessions. Fixes #59817. Thanks @DooPeePey.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
 

@@ -135,19 +135,6 @@ function normalizeStringField(value: unknown): string | undefined {
   return normalized ? normalized : undefined;
 }
 
-function normalizeStringListField(value: unknown): readonly string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .flatMap((entry) => {
-      const normalizedEntry = normalizeStringField(entry);
-      return normalizedEntry ? [normalizedEntry] : [];
-    })
-    .filter((entry, index, all) => all.indexOf(entry) === index);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function normalizePackageChannel(
   channel: PluginPackageChannel | undefined,
 ): InstalledPluginPackageChannelInfo | undefined {
@@ -155,30 +142,9 @@ function normalizePackageChannel(
   if (!id) {
     return undefined;
   }
-  const label = normalizeStringField(channel?.label);
-  const blurb = normalizeStringField(channel?.blurb);
-  const preferOver = normalizeStringListField(channel?.preferOver);
-  const commands =
-    channel?.commands &&
-    typeof channel.commands === "object" &&
-    !Array.isArray(channel.commands) &&
-    (typeof channel.commands.nativeCommandsAutoEnabled === "boolean" ||
-      typeof channel.commands.nativeSkillsAutoEnabled === "boolean")
-      ? {
-          ...(typeof channel.commands.nativeCommandsAutoEnabled === "boolean"
-            ? { nativeCommandsAutoEnabled: channel.commands.nativeCommandsAutoEnabled }
-            : {}),
-          ...(typeof channel.commands.nativeSkillsAutoEnabled === "boolean"
-            ? { nativeSkillsAutoEnabled: channel.commands.nativeSkillsAutoEnabled }
-            : {}),
-        }
-      : undefined;
   return {
+    ...structuredClone(channel),
     id,
-    ...(label ? { label } : {}),
-    ...(blurb ? { blurb } : {}),
-    ...(preferOver ? { preferOver } : {}),
-    ...(commands ? { commands } : {}),
   };
 }
 
@@ -240,7 +206,9 @@ export function buildInstalledPluginIndexRecords(params: {
     const packageJsonPath = resolvePackageJsonPath(candidate);
     const installRecord = params.installRecords[record.id];
     const packageInstall = describePackageInstallSource(candidate);
-    const packageChannel = normalizePackageChannel(candidate?.packageManifest?.channel);
+    const packageChannel = normalizePackageChannel(
+      record.packageChannel ?? candidate?.packageManifest?.channel,
+    );
     const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
     const packageJson = resolvePackageJsonRecord({
       candidate,

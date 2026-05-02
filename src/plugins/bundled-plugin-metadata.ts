@@ -29,7 +29,6 @@ const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const RUNNING_FROM_BUILT_ARTIFACT =
   CURRENT_MODULE_PATH.includes(`${path.sep}dist${path.sep}`) ||
   CURRENT_MODULE_PATH.includes(`${path.sep}dist-runtime${path.sep}`);
-const DEFAULT_ROOT_METADATA_CACHE = new Map<string, readonly BundledPluginMetadata[]>();
 
 type BundledPluginPathPair = {
   source: string;
@@ -186,18 +185,6 @@ export function listBundledPluginMetadata(params?: {
   const includeChannelConfigs = params?.includeChannelConfigs ?? !RUNNING_FROM_BUILT_ARTIFACT;
   const includeSyntheticChannelConfigs =
     params?.includeSyntheticChannelConfigs ?? includeChannelConfigs;
-  const cacheKey =
-    !params?.rootDir && !scanDir
-      ? JSON.stringify({
-          resolvedScanDir,
-          includeChannelConfigs,
-          includeSyntheticChannelConfigs,
-        })
-      : undefined;
-  const cached = cacheKey ? DEFAULT_ROOT_METADATA_CACHE.get(cacheKey) : undefined;
-  if (cached) {
-    return cached;
-  }
   const metadata = Object.freeze(
     collectBundledPluginMetadata(
       resolvedScanDir,
@@ -205,9 +192,6 @@ export function listBundledPluginMetadata(params?: {
       includeSyntheticChannelConfigs,
     ),
   );
-  if (cacheKey) {
-    DEFAULT_ROOT_METADATA_CACHE.set(cacheKey, metadata);
-  }
   return metadata;
 }
 

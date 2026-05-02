@@ -155,12 +155,13 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.minimax?.enabled).toBe(false);
   });
 
-  it("reuses the bundled alias scan during one config normalization", async () => {
+  it("reuses the plugin alias discovery during one config normalization", async () => {
     vi.resetModules();
-    const bundledPluginMetadata = await import("./bundled-plugin-metadata.js");
-    const listBundledMetadata = vi.spyOn(bundledPluginMetadata, "listBundledPluginMetadata");
+    const discovery = await import("./discovery.js");
+    const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins");
     const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
       await import("./config-state.js");
+    discoverPlugins.mockClear();
 
     const result = normalizeFreshPluginsConfig({
       allow: ["unknown-plugin-one", "unknown-plugin-two"],
@@ -175,7 +176,7 @@ describe("normalizePluginsConfig", () => {
     expect(result.allow).toEqual(["unknown-plugin-one", "unknown-plugin-two"]);
     expect(result.deny).toEqual(["unknown-plugin-three"]);
     expect(result.entries["unknown-plugin-four"]?.enabled).toBe(true);
-    expect(listBundledMetadata).toHaveBeenCalledTimes(1);
+    expect(discoverPlugins).toHaveBeenCalledTimes(1);
   });
 });
 

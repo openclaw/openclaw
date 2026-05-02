@@ -140,6 +140,7 @@ describe("bundled plugin postinstall", () => {
   it("does not classify published packages with source files as source checkouts", () => {
     const packageRoot = "/pkg";
     const existingPaths = new Set([
+      path.join(packageRoot, "package.json"),
       path.join(packageRoot, "pnpm-workspace.yaml"),
       path.join(packageRoot, "src"),
       path.join(packageRoot, "extensions"),
@@ -150,6 +151,14 @@ describe("bundled plugin postinstall", () => {
       isSourceCheckoutRoot({
         packageRoot,
         existsSync: (value: string) => existingPaths.has(value),
+        readFileSync: () =>
+          JSON.stringify({
+            openclaw: {
+              bundle: {
+                mirroredRootRuntimeDependencies: ["json5"],
+              },
+            },
+          }),
       }),
     ).toBe(false);
   });

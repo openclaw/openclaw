@@ -3,7 +3,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
-import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
 import {
   createEffectiveEnableStateResolver,
   createPluginEnableStateResolver,
@@ -21,6 +20,8 @@ import {
   type NormalizePluginId,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
+import { loadPluginManifest } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
@@ -45,36 +46,38 @@ const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
   ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
 ]);
 
-let bundledPluginAliasLookup: ReadonlyMap<string, string> | undefined;
-
 function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
-  if (bundledPluginAliasLookup) {
-    return bundledPluginAliasLookup;
-  }
   const lookup = new Map<string, string>();
-  for (const plugin of listBundledPluginMetadata({ includeChannelConfigs: false })) {
-    const pluginId = normalizeOptionalLowercaseString(plugin.manifest.id);
-    if (pluginId) {
-      lookup.set(pluginId, plugin.manifest.id);
+  for (const candidate of discoverOpenClawPlugins({}).candidates) {
+    const manifestResult =
+      candidate.origin === "bundled" && candidate.bundledManifest
+        ? { ok: true as const, manifest: candidate.bundledManifest }
+        : loadPluginManifest(candidate.rootDir, candidate.origin !== "bundled");
+    if (!manifestResult.ok) {
+      continue;
     }
-    for (const providerId of plugin.manifest.providers ?? []) {
+    const manifest = manifestResult.manifest;
+    const pluginId = normalizeOptionalLowercaseString(manifest.id);
+    if (pluginId) {
+      lookup.set(pluginId, manifest.id);
+    }
+    for (const providerId of manifest.providers ?? []) {
       const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
       if (normalizedProviderId) {
-        lookup.set(normalizedProviderId, plugin.manifest.id);
+        lookup.set(normalizedProviderId, manifest.id);
       }
     }
-    for (const legacyPluginId of plugin.manifest.legacyPluginIds ?? []) {
+    for (const legacyPluginId of manifest.legacyPluginIds ?? []) {
       const normalizedLegacyPluginId = normalizeOptionalLowercaseString(legacyPluginId);
       if (normalizedLegacyPluginId) {
-        lookup.set(normalizedLegacyPluginId, plugin.manifest.id);
+        lookup.set(normalizedLegacyPluginId, manifest.id);
       }
     }
   }
   for (const [alias, pluginId] of BUILT_IN_PLUGIN_ALIAS_FALLBACKS) {
     lookup.set(alias, pluginId);
   }
-  bundledPluginAliasLookup = lookup;
-  return bundledPluginAliasLookup;
+  return lookup;
 }
 
 function normalizePluginIdWithLookup(

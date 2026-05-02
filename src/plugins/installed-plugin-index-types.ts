@@ -60,10 +60,7 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "marketplacePlugin"
 >;
 
-export type InstalledPluginPackageChannelInfo = Pick<
-  PluginPackageChannel,
-  "id" | "label" | "blurb" | "preferOver" | "commands"
->;
+export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 
 export type InstalledPluginIndexRecord = {
   pluginId: string;

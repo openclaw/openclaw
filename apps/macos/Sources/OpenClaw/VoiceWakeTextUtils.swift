@@ -149,6 +149,19 @@ enum VoiceWakeTextUtils {
         return trimmed
     }
 
+    static func isTriggerOnly(
+        transcript: String,
+        triggers: [String],
+        trimWake: TrimWake) -> Bool
+    {
+        guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return false }
+        guard
+            self.startsWithTrigger(transcript: transcript, triggers: triggers)
+            || self.hasOnlyFillerBeforeTrigger(transcript: transcript, triggers: triggers)
+        else { return false }
+        return trimWake(transcript, triggers).isEmpty
+    }
+
     static func hasOnlyFillerBeforeTrigger(transcript: String, triggers: [String]) -> Bool {
         guard let match = self.bestRawTriggerMatch(transcript: transcript, triggers: triggers) else { return false }
         let prefixTokens = transcript[..<match.range.lowerBound]
