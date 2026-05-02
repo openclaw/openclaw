@@ -1,4 +1,4 @@
-import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   ARCEE_TRINITY_LARGE_THINKING_COMPAT,
   isArceeTrinityLargeThinkingModelId,
