@@ -33,7 +33,6 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Cron: retry recurring wake-now main-session jobs through temporary heartbeat busy skips before recording success, so queued cron events no longer appear as ok ghost runs while the main lane is still busy. Fixes #75964. Thanks @kshetrajna12 and @xuruiray.
 - Control UI: contain the standalone iOS PWA viewport with safe-area-aware document locking, so Add-to-Home-Screen launches cannot scroll past the device bounds. Refs #76072. Thanks @kvncrw.
 - Agents/restart recovery: match cleaned transcript locks by exact transcript lock paths plus the canonical session fallback, so interrupted main sessions using topic-suffixed transcripts resume after gateway restart. Refs #76052. Thanks @anyech.
 - Agents/runtime: cache the stable system-prompt prefix and reuse prompt-report tool schema stats during dispatch prep, reducing repeated CPU work before streaming starts. Fixes #75999; supersedes #76061. Thanks @zackchiutw and @STLI69.
@@ -266,6 +265,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/startup: return the shared retryable startup-sidecars error for startup-gated control-plane RPCs such as sessions.create, sessions.send, sessions.abort, agent.wait, and tools.effective, so clients can retry early sidecar races. (#76012) Thanks @scoootscooob.
 - Providers/Google: fix Gemini 2.5 Flash-Lite `reasoning: "minimal"` rejections by raising its thinking-budget floor to 512 while preserving the existing Gemini 2.5 Pro and Flash minimal presets. (#70629) Thanks @ericberic.
 - Agents/status: resolve `session_status(sessionKey="current")` for sparse channel-plugin sessions after literal current lookups miss, so Scope, Slack, Discord, and other plugin-driven agents avoid retrying through `Unknown sessionKey: current`. Fixes #74141. (#72306) Thanks @bittoby.
+- Cron: retry recurring wake-now main-session jobs through temporary heartbeat busy skips before recording success, so queued cron events no longer appear as ok ghost runs while the main lane is still busy. Fixes #75964. (#76083) Thanks @kshetrajna12 and @xuruiray.
 
 ## 2026.4.30
 
