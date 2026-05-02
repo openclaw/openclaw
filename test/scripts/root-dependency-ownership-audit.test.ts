@@ -251,4 +251,73 @@ describe("collectRootDependencyOwnershipCheckErrors", () => {
     ]);
     expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([]);
   });
+
+  it("allows runtime deps for bundled plugins that are still packaged in core", () => {
+    const repoRoot = makeTempRepo();
+    writeRepoFile(
+      repoRoot,
+      "package.json",
+      JSON.stringify({
+        dependencies: { "vendor-sdk": "^1.0.0" },
+        files: ["dist/", "!dist/extensions/externalized/**"],
+      }),
+    );
+    writeRepoFile(
+      repoRoot,
+      "extensions/internal/package.json",
+      JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
+    );
+    writeRepoFile(repoRoot, "extensions/internal/openclaw.plugin.json", JSON.stringify({}));
+    writeRepoFile(
+      repoRoot,
+      "extensions/internal/src/setup.ts",
+      'const sdk = await import("vendor-sdk");\n',
+    );
+
+    const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
+
+    expect(records).toMatchObject([
+      {
+        category: "root_owned_extension_runtime",
+        depName: "vendor-sdk",
+        internalizedBundledRuntimeOwners: ["internal:dependencies"],
+        sections: ["extensions"],
+      },
+    ]);
+    expect(collectRootDependencyOwnershipCheckErrors(records)).toEqual([]);
+  });
+
+  it("keeps excluded bundled plugin deps localizable", () => {
+    const repoRoot = makeTempRepo();
+    writeRepoFile(
+      repoRoot,
+      "package.json",
+      JSON.stringify({
+        dependencies: { "vendor-sdk": "^1.0.0" },
+        files: ["dist/", "!dist/extensions/externalized/**"],
+      }),
+    );
+    writeRepoFile(
+      repoRoot,
+      "extensions/externalized/package.json",
+      JSON.stringify({ dependencies: { "vendor-sdk": "^1.0.0" } }),
+    );
+    writeRepoFile(repoRoot, "extensions/externalized/openclaw.plugin.json", JSON.stringify({}));
+    writeRepoFile(
+      repoRoot,
+      "extensions/externalized/src/setup.ts",
+      'const sdk = await import("vendor-sdk");\n',
+    );
+
+    const records = collectRootDependencyOwnershipAudit({ repoRoot, scanRoots: ["extensions"] });
+
+    expect(records).toMatchObject([
+      {
+        category: "extension_only_localizable",
+        depName: "vendor-sdk",
+        internalizedBundledRuntimeOwners: [],
+        sections: ["extensions"],
+      },
+    ]);
+  });
 });
