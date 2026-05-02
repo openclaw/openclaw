@@ -1396,11 +1396,7 @@ async function executeMainSessionCronJob(
         break;
       }
       if (heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
-        // A cron-in-progress skip is caused by this job's own active marker, so
-        // direct wake-now cannot succeed until the cron job returns and clears
-        // it (#50773). Other retryable busy reasons can clear while this job is
-        // still active, so let the bounded retry loop observe a real heartbeat
-        // run before recording recurring jobs as successful (#75964).
+        // The active cron marker blocks direct wake-now until this job returns.
         state.deps.requestHeartbeatNow({
           reason,
           agentId: job.agentId,
