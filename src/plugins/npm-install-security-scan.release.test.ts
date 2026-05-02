@@ -18,6 +18,16 @@ type PublishablePluginPackage = {
   packageName: string;
 };
 
+const REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
+  "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
+  "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+  "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
+  "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
+  "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
+  "@openclaw/voice-call:dangerous-exec:src/tunnel.ts",
+  "@openclaw/voice-call:dangerous-exec:src/webhook/tailscale.ts",
+]);
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -115,8 +125,9 @@ function collectPublishablePluginPackages(): PublishablePluginPackage[] {
 }
 
 describe("publishable plugin npm package install security scan", () => {
-  it("keeps npm-published plugin files clear of env-harvesting hits", async () => {
-    const failures: string[] = [];
+  it("keeps npm-published plugin files clear of unexpected critical hits", async () => {
+    const unexpectedCriticalFindings: string[] = [];
+    const reviewedCriticalFindings = new Set<string>();
 
     for (const plugin of collectPublishablePluginPackages()) {
       const packedFiles = collectNpmPackedFiles(plugin.packageDir, plugin.packageName);
@@ -127,20 +138,22 @@ describe("publishable plugin npm package install security scan", () => {
       });
 
       for (const finding of summary.findings) {
-        if (finding.ruleId !== "env-harvesting" || finding.severity !== "critical") {
+        if (finding.severity !== "critical") {
           continue;
         }
-        failures.push(
-          [
-            plugin.packageName,
-            relative(stageDir, finding.file).split(sep).join("/"),
-            `${finding.line}`,
-            finding.evidence,
-          ].join(":"),
-        );
+        const packedPath = relative(stageDir, finding.file).split(sep).join("/");
+        const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
+        if (REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS.has(key)) {
+          reviewedCriticalFindings.add(key);
+          continue;
+        }
+        unexpectedCriticalFindings.push([key, `${finding.line}`, finding.evidence].join(":"));
       }
     }
 
-    expect(failures).toEqual([]);
+    expect(unexpectedCriticalFindings).toEqual([]);
+    expect([...reviewedCriticalFindings].toSorted()).toEqual(
+      [...REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].toSorted(),
+    );
   });
 });
