@@ -278,6 +278,20 @@ describe("buildInlineKeyboard", () => {
         },
       },
       {
+        name: "keeps url buttons",
+        input: [[{ text: "Open", url: "https://example.com" }]],
+        expected: {
+          inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+        },
+      },
+      {
+        name: "prefers url over callback data when both are present",
+        input: [[{ text: "Open", callback_data: "cmd:open", url: "https://example.com" }]],
+        expected: {
+          inline_keyboard: [[{ text: "Open", url: "https://example.com" }]],
+        },
+      },
+      {
         name: "filters invalid buttons and empty rows",
         input: [
           [
@@ -285,6 +299,7 @@ describe("buildInlineKeyboard", () => {
             { text: "Ok", callback_data: "cmd:ok" },
           ],
           [{ text: "Missing data", callback_data: "" }],
+          [{ text: "Missing action" }],
           [],
         ],
         expected: {

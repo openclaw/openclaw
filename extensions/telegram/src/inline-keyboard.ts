@@ -9,15 +9,28 @@ export function buildInlineKeyboard(
   }
   const rows = buttons
     .map((row) =>
-      row
-        .filter((button) => button?.text && button?.callback_data)
-        .map(
-          (button): InlineKeyboardButton =>
+      row.flatMap((button): InlineKeyboardButton[] => {
+        if (!button?.text) {
+          return [];
+        }
+        if (button.url) {
+          return [
+            Object.assign(
+              { text: button.text, url: button.url },
+              button.style ? { style: button.style } : {},
+            ),
+          ];
+        }
+        if (button.callback_data) {
+          return [
             Object.assign(
               { text: button.text, callback_data: button.callback_data },
               button.style ? { style: button.style } : {},
             ),
-        ),
+          ];
+        }
+        return [];
+      }),
     )
     .filter((row) => row.length > 0);
   if (rows.length === 0) {

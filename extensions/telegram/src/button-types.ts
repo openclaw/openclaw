@@ -10,7 +10,8 @@ export type TelegramButtonStyle = "danger" | "success" | "primary";
 
 type TelegramInlineButton = {
   text: string;
-  callback_data: string;
+  callback_data?: string;
+  url?: string;
   style?: TelegramButtonStyle;
 };
 
@@ -29,22 +30,33 @@ function chunkInteractiveButtons(
   rows: TelegramInlineButton[][],
 ) {
   for (let i = 0; i < buttons.length; i += TELEGRAM_INTERACTIVE_ROW_SIZE) {
-    const row = buttons.slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE).flatMap((button) => {
-      if (!button.value) {
-        return [];
-      }
-      const callbackData = sanitizeTelegramCallbackData(button.value);
-      if (!callbackData) {
-        return [];
-      }
-      return [
-        {
-          text: button.label,
-          callback_data: callbackData,
-          style: toTelegramButtonStyle(button.style),
-        },
-      ];
-    });
+    const row = buttons
+      .slice(i, i + TELEGRAM_INTERACTIVE_ROW_SIZE)
+      .flatMap((button): TelegramInlineButton[] => {
+        if (button.url) {
+          return [
+            {
+              text: button.label,
+              url: button.url,
+              style: toTelegramButtonStyle(button.style),
+            },
+          ];
+        }
+        if (!button.value) {
+          return [];
+        }
+        const callbackData = sanitizeTelegramCallbackData(button.value);
+        if (!callbackData) {
+          return [];
+        }
+        return [
+          {
+            text: button.label,
+            callback_data: callbackData,
+            style: toTelegramButtonStyle(button.style),
+          },
+        ];
+      });
     if (row.length > 0) {
       rows.push(row);
     }
