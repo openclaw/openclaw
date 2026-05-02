@@ -677,17 +677,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       modelCatalog,
       opts: p,
     });
+    const activeSessionKeys = new Set<string>();
+    if (chatHandlers.chatAbortControllers.size > 0) {
+      for (const run of chatHandlers.chatAbortControllers.values()) {
+        const sessionKey = resolveSessionKeyForRun(run);
+        if (typeof sessionKey === "string" && sessionKey.length > 0) {
+          activeSessionKeys.add(sessionKey);
+        }
+      }
+    }
     respond(
       true,
       {
         ...result,
         sessions: result.sessions.map((session) =>
           Object.assign({}, session, {
-            hasActiveRun: hasTrackedActiveSessionRun({
-              context,
-              requestedKey: session.key,
-              canonicalKey: session.key,
-            }),
+            hasActiveRun: activeSessionKeys.has(session.key),
           }),
         ),
       },
