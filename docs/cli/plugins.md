@@ -164,7 +164,7 @@ openclaw plugins install npm:openclaw-codex-app-server
 openclaw plugins install npm:@scope/plugin-name@1.0.1
 ```
 
-OpenClaw downloads the package archive from ClawHub, checks the advertised plugin API / minimum gateway compatibility, then installs it through the normal archive path. Recorded installs keep their ClawHub source metadata for later updates.
+OpenClaw checks the advertised plugin API / minimum gateway compatibility before install. When the selected ClawHub version publishes a ClawPack artifact, OpenClaw downloads the versioned ClawPack, verifies the ClawHub digest header and the artifact digest, then installs it through the normal archive path. Older ClawHub versions without ClawPack metadata still install through the legacy package archive verification path. Recorded installs keep their ClawHub source metadata and ClawPack digest facts for later updates.
 Unversioned ClawHub installs keep an unversioned recorded spec so `openclaw plugins update` can follow newer ClawHub releases; explicit version or tag selectors such as `clawhub:pkg@1.2.3` and `clawhub:pkg@beta` remain pinned to that selector.
 
 #### Marketplace shorthand

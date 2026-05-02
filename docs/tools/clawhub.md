@@ -80,7 +80,11 @@ Site: [clawhub.ai](https://clawhub.ai)
     Plugin installs validate advertised `pluginApi` and
     `minGatewayVersion` compatibility before archive install runs, so
     incompatible hosts fail closed early instead of partially installing
-    the package.
+    the package. When a package version publishes a ClawPack artifact,
+    OpenClaw prefers that artifact, verifies the ClawHub digest header and
+    downloaded bytes, and records the ClawPack digest metadata for later
+    updates. Older package versions without ClawPack metadata still use the
+    legacy package archive verification path.
 
   </Tab>
 </Tabs>
