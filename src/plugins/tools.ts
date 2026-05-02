@@ -21,8 +21,10 @@ import { findUndeclaredPluginToolNames } from "./tool-contracts.js";
 import {
   buildPluginToolDescriptorCacheKey,
   capturePluginToolDescriptor,
+  createPluginToolDescriptorConfigCacheKeyMemo,
   readCachedPluginToolDescriptors,
   type CachedPluginToolDescriptor,
+  type PluginToolDescriptorConfigCacheKeyMemo,
   writeCachedPluginToolDescriptors,
 } from "./tool-descriptor-cache.js";
 import type { OpenClawPluginToolContext } from "./types.js";
@@ -395,6 +397,7 @@ function buildPluginDescriptorCacheKey(params: {
   plugin: PluginManifestRecord;
   ctx: OpenClawPluginToolContext;
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
+  configCacheKeyMemo?: PluginToolDescriptorConfigCacheKeyMemo;
 }): string {
   return buildPluginToolDescriptorCacheKey({
     pluginId: params.plugin.id,
@@ -403,6 +406,7 @@ function buildPluginDescriptorCacheKey(params: {
     contractToolNames: params.plugin.contracts?.tools ?? [],
     ctx: params.ctx,
     currentRuntimeConfig: params.currentRuntimeConfig,
+    configCacheKeyMemo: params.configCacheKeyMemo,
   });
 }
 
@@ -493,6 +497,7 @@ function resolveCachedPluginTools(params: {
   loadContext: ReturnType<typeof resolvePluginRuntimeLoadContext>;
   runtimeOptions: PluginLoadOptions["runtimeOptions"];
   currentRuntimeConfig?: PluginLoadOptions["config"] | null;
+  configCacheKeyMemo: PluginToolDescriptorConfigCacheKeyMemo;
 }): { tools: AnyAgentTool[]; handledPluginIds: Set<string> } {
   const tools: AnyAgentTool[] = [];
   const handledPluginIds = new Set<string>();
@@ -535,6 +540,7 @@ function resolveCachedPluginTools(params: {
         plugin,
         ctx: params.ctx,
         currentRuntimeConfig: params.currentRuntimeConfig,
+        configCacheKeyMemo: params.configCacheKeyMemo,
       }),
     );
     if (
@@ -714,6 +720,7 @@ export function resolvePluginTools(params: {
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
+  const configCacheKeyMemo = createPluginToolDescriptorConfigCacheKeyMemo();
   let currentRuntimeConfigForDescriptorCache: PluginLoadOptions["config"] | null | undefined =
     params.context.runtimeConfig;
   if (currentRuntimeConfigForDescriptorCache === undefined && params.context.getRuntimeConfig) {
@@ -737,6 +744,7 @@ export function resolvePluginTools(params: {
     loadContext: context,
     runtimeOptions,
     currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
+    configCacheKeyMemo,
   });
   tools.push(...cached.tools);
   const runtimePluginIds = onlyPluginIds.filter(
@@ -922,6 +930,7 @@ export function resolvePluginTools(params: {
           plugin: manifestPlugin,
           ctx: params.context,
           currentRuntimeConfig: currentRuntimeConfigForDescriptorCache,
+          configCacheKeyMemo,
         }),
         descriptors,
       });
