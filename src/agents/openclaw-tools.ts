@@ -325,6 +325,7 @@ export function createOpenClawTools(
         sandbox,
         fsPolicy: options?.fsPolicy,
         modelHasVision: options?.modelHasVision,
+        deferAutoModelResolution: true,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-tool");
