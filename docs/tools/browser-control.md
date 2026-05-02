@@ -31,8 +31,14 @@ For local integrations only, the Gateway exposes a small loopback HTTP API:
 
 All endpoints accept `?profile=<name>`. `POST /start?headless=true` requests a
 one-shot headless launch for local managed profiles without changing persisted
-browser config; attach-only, remote CDP, and existing-session profiles reject
-that override because OpenClaw does not launch those browser processes.
+browser config. `POST /start?headless=false` requests a one-shot headed
+(visible) launch — useful for human-handoff workflows where the operator needs
+to observe or interact with the browser. Attach-only, remote CDP, and
+existing-session profiles reject these overrides because OpenClaw does not
+launch those browser processes.
+
+The same override is available via the CLI (`openclaw browser start --headed` /
+`--headless`) and the browser tool (`{ "action": "start", "headed": true }`).
 
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
@@ -131,6 +137,7 @@ All commands accept `--browser-profile <name>` to target a specific profile, and
 openclaw browser status
 openclaw browser start
 openclaw browser start --headless # one-shot local managed headless launch
+openclaw browser start --headed   # one-shot headed (visible) launch for human handoff
 openclaw browser stop            # also clears emulation on attach-only/remote CDP
 openclaw browser tabs
 openclaw browser tab             # shortcut for current tab

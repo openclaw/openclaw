@@ -103,6 +103,8 @@ export const BrowserToolSchema = Type.Object({
   mode: optionalStringEnum(BROWSER_SNAPSHOT_MODES),
   snapshotFormat: optionalStringEnum(BROWSER_SNAPSHOT_FORMATS),
   refs: optionalStringEnum(BROWSER_SNAPSHOT_REFS),
+  headed: Type.Optional(Type.Boolean()),
+  headless: Type.Optional(Type.Boolean()),
   interactive: Type.Optional(Type.Boolean()),
   compact: Type.Optional(Type.Boolean()),
   depth: Type.Optional(Type.Number()),

@@ -1378,3 +1378,63 @@ describe("browser tool act stale target recovery", () => {
     expect(browserActionsMocks.browserAct).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("browser tool start headless param", () => {
+  beforeEach(() => {
+    resetBrowserToolMocks();
+  });
+
+  it("passes headless=false when headless: false is given", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "start", headless: false });
+
+    expect(browserClientMocks.browserStart).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ headless: false }),
+    );
+  });
+
+  it("passes headless=true when headless: true is given", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "start", headless: true });
+
+    expect(browserClientMocks.browserStart).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ headless: true }),
+    );
+  });
+
+  it("passes no headless override when neither headed nor headless is given", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "start" });
+
+    expect(browserClientMocks.browserStart).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ headless: undefined }),
+    );
+  });
+
+  it("returns conflict error when headed and headless disagree", async () => {
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", {
+      action: "start",
+      headed: true,
+      headless: true,
+    });
+
+    expect(result).toMatchObject({
+      content: [expect.objectContaining({ text: expect.stringContaining("conflict") })],
+    });
+    expect(browserClientMocks.browserStart).not.toHaveBeenCalled();
+  });
+
+  it("accepts consistent headed=true headless=false combination", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "start", headed: true, headless: false });
+
+    expect(browserClientMocks.browserStart).toHaveBeenCalledWith(
+      undefined,
+      expect.objectContaining({ headless: false }),
+    );
+  });
+});

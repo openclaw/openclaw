@@ -559,11 +559,25 @@ export function createBrowserTool(opts?: {
           return jsonResult(
             await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
           );
-        case "start":
+        case "start": {
+          const headedParam = params.headed;
+          const headlessParam = params.headless;
+          const fromHeaded = typeof headedParam === "boolean" ? !headedParam : undefined;
+          const fromHeadless = typeof headlessParam === "boolean" ? headlessParam : undefined;
+          if (
+            fromHeaded !== undefined &&
+            fromHeadless !== undefined &&
+            fromHeaded !== fromHeadless
+          ) {
+            return jsonResult({ error: "`headed` and `headless` conflict — use one or the other" });
+          }
+          const headlessOverride = fromHeaded ?? fromHeadless;
           if (proxyRequest) {
             await proxyRequest({
               method: "POST",
               path: "/start",
+              query:
+                typeof headlessOverride === "boolean" ? { headless: headlessOverride } : undefined,
               profile,
               timeoutMs: toolTimeoutMs,
             });
@@ -576,10 +590,15 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserToolDeps.browserStart(baseUrl, { profile, timeoutMs: toolTimeoutMs });
+          await browserToolDeps.browserStart(baseUrl, {
+            profile,
+            timeoutMs: toolTimeoutMs,
+            headless: headlessOverride,
+          });
           return jsonResult(
             await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
           );
+        }
         case "stop":
           if (proxyRequest) {
             await proxyRequest({

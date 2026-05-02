@@ -58,6 +58,7 @@ openclaw browser doctor
 openclaw browser doctor --deep
 openclaw browser start
 openclaw browser start --headless
+openclaw browser start --headed
 openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
@@ -75,6 +76,11 @@ Notes:
   only when OpenClaw launches a local managed browser. It does not rewrite
   `browser.headless` or profile config, and it is a no-op for an already-running
   browser.
+- `openclaw browser start --headed` is the symmetric counterpart: it requests a
+  visible (non-headless) start for this request only, overriding config-level
+  `browser.headless=true` for the duration of the launch. Use it for human-handoff
+  workflows — stop the headless browser, then `openclaw browser start --headed` to
+  reopen it in a visible window. `--headed` and `--headless` are mutually exclusive.
 - On Linux hosts without `DISPLAY` or `WAYLAND_DISPLAY`, local managed profiles
   run headless automatically unless `OPENCLAW_BROWSER_HEADLESS=0`,
   `browser.headless=false`, or `browser.profiles.<name>.headless=false`

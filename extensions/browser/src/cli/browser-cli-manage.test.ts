@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   createBrowserManageProgram,
+  findBrowserManageCall,
   getBrowserManageCallBrowserRequestMock,
 } from "./browser-cli-manage.test-helpers.js";
 import { getBrowserCliRuntime, getBrowserCliRuntimeCapture } from "./browser-cli.test-support.js";
@@ -231,5 +232,45 @@ describe("browser manage output", () => {
     const output = getBrowserCliRuntime().log.mock.calls.at(-1)?.[0] as string;
     expect(output).toContain("OK gateway: browser control endpoint reachable");
     expect(output).toContain("OK tabs: 1 visible, use target t1");
+  });
+
+  it("passes headless=false query param when --headed flag is used", async () => {
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "start", "--headed"], { from: "user" });
+
+    const startCall = findBrowserManageCall("/start");
+    expect(startCall).toBeDefined();
+    expect(startCall?.[1].query).toEqual({ headless: false });
+  });
+
+  it("passes headless=true query param when --headless flag is used", async () => {
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "start", "--headless"], { from: "user" });
+
+    const startCall = findBrowserManageCall("/start");
+    expect(startCall).toBeDefined();
+    expect(startCall?.[1].query).toEqual({ headless: true });
+  });
+
+  it("passes no headless query param when neither --headed nor --headless is used", async () => {
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "start"], { from: "user" });
+
+    const startCall = findBrowserManageCall("/start");
+    expect(startCall).toBeDefined();
+    expect(startCall?.[1].query).toBeUndefined();
+  });
+
+  it("logs error and exits when --headless and --headed are both used", async () => {
+    const program = createBrowserManageProgram();
+    await program
+      .parseAsync(["browser", "start", "--headless", "--headed"], { from: "user" })
+      .catch(() => undefined);
+
+    const logOutput = getBrowserCliRuntime().log.mock.calls.find(
+      (call) => typeof call[0] === "string" && call[0].includes("mutually exclusive"),
+    );
+    expect(logOutput).toBeDefined();
+    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
   });
 });
