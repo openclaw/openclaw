@@ -70,11 +70,28 @@ vi.mock("./plugin-registry.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
-    loadPluginRegistrySnapshotWithMetadata: (params?: { index?: unknown }) => ({
-      snapshot: params?.index ?? mocks.loadPluginRegistrySnapshot(),
-      source: params?.index ? "provided" : "derived",
-      diagnostics: [],
-    }),
+    loadPluginRegistrySnapshotWithMetadata: (params?: { index?: unknown }) => {
+      const snapshot =
+        params?.index ??
+        (mocks.loadPluginRegistrySnapshot() as { plugins?: Array<Record<string, unknown>> });
+      return {
+        snapshot: {
+          ...snapshot,
+          plugins:
+            snapshot.plugins && snapshot.plugins.length > 0
+              ? snapshot.plugins
+              : [
+                  {
+                    pluginId: "__test_manifest_registry_fixture__",
+                    origin: "bundled",
+                    enabled: true,
+                  },
+                ],
+        },
+        source: params?.index ? "provided" : "derived",
+        diagnostics: [],
+      };
+    },
     loadPluginManifestRegistryForPluginRegistry: (
       ...args: Parameters<typeof mocks.loadPluginManifestRegistry>
     ) => {
