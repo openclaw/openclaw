@@ -261,6 +261,8 @@ Extracts the last user/assistant messages (default 15, configurable with `hooks.
 
 `patterns` and `files` are accepted as aliases of `paths`. Paths resolve relative to the workspace and must stay inside it. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
 
+For workspace-local procedures and bridge documentation, use [Workspace capabilities](/concepts/workspace-capabilities). Capability descriptors are not recognized bootstrap basenames, so link them from `TOOLS.md` or keep runtime auto-discovery as an explicit follow-up.
+
 <a id="command-logger"></a>
 
 ### command-logger details

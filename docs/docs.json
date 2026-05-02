@@ -1220,6 +1220,7 @@
                   "concepts/context",
                   "concepts/context-engine",
                   "concepts/agent-workspace",
+                  "concepts/workspace-capabilities",
                   "concepts/managed-worktrees",
                   "concepts/soul",
                   "concepts/oauth",
