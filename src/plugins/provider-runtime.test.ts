@@ -1229,6 +1229,53 @@ describe("provider-runtime", () => {
     ).toBe(wrappedStreamFn);
   });
 
+  it("resolves Azure OpenAI Responses hooks through the manifest-owned OpenAI provider", () => {
+    resolvePluginProvidersMock.mockImplementation((params) =>
+      params.providerRefs?.includes("azure-openai-responses")
+        ? [
+            {
+              id: "openai",
+              label: "OpenAI",
+              hookAliases: ["azure-openai-responses"],
+              auth: [],
+              prepareExtraParams: ({ extraParams }) => ({
+                ...extraParams,
+                azureResponsesHook: true,
+              }),
+            },
+          ]
+        : [],
+    );
+
+    expect(
+      prepareProviderExtraParams({
+        provider: "azure-openai-responses",
+        config: {
+          models: {
+            providers: {
+              "azure-openai-responses": {
+                baseUrl: "https://azure.example.com/openai/v1",
+                api: "azure-openai-responses",
+                models: [],
+              },
+            },
+          },
+        } as never,
+        context: createDemoRuntimeContext({
+          provider: "azure-openai-responses",
+          extraParams: {},
+        }),
+      }),
+    ).toEqual({
+      azureResponsesHook: true,
+    });
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerRefs: ["azure-openai-responses"],
+      }),
+    );
+  });
+
   it("does not run broad provider-hook scans for reasoning output mode", () => {
     resolvePluginProvidersMock.mockImplementation((params) => {
       if (params.providerRefs?.includes("mock-openai")) {
