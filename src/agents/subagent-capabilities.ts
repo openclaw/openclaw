@@ -20,7 +20,7 @@ const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
 type SubagentControlScope = "children" | "none";
 const SUBAGENT_CONTROL_SCOPES: readonly SubagentControlScope[] = ["children", "none"] as const;
 
-export type SessionCapabilityEntry = {
+type SessionCapabilityEntry = {
   sessionId?: unknown;
   spawnDepth?: unknown;
   subagentRole?: unknown;
@@ -28,7 +28,16 @@ export type SessionCapabilityEntry = {
   spawnedBy?: unknown;
 };
 
-export type SessionCapabilityStore = Record<string, SessionCapabilityEntry>;
+export type SessionCapabilityStore = Record<
+  string,
+  {
+    sessionId?: unknown;
+    spawnDepth?: unknown;
+    subagentRole?: unknown;
+    subagentControlScope?: unknown;
+    spawnedBy?: unknown;
+  }
+>;
 
 function normalizeSubagentRole(value: unknown): SubagentSessionRole | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
