@@ -25,5 +25,6 @@ export type DaemonInstallOptions = {
 };
 
 export type DaemonLifecycleOptions = {
+  port?: string | number;
   json?: boolean;
 };

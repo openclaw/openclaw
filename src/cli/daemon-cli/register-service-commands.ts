@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { inheritOptionFromParent } from "../command-options.js";
 import type { DaemonInstallOptions, GatewayRpcOpts } from "./types.js";
+import type { DaemonLifecycleOptions } from "./types.js";
 
 let daemonInstallModulePromise: Promise<typeof import("./install.runtime.js")> | undefined;
 let daemonLifecycleModulePromise: Promise<typeof import("./lifecycle.runtime.js")> | undefined;
@@ -97,6 +98,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("start")
     .description("Start the Gateway service (launchd/systemd/schtasks)")
+    .option("--port <port>", "Target the gateway instance listening on this port (multi-instance only)")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       const { runDaemonStart } = await loadDaemonLifecycleModule();
@@ -106,6 +108,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("stop")
     .description("Stop the Gateway service (launchd/systemd/schtasks)")
+    .option("--port <port>", "Target the gateway instance listening on this port (multi-instance only)")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       const { runDaemonStop } = await loadDaemonLifecycleModule();
@@ -115,6 +118,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option("--port <port>", "Target the gateway instance listening on this port (multi-instance only)")
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       const { runDaemonRestart } = await loadDaemonLifecycleModule();

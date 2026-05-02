@@ -1,6 +1,7 @@
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../../config/config.js";
 import { resolveGatewayService } from "../../daemon/service.js";
+import { resolveLaunchdLabelForPort } from "../../daemon/launchd.js";
 import { probeGateway } from "../../gateway/probe.js";
 import {
   findVerifiedGatewayListenerPidsOnPortSync,
@@ -11,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
+import { parsePort } from "../shared/parse-port.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
 import {
   runServiceRestart,
@@ -34,6 +36,37 @@ import type { DaemonLifecycleOptions } from "./types.js";
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
 const POST_RESTART_HEALTH_DELAY_MS = DEFAULT_RESTART_HEALTH_DELAY_MS;
 const WINDOWS_POST_RESTART_HEALTH_TIMEOUT_MS = 180_000;
+
+/**
+ * When --port is passed to a lifecycle command (restart/start/stop),
+ * resolve the matching launchd label from the gateway plist that declares
+ * OPENCLAW_GATEWAY_PORT equal to the given port, and set OPENCLAW_LAUNCHD_LABEL
+ * in process.env so resolveLaunchAgentLabel() picks it up.
+ * Returns the resolved port number for health checks.
+ *
+ * If --port is not specified or the label cannot be resolved, returns undefined
+ * (falls back to the default/primary gateway service).
+ */
+async function applyPortTargetToEnv(opts: DaemonLifecycleOptions): Promise<number | undefined> {
+  const rawPort = opts.port;
+  if (rawPort === undefined) {
+    return undefined;
+  }
+  const port = parsePort(String(rawPort));
+  if (port === null) {
+    throw new Error(`Invalid --port value: ${rawPort}`);
+  }
+  if (process.platform !== "darwin") {
+    // On non-macOS platforms, --port targeting through plists is not applicable.
+    // Fall back to letting the service manager resolve from env.
+    return port;
+  }
+  const label = await resolveLaunchdLabelForPort(port);
+  if (label) {
+    process.env.OPENCLAW_LAUNCHD_LABEL = label;
+  }
+  return port;
+}
 
 function postRestartHealthAttempts(): number {
   return process.platform === "win32"
@@ -140,6 +173,7 @@ async function restartGatewayWithoutServiceManager(port: number) {
 }
 
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
+  await applyPortTargetToEnv(opts);
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
@@ -150,6 +184,7 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
+  await applyPortTargetToEnv(opts);
   return await runServiceStart({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
@@ -163,6 +198,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
+  await applyPortTargetToEnv(opts);
   const service = resolveGatewayService();
   let gatewayPortPromise: Promise<number> | undefined;
   return await runServiceStop({
@@ -184,12 +220,15 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
  * Throws/exits on check or restart failures.
  */
 export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promise<boolean> {
+  const targetPort = await applyPortTargetToEnv(opts);
   const json = Boolean(opts.json);
   const service = resolveGatewayService();
   let restartedWithoutServiceManager = false;
-  const restartPort = await resolveGatewayLifecyclePort(service).catch(() =>
-    resolveGatewayPortFallback(),
-  );
+  const restartPort =
+    targetPort ??
+    (await resolveGatewayLifecyclePort(service).catch(
+      () => resolveGatewayPortFallback(),
+    ));
   const restartHealthAttempts = postRestartHealthAttempts();
   const restartWaitMs = restartHealthAttempts * POST_RESTART_HEALTH_DELAY_MS;
   const restartWaitSeconds = Math.round(restartWaitMs / 1000);

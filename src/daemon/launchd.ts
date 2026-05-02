@@ -66,6 +66,50 @@ function resolveLaunchAgentPlistPathForLabel(
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
 }
 
+/**
+ * Scan installed gateway LaunchAgent plists and return the label whose
+ * OPENCLAW_GATEWAY_PORT environment variable matches the given port.
+ * Returns null if no matching plist is found.
+ *
+ * This enables `openclaw gateway --port 18793 restart` to target the
+ * correct multi-instance launchd service.
+ */
+export async function resolveLaunchdLabelForPort(
+  port: number,
+  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+): Promise<string | null> {
+  const home = toPosixPath(resolveHomeDir(env));
+  const launchAgentsDir = path.posix.join(home, "Library", "LaunchAgents");
+
+  let dirEntries: string[];
+  try {
+    dirEntries = await fs.readdir(launchAgentsDir);
+  } catch {
+    return null;
+  }
+
+  const gatewayPlists = dirEntries.filter(
+    (name) =>
+      name.startsWith(GATEWAY_LAUNCH_AGENT_LABEL) && name.endsWith(".plist"),
+  );
+
+  for (const plistName of gatewayPlists) {
+    const plistPath = path.posix.join(launchAgentsDir, plistName);
+    const result = await readLaunchAgentProgramArgumentsFromFile(plistPath).catch(() => null);
+    if (!result?.environment) {
+      continue;
+    }
+    const plistPort = result.environment.OPENCLAW_GATEWAY_PORT;
+    if (plistPort && parseStrictPositiveInteger(plistPort) === port) {
+      // Extract label from plist filename: "ai.openclaw.gateway.plist" → "ai.openclaw.gateway"
+      const label = plistName.replace(/\.plist$/, "");
+      return label;
+    }
+  }
+
+  return null;
+}
+
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
   return path.join(resolveGatewayStateDir(env), LAUNCH_AGENT_ENV_DIR_NAME);
 }
