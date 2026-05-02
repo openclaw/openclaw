@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   buildPluginToolMetadataKey,
+  ensureStandalonePluginToolRegistryLoaded,
   getPluginToolMeta,
   resolvePluginTools,
 } from "../../plugins/tools.js";
@@ -88,13 +89,19 @@ function buildPluginGroups(params: {
 }): ToolCatalogGroup[] {
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
+  const toolContext = {
+    config: params.cfg,
+    workspaceDir,
+    agentDir,
+    agentId: params.agentId,
+  };
+  ensureStandalonePluginToolRegistryLoaded({
+    context: toolContext,
+    toolAllowlist: ["group:plugins"],
+    allowGatewaySubagentBinding: true,
+  });
   const pluginTools = resolvePluginTools({
-    context: {
-      config: params.cfg,
-      workspaceDir,
-      agentDir,
-      agentId: params.agentId,
-    },
+    context: toolContext,
     existingToolNames: params.existingToolNames,
     toolAllowlist: ["group:plugins"],
     suppressNameConflicts: true,
