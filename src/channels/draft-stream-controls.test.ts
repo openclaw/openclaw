@@ -160,9 +160,8 @@ describe("draft-stream-controls", () => {
       resolveInflight = res;
     });
     const sendOrEditStreamMessage = vi
-      .fn<[string], Promise<boolean>>()
-      .mockImplementationOnce(() => inflightPromise)
-      .mockResolvedValue(true);
+      .fn((_text: string): Promise<boolean> => Promise.resolve(true))
+      .mockImplementationOnce(() => inflightPromise);
 
     const state = { stopped: false, final: false };
     const controls = createFinalizableDraftStreamControlsForState({
