@@ -11,6 +11,8 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/session history: recover Discord sender labels from hidden runtime-context rows without exposing those rows in dashboard or history output. Thanks @Squirbie.
+- Control UI/sessions: bound the default Sessions tab query to recent activity and fewer rows, avoiding expensive full-history loads while keeping filters editable. Fixes #76050. (#76051) Thanks @Neomail2.
+- Gateway/channels: cap startup fanout at four channel/account handoffs and recover from Bonjour ciao self-probe races, reducing Windows startup stalls with many Telegram accounts. Fixes #75687.
 - CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
 - Agents/failover: exempt run-level timeouts that fire during tool execution from model fallback, timeout-triggered compaction, and generic timeout payload synthesis. Long `process(poll)`, browser, or `exec` tool calls that exceed `agents.defaults.timeoutSeconds` previously rotated auth profiles, switched to a fallback model, and surfaced a misleading "LLM request timed out" error even though the primary model had already responded. Mirrors the existing `timedOutDuringCompaction` precedent (#46889). Fixes #52147. (#75873) Thanks @simonusa.
 
@@ -37,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/ClawHub: prefer versioned ClawPack artifacts when ClawHub publishes digest metadata, verifying the ClawPack response header and downloaded bytes before installing. Thanks @vincentkoc.
 - Plugins/ClawHub: persist ClawPack digest metadata on ClawHub plugin install and update records so registry refreshes and download verification can reuse stored artifact facts. Thanks @vincentkoc.
 - Plugins/ClawHub: allow official bundled-plugin cutovers to prefer ClawHub installs with npm fallback only when the ClawHub package or version is absent. Thanks @vincentkoc.
+- Plugins/onboarding: allow install-on-demand provider setup entries to prefer ClawHub packages before npm/local fallback and persist ClawHub artifact metadata after install. Thanks @vincentkoc.
 - Plugins/Crestodian: add ClawHub plugin search plus Crestodian plugin list/search/install/uninstall operations, with approval and audit coverage for install and uninstall.
 - Channels/thread bindings: replace split subagent/ACP thread-spawn toggles with `threadBindings.spawnSessions`, default thread-bound spawns on, and let `openclaw doctor --fix` migrate the legacy keys. (#75943)
 - Providers/OpenAI: add `extraBody`/`extra_body` passthrough for OpenAI-compatible TTS endpoints, so custom speech servers can receive fields such as `lang` in `/audio/speech` requests. Fixes #39900. Thanks @R3NK0R.
