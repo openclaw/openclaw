@@ -565,6 +565,84 @@ describe("resolveAgentConfig", () => {
     expect(result?.tools?.allow).toEqual(["read"]);
   });
 
+  it("returns runtime, skipBootstrap, models, contextTokens from agent defaults", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skipBootstrap: true,
+          models: {
+            "anthropic/claude-sonnet-4-6": {
+              alias: "sonnet",
+            },
+          },
+          contextTokens: 150000,
+        },
+        list: [{ id: "main" }],
+      },
+    };
+    const result = resolveAgentConfig(cfg, "main");
+
+    expect(result?.skipBootstrap).toBe(true);
+    expect(result?.models).toEqual({
+      "anthropic/claude-sonnet-4-6": {
+        alias: "sonnet",
+      },
+    });
+    expect(result?.contextTokens).toBe(150000);
+  });
+
+  it("includes runtime config with ACP type", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "tui-agent",
+            runtime: {
+              type: "acp",
+              acp: {
+                agent: "custom-acp-agent",
+                mode: "persistent",
+                backend: "custom",
+              },
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentConfig(cfg, "tui-agent");
+
+    expect(result?.runtime).toEqual({
+      type: "acp",
+      acp: {
+        agent: "custom-acp-agent",
+        mode: "persistent",
+        backend: "custom",
+      },
+    });
+  });
+
+  it("per-agent runtime config is included in resolved config", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "acp-agent",
+            runtime: {
+              type: "acp",
+              acp: {
+                mode: "oneshot",
+              },
+            },
+          },
+        ],
+      },
+    };
+    const result = resolveAgentConfig(cfg, "acp-agent");
+
+    expect(result?.runtime?.type).toBe("acp");
+    expect(result?.runtime?.type === "acp" && result.runtime.acp?.mode).toBe("oneshot");
+  });
+
   it("should normalize agent id", () => {
     const cfg: OpenClawConfig = {
       agents: {
