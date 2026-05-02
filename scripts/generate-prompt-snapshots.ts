@@ -54,6 +54,33 @@ async function readSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   );
 }
 
+async function listCommittedSnapshotArtifactPaths(root: string): Promise<string[]> {
+  let committedEntries: string[];
+  try {
+    committedEntries = await fs.readdir(path.resolve(root, HAPPY_PATH_PROMPT_SNAPSHOT_DIR));
+  } catch (error) {
+    if (!hasErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+    committedEntries = [];
+  }
+  return committedEntries
+    .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
+    .map((entry) => path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry));
+}
+
+export async function deleteStalePromptSnapshotFiles(
+  root: string,
+  files: Array<{ path: string }>,
+): Promise<string[]> {
+  const expectedPaths = new Set(files.map((file) => file.path));
+  const stalePaths = (await listCommittedSnapshotArtifactPaths(root)).filter(
+    (snapshotPath) => !expectedPaths.has(snapshotPath),
+  );
+  await Promise.all(stalePaths.map((snapshotPath) => fs.rm(path.resolve(root, snapshotPath))));
+  return stalePaths;
+}
+
 export async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
   const files = createHappyPathPromptSnapshotFiles();
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-snapshots-"));
@@ -69,8 +96,10 @@ export async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapsh
 async function writeSnapshots() {
   const files = await createFormattedPromptSnapshotFiles();
   await fs.mkdir(path.resolve(repoRoot, HAPPY_PATH_PROMPT_SNAPSHOT_DIR), { recursive: true });
+  const deleted = await deleteStalePromptSnapshotFiles(repoRoot, files);
   await writeSnapshotFiles(repoRoot, files);
-  console.log(`Wrote ${files.length} prompt snapshot files.`);
+  const deletedSummary = deleted.length > 0 ? ` Deleted ${deleted.length} stale file(s).` : "";
+  console.log(`Wrote ${files.length} prompt snapshot files.${deletedSummary}`);
 }
 
 async function checkSnapshots() {
@@ -90,20 +119,7 @@ async function checkSnapshots() {
       mismatches.push(`${file.path}: differs from generated output`);
     }
   }
-  let committedEntries: string[];
-  try {
-    committedEntries = await fs.readdir(path.resolve(repoRoot, HAPPY_PATH_PROMPT_SNAPSHOT_DIR));
-  } catch (error) {
-    if (!hasErrorCode(error, "ENOENT")) {
-      throw error;
-    }
-    committedEntries = [];
-  }
-  for (const entry of committedEntries) {
-    if (!entry.endsWith(".md") && !entry.endsWith(".json")) {
-      continue;
-    }
-    const snapshotPath = path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry);
+  for (const snapshotPath of await listCommittedSnapshotArtifactPaths(repoRoot)) {
     if (!expectedPaths.has(snapshotPath)) {
       mismatches.push(`${snapshotPath}: stale file (not generated)`);
     }
