@@ -5,6 +5,7 @@ import type {
   WAPresence,
 } from "@whiskeysockets/baileys";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import { isWhatsAppNewsletterJid } from "../normalize.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
 import { toWhatsappJid } from "../text-runtime.js";
 import {
@@ -135,6 +136,9 @@ export function createWebSendApi(params: {
     },
     sendComposingTo: async (to: string): Promise<void> => {
       const jid = toWhatsappJid(to);
+      if (isWhatsAppNewsletterJid(jid)) {
+        return;
+      }
       await params.sock.sendPresenceUpdate("composing", jid);
     },
   } as const;
