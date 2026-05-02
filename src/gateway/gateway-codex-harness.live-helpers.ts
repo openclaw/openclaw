@@ -91,6 +91,7 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
   const normalized = text.toLowerCase();
   const mentionsOpenClawStatus =
     normalized.includes("openclaw is running on") ||
+    /openclaw\s+\S+\s+is running on/u.test(normalized) ||
     normalized.includes("openclaw status:") ||
     normalized.includes("status: running on") ||
     normalized.includes("session status: running on");
@@ -103,6 +104,7 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     normalized.includes("current session is `agent:dev:live-codex-harness`") ||
     normalized.includes("current session is agent:dev:live-codex-harness") ||
     normalized.includes("session context is healthy") ||
+    normalized.includes("session is healthy:") ||
     ((normalized.includes("session context") || normalized.includes("context is at")) &&
       normalized.includes("active task: `/codex status`"));
   const mentionsModel =
