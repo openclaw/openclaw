@@ -1734,7 +1734,11 @@ export class AcpSessionManager {
     runtime?: AcpRuntime;
     meta?: SessionAcpMeta;
   }): Promise<boolean> {
-    if (params.attempt > 0 || params.sawTurnOutput) {
+    if (params.attempt > 0) {
+      return false;
+    }
+    if (params.sawTurnOutput) {
+      await this.clearStalePersistentResumeStateAfterPartialTurn(params);
       return false;
     }
     if (this.isRecoverableAcpxExitError(params.error.message)) {
@@ -1773,9 +1777,37 @@ export class AcpSessionManager {
     }
     this.clearCachedRuntimeState(params.sessionKey);
     logVerbose(
-      `acp-manager: retrying ${params.sessionKey} with a fresh persistent session after missing backend resume target: ${params.error.message}`,
+      `acp-manager: retrying ${params.sessionKey} with a fresh persistent session after stale backend resume target: ${params.error.message}`,
     );
     return true;
+  }
+
+  private async clearStalePersistentResumeStateAfterPartialTurn(params: {
+    cfg: OpenClawConfig;
+    sessionKey: string;
+    error: AcpRuntimeError;
+    runtime?: AcpRuntime;
+    meta?: SessionAcpMeta;
+  }): Promise<void> {
+    if (
+      !params.runtime ||
+      !params.meta ||
+      params.meta.mode !== "persistent" ||
+      !this.isRecoverableMissingPersistentSessionError(params.error.message)
+    ) {
+      return;
+    }
+    const cleared = await this.clearPersistedRuntimeResumeState({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+    if (!cleared) {
+      return;
+    }
+    this.clearCachedRuntimeState(params.sessionKey);
+    logVerbose(
+      `acp-manager: cleared stale persistent resume state for ${params.sessionKey} after partial replay failure: ${params.error.message}`,
+    );
   }
 
   private isRecoverableAcpxExitError(message: string): boolean {
@@ -1786,7 +1818,9 @@ export class AcpSessionManager {
     const normalized = message.trim();
     return (
       /persistent acp session .* could not be resumed/i.test(normalized) &&
-      /(resource not found|no matching session)/i.test(normalized)
+      /(resource not found|no matching session|timed out waiting for session replay drain)/i.test(
+        normalized,
+      )
     );
   }
 
