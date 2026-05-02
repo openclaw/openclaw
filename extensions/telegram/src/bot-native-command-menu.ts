@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import type { Bot } from "grammy";
+import { loadJsonFile, saveJsonFile } from "openclaw/plugin-sdk/json-store";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
@@ -19,6 +22,11 @@ export type TelegramMenuCommand = {
 type TelegramPluginCommandSpec = {
   name: unknown;
   description: unknown;
+};
+
+type CommandHashCacheFile = {
+  version?: unknown;
+  hashes?: unknown;
 };
 
 function countTelegramCommandText(value: string): number {
@@ -211,25 +219,68 @@ export function hashCommandList(commands: TelegramMenuCommand[]): string {
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
 }
 
-// Keep the sync cache process-local so restarts always re-register commands.
 const syncedCommandHashes = new Map<string, string>();
 
 function getCommandHashKey(accountId?: string, botIdentity?: string): string {
-  return `${accountId ?? "default"}:${botIdentity ?? ""}`;
+  const rawKey = `${accountId ?? "default"}\0${botIdentity ?? ""}`;
+  return createHash("sha256").update(rawKey).digest("hex").slice(0, 24);
 }
 
-function readCachedCommandHash(accountId?: string, botIdentity?: string): string | null {
+function getDefaultCommandHashCachePath(): string {
+  return path.join(resolveStateDir(), "telegram", "command-menu-hashes.json");
+}
+
+function readCommandHashCacheFile(commandHashCachePath: string): Record<string, string> {
+  const raw = loadJsonFile<CommandHashCacheFile>(commandHashCachePath);
+  if (!raw || typeof raw !== "object" || !raw.hashes || typeof raw.hashes !== "object") {
+    return {};
+  }
+
+  const hashes: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw.hashes)) {
+    if (typeof value === "string") {
+      hashes[key] = value;
+    }
+  }
+  return hashes;
+}
+
+function readCachedCommandHash(
+  accountId: string | undefined,
+  botIdentity: string | undefined,
+  commandHashCachePath: string,
+): string | null {
   const key = getCommandHashKey(accountId, botIdentity);
-  return syncedCommandHashes.get(key) ?? null;
+  const cachedHash = syncedCommandHashes.get(key);
+  if (cachedHash) {
+    return cachedHash;
+  }
+
+  const hashes = readCommandHashCacheFile(commandHashCachePath);
+  const persistedHash = hashes[key];
+  if (!persistedHash) {
+    return null;
+  }
+  syncedCommandHashes.set(key, persistedHash);
+  return persistedHash;
 }
 
 function writeCachedCommandHash(
   accountId: string | undefined,
   botIdentity: string | undefined,
   hash: string,
+  commandHashCachePath: string,
+  runtime: RuntimeEnv,
 ): void {
   const key = getCommandHashKey(accountId, botIdentity);
   syncedCommandHashes.set(key, hash);
+  try {
+    const hashes = readCommandHashCacheFile(commandHashCachePath);
+    hashes[key] = hash;
+    saveJsonFile(commandHashCachePath, { version: 1, hashes });
+  } catch (err) {
+    runtime.log?.(`telegram: command menu hash cache write failed: ${String(err)}`);
+  }
 }
 
 export function syncTelegramMenuCommands(params: {
@@ -238,15 +289,17 @@ export function syncTelegramMenuCommands(params: {
   commandsToRegister: TelegramMenuCommand[];
   accountId?: string;
   botIdentity?: string;
+  commandHashCachePath?: string;
 }): void {
   const { bot, runtime, commandsToRegister, accountId, botIdentity } = params;
+  const commandHashCachePath = params.commandHashCachePath ?? getDefaultCommandHashCachePath();
   const sync = async () => {
     // Skip sync if the command list hasn't changed since the last successful
     // sync. This prevents hitting Telegram's 429 rate limit when the gateway
     // is restarted several times in quick succession.
     // See: openclaw/openclaw#32017
     const currentHash = hashCommandList(commandsToRegister);
-    const cachedHash = readCachedCommandHash(accountId, botIdentity);
+    const cachedHash = readCachedCommandHash(accountId, botIdentity, commandHashCachePath);
     if (cachedHash === currentHash) {
       logVerbose("telegram: command menu unchanged; skipping sync");
       return;
@@ -269,7 +322,7 @@ export function syncTelegramMenuCommands(params: {
         runtime.log?.("telegram: deleteMyCommands failed; skipping empty-menu hash cache write");
         return;
       }
-      writeCachedCommandHash(accountId, botIdentity, currentHash);
+      writeCachedCommandHash(accountId, botIdentity, currentHash, commandHashCachePath, runtime);
       return;
     }
 
@@ -291,7 +344,7 @@ export function syncTelegramMenuCommands(params: {
             }),
           );
         }
-        writeCachedCommandHash(accountId, botIdentity, currentHash);
+        writeCachedCommandHash(accountId, botIdentity, currentHash, commandHashCachePath, runtime);
         return;
       } catch (err) {
         if (!isBotCommandsTooMuchError(err)) {

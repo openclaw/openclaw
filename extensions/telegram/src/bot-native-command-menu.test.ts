@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildCappedTelegramMenuCommands,
@@ -13,6 +16,7 @@ type SyncMenuOptions = {
   commandsToRegister: Parameters<typeof syncTelegramMenuCommands>[0]["commandsToRegister"];
   accountId: string;
   botIdentity: string;
+  commandHashCachePath?: string;
   runtimeLog?: ReturnType<typeof vi.fn>;
   runtimeError?: ReturnType<typeof vi.fn>;
 };
@@ -30,7 +34,12 @@ function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
     commandsToRegister: options.commandsToRegister,
     accountId: options.accountId,
     botIdentity: options.botIdentity,
-  });
+    commandHashCachePath: options.commandHashCachePath,
+  } as Parameters<typeof syncTelegramMenuCommands>[0] & { commandHashCachePath?: string });
+}
+
+function createCommandHashCachePath(): string {
+  return path.join(mkdtempSync(path.join(tmpdir(), "openclaw-telegram-menu-")), "hashes.json");
 }
 
 describe("bot-native-command-menu", () => {
@@ -224,6 +233,52 @@ describe("bot-native-command-menu", () => {
 
     // setMyCommands should NOT have been called a second time.
     expect(setMyCommands).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips sync across restarts when the persisted command hash is unchanged (#32017)", async () => {
+    const cachePath = createCommandHashCachePath();
+    const accountId = `test-persisted-cache-${Date.now()}`;
+    const botIdentity = "bot-token-that-must-not-be-persisted";
+    const commands = [{ command: "persisted_cache", description: "Persisted cache test" }];
+
+    {
+      const { syncTelegramMenuCommands: firstSync } = await import("./bot-native-command-menu.js");
+      const deleteMyCommands = vi.fn(async () => undefined);
+      const setMyCommands = vi.fn(async () => undefined);
+      firstSync({
+        bot: {
+          api: { deleteMyCommands, setMyCommands },
+        } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        commandsToRegister: commands,
+        accountId,
+        botIdentity,
+        commandHashCachePath: cachePath,
+      } as Parameters<typeof syncTelegramMenuCommands>[0] & { commandHashCachePath?: string });
+      await vi.waitFor(() => expect(setMyCommands).toHaveBeenCalledTimes(1));
+    }
+
+    vi.resetModules();
+
+    const { syncTelegramMenuCommands: secondSync } = await import("./bot-native-command-menu.js");
+    const deleteMyCommands = vi.fn(async () => undefined);
+    const setMyCommands = vi.fn(async () => undefined);
+    secondSync({
+      bot: {
+        api: { deleteMyCommands, setMyCommands },
+      } as unknown as Parameters<typeof syncTelegramMenuCommands>[0]["bot"],
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      commandsToRegister: commands,
+      accountId,
+      botIdentity,
+      commandHashCachePath: cachePath,
+    } as Parameters<typeof syncTelegramMenuCommands>[0] & { commandHashCachePath?: string });
+
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(deleteMyCommands).not.toHaveBeenCalled();
+    expect(setMyCommands).not.toHaveBeenCalled();
+    expect(existsSync(cachePath)).toBe(true);
+    expect(readFileSync(cachePath, "utf8")).not.toContain(botIdentity);
   });
 
   it("does not reuse cached hash across different bot identities", async () => {
