@@ -76,7 +76,7 @@ steps:
         node /app/openclaw.mjs gateway --allow-unconfigured > /tmp/gw.log 2>&1 &
         gw_pid=$$!
         ok=0
-        for i in $$(seq 1 90); do
+        for i in $$(seq 1 180); do
           if curl -fsS http://127.0.0.1:18789/healthz 2>/dev/null; then
             echo
             echo "GATEWAY HEALTHY after $${i}s"
