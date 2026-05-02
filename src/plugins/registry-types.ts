@@ -50,6 +50,7 @@ import type {
   OpenClawPluginToolFactory,
   PluginConversationBindingResolvedEvent,
   PluginHookRegistration as TypedPluginHookRegistration,
+  PluginStatusProvider,
   PluginLogger,
   PluginOrigin,
   PluginTextTransformRegistration,
@@ -188,6 +189,11 @@ export type PluginAgentHarnessRegistration = {
   harness: AgentHarness;
   source: string;
   rootDir?: string;
+};
+
+export type PluginStatusProviderRegistration = {
+  pluginId: string;
+  provider: PluginStatusProvider;
 };
 
 export type PluginHookRegistration = {
@@ -381,6 +387,7 @@ export type PluginRecord = {
 
 export type PluginRegistry = {
   plugins: PluginRecord[];
+  statusProviders: PluginStatusProviderRegistration[];
   tools: PluginToolRegistration[];
   hooks: PluginHookRegistration[];
   typedHooks: TypedPluginHookRegistration[];

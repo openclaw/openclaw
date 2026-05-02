@@ -18,6 +18,7 @@ export type BuildPluginApiParams = {
   handlers?: Partial<
     Pick<
       OpenClawPluginApi,
+      | "registerStatusProvider"
       | "registerTool"
       | "registerHook"
       | "registerHttpRoute"
@@ -77,6 +78,7 @@ export type BuildPluginApiParams = {
   >;
 };
 
+const noopRegisterStatusProvider: OpenClawPluginApi["registerStatusProvider"] = () => {};
 const noopRegisterTool: OpenClawPluginApi["registerTool"] = () => {};
 const noopRegisterHook: OpenClawPluginApi["registerHook"] = () => {};
 const noopRegisterHttpRoute: OpenClawPluginApi["registerHttpRoute"] = () => {};
@@ -165,6 +167,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     pluginConfig: params.pluginConfig,
     runtime: params.runtime,
     logger: params.logger,
+    registerStatusProvider: handlers.registerStatusProvider ?? noopRegisterStatusProvider,
     registerTool: handlers.registerTool ?? noopRegisterTool,
     registerHook: handlers.registerHook ?? noopRegisterHook,
     registerHttpRoute: handlers.registerHttpRoute ?? noopRegisterHttpRoute,
