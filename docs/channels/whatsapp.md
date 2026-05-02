@@ -160,6 +160,8 @@ Example lane layout:
 - `Frank - Main` for normal decisions and coordination
 - `Frank - Code` for coding tasks, PRs, and repo work
 - `Frank - Research` for web research, client/investor research, and synthesis
+- `Frank - Deal Docs` for one-pagers, investment memos, and investor materials
+- `Frank - CeeCee` for agency/client operations, websites, email, analytics, and task follow-up
 - `Frank - Ops` for monitoring, inbox triage, and operational follow-up
 
 Minimal single-agent setup keeps the same agent/personality but isolates context
@@ -175,6 +177,8 @@ per WhatsApp group JID:
         "120363000000001@g.us": { requireMention: false }, // Frank - Main
         "120363000000002@g.us": { requireMention: false }, // Frank - Code
         "120363000000003@g.us": { requireMention: false }, // Frank - Research
+        "120363000000004@g.us": { requireMention: false }, // Frank - Deal Docs
+        "120363000000005@g.us": { requireMention: false }, // Frank - CeeCee
       },
     },
   },
@@ -201,6 +205,16 @@ sandbox, and model/runtime policy:
         instructions: "You are the research lane. Cite sources and separate facts from judgment.",
       },
       {
+        id: "deal-docs",
+        workspace: "~/.openclaw/workspace-deal-docs",
+        instructions: "You are the deal-docs lane. Draft one-pagers, investment memos, and investor materials with clear claims, evidence, risks, and asks.",
+      },
+      {
+        id: "ceecee",
+        workspace: "~/.openclaw/workspace-ceecee",
+        instructions: "You are the CeeCee agency lane. Track client operations, websites, email, analytics, renewals, tasks, and weekly checks.",
+      },
+      {
         id: "ops",
         workspace: "~/.openclaw/workspace-ops",
         instructions: "You are the operations lane. Track blockers, follow-ups, and alerts.",
@@ -217,8 +231,16 @@ sandbox, and model/runtime policy:
       match: { channel: "whatsapp", peer: { kind: "group", id: "120363000000003@g.us" } },
     },
     {
-      agentId: "ops",
+      agentId: "deal-docs",
       match: { channel: "whatsapp", peer: { kind: "group", id: "120363000000004@g.us" } },
+    },
+    {
+      agentId: "ceecee",
+      match: { channel: "whatsapp", peer: { kind: "group", id: "120363000000005@g.us" } },
+    },
+    {
+      agentId: "ops",
+      match: { channel: "whatsapp", peer: { kind: "group", id: "120363000000006@g.us" } },
     },
   ],
 }
