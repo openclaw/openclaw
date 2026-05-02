@@ -13,9 +13,11 @@ const hoisted = await vi.hoisted(async () => {
       injectedFiles: [],
       sandboxRuntime: { sandboxed: false, mode: "off" },
     })),
-    writeFileMock: vi.fn(async () => undefined),
-    mkdirMock: vi.fn(async () => undefined),
-    accessMock: vi.fn(async () => undefined),
+    writeFileMock: vi.fn(
+      async (_filePath: string, _data: string, _encoding?: BufferEncoding) => undefined,
+    ),
+    mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
+    accessMock: vi.fn(async (_filePath: string) => undefined),
     exportHtmlTemplateContents: new Map<string, string>(),
   };
 });
