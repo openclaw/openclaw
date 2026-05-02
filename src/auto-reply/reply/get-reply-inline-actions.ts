@@ -2,6 +2,19 @@ import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import type { BlockReplyChunking } from "../../agents/pi-embedded-block-chunker.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
+import {
+  resolveEffectiveToolPolicy,
+  resolveGroupToolPolicy,
+  resolveSubagentToolPolicyForSession,
+} from "../../agents/pi-tools.policy.js";
+import {
+  applyToolPolicyPipeline,
+  buildDefaultToolPolicyPipelineSteps,
+} from "../../agents/tool-policy-pipeline.js";
+import { getPluginToolMeta } from "../../plugins/tools.js";
+import { logWarn } from "../../logger.js";
+import { resolveToolProfilePolicy } from "../../agents/tool-policy-shared.js";
+import { mergeAlsoAllowPolicy } from "../../agents/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -288,7 +301,61 @@ export async function handleInlineActions(params: {
       });
       const authorizedTools = applyOwnerOnlyToolPolicy(tools, command.senderIsOwner);
 
-      const tool = authorizedTools.find((candidate) => candidate.name === dispatch.toolName);
+      // Apply the same tool-policy pipeline used by normal agent turns.
+      const {
+        agentId: resolvedAgentId,
+        globalPolicy,
+        globalProviderPolicy,
+        agentPolicy,
+        agentProviderPolicy,
+        profile,
+        providerProfile,
+        profileAlsoAllow,
+        providerProfileAlsoAllow,
+      } = resolveEffectiveToolPolicy({
+        config: cfg,
+        sessionKey,
+        agentId,
+      });
+      const groupPolicy = resolveGroupToolPolicy({
+        config: cfg,
+        sessionKey,
+        groupId: extractExplicitGroupId(ctx.From),
+      });
+      const profilePolicy = resolveToolProfilePolicy(profile);
+      const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
+      const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
+        profilePolicy,
+        profileAlsoAllow ?? [],
+      );
+      const providerProfilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(
+        providerProfilePolicy,
+        providerProfileAlsoAllow ?? [],
+      );
+      const subagentPolicy = resolveSubagentToolPolicyForSession(cfg, sessionKey);
+
+      const policyFilteredTools = applyToolPolicyPipeline({
+        tools: authorizedTools,
+        toolMeta: (tool) => getPluginToolMeta(tool),
+        warn: logWarn,
+        steps: [
+          ...buildDefaultToolPolicyPipelineSteps({
+            profilePolicy: profilePolicyWithAlsoAllow,
+            profile,
+            providerProfilePolicy: providerProfilePolicyWithAlsoAllow,
+            providerProfile,
+            globalPolicy,
+            globalProviderPolicy,
+            agentPolicy,
+            agentProviderPolicy,
+            groupPolicy,
+            agentId: resolvedAgentId,
+          }),
+          { policy: subagentPolicy, label: "subagent tools.allow" },
+        ],
+      });
+
+      const tool = policyFilteredTools.find((candidate) => candidate.name === dispatch.toolName);
       if (!tool) {
         typing.cleanup();
         return { kind: "reply", reply: { text: `❌ Tool not available: ${dispatch.toolName}` } };
