@@ -25,8 +25,8 @@ import {
 } from "./oauth-shared.js";
 import { ensureAuthStoreFile, resolveAuthStorePath, resolveOAuthRefreshLockPath } from "./paths.js";
 import {
-  ensureAuthProfileStore,
-  loadAuthProfileStoreForSecretsRuntime,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  loadAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
   resolvePersistedAuthProfileOwnerAgentDir,
   updateAuthProfileStoreWithLock,
@@ -143,7 +143,7 @@ async function loadFreshStoredOAuthCredential(params: {
   previous?: Pick<OAuthCredential, "access" | "refresh" | "expires">;
   requireChange?: boolean;
 }): Promise<OAuthCredential | null> {
-  const reloadedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+  const reloadedStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
   const reloaded = reloadedStore.profiles[params.profileId];
   if (
     reloaded?.type !== "oauth" ||
@@ -217,7 +217,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       return null;
     }
     try {
-      const mainStore = ensureAuthProfileStore(undefined);
+      const mainStore = ensureAuthProfileStoreWithoutExternalProfiles(undefined, {
+        allowKeychainPrompt: false,
+      });
       const mainCred = mainStore.profiles[params.profileId];
       if (
         mainCred?.type === "oauth" &&
@@ -325,7 +327,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     try {
       return await withFileLock(globalRefreshLockPath, OAUTH_REFRESH_LOCK_OPTIONS, async () =>
         withFileLock(authPath, AUTH_STORE_LOCK_OPTIONS, async () => {
-          const store = loadAuthProfileStoreForSecretsRuntime(ownerAgentDir);
+          const store = loadAuthProfileStoreWithoutExternalProfiles(ownerAgentDir);
           const cred = store.profiles[params.profileId];
           if (!cred || cred.type !== "oauth") {
             return null;
@@ -341,7 +343,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
 
           if (params.agentDir) {
             try {
-              const mainStore = loadAuthProfileStoreForSecretsRuntime(undefined);
+              const mainStore = loadAuthProfileStoreWithoutExternalProfiles(undefined);
               const mainCred = mainStore.profiles[params.profileId];
               if (
                 mainCred?.type === "oauth" &&
@@ -517,7 +519,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       });
       return refreshed;
     } catch (error) {
-      const refreshedStore = loadAuthProfileStoreForSecretsRuntime(params.agentDir);
+      const refreshedStore = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
       const refreshed = refreshedStore.profiles[params.profileId];
       if (refreshed?.type === "oauth" && hasUsableOAuthCredential(refreshed)) {
         return {
@@ -560,7 +562,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
       }
       if (params.agentDir) {
         try {
-          const mainStore = ensureAuthProfileStore(undefined);
+          const mainStore = ensureAuthProfileStoreWithoutExternalProfiles(undefined, {
+            allowKeychainPrompt: false,
+          });
           const mainCred = mainStore.profiles[params.profileId];
           if (
             mainCred?.type === "oauth" &&
