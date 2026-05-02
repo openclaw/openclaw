@@ -308,9 +308,18 @@ describe("isTransientFileWatchError", () => {
     ).toBe(true);
   });
 
-  it("returns true for watcher-related error messages", () => {
+  it("returns true for watcher-related ENOSPC messages", () => {
     expect(isTransientFileWatchError(new Error("watcher error: ENOSPC"))).toBe(true);
-    expect(isTransientFileWatchError(new Error("file watcher failed"))).toBe(true);
+    expect(isTransientFileWatchError(new Error("file watcher: no space left on device"))).toBe(
+      true,
+    );
+  });
+
+  it("returns false for generic code-less watcher messages", () => {
+    expect(isTransientFileWatchError(new Error("file watcher failed"))).toBe(false);
+    expect(isTransientFileWatchError(new Error("watcher error: boom"))).toBe(false);
+    expect(isTransientUnhandledRejectionError(new Error("file watcher failed"))).toBe(false);
+    expect(isTransientUnhandledRejectionError(new Error("watcher error: boom"))).toBe(false);
   });
 
   it("returns true for ENOSPC with cause chain containing watch indicator", () => {

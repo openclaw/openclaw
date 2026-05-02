@@ -371,6 +371,12 @@ export function isTransientFileWatchError(err: unknown): boolean {
     message.includes("file watcher") ||
     message.includes("watch limit") ||
     message.includes("max watches");
+  const hasFileWatchExhaustionSignal = (message: string) =>
+    message.includes("inotify watches") ||
+    message.includes("inotify watch") ||
+    message.includes("system limit for number of file watchers") ||
+    message.includes("watch limit") ||
+    message.includes("max watches");
 
   for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
     // Skip non-object candidates early
@@ -393,16 +399,15 @@ export function isTransientFileWatchError(err: unknown): boolean {
       continue;
     }
 
-    // Check for file watcher error message patterns (without ENOSPC code)
+    // Without an ENOSPC code, only classify explicit watcher resource exhaustion.
+    // Generic "file watcher failed" labels can wrap permission/config/runtime failures.
     if (!message) {
       continue;
     }
     if (
       ((message.includes("no space left on device") || message.includes("enosp")) &&
         hasFileWatchSignal(message)) ||
-      message.includes("inotify watches") ||
-      message.includes("file watcher") ||
-      message.includes("watcher error")
+      hasFileWatchExhaustionSignal(message)
     ) {
       return true;
     }
