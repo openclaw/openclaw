@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { applyRuntimeLegacyConfigMigrations } from "../commands/doctor/shared/runtime-compat-api.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -940,7 +939,7 @@ describe("config strict validation", () => {
     });
   });
 
-  it("accepts legacy messages.tts provider keys via auto-migration and reports legacyIssues", async () => {
+  it("reports legacy messages.tts provider keys without read-time auto-migration", async () => {
     const raw = {
       messages: {
         tts: {
@@ -953,29 +952,13 @@ describe("config strict validation", () => {
       },
     };
     const issues = findLegacyConfigIssues(raw);
-    const migrated = applyRuntimeLegacyConfigMigrations(raw);
 
     expect(issues.some((issue) => issue.path === "messages.tts")).toBe(true);
-    expect(migrated.next).not.toBeNull();
-
-    const next = migrated.next as {
-      messages?: {
-        tts?: {
-          providers?: {
-            elevenlabs?: {
-              apiKey?: string;
-              voiceId?: string;
-            };
-          };
-          elevenlabs?: unknown;
-        };
-      };
-    } | null;
-    expect(next?.messages?.tts?.providers?.elevenlabs).toEqual({
+    expect(raw.messages.tts.elevenlabs).toEqual({
       apiKey: "test-key",
       voiceId: "voice-1",
     });
-    expect(next?.messages?.tts?.elevenlabs).toBeUndefined();
+    expect(raw.messages.tts).not.toHaveProperty("providers");
   });
 
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {

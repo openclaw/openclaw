@@ -102,10 +102,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("npm-latest-conformance");
     expect(script).toContain("npm-latest-adversarial");
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
-    expect(script).toContain("clawhub:openclaw-kitchen-sink@latest");
-    expect(script).toContain("clawhub:openclaw-kitchen-sink@beta");
+    expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
+    expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
+    expect(script).toContain(
+      "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||npm:@openclaw/kitchen-sink@latest",
+    );
     expect(script).toContain("scripts/e2e/lib/kitchen-sink-plugin/sweep.sh");
     expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_SPEC"');
+    expect(sweepScript).toContain('plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"');
+    expect(sweepScript).toContain("assert-cutover-preinstalled");
+    expect(sweepScript).toContain('install_args+=("--force")');
     expect(sweepScript).toContain("KITCHEN_SINK_PERSONALITY");
     expect(sweepScript).toContain("OPENCLAW_KITCHEN_SINK_PERSONALITY");
     expect(sweepScript).toContain('plugins uninstall "$KITCHEN_SINK_SPEC" --force');
@@ -113,7 +119,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       sweepScript.indexOf("run_success_scenario()"),
       sweepScript.indexOf("run_failure_scenario()"),
     );
-    expect(successScenario.indexOf('plugins install "$KITCHEN_SINK_SPEC"')).toBeLessThan(
+    expect(successScenario.indexOf('plugins install "${install_args[@]}"')).toBeLessThan(
       successScenario.indexOf("configure_kitchen_sink_runtime"),
     );
     expect(successScenario.indexOf("configure_kitchen_sink_runtime")).toBeLessThan(
@@ -122,6 +128,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(successScenario).toContain('plugins inspect "$KITCHEN_SINK_ID" --runtime --json');
     expect(successScenario).toContain("plugins inspect --all --runtime --json");
     expect(sweepScript).toContain("run_failure_scenario");
+    expect(assertionsScript).toContain("assertCutoverPreinstalled");
     expect(assertionsScript).toContain("record.source !== source");
     expect(assertionsScript).toContain("record.clawhubPackage !== packageName");
     expect(assertionsScript).toContain("assertClawHubExternalInstallContract");

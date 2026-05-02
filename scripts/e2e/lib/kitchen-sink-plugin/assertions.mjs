@@ -213,6 +213,39 @@ function assertClawHubExternalInstallContract(installPath) {
   }
 }
 
+function inferInstallSource(spec) {
+  if (spec?.startsWith("npm:")) {
+    return "npm";
+  }
+  if (spec?.startsWith("clawhub:")) {
+    return "clawhub";
+  }
+  return null;
+}
+
+function assertCutoverPreinstalled() {
+  const pluginId = process.env.KITCHEN_SINK_ID;
+  const preinstallSpec = process.env.KITCHEN_SINK_PREINSTALL_SPEC;
+  const source = inferInstallSource(preinstallSpec);
+  if (!pluginId || !preinstallSpec || !source) {
+    throw new Error(`invalid kitchen-sink cutover preinstall spec: ${preinstallSpec}`);
+  }
+
+  const indexPath = path.join(process.env.HOME, ".openclaw", "plugins", "installs.json");
+  const index = readJson(indexPath);
+  const record = (index.installRecords ?? index.records ?? {})[pluginId];
+  if (!record) {
+    throw new Error(`missing kitchen-sink cutover preinstall record for ${pluginId}`);
+  }
+  if (record.source !== source) {
+    throw new Error(`expected kitchen-sink preinstall source=${source}, got ${record.source}`);
+  }
+  const expectedSpec = source === "npm" ? preinstallSpec.replace(/^npm:/u, "") : preinstallSpec;
+  if (record.spec !== expectedSpec) {
+    throw new Error(`expected kitchen-sink preinstall spec ${expectedSpec}, got ${record.spec}`);
+  }
+}
+
 function assertInstalled() {
   const pluginId = process.env.KITCHEN_SINK_ID;
   const spec = process.env.KITCHEN_SINK_SPEC;
@@ -412,6 +445,7 @@ const commands = {
   "scan-logs": scanLogs,
   "configure-runtime": configureRuntime,
   "remove-channel-config": removeChannelConfig,
+  "assert-cutover-preinstalled": assertCutoverPreinstalled,
   "assert-installed": assertInstalled,
   "assert-removed": assertRemoved,
 };
