@@ -41,6 +41,24 @@ describe("legacy session maintenance migrate", () => {
   });
 });
 
+describe("legacy session parent fork migrate", () => {
+  it("removes legacy session.parentForkMaxTokens", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        store: "sessions.json",
+        parentForkMaxTokens: 200_000,
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      store: "sessions.json",
+    });
+    expect(res.changes).toContain(
+      "Removed session.parentForkMaxTokens; parent fork sizing is automatic.",
+    );
+  });
+});
+
 describe("legacy thread binding spawn migrate", () => {
   it("moves matching split spawn flags to unified spawnSessions", () => {
     const res = migrateLegacyConfigForTest({
