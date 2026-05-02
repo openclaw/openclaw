@@ -49,6 +49,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
+- Plugins/ClawHub: gate bare plugin specs on ClawHub readiness before preferring ClawHub, so packages without deployed ClawPack readiness keep the npm fallback path instead of failing through a half-ready registry route. Thanks @vincentkoc.
 - Plugins/source checkout: discover source-only plugins such as Codex from the `extensions/*` workspace while using npm package excludes as the packaged-core boundary, removing the stale core-bundle metadata path.
 - Plugins/ClawHub: install ClawPack artifacts from the explicit npm-pack `.tgz` resolver path and persist artifact kind, npm integrity, shasum, and tarball metadata for update and diagnostics flows. Thanks @vincentkoc.
 - Control UI: allow deployments to configure grouped chat message max-width with a validated `gateway.controlUi.chatMessageMaxWidth` setting instead of patching bundled CSS after upgrades. Fixes #67935. Thanks @xiew4589-lang.

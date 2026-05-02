@@ -66,8 +66,9 @@ Site: [clawhub.ai](https://clawhub.ai)
     ```
 
     `plugins search` queries the ClawHub plugin catalog and prints install-ready
-    package names. Bare npm-safe plugin specs are also tried against ClawHub
-    before npm:
+    package names. Bare npm-safe plugin specs use ClawHub only after package
+    readiness says the package is install-ready for OpenClaw; otherwise OpenClaw
+    preserves npm fallback:
 
     ```bash
     openclaw plugins install openclaw-codex-app-server

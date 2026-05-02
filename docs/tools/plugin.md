@@ -465,7 +465,7 @@ openclaw plugins registry                  # inspect persisted registry state
 openclaw plugins registry --refresh        # rebuild persisted registry
 openclaw doctor --fix                      # repair plugin registry state
 
-openclaw plugins install <package>         # install (ClawHub first, then npm)
+openclaw plugins install <package>         # install (readiness-gated ClawHub, then npm)
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
 openclaw plugins install npm:<pkg>         # install from npm only
 openclaw plugins install git:<repo>        # install from git
