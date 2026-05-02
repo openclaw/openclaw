@@ -31,6 +31,24 @@ function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }
 
+function resolveHomePath(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return "";
+  }
+  if (value === "~") {
+    return process.env.HOME || value;
+  }
+  if (value.startsWith("~/")) {
+    return path.join(process.env.HOME || "", value.slice(2));
+  }
+  return value;
+}
+
+function isPathInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function write(file, contents) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents);
@@ -375,12 +393,30 @@ function assertConfiguredPluginInstalls() {
     matrix.source === "clawhub" || matrix.source === "npm",
     `configured external matrix plugin installed from unexpected source: ${matrix.source}`,
   );
+  const installPath = resolveHomePath(matrix.installPath);
+  assert(
+    installPath,
+    `configured external matrix plugin installPath missing: ${JSON.stringify(matrix)}`,
+  );
+  assert(
+    fs.existsSync(installPath),
+    `configured external matrix plugin installPath missing on disk: ${installPath}`,
+  );
+  assert(
+    fs.existsSync(path.join(installPath, "package.json")),
+    `configured external matrix plugin package.json missing: ${installPath}`,
+  );
   if (matrix.source === "clawhub") {
     assert(
       String(matrix.spec ?? "").startsWith("clawhub:@openclaw/matrix"),
       "configured external matrix plugin ClawHub spec changed",
     );
   } else {
+    const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+    assert(
+      isPathInside(npmRoot, installPath),
+      `configured external matrix npm install path outside managed npm root: ${installPath}`,
+    );
     assert(
       String(matrix.spec ?? matrix.resolvedSpec ?? "").startsWith("@openclaw/matrix"),
       "configured external matrix plugin npm spec changed",
