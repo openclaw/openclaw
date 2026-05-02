@@ -2227,6 +2227,79 @@ describe("runWithModelFallback", () => {
       expect(run).toHaveBeenCalledTimes(1);
     });
 
+    it("rethrows when thrown error has TimeoutError in cause chain (embedded run-budget timer)", async () => {
+      // The embedded runner aborts a *private* runAbortController on
+      // run-budget timeout — `params.abortSignal` (the caller signal) is
+      // never aborted. abortable() then wraps the rejection in an outer
+      // AbortError whose .cause is the TimeoutError. The fallback layer
+      // must inspect the thrown error's cause chain (not just the signal).
+      // Closes #60388.
+      const cfg = makeCfg();
+      const innerTimeout = new Error("request timed out");
+      innerTimeout.name = "TimeoutError";
+      const outerAbort = new Error("aborted", { cause: innerTimeout });
+      outerAbort.name = "AbortError";
+      const run = vi.fn().mockRejectedValue(outerAbort);
+
+      // Note: NO abortSignal passed — caller signal is irrelevant for this
+      // path. The terminal classification must come from the thrown error.
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when thrown error has ClientDisconnectError in cause chain", async () => {
+      // Parallel to the run-budget case: HTTP client disconnect can also
+      // surface as a wrapped AbortError whose .cause is a
+      // ClientDisconnectError. The fallback layer must recognize it via
+      // the thrown error even when params.abortSignal is unused.
+      const cfg = makeCfg();
+      const innerDisconnect = new Error("client disconnected");
+      innerDisconnect.name = "ClientDisconnectError";
+      const outerAbort = new Error("aborted", { cause: innerDisconnect });
+      outerAbort.name = "AbortError";
+      const run = vi.fn().mockRejectedValue(outerAbort);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back normally when thrown error is generic AbortError without terminal cause", async () => {
+      // Sanity: a generic AbortError (e.g. user pressed Esc but signal not
+      // tagged) should NOT trigger terminal-from-error detection — it falls
+      // through to the existing fallback path.
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("provider transient failure"))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
     it("falls back normally when signal is aborted with a non-terminal reason", async () => {
       // A signal aborted with a generic error (e.g. provider-specific failure)
       // should NOT skip fallback — that's a regular failover situation.

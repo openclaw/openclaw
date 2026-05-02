@@ -60,6 +60,17 @@ export type EmbeddedRunAttemptResult = {
   timedOutDuringCompaction: boolean;
   /** Optional because this type is re-exported as `AgentHarnessAttemptResult`. */
   timedOutDuringToolExecution?: boolean;
+  /**
+   * True when the embedded run-budget timer (`scheduleAbortTimer`) fired,
+   * exhausting the whole-run deadline. Distinct from `idleTimedOut`
+   * (per-LLM-call streaming idle, where retrying with a fallback model can
+   * help) and from caller-signal aborts: this is the "run is over regardless
+   * of which model handles it" case. The model-fallback layer must skip the
+   * fallback chain when this is set. Closes #60388.
+   *
+   * Optional because this type is re-exported as `AgentHarnessAttemptResult`.
+   */
+  timedOutByRunBudget?: boolean;
   promptError: unknown;
   /**
    * Identifies which phase produced the promptError.

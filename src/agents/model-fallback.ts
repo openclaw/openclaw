@@ -192,6 +192,51 @@ function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   return false;
 }
 
+/**
+ * Check if a thrown error itself indicates a terminal abort (vs the
+ * caller-provided signal). Mirrors {@link isTerminalAbort} but inspects the
+ * error's `.cause` chain instead of `signal.reason`. Needed because the
+ * embedded runner's run-budget timer aborts a private `runAbortController`,
+ * not the caller signal — `abortable()` then wraps the rejection in an
+ * outer AbortError whose `.cause` is the original TimeoutError. Closes #60388.
+ */
+function isTerminalAbortFromError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const candidates: unknown[] = [err];
+  if ("cause" in err && err.cause !== undefined) {
+    candidates.push(err.cause);
+    if (err.cause instanceof Error && "cause" in err.cause && err.cause.cause !== undefined) {
+      candidates.push(err.cause.cause);
+    }
+  }
+  for (const candidate of candidates) {
+    if (typeof candidate === "string") {
+      if (TERMINAL_ABORT_REASON_STRINGS.has(candidate)) {
+        return true;
+      }
+      continue;
+    }
+    if (!(candidate instanceof Error)) {
+      continue;
+    }
+    if (candidate.name === "TimeoutError") {
+      return true;
+    }
+    if (candidate.name === "ClientDisconnectError") {
+      return true;
+    }
+    if (
+      typeof candidate.message === "string" &&
+      TERMINAL_ABORT_REASON_STRINGS.has(candidate.message)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function shouldRethrowAbort(err: unknown, signal?: AbortSignal): boolean {
   // Terminal aborts (run timeout, client disconnect) always propagate up.
   // The whole run is over — retrying with another model wastes resources.
@@ -319,7 +364,17 @@ async function runFallbackCandidate<T>(params: {
     // (e.g. a Google Vertex RESOURCE_EXHAUSTED abort that races with the run-budget
     // timer). Check this BEFORE coerceToFailoverError so the normalization path
     // cannot mask a terminal reason. Flagged by greptile review on openclaw/openclaw#62682.
-    if (isTerminalAbort(params.abortSignal)) {
+    //
+    // Two paths are checked:
+    //  (1) `params.abortSignal` — the caller-provided signal. Catches HTTP
+    //      client disconnects (caller aborts on socket close) and any other
+    //      caller-driven terminal abort.
+    //  (2) the thrown error itself — catches the embedded runner's
+    //      run-budget-timer case where the embedded `runAbortController` (a
+    //      *private* controller, not `params.abortSignal`) is aborted with a
+    //      TimeoutError; `abortable()` wraps that as an outer AbortError whose
+    //      `.cause` is the TimeoutError. Closes #60388.
+    if (isTerminalAbort(params.abortSignal) || isTerminalAbortFromError(err)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
