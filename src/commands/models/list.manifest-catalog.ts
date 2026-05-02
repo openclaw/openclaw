@@ -86,7 +86,7 @@ function resolveDeclaredModelCatalogPluginIds(params: {
   });
 }
 
-export function loadManifestCatalogRowsForList(params: {
+function loadManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;
   env?: NodeJS.ProcessEnv;
