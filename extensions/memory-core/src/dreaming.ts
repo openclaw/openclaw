@@ -903,6 +903,22 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
       const currentConfig = resolveCurrentConfig();
+
+      // Bug #65374: Validate ctx.agentId against configured agents (Ghost audit finding)
+      if (ctx.agentId) {
+        const configuredAgentIds = (currentConfig.agents?.list ?? []).map((a: any) =>
+          typeof a?.id === "string" ? a.id.toLowerCase() : "",
+        );
+        if (
+          configuredAgentIds.length > 0 &&
+          !configuredAgentIds.includes(ctx.agentId.toLowerCase())
+        ) {
+          api.logger.warn(
+            `memory-core: ctx.agentId "${ctx.agentId}" not in configured agents list — skipping dreaming`,
+          );
+          return undefined;
+        }
+      }
       const config = await reconcileManagedDreamingCron({
         reason: "runtime",
       });
