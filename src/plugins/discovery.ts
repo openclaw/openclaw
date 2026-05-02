@@ -250,6 +250,7 @@ function isUnsafePluginCandidate(params: {
   diagnostics: PluginDiagnostic[];
   ownershipUid?: number | null;
   realpathCache: Map<string, string>;
+  idHint?: string;
 }): boolean {
   const issue = findCandidateBlockIssue({
     source: params.source,
@@ -261,11 +262,16 @@ function isUnsafePluginCandidate(params: {
   if (!issue) {
     return false;
   }
-  params.diagnostics.push({
-    level: "warn",
-    source: issue.targetPath,
-    message: formatCandidateBlockMessage(issue),
-  });
+  const message = formatCandidateBlockMessage(issue);
+  const key = `${params.idHint ?? ""}::${message}`;
+  if (!params.diagnostics.some((d) => `${d.pluginId ?? ""}::${d.message}` === key)) {
+    params.diagnostics.push({
+      level: "warn",
+      pluginId: params.idHint,
+      source: issue.targetPath,
+      message,
+    });
+  }
   return true;
 }
 
@@ -365,7 +371,12 @@ function mergeDiscoveryResult(
     seenSources.add(key);
     target.candidates.push(candidate);
   }
-  target.diagnostics.push(...source.diagnostics);
+  for (const diag of source.diagnostics) {
+    const key = `${diag.pluginId ?? ""}::${diag.message}`;
+    if (!target.diagnostics.some((d) => `${d.pluginId ?? ""}::${d.message}` === key)) {
+      target.diagnostics.push(diag);
+    }
+  }
 }
 
 function collectInstalledPluginRecordPaths(
@@ -494,8 +505,10 @@ function addCandidate(params: {
       diagnostics: params.diagnostics,
       ownershipUid: params.ownershipUid,
       realpathCache: params.realpathCache,
+      idHint: params.idHint,
     })
   ) {
+    params.seen.add(resolved);
     return;
   }
   params.seen.add(resolved);

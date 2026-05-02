@@ -1210,6 +1210,13 @@ function validateConfigObjectWithPluginsBase(
   const knownIds = ensureKnownIds();
   const normalizedPlugins = ensureNormalizedPlugins();
   const effectiveConfig = ensureCompatConfig();
+  const blockedOwnershipPluginIds = new Set(
+    registry.diagnostics
+      .filter(
+        (diag) => diag.pluginId !== undefined && diag.message.includes("suspicious ownership"),
+      )
+      .map((diag) => diag.pluginId as string),
+  );
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -1219,6 +1226,13 @@ function validateConfigObjectWithPluginsBase(
       warnings.push({
         path,
         message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
+      });
+      return;
+    }
+    if (blockedOwnershipPluginIds.has(pluginId)) {
+      warnings.push({
+        path,
+        message: `plugin ${pluginId} present but blocked by file ownership; run \`chown root:root <plugin-path>\` to allow load`,
       });
       return;
     }

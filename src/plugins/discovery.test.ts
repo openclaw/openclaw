@@ -1553,6 +1553,61 @@ describe("discoverOpenClawPlugins", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
+    "attaches idHint as pluginId on blocked-ownership diagnostics",
+    async () => {
+      const stateDir = makeTempDir();
+      const globalExt = path.join(stateDir, "extensions");
+      mkdirSafe(globalExt);
+      fs.writeFileSync(
+        path.join(globalExt, "my-plugin.ts"),
+        "export default function () {}",
+        "utf-8",
+      );
+
+      const actualUid = (process as NodeJS.Process & { getuid: () => number }).getuid();
+      if (actualUid === 0) {
+        return; // root bypasses ownership check
+      }
+      const result = await discoverWithStateDir(stateDir, { ownershipUid: actualUid + 1 });
+      const blockedDiag = result.diagnostics.find((d) =>
+        d.message.includes("suspicious ownership"),
+      );
+      expect(blockedDiag).toBeDefined();
+      expect(blockedDiag?.pluginId).toBe("my-plugin");
+    },
+  );
+
+  it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
+    "emits blocked-ownership diagnostic only once per path even when seen via multiple discovery paths",
+    async () => {
+      const stateDir = makeTempDir();
+      const globalExt = path.join(stateDir, "extensions");
+      mkdirSafe(globalExt);
+      fs.writeFileSync(
+        path.join(globalExt, "dup-plugin.ts"),
+        "export default function () {}",
+        "utf-8",
+      );
+
+      const actualUid = (process as NodeJS.Process & { getuid: () => number }).getuid();
+      if (actualUid === 0) {
+        return;
+      }
+      // Pass the same extension path twice via extraPaths to force two addCandidate calls.
+      const env = buildDiscoveryEnv(stateDir);
+      const result = await discoverOpenClawPlugins({
+        env,
+        ownershipUid: actualUid + 1,
+        extraPaths: [globalExt, globalExt],
+      });
+      const ownershipDiags = result.diagnostics.filter((d) =>
+        d.message.includes("suspicious ownership"),
+      );
+      expect(ownershipDiags.length).toBe(1);
+    },
+  );
+
   it("reflects plugin root changes on the next discovery call", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
