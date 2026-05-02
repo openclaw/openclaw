@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { __testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
-import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import {
+  __testing as subagentAnnounceTesting,
+  runSubagentAnnounceFlow,
+} from "./subagent-announce.js";
 import * as mod from "./subagent-registry.js";
 
 const noop = () => {};
@@ -163,6 +166,11 @@ describe("subagent registry lifecycle error grace", () => {
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
+      runSubagentAnnounceFlow: (params) =>
+        runSubagentAnnounceFlow({
+          ...params,
+          timeoutMs: Math.min(params.timeoutMs, 1_000),
+        }),
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
