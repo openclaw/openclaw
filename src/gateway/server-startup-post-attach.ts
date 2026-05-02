@@ -511,14 +511,20 @@ export async function startGatewaySidecars(params: {
           );
           enqueueSystemEvent(
             `[pending-inbound] ${skipped} older message${skipped > 1 ? "s" : ""} skipped during restart (queue cap ${MAX_EVENTS})`,
-            { sessionKey },
+            // Internal counts only (skipped count, MAX_EVENTS const). Mark trusted
+            // explicitly to self-document that no external content is interpolated.
+            { sessionKey, trusted: true },
           );
         }
 
         for (const { entry, eventText } of toReplay) {
+          // eventText carries sanitized but user-controlled inbound message
+          // content (sender label, text preview). Mark untrusted so the agent
+          // does not treat the body as a privileged System: directive.
           enqueueSystemEvent(eventText, {
             sessionKey,
             contextKey: `pending-inbound:${entry.channel}${entry.accountId ? `:${entry.accountId}` : ""}:${entry.id}`,
+            trusted: false,
           });
           params.log.warn(
             `pending-inbound: replayed ${entry.channel}:${entry.id} -> session ${sessionKey}`,
@@ -667,9 +673,13 @@ export async function startGatewaySidecars(params: {
           // multiple concurrent stale turns share the same sessionKey (e.g. multi-
           // threaded Discord session). enqueueSystemEvent deduplicates on lastText,
           // so a fixed string would silently drop all but the first recovery notice.
+          // recoveryMessage is a fixed internal string and turn.sessionId is
+          // an internal session identifier; no external content is interpolated.
+          // Mark trusted explicitly to self-document the privileged status.
           enqueueSystemEvent(`[active-turn-recovery:${turn.sessionId}] ${recoveryMessage}`, {
             sessionKey: turn.sessionKey,
             contextKey: `active-turn-recovery:${turn.sessionId}`,
+            trusted: true,
           });
           params.log.warn(
             `active-turn recovery: notified session ${turn.sessionKey} (sessionId=${turn.sessionId}, channel=${turn.channel})`,
