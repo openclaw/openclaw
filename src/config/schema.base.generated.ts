@@ -4818,6 +4818,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               "Combines BM25 keyword matching with vector similarity for better recall on mixed exact + semantic queries. Keep enabled unless you are isolating ranking behavior for troubleshooting.",
                           },
                           fusion: {
+                            type: "string",
                             enum: ["weighted", "rrf"],
                             title: "Memory Search Fusion Mode",
                             description:
@@ -6782,6 +6783,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                               type: "boolean",
                             },
                             fusion: {
+                              type: "string",
                               enum: ["weighted", "rrf"],
                             },
                             vectorWeight: {
@@ -29356,5 +29358,5 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
   },
   version: "2026.5.2",
-  generatedAt: "2026-03-22T21:17:33.302Z",
+  generatedAt: "2026-05-02T14:17:18.782Z",
 };

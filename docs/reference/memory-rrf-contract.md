@@ -19,8 +19,10 @@ Embedding transport remains OpenAI-compatible `/v1/embeddings`; fusion changes s
 ## Fusion Rules
 
 - `weighted`: existing score blend `vectorWeight * vectorScore + textWeight * textScore`.
-- `rrf`: reciprocal-rank fusion with weighted ranks:
-  - `score = vectorWeight/(k + rankVector) + textWeight/(k + rankText)`
+- `rrf`: reciprocal-rank fusion with weighted ranks. Raw contribution is
+  `vectorWeight/(k + rankVector) + textWeight/(k + rankText)` (missing modality omits that term).
+  Fused `score` scales that sum by `(k + 1)/(vectorWeight + textWeight)` so the theoretical maximum
+  (rank 1 in both lists, positive weights) is `1.0`, matching the hybrid `minScore` range.
   - `k = 60` (fixed constant for deterministic behavior and stable tuning).
 
 ## Ordering Guarantees

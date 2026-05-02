@@ -695,12 +695,22 @@ export abstract class MemoryManagerSyncOps {
     const deleteChunksByPathAndSource = this.db.prepare(
       `DELETE FROM chunks WHERE path = ? AND source = ?`,
     );
-    const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
-        ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-          )
-        : null;
+    let deleteVectorRowsStmt: { run: (path: string, source: string) => void } | null = null;
+    const runDeleteVectorRowsForPath = (path: string, source: string) => {
+      if (!this.vector.enabled || !this.vector.available || !this.vector.dims) {
+        return;
+      }
+      if (!deleteVectorRowsStmt) {
+        deleteVectorRowsStmt = this.db.prepare(
+          `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+        );
+      }
+      try {
+        deleteVectorRowsStmt.run(path, source);
+      } catch {
+        // vec table may not exist during earliest bootstrap; chunk delete still runs.
+      }
+    };
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
@@ -769,11 +779,7 @@ export abstract class MemoryManagerSyncOps {
         continue;
       }
       deleteFileByPathAndSource.run(stale.path, "memory");
-      if (deleteVectorRowsByPathAndSource) {
-        try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "memory");
-        } catch {}
-      }
+      runDeleteVectorRowsForPath(stale.path, "memory");
       deleteChunksByPathAndSource.run(stale.path, "memory");
       if (deleteFtsRowsByPathAndSource) {
         try {
@@ -794,12 +800,22 @@ export abstract class MemoryManagerSyncOps {
     const deleteChunksByPathAndSource = this.db.prepare(
       `DELETE FROM chunks WHERE path = ? AND source = ?`,
     );
-    const deleteVectorRowsByPathAndSource =
-      this.vector.enabled && this.vector.available
-        ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
-          )
-        : null;
+    let deleteVectorRowsStmt: { run: (path: string, source: string) => void } | null = null;
+    const runDeleteVectorRowsForPath = (path: string, source: string) => {
+      if (!this.vector.enabled || !this.vector.available || !this.vector.dims) {
+        return;
+      }
+      if (!deleteVectorRowsStmt) {
+        deleteVectorRowsStmt = this.db.prepare(
+          `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+        );
+      }
+      try {
+        deleteVectorRowsStmt.run(path, source);
+      } catch {
+        // vec table may not exist during earliest bootstrap; chunk delete still runs.
+      }
+    };
     const deleteFtsRowsByPathSourceAndModel =
       this.fts.enabled && this.fts.available
         ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
@@ -904,11 +920,7 @@ export abstract class MemoryManagerSyncOps {
         continue;
       }
       deleteFileByPathAndSource.run(stale.path, "sessions");
-      if (deleteVectorRowsByPathAndSource) {
-        try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
-        } catch {}
-      }
+      runDeleteVectorRowsForPath(stale.path, "sessions");
       deleteChunksByPathAndSource.run(stale.path, "sessions");
       if (deleteFtsRowsByPathSourceAndModel) {
         try {

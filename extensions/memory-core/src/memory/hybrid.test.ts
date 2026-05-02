@@ -144,6 +144,12 @@ describe("memory hybrid helpers", () => {
     // "a" appears in both ranked lists, so it wins in RRF.
     expect(merged[0]?.path).toBe("memory/a.md");
     expect(merged[1]?.path).toBe("memory/b.md");
+    const k = 60;
+    const vw = 0.7;
+    const tw = 0.3;
+    expect(merged[0]?.score).toBeCloseTo(1, 6);
+    expect(merged[0]?.score).toBeLessThanOrEqual(1);
+    expect(merged[1]?.score).toBeCloseTo((vw / (k + 2)) * ((k + 1) / (vw + tw)), 6);
   });
 
   it("mergeHybridResults uses deterministic tie-breaking", async () => {

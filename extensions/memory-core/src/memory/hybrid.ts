@@ -137,11 +137,16 @@ export async function mergeHybridResults(params: {
     }
   }
 
+  const weightSum = params.vectorWeight + params.textWeight;
+  const rrfNormalizeScale = fusion === "rrf" && weightSum > 0 ? (DEFAULT_RRF_K + 1) / weightSum : 1;
+
   const merged = Array.from(byId.values()).map((entry) => {
+    const rawRrfScore =
+      (entry.vectorRank ? params.vectorWeight / (DEFAULT_RRF_K + entry.vectorRank) : 0) +
+      (entry.textRank ? params.textWeight / (DEFAULT_RRF_K + entry.textRank) : 0);
     const score =
       fusion === "rrf"
-        ? (entry.vectorRank ? params.vectorWeight / (DEFAULT_RRF_K + entry.vectorRank) : 0) +
-          (entry.textRank ? params.textWeight / (DEFAULT_RRF_K + entry.textRank) : 0)
+        ? rawRrfScore * rrfNormalizeScale
         : params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
     return {
       path: entry.path,
