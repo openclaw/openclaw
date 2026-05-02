@@ -65,16 +65,24 @@ function registryHasPluginHostCleanupWork(registry: PluginRegistry | null): bool
 
 async function cleanupPreviousPluginHostRegistry(params: {
   previousRegistry: PluginRegistry;
-  nextRegistry: PluginRegistry;
 }): Promise<void> {
   const [{ getRuntimeConfig }, { cleanupReplacedPluginHostRegistry }] = await Promise.all([
     import("../config/config.js"),
     import("./host-hook-cleanup.js"),
   ]);
+  const nextRegistry = asPluginRegistry(state.activeRegistry);
+  if (!nextRegistry || nextRegistry === params.previousRegistry) {
+    return;
+  }
+  const cleanupActiveVersion = state.activeVersion;
+  // Async cleanup must not clear state after another registry becomes live.
+  const shouldCleanup = () =>
+    state.activeVersion === cleanupActiveVersion && state.activeRegistry === nextRegistry;
   await cleanupReplacedPluginHostRegistry({
     cfg: getRuntimeConfig(),
     previousRegistry: params.previousRegistry,
-    nextRegistry: params.nextRegistry,
+    nextRegistry,
+    shouldCleanup,
   });
 }
 
@@ -151,7 +159,6 @@ export function setActivePluginRegistry(
   }
   void cleanupPreviousPluginHostRegistry({
     previousRegistry,
-    nextRegistry: registry,
   }).catch((error) => {
     log.warn(`plugin host registry cleanup failed: ${String(error)}`);
   });

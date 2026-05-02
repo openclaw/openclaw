@@ -118,6 +118,76 @@ describe("plugin run context lifecycle", () => {
     ).toEqual({ restored: true });
   });
 
+  it("keeps restored active registry state after stale async cleanup finishes", async () => {
+    let releaseCleanup: (() => void) | undefined;
+    let markCleanupStarted: (() => void) | undefined;
+    let capturedApi: OpenClawPluginApi | undefined;
+    const cleanupStarted = new Promise<void>((resolve) => {
+      markCleanupStarted = resolve;
+    });
+    const cleanupRelease = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    const schedulerCleanup = vi.fn();
+    const { config, registry } = createPluginRegistryFixture();
+    registerTestPlugin({
+      registry,
+      config,
+      record: createPluginRecord({
+        id: "delayed-restored-registry-plugin",
+        name: "Delayed Restored Registry Plugin",
+      }),
+      register(api) {
+        capturedApi = api;
+        api.registerRuntimeLifecycle({
+          id: "delayed-cleanup",
+          async cleanup() {
+            markCleanupStarted?.();
+            await cleanupRelease;
+          },
+        });
+        api.registerSessionSchedulerJob({
+          id: "live-job",
+          sessionKey: "agent:main:main",
+          kind: "session-turn",
+          cleanup: schedulerCleanup,
+        });
+      },
+    });
+    setActivePluginRegistry(registry.registry);
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    await cleanupStarted;
+    setActivePluginRegistry(registry.registry);
+
+    expect(
+      capturedApi?.setRunContext({
+        runId: "restored-after-cleanup-started",
+        namespace: "state",
+        value: { restored: true },
+      }),
+    ).toBe(true);
+
+    releaseCleanup?.();
+    await waitForPluginEventHandlers();
+    await waitForPluginEventHandlers();
+
+    expect(
+      getPluginRunContext({
+        pluginId: "delayed-restored-registry-plugin",
+        get: { runId: "restored-after-cleanup-started", namespace: "state" },
+      }),
+    ).toEqual({ restored: true });
+    expect(schedulerCleanup).not.toHaveBeenCalled();
+    expect(listPluginSessionSchedulerJobs("delayed-restored-registry-plugin")).toEqual([
+      {
+        id: "live-job",
+        pluginId: "delayed-restored-registry-plugin",
+        sessionKey: "agent:main:main",
+        kind: "session-turn",
+      },
+    ]);
+  });
+
   it("does not let delayed non-terminal subscriptions resurrect closed run context", async () => {
     let releaseToolHandler: (() => void) | undefined;
     let delayedToolHandlerSawContext: unknown;

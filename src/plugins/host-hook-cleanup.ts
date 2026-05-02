@@ -114,10 +114,15 @@ export async function runPluginHostCleanup(params: {
   sessionKey?: string;
   runId?: string;
   preserveSchedulerJobIds?: ReadonlySet<string>;
+  shouldCleanup?: () => boolean;
 }): Promise<PluginHostCleanupResult> {
   const failures: PluginHostCleanupFailure[] = [];
+  const shouldCleanup = params.shouldCleanup ?? (() => true);
+  if (!shouldCleanup()) {
+    return { cleanupCount: 0, failures };
+  }
   let persistentCleanupCount = 0;
-  if (params.reason !== "restart") {
+  if (params.reason !== "restart" && shouldCleanup()) {
     try {
       persistentCleanupCount = await clearPluginOwnedSessionStores({
         cfg: params.cfg ?? getRuntimeConfig(),
@@ -136,6 +141,9 @@ export async function runPluginHostCleanup(params: {
   let cleanupCount = persistentCleanupCount;
   if (registry) {
     for (const registration of registry.sessionExtensions ?? []) {
+      if (!shouldCleanup()) {
+        return { cleanupCount, failures };
+      }
       if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
         continue;
       }
@@ -161,6 +169,9 @@ export async function runPluginHostCleanup(params: {
       }
     }
     for (const registration of registry.runtimeLifecycles ?? []) {
+      if (!shouldCleanup()) {
+        return { cleanupCount, failures };
+      }
       if (!shouldCleanPlugin(registration.pluginId, params.pluginId)) {
         continue;
       }
@@ -192,12 +203,13 @@ export async function runPluginHostCleanup(params: {
       sessionKey: params.sessionKey,
       records: registry.sessionSchedulerJobs,
       preserveJobIds: params.preserveSchedulerJobIds,
+      shouldCleanup,
     });
     for (const failure of schedulerFailures) {
       failures.push(failure);
     }
   }
-  if (params.reason !== "restart") {
+  if (params.reason !== "restart" && shouldCleanup()) {
     const registrySchedulerJobKeys = new Set(
       (registry?.sessionSchedulerJobs ?? [])
         .filter((record) => !params.pluginId || record.pluginId === params.pluginId)
@@ -214,12 +226,17 @@ export async function runPluginHostCleanup(params: {
       sessionKey: params.sessionKey,
       preserveJobIds: params.preserveSchedulerJobIds,
       excludeJobKeys: registrySchedulerJobKeys,
+      shouldCleanup,
     });
     for (const failure of runtimeSchedulerFailures) {
       failures.push(failure);
     }
   }
-  if ((params.pluginId || params.runId) && (params.reason !== "restart" || params.runId)) {
+  if (
+    shouldCleanup() &&
+    (params.pluginId || params.runId) &&
+    (params.reason !== "restart" || params.runId)
+  ) {
     clearPluginRunContext({ pluginId: params.pluginId, runId: params.runId });
   }
   return { cleanupCount, failures };
@@ -266,9 +283,11 @@ export async function cleanupReplacedPluginHostRegistry(params: {
   cfg: OpenClawConfig;
   previousRegistry?: PluginRegistry | null;
   nextRegistry?: PluginRegistry | null;
+  shouldCleanup?: () => boolean;
 }): Promise<PluginHostCleanupResult> {
   const previousRegistry = params.previousRegistry;
-  if (!previousRegistry || previousRegistry === params.nextRegistry) {
+  const shouldCleanup = params.shouldCleanup ?? (() => true);
+  if (!previousRegistry || previousRegistry === params.nextRegistry || !shouldCleanup()) {
     return { cleanupCount: 0, failures: [] };
   }
   const nextPluginIds = params.nextRegistry
@@ -281,6 +300,9 @@ export async function cleanupReplacedPluginHostRegistry(params: {
   const failures: PluginHostCleanupFailure[] = [];
   let cleanupCount = 0;
   for (const pluginId of previousPluginIds) {
+    if (!shouldCleanup()) {
+      break;
+    }
     const restarted = nextPluginIds.has(pluginId);
     const result = await runPluginHostCleanup({
       cfg: params.cfg,
@@ -290,6 +312,7 @@ export async function cleanupReplacedPluginHostRegistry(params: {
       preserveSchedulerJobIds: restarted
         ? collectSchedulerJobIds(params.nextRegistry, pluginId)
         : undefined,
+      shouldCleanup,
     });
     cleanupCount += result.cleanupCount;
     failures.push(...result.failures);

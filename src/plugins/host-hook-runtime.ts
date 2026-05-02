@@ -449,11 +449,19 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
   }[];
   preserveJobIds?: ReadonlySet<string>;
   excludeJobKeys?: ReadonlySet<string>;
+  shouldCleanup?: () => boolean;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
   const failures: Array<{ pluginId: string; hookId: string; error: unknown }> = [];
+  const shouldCleanup = params.shouldCleanup ?? (() => true);
+  if (!shouldCleanup()) {
+    return failures;
+  }
   if (params.records) {
     for (const record of params.records) {
+      if (!shouldCleanup()) {
+        return failures;
+      }
       if (params.pluginId && record.pluginId !== params.pluginId) {
         continue;
       }
@@ -512,6 +520,9 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         });
         continue;
       }
+      if (!shouldCleanup()) {
+        continue;
+      }
       deletePluginSessionSchedulerJob({
         pluginId: record.pluginId,
         jobId,
@@ -523,11 +534,17 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
   }
   const pluginIds = params.pluginId ? [params.pluginId] : [...state.schedulerJobsByPlugin.keys()];
   for (const pluginId of pluginIds) {
+    if (!shouldCleanup()) {
+      return failures;
+    }
     const jobs = state.schedulerJobsByPlugin.get(pluginId);
     if (!jobs) {
       continue;
     }
     for (const [jobId, record] of jobs.entries()) {
+      if (!shouldCleanup()) {
+        return failures;
+      }
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
         continue;
       }
@@ -552,6 +569,9 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
           hookId,
           error,
         });
+        continue;
+      }
+      if (!shouldCleanup()) {
         continue;
       }
       jobs.delete(jobId);
