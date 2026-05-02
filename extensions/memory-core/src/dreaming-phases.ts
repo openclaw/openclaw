@@ -1968,6 +1968,7 @@ export const __testing = {
   previewRemDreaming,
   appendSessionCorpusLines,
   filterRecallEntriesForAgentIsolation,
+  resolveSessionAgentsForWorkspace,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,
