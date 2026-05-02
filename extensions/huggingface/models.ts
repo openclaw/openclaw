@@ -1,5 +1,6 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { isHuggingfaceModelDiscoveryTestEnvironment } from "./model-discovery-env.js";
 
 export const HUGGINGFACE_BASE_URL = "https://router.huggingface.co/v1";
 export const HUGGINGFACE_POLICY_SUFFIXES = ["cheapest", "fastest"] as const;
@@ -129,7 +130,7 @@ export async function discoverHuggingfaceModels(
   apiKey: string,
   timeoutMs = HUGGINGFACE_DISCOVERY_TIMEOUT_MS,
 ): Promise<ModelDefinitionConfig[]> {
-  if (process.env.VITEST === "true" || process.env.NODE_ENV === "test") {
+  if (isHuggingfaceModelDiscoveryTestEnvironment()) {
     return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
   }
 
