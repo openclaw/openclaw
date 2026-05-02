@@ -156,7 +156,8 @@ export type AgentRuntimeReplyPayload = {
 export type AgentRuntimeSystemPromptSectionId =
   | "interaction_style"
   | "tool_call_style"
-  | "execution_bias";
+  | "execution_bias"
+  | "completeness_scan";
 
 export type AgentRuntimeSystemPromptContribution = {
   stablePrefix?: string;
