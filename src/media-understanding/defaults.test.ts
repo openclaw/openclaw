@@ -91,6 +91,12 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
   }),
 }));
 
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: () => ({
+    plugins: mediaMetadataPlugins,
+  }),
+}));
+
 import {
   providerSupportsNativePdfDocument,
   resolveAutoMediaKeyProviders,
