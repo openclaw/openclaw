@@ -7,7 +7,7 @@ import {
   resolveTrajectoryPointerFilePath,
 } from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
-import { enforceSessionDiskBudget } from "./disk-budget.js";
+import { enforceSessionDiskBudget, sweepOrphanedSessionArtifacts } from "./disk-budget.js";
 import type { SessionEntry } from "./types.js";
 
 describe("enforceSessionDiskBudget", () => {
@@ -240,6 +240,67 @@ describe("enforceSessionDiskBudget", () => {
           removedEntries: 1,
         }),
       );
+    });
+  });
+});
+
+describe("sweepOrphanedSessionArtifacts", () => {
+  it("removes unreferenced primary transcript files and preserves referenced ones (#76220)", async () => {
+    await withTempDir({ prefix: "openclaw-orphan-sweep-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const referencedId = "session-active";
+      const orphanedId = "session-orphaned";
+      const referencedTranscript = path.join(dir, `${referencedId}.jsonl`);
+      const orphanedTranscript = path.join(dir, `${orphanedId}.jsonl`);
+      const store: Record<string, SessionEntry> = {
+        "agent:main:main": {
+          sessionId: referencedId,
+          updatedAt: Date.now(),
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(referencedTranscript, "active transcript data", "utf-8");
+      await fs.writeFile(orphanedTranscript, "orphaned transcript data", "utf-8");
+
+      const result = await sweepOrphanedSessionArtifacts({ store, storePath });
+
+      await expect(fs.stat(referencedTranscript)).resolves.toBeDefined();
+      await expect(fs.stat(orphanedTranscript)).rejects.toThrow();
+      expect(result.removedFiles).toBe(1);
+      expect(result.freedBytes).toBeGreaterThan(0);
+    });
+  });
+
+  it("does not remove files in dry-run mode (#76220)", async () => {
+    await withTempDir({ prefix: "openclaw-orphan-sweep-dry-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const orphanedTranscript = path.join(dir, "orphan.jsonl");
+      const store: Record<string, SessionEntry> = {};
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(orphanedTranscript, "orphaned", "utf-8");
+
+      const result = await sweepOrphanedSessionArtifacts({ store, storePath, dryRun: true });
+
+      await expect(fs.stat(orphanedTranscript)).resolves.toBeDefined();
+      expect(result.removedFiles).toBe(1);
+    });
+  });
+
+  it("preserves archive backup files even when not referenced by index (#76220)", async () => {
+    await withTempDir({ prefix: "openclaw-orphan-sweep-arch-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const archiveBackup = path.join(
+        dir,
+        `orphan.jsonl.deleted.${formatSessionArchiveTimestamp(Date.now() - 1000)}`,
+      );
+      const store: Record<string, SessionEntry> = {};
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+      await fs.writeFile(archiveBackup, "archive data", "utf-8");
+
+      const result = await sweepOrphanedSessionArtifacts({ store, storePath });
+
+      await expect(fs.stat(archiveBackup)).resolves.toBeDefined();
+      expect(result.removedFiles).toBe(0);
     });
   });
 });

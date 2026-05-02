@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Status: show the `openai-codex` OAuth profile for `openai/gpt-*` sessions running through the native Codex runtime instead of reporting auth as unknown. (#76197) Thanks @mbelinky.
+- Sessions/cleanup: garbage-collect orphaned session transcript, trajectory, and compaction-checkpoint files whose index entries have been pruned (by age or count cap) but whose on-disk artifacts were left behind; `sessions cleanup` now sweeps the sessions directory and removes unreferenced artifacts, preventing unbounded directory growth that can wedge the gateway on filesystems sensitive to large directory sizes. Fixes #76220.
 
 ## 2026.5.2
 
