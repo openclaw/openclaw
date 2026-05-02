@@ -582,7 +582,7 @@ export async function prepareSlackMessage(params: {
   const ackReactionMessageTs = message.ts;
   const allowToolOnlyStatusReaction =
     statusReactionsExplicitlyEnabled &&
-    (effectiveWasMentioned || mentionDecision.shouldBypassMention === true);
+    (effectiveWasMentioned || mentionDecision.shouldBypassMention);
   const shouldSendAckReaction =
     shouldAckReaction() && (!sourceRepliesAreToolOnly || allowToolOnlyStatusReaction);
   const statusReactionsWillHandle =

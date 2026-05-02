@@ -77,7 +77,7 @@ function isoDateExclusiveEnd(value: string): string {
 }
 
 function freshnessStartTime(freshness: GeminiFreshness, now: Date): string {
-  const start = new Date(now.getTime());
+  const start = new Date(now);
   start.setUTCDate(start.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
   return start.toISOString();
 }
