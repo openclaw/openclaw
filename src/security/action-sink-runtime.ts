@@ -178,6 +178,78 @@ function isApprovedExecCompletionFollowup(request: PolicyRequest): boolean {
   return true;
 }
 
+function taskRegistryDeliveryIdempotencyMatches(params: {
+  delivery: string;
+  idempotencyKey: string;
+  taskId: string;
+}): boolean {
+  const parts = params.idempotencyKey.split(":");
+  if (params.delivery === "terminal") {
+    return (
+      (parts[0] === "task-terminal" && parts[1] === params.taskId && parts.length >= 4) ||
+      (parts[0] === "flow-terminal" && parts[2] === params.taskId && parts.length >= 5)
+    );
+  }
+  if (params.delivery === "state_change") {
+    return (
+      (parts[0] === "task-event" && parts[1] === params.taskId && parts.length >= 4) ||
+      (parts[0] === "flow-event" && parts[2] === params.taskId && parts.length >= 5)
+    );
+  }
+  return false;
+}
+
+function isTaskRegistryDeliveryFollowup(request: PolicyRequest): boolean {
+  if (request.actionType !== "completion_claim" || request.toolName !== "outbound.deliver") {
+    return false;
+  }
+  const context = request.context;
+  if (!isPlainRecord(context)) {
+    return false;
+  }
+  const marker = context.actionSinkContext;
+  if (!isPlainRecord(marker) || marker.source !== "task_registry_delivery") {
+    return false;
+  }
+
+  const taskId = nonEmptyString(marker.taskId);
+  const idempotencyKey = nonEmptyString(marker.idempotencyKey);
+  const sessionKey = nonEmptyString(marker.sessionKey);
+  const channel = nonEmptyString(marker.channel);
+  const to = nonEmptyString(marker.to);
+  const delivery = nonEmptyString(marker.delivery);
+  if (!taskId || !idempotencyKey || !sessionKey || !channel || !to || !delivery) {
+    return false;
+  }
+  if (!taskRegistryDeliveryIdempotencyMatches({ taskId, idempotencyKey, delivery })) {
+    return false;
+  }
+  if (sessionKey !== nonEmptyString(context.sessionKey)) {
+    return false;
+  }
+  if (request.actor?.sessionKey !== sessionKey) {
+    return false;
+  }
+  if (channel !== nonEmptyString(context.channel) || to !== nonEmptyString(context.to)) {
+    return false;
+  }
+  if (request.targetResource !== `${channel}:${to}`) {
+    return false;
+  }
+
+  const contextAccountId = nonEmptyString(context.accountId);
+  const markerAccountId = nonEmptyString(marker.accountId);
+  if (contextAccountId && markerAccountId !== contextAccountId) {
+    return false;
+  }
+  const contextThreadId = optionalString(context.threadId);
+  const markerThreadId = optionalString(marker.threadId);
+  if (contextThreadId && markerThreadId !== contextThreadId) {
+    return false;
+  }
+  return true;
+}
+
 export function createDefaultActionSinkPolicyConfig(): ActionSinkPolicyConfig {
   const fixture = createMissionControlActionSinkPolicyFixture();
   return parseActionSinkPolicyConfig({
@@ -203,7 +275,11 @@ export function createDefaultActionSinkPolicyModules(
     createExternalActionFirewallModule(config),
     createShellRiskPolicyModule(),
   ];
-  if (request.actionType === "completion_claim" && !isApprovedExecCompletionFollowup(request)) {
+  if (
+    request.actionType === "completion_claim" &&
+    !isApprovedExecCompletionFollowup(request) &&
+    !isTaskRegistryDeliveryFollowup(request)
+  ) {
     modules.push(createEvidenceGatePolicyModule(expectedEvidenceFromRequest(request)));
   }
   return modules;

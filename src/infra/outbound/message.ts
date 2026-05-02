@@ -11,6 +11,7 @@ import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   deliverOutboundPayloads,
+  type ActionSinkDeliveryContext,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
@@ -79,6 +80,7 @@ type MessageSendParams = {
   gateway?: MessageGatewayOptions;
   idempotencyKey?: string;
   mirror?: OutboundMirror;
+  actionSinkContext?: ActionSinkDeliveryContext;
   abortSignal?: AbortSignal;
   silent?: boolean;
 };
@@ -299,6 +301,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       bestEffort: params.bestEffort,
       abortSignal: params.abortSignal,
       silent: params.silent,
+      actionSinkContext: params.actionSinkContext,
       mirror: params.mirror
         ? {
             ...params.mirror,

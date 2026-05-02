@@ -51,7 +51,7 @@ export function evaluateProtectedWorktree(params: {
         : undefined) ??
       (typeof params.request.payloadSummary === "string" ? params.request.payloadSummary : "");
     const shell = classifyShellCommand({ command, cwd: target });
-    if (!shell.highRisk) {
+    if (!shell.mutating) {
       return undefined;
     }
   }

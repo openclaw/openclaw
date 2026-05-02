@@ -546,7 +546,7 @@ describe("task-registry", () => {
         via: "direct",
       });
 
-      createTaskRecord({
+      const task = createTaskRecord({
         runtime: "acp",
         ownerKey: "agent:main:main",
         scopeKind: "session",
@@ -587,6 +587,16 @@ describe("task-registry", () => {
             content: expect.stringContaining("Background task done: ACP background task"),
             mirror: expect.objectContaining({
               sessionKey: "agent:main:main",
+            }),
+            actionSinkContext: expect.objectContaining({
+              source: "task_registry_delivery",
+              taskId: task.taskId,
+              idempotencyKey: `task-terminal:${task.taskId}:succeeded:default`,
+              sessionKey: "agent:main:main",
+              channel: "notifychat",
+              to: "notifychat:123",
+              threadId: "321",
+              delivery: "terminal",
             }),
           }),
         ),
@@ -1205,6 +1215,13 @@ describe("task-registry", () => {
           mirror: expect.objectContaining({
             idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
           }),
+          actionSinkContext: expect.objectContaining({
+            source: "task_registry_delivery",
+            taskId: task.taskId,
+            idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
+            sessionKey: "agent:main:main",
+            delivery: "terminal",
+          }),
         }),
       );
       expect(findTaskByRunId("run-racing-delivery")).toMatchObject({
@@ -1685,6 +1702,14 @@ describe("task-registry", () => {
           expect.objectContaining({
             content:
               "Background task update: ACP background task. No output for 60s. It may be waiting for input.",
+            actionSinkContext: expect.objectContaining({
+              source: "task_registry_delivery",
+              taskId: task.taskId,
+              sessionKey: "agent:main:main",
+              channel: "guildchat",
+              to: "guildchat:123",
+              delivery: "state_change",
+            }),
           }),
         ),
       );

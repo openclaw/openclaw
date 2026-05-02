@@ -971,6 +971,37 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
 }
 
+function createTaskDeliveryActionSinkContext(params: {
+  task: TaskRecord;
+  owner: TaskDeliveryOwner;
+  ownerSessionKey: string;
+  idempotencyKey: string;
+  delivery: "terminal" | "state_change";
+  latestEvent?: TaskEventRecord;
+}) {
+  const origin = params.owner.requesterOrigin;
+  const channel = origin?.channel?.trim();
+  const to = origin?.to?.trim();
+  if (!channel || !to) {
+    return undefined;
+  }
+  return {
+    source: "task_registry_delivery" as const,
+    taskId: params.task.taskId,
+    idempotencyKey: params.idempotencyKey,
+    sessionKey: params.ownerSessionKey,
+    channel,
+    to,
+    delivery: params.delivery,
+    status: params.task.status,
+    ...(origin?.accountId ? { accountId: origin.accountId } : {}),
+    ...(origin?.threadId !== undefined ? { threadId: origin.threadId } : {}),
+    ...(params.latestEvent
+      ? { eventKind: params.latestEvent.kind, eventAt: params.latestEvent.at }
+      : {}),
+  };
+}
+
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
   return task.scopeKind === "system" ? "not_applicable" : "parent_missing";
 }
@@ -1089,6 +1120,13 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
           agentId: requesterAgentId,
           idempotencyKey,
         },
+        actionSinkContext: createTaskDeliveryActionSinkContext({
+          task: latest,
+          owner,
+          ownerSessionKey,
+          idempotencyKey,
+          delivery: "terminal",
+        }),
       });
       if (latest.terminalOutcome === "blocked") {
         queueBlockedTaskFollowup(latest);
@@ -1183,6 +1221,14 @@ export async function maybeDeliverTaskStateChangeUpdate(
         agentId: requesterAgentId,
         idempotencyKey,
       },
+      actionSinkContext: createTaskDeliveryActionSinkContext({
+        task: current,
+        owner,
+        ownerSessionKey,
+        idempotencyKey,
+        delivery: "state_change",
+        latestEvent,
+      }),
     });
     upsertTaskDeliveryState({
       taskId,

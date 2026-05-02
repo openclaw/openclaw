@@ -204,6 +204,36 @@ describe("sendMessage", () => {
     );
   });
 
+  it("forwards action-sink context into direct outbound delivery", async () => {
+    const actionSinkContext = {
+      source: "task_registry_delivery" as const,
+      taskId: "task-1",
+      idempotencyKey: "task-terminal:task-1:succeeded:default",
+      sessionKey: "agent:main:forum:dm:123456",
+      channel: "forum",
+      to: "123456",
+      delivery: "terminal" as const,
+      status: "succeeded",
+    };
+
+    await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "Background task done: ACP background task.",
+      mirror: {
+        sessionKey: "agent:main:forum:dm:123456",
+      },
+      actionSinkContext,
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        actionSinkContext,
+      }),
+    );
+  });
+
   it("applies mirror matrix semantics for MEDIA and silent token variants", async () => {
     const matrix: Array<{
       name: string;

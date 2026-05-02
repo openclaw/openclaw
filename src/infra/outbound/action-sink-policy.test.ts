@@ -64,6 +64,42 @@ describe("outbound action-sink policy request builders", () => {
     });
   });
 
+  it("carries task registry delivery context for outbound delivery policy", () => {
+    const actionSinkContext = {
+      source: "task_registry_delivery" as const,
+      taskId: "task-1",
+      idempotencyKey: "task-terminal:task-1:succeeded:default",
+      sessionKey: "agent:main:telegram:chat-1",
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      threadId: "topic-1",
+      delivery: "terminal" as const,
+      status: "succeeded",
+    };
+
+    const request = buildOutboundDeliveryPolicyRequest({
+      cfg: {} as never,
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      threadId: "topic-1",
+      payloads: [{ text: "Background task done: ACP background task." }],
+      session: { key: "agent:main:telegram:chat-1", agentId: "main" },
+      actionSinkContext,
+    });
+
+    expect(request.actionType).toBe("completion_claim");
+    expect(request.context).toMatchObject({
+      channel: "telegram",
+      to: "chat-1",
+      accountId: "acct-1",
+      sessionKey: "agent:main:telegram:chat-1",
+      threadId: "topic-1",
+      actionSinkContext,
+    });
+  });
+
   it("builds message action policy requests from normalized tool args", () => {
     const request = buildMessageActionPolicyRequest({
       channel: "discord",

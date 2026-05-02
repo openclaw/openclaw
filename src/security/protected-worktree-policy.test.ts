@@ -68,5 +68,29 @@ describe("protected worktree policy", () => {
         config,
       }),
     ).toBeUndefined();
+    expect(
+      evaluateProtectedWorktree({
+        request: {
+          policyVersion: "v1",
+          actionType: "shell_exec",
+          targetResource: "/protected",
+          context: { command: "pwd && ls" },
+        },
+        config,
+      }),
+    ).toBeUndefined();
+    expect(
+      evaluateProtectedWorktree({
+        request: {
+          policyVersion: "v1",
+          actionType: "shell_exec",
+          targetResource: "/protected",
+          context: {
+            command: "curl -fsS http://127.0.0.1:3001/api/health | head -c 300",
+          },
+        },
+        config,
+      }),
+    ).toBeUndefined();
   });
 });

@@ -141,6 +141,90 @@ describe("action sink runtime enforcement", () => {
     ).rejects.toThrow("Completion/status claim requires review and QA evidence");
   });
 
+  it("allows task registry delivery follow-ups to the original outbound target", async () => {
+    await expect(
+      enforceActionSinkPolicy({
+        policyVersion: "v1",
+        actionType: "completion_claim",
+        toolName: "outbound.deliver",
+        targetResource: "telegram:chat-1",
+        payloadSummary: "Background task done: ACP background task.",
+        actor: { id: "main", sessionKey: "agent:main:telegram:chat-1" },
+        context: {
+          channel: "telegram",
+          to: "chat-1",
+          accountId: "acct-1",
+          sessionKey: "agent:main:telegram:chat-1",
+          actionSinkContext: {
+            source: "task_registry_delivery",
+            taskId: "task-1",
+            idempotencyKey: "task-terminal:task-1:succeeded:default",
+            sessionKey: "agent:main:telegram:chat-1",
+            channel: "telegram",
+            to: "chat-1",
+            accountId: "acct-1",
+            delivery: "terminal",
+            status: "succeeded",
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ decision: "allow" });
+  });
+
+  it("does not allow task registry delivery context for generic outbound tools", async () => {
+    await expect(
+      enforceActionSinkPolicy({
+        policyVersion: "v1",
+        actionType: "completion_claim",
+        toolName: "message.send",
+        targetResource: "telegram:chat-1",
+        payloadSummary: "Background task done: ACP background task.",
+        actor: { id: "main", sessionKey: "agent:main:telegram:chat-1" },
+        context: {
+          channel: "telegram",
+          to: "chat-1",
+          sessionKey: "agent:main:telegram:chat-1",
+          actionSinkContext: {
+            source: "task_registry_delivery",
+            taskId: "task-1",
+            idempotencyKey: "task-terminal:task-1:succeeded:default",
+            sessionKey: "agent:main:telegram:chat-1",
+            channel: "telegram",
+            to: "chat-1",
+            delivery: "terminal",
+          },
+        },
+      }),
+    ).rejects.toThrow("Completion/status claim requires review and QA evidence");
+  });
+
+  it("does not allow task registry delivery context for a different target", async () => {
+    await expect(
+      enforceActionSinkPolicy({
+        policyVersion: "v1",
+        actionType: "completion_claim",
+        toolName: "outbound.deliver",
+        targetResource: "telegram:chat-1",
+        payloadSummary: "Background task done: ACP background task.",
+        actor: { id: "main", sessionKey: "agent:main:telegram:chat-1" },
+        context: {
+          channel: "telegram",
+          to: "chat-1",
+          sessionKey: "agent:main:telegram:chat-1",
+          actionSinkContext: {
+            source: "task_registry_delivery",
+            taskId: "task-1",
+            idempotencyKey: "task-terminal:task-1:succeeded:default",
+            sessionKey: "agent:main:telegram:chat-1",
+            channel: "telegram",
+            to: "chat-2",
+            delivery: "terminal",
+          },
+        },
+      }),
+    ).rejects.toThrow("Completion/status claim requires review and QA evidence");
+  });
+
   it("allows environment-scoped external message targets", () => {
     process.env.OPENCLAW_ACTION_SINK_EXTERNAL_ALLOWLIST = "telegram:-1003872638243|message_send";
 

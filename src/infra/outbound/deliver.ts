@@ -360,16 +360,31 @@ type DeliverOutboundPayloadsCoreParams = {
   actionSinkContext?: ActionSinkDeliveryContext;
 };
 
-export type ActionSinkDeliveryContext = {
-  source: "approved_exec_completion";
-  approvalId: string;
-  idempotencyKey: string;
-  sessionKey: string;
-  channel: string;
-  to: string;
-  accountId?: string;
-  threadId?: string | number;
-};
+export type ActionSinkDeliveryContext =
+  | {
+      source: "approved_exec_completion";
+      approvalId: string;
+      idempotencyKey: string;
+      sessionKey: string;
+      channel: string;
+      to: string;
+      accountId?: string;
+      threadId?: string | number;
+    }
+  | {
+      source: "task_registry_delivery";
+      taskId: string;
+      idempotencyKey: string;
+      sessionKey: string;
+      channel: string;
+      to: string;
+      accountId?: string;
+      threadId?: string | number;
+      delivery: "terminal" | "state_change";
+      status?: string;
+      eventKind?: string;
+      eventAt?: number;
+    };
 
 function collectPayloadMediaSources(plan: readonly OutboundPayloadPlan[]): string[] {
   return plan.flatMap((entry) => entry.parts.mediaUrls);
