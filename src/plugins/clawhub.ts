@@ -249,6 +249,21 @@ function readArtifactResolverVersion(
   return { version: requestedVersion };
 }
 
+function isClawHubPackageFamily(
+  value: unknown,
+): value is NonNullable<ClawHubPackageVersion["package"]>["family"] {
+  return value === "code-plugin" || value === "bundle-plugin" || value === "skill";
+}
+
+function normalizeArtifactResolverFiles(
+  files: ClawHubArtifactResolverVersion["files"],
+): NonNullable<ClawHubPackageVersion["version"]>["files"] {
+  if (!Array.isArray(files)) {
+    return undefined;
+  }
+  return files as NonNullable<ClawHubPackageVersion["version"]>["files"];
+}
+
 function resolveTopLevelNpmPackArtifact(
   artifact: ClawHubResolvedArtifact | null | undefined,
 ): ClawHubPackageArtifactSummary | null {
@@ -784,34 +799,35 @@ async function resolveCompatiblePackageVersion(params: {
         artifactVersion.clawpack ?? resolveTopLevelNpmPackArtifact(artifactResponse.artifact),
     };
   }
+  const artifactFamily = artifactResponse.package?.family;
+  const resolvedFamily: NonNullable<ClawHubPackageVersion["package"]>["family"] =
+    isClawHubPackageFamily(artifactFamily)
+      ? artifactFamily
+      : (params.detail.package?.family ?? "code-plugin");
+  const versionRecord: NonNullable<ClawHubPackageVersion["version"]> = {
+    version: resolvedVersion,
+    createdAt: typeof artifactVersion.createdAt === "number" ? artifactVersion.createdAt : 0,
+    changelog: typeof artifactVersion.changelog === "string" ? artifactVersion.changelog : "",
+    distTags: artifactVersion.distTags,
+    files: normalizeArtifactResolverFiles(artifactVersion.files),
+    sha256hash: artifactVersion.sha256hash,
+    compatibility: artifactVersion.compatibility,
+    artifact: artifactVersion.artifact,
+    clawpack: artifactVersion.clawpack ?? undefined,
+  };
   const versionDetail: ClawHubPackageVersion = {
     package: artifactResponse.package
       ? {
           name: artifactResponse.package.name ?? params.detail.package?.name ?? "",
           displayName:
             artifactResponse.package.displayName ?? params.detail.package?.displayName ?? "",
-          family:
-            artifactResponse.package.family === "code-plugin" ||
-            artifactResponse.package.family === "bundle-plugin" ||
-            artifactResponse.package.family === "skill"
-              ? artifactResponse.package.family
-              : (params.detail.package?.family ?? "code-plugin"),
+          family: resolvedFamily,
         }
       : null,
-    version: {
-      version: resolvedVersion,
-      createdAt: typeof artifactVersion.createdAt === "number" ? artifactVersion.createdAt : 0,
-      changelog: typeof artifactVersion.changelog === "string" ? artifactVersion.changelog : "",
-      distTags: artifactVersion.distTags,
-      files: artifactVersion.files,
-      sha256hash: artifactVersion.sha256hash,
-      compatibility: artifactVersion.compatibility,
-      artifact: artifactVersion.artifact,
-      clawpack: artifactVersion.clawpack ?? undefined,
-    },
+    version: versionRecord,
   };
   const clawpack =
-    resolveClawHubNpmPackArtifact(versionDetail.version) ??
+    resolveClawHubNpmPackArtifact(versionRecord) ??
     resolveTopLevelNpmPackArtifact(artifactResponse.artifact);
   const verificationState = resolveClawHubArchiveVerification(
     versionDetail,

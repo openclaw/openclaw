@@ -105,12 +105,7 @@ export type ClawHubPackageArtifactResolverResponse = {
         createdAt?: number | null;
         changelog?: string | null;
         distTags?: string[];
-        files?: Array<{
-          path: string;
-          size?: number;
-          sha256: string;
-          contentType?: string;
-        }>;
+        files?: unknown[];
         sha256hash?: string | null;
         compatibility?: ClawHubPackageCompatibility | null;
         artifact?: ClawHubPackageArtifactSummary | null;
