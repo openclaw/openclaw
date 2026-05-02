@@ -101,6 +101,15 @@ function assertSimplePlugin(jsonFile, inspectFile, pluginId, method) {
   }
 }
 
+function assertUpdateOutput(logFile, expectedSnippet) {
+  const output = fs.readFileSync(logFile, "utf8");
+  if (!output.includes(expectedSnippet)) {
+    throw new Error(
+      `expected update output to include ${JSON.stringify(expectedSnippet)}:\n${output}`,
+    );
+  }
+}
+
 function assertClaudeBundleDisabled() {
   const data = readJson("/tmp/plugins-bundle-disabled.json");
   const plugin = (data.plugins || []).find((entry) => entry.id === "claude-bundle-e2e");
@@ -326,6 +335,62 @@ function assertPluginDirDeps() {
   assertRealPathInside(installPath, dependencyPackagePath, "local plugin copied dependency");
 }
 
+function assertLocalPathUpdateSkipped() {
+  assertUpdateOutput("/tmp/plugins-dir-update.log", 'Skipping "demo-plugin-dir" (source: path).');
+}
+
+function assertNpmPlugin() {
+  assertSimplePlugin(
+    "/tmp/plugins-npm.json",
+    "/tmp/plugins-npm-inspect.json",
+    "demo-plugin-npm",
+    "demo.npm",
+  );
+
+  const inspect = readJson("/tmp/plugins-npm-inspect.json");
+  if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-npm")) {
+    throw new Error(`expected demo-npm cli command, got ${inspect.cliCommands?.join(", ")}`);
+  }
+
+  const cliOutput = fs.readFileSync("/tmp/plugins-npm-cli.txt", "utf8");
+  if (!cliOutput.includes("demo-plugin-npm:pong")) {
+    throw new Error(`unexpected npm plugin cli output: ${cliOutput.trim()}`);
+  }
+
+  const record = getInstallRecords()["demo-plugin-npm"];
+  if (!record) {
+    throw new Error("missing npm install record for demo-plugin-npm");
+  }
+  if (record.source !== "npm") {
+    throw new Error(`unexpected npm install source: ${record.source}`);
+  }
+  if (record.spec !== "@openclaw/demo-plugin-npm@0.0.1") {
+    throw new Error(`unexpected npm spec: ${record.spec}`);
+  }
+  if (record.resolvedName !== "@openclaw/demo-plugin-npm") {
+    throw new Error(`unexpected npm resolved name: ${record.resolvedName}`);
+  }
+  if (record.resolvedVersion !== "0.0.1") {
+    throw new Error(`unexpected npm resolved version: ${record.resolvedVersion}`);
+  }
+  const installPath = record.installPath?.replace(/^~(?=$|\/)/u, process.env.HOME);
+  if (!installPath || !fs.existsSync(installPath)) {
+    throw new Error(`npm install path missing on disk: ${installPath}`);
+  }
+  const nodeModulesRoot = path.dirname(path.dirname(installPath));
+  const npmRoot = path.dirname(nodeModulesRoot);
+  const dependencyPackagePath = path.join(nodeModulesRoot, "is-number", "package.json");
+  if (!fs.existsSync(dependencyPackagePath)) {
+    throw new Error(`missing npm plugin installed dependency: ${dependencyPackagePath}`);
+  }
+  assertRealPathInside(npmRoot, dependencyPackagePath, "npm plugin installed dependency");
+}
+
+function assertNpmPluginUpdateUnchanged() {
+  assertUpdateOutput("/tmp/plugins-npm-update.log", "demo-plugin-npm is up to date (0.0.1).");
+  assertNpmPlugin();
+}
+
 function assertMarketplaceUpdated() {
   const data = readJson("/tmp/plugins-marketplace-updated.json");
   const inspect = readJson("/tmp/plugins-marketplace-updated-inspect.json");
@@ -339,6 +404,49 @@ function assertMarketplaceUpdated() {
   if (!inspect.gatewayMethods.includes("demo.marketplace.shortcut.v2")) {
     throw new Error(`expected updated gateway method, got ${inspect.gatewayMethods.join(", ")}`);
   }
+}
+
+function assertGitPluginUpdated() {
+  const beforeCommit = process.argv[3];
+  assertSimplePlugin(
+    "/tmp/plugins-git-update.json",
+    "/tmp/plugins-git-update-inspect.json",
+    "demo-plugin-git-update",
+    "demo.git.update.v2",
+  );
+
+  const inspect = readJson("/tmp/plugins-git-update-inspect.json");
+  if (!Array.isArray(inspect.cliCommands) || !inspect.cliCommands.includes("demo-git-update")) {
+    throw new Error(`expected demo-git-update cli command, got ${inspect.cliCommands?.join(", ")}`);
+  }
+
+  const cliOutput = fs.readFileSync("/tmp/plugins-git-update-cli.txt", "utf8");
+  if (!cliOutput.includes("demo-plugin-git-update:pong-v2")) {
+    throw new Error(`unexpected updated git plugin cli output: ${cliOutput.trim()}`);
+  }
+
+  const record = getInstallRecords()["demo-plugin-git-update"];
+  if (!record) {
+    throw new Error("missing git update install record for demo-plugin-git-update");
+  }
+  if (record.source !== "git") {
+    throw new Error(`unexpected git update source: ${record.source}`);
+  }
+  if (record.gitRef !== "main") {
+    throw new Error(`unexpected git update ref: ${record.gitRef}`);
+  }
+  if (!record.gitCommit || record.gitCommit === beforeCommit) {
+    throw new Error(
+      `expected git update commit to advance from ${beforeCommit}, got ${record.gitCommit}`,
+    );
+  }
+  if (record.version !== "0.0.2") {
+    throw new Error(`unexpected git update version: ${record.version}`);
+  }
+  assertUpdateOutput(
+    "/tmp/plugins-git-update.log",
+    "Updated demo-plugin-git-update: 0.0.1 -> 0.0.2.",
+  );
 }
 
 async function assertClawHubPreflight() {
@@ -476,6 +584,14 @@ function assertClawHubRemoved() {
   }
 }
 
+function assertClawHubUpdated() {
+  assertUpdateOutput(
+    "/tmp/plugins-clawhub-update.log",
+    `${process.env.CLAWHUB_PLUGIN_ID} already at 0.1.0.`,
+  );
+  assertClawHubInstalled();
+}
+
 const commands = {
   "record-fixture-plugin-trust": recordFixturePluginTrust,
   "demo-plugin": assertDemoPlugin,
@@ -493,6 +609,7 @@ const commands = {
       "demo-plugin-dir",
       "demo.dir",
     ),
+  "plugin-dir-update-skipped": assertLocalPathUpdateSkipped,
   "plugin-dir-deps": assertPluginDirDeps,
   "plugin-file": () =>
     assertSimplePlugin(
@@ -501,16 +618,20 @@ const commands = {
       "demo-plugin-file",
       "demo.file",
     ),
+  "plugin-npm": assertNpmPlugin,
+  "plugin-npm-update": assertNpmPluginUpdateUnchanged,
   "bundle-disabled": assertClaudeBundleDisabled,
   "bundle-inspect": assertClaudeBundleInspect,
   "slash-install": assertSlashInstall,
   "plugin-git": assertGitPlugin,
+  "plugin-git-updated": assertGitPluginUpdated,
   "marketplace-list": assertMarketplaceList,
   "marketplace-installed": assertMarketplaceInstalled,
   "marketplace-records": assertMarketplaceRecords,
   "marketplace-updated": assertMarketplaceUpdated,
   "clawhub-preflight": assertClawHubPreflight,
   "clawhub-installed": assertClawHubInstalled,
+  "clawhub-updated": assertClawHubUpdated,
   "clawhub-removed": assertClawHubRemoved,
 };
 
