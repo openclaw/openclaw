@@ -23,6 +23,7 @@ function resolveDisabledBundledPluginsDir(): string {
 function isSourceCheckoutRoot(packageRoot: string): boolean {
   return (
     fs.existsSync(path.join(packageRoot, ".git")) &&
+    fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
     fs.existsSync(path.join(packageRoot, "src")) &&
     fs.existsSync(path.join(packageRoot, "extensions"))
   );
@@ -126,12 +127,13 @@ function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefin
   const builtExtensionsDir = path.join(packageRoot, "dist", "extensions");
   const sourceCheckout = isSourceCheckoutRoot(packageRoot);
   const hasUsableSourceTree = sourceCheckout && hasUsableBundledPluginTree(sourceExtensionsDir);
-  // Local source checkouts stage a runtime-complete bundled plugin tree under
-  // dist-runtime/. Prefer that over source extensions only when the paired
-  // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
-  // Even when OpenClaw itself runs from TypeScript, bundled plugins should use
-  // compiled JavaScript whenever it is available. Source plugin entries force
-  // jiti onto hot runtime paths such as per-run tool construction.
+  // In pnpm source checkouts, extensions/* is a workspace package tree with its
+  // own package.json dependencies. Prefer it so git checkouts remain editable
+  // and dependency-complete without moving optional plugin deps back into root.
+  if (hasUsableSourceTree) {
+    return sourceExtensionsDir;
+  }
+
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   const hasUsableRuntimeTree = sourceCheckout
     ? hasUsableBundledPluginTree(runtimeExtensionsDir)

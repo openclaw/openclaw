@@ -106,6 +106,12 @@ through `openclaw plugins install`.
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the
 install-time lifecycle.
 
+Source checkouts are pnpm workspaces. If you clone OpenClaw to hack on bundled
+plugins, run `pnpm install`; OpenClaw then loads bundled plugins from
+`extensions/<id>` so edits and package-local dependencies are used directly.
+Plain npm root installs are for packaged OpenClaw, not source checkout
+development.
+
 ## Plugin types
 
 OpenClaw recognizes two plugin formats:
