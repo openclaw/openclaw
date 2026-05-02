@@ -5,6 +5,32 @@ import { __testing } from "../test-api.js";
 import { createBraveWebSearchProvider as createBraveWebSearchContractProvider } from "../web-search-contract-api.js";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
+const loggerInfoMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  createSubsystemLogger: () => ({
+    info: loggerInfoMock,
+    debug: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    fatal: vi.fn(),
+    trace: vi.fn(),
+    raw: vi.fn(),
+    isEnabled: () => true,
+    child: () => ({
+      info: loggerInfoMock,
+      debug: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      fatal: vi.fn(),
+      trace: vi.fn(),
+      raw: vi.fn(),
+      isEnabled: () => true,
+      child: vi.fn(),
+    }),
+  }),
+}));
+
 const braveManifest = JSON.parse(
   fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf-8"),
 ) as {
@@ -46,6 +72,7 @@ describe("brave web search provider", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    loggerInfoMock.mockClear();
     global.fetch = priorFetch;
   });
 
@@ -421,5 +448,78 @@ describe("brave web search provider", () => {
 
     const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
     expect(requestUrl.searchParams.get("country")).toBe("ALL");
+  });
+
+  it("emits brave.http diagnostics for requests, responses, and cache events", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          web: {
+            results: [
+              {
+                title: "Diagnostics",
+                url: "https://example.com/diagnostics",
+                description: "debug details",
+              },
+            ],
+          },
+        }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: { diagnostics: { flags: ["brave.http"] } },
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "web" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "unique brave diagnostics query", count: 1 });
+    await tool.execute({ query: "unique brave diagnostics query", count: 1 });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const messages = loggerInfoMock.mock.calls.map((call) => call[0]);
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        "brave http cache miss",
+        "brave http request",
+        "brave http response",
+        "brave http cache write",
+        "brave http cache hit",
+      ]),
+    );
+    expect(loggerInfoMock.mock.calls).toEqual(
+      expect.arrayContaining([
+        [
+          "brave http request",
+          expect.objectContaining({
+            mode: "web",
+            query: "unique brave diagnostics query",
+            params: expect.objectContaining({ q: "unique brave diagnostics query", count: "1" }),
+            url: expect.stringContaining("api.search.brave.com/res/v1/web/search"),
+          }),
+        ],
+        [
+          "brave http response",
+          expect.objectContaining({
+            mode: "web",
+            status: 200,
+            ok: true,
+            durationMs: expect.any(Number),
+          }),
+        ],
+      ]),
+    );
+    expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("brave-test-key");
+    expect(JSON.stringify(loggerInfoMock.mock.calls)).not.toContain("X-Subscription-Token");
   });
 });

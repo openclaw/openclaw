@@ -18,6 +18,7 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
   type BraveLlmContextResponse,
   mapBraveLlmContextResults,
@@ -29,6 +30,7 @@ import {
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const BRAVE_LLM_CONTEXT_ENDPOINT = "https://api.search.brave.com/res/v1/llm/context";
+const braveHttpLogger = createSubsystemLogger("brave/http");
 
 type BraveSearchResult = {
   title?: string;
@@ -42,6 +44,33 @@ type BraveSearchResponse = {
     results?: BraveSearchResult[];
   };
 };
+
+type BraveHttpDiagnostics = {
+  enabled?: boolean;
+};
+
+function logBraveHttp(
+  diagnostics: BraveHttpDiagnostics | undefined,
+  event: string,
+  meta?: Record<string, unknown>,
+): void {
+  if (!diagnostics?.enabled) {
+    return;
+  }
+  braveHttpLogger.info(`brave http ${event}`, meta);
+}
+
+function describeBraveRequestUrl(url: URL): {
+  url: string;
+  query: string;
+  params: Record<string, string>;
+} {
+  return {
+    url: url.toString(),
+    query: url.searchParams.get("q") ?? "",
+    params: Object.fromEntries(url.searchParams.entries()),
+  };
+}
 
 function resolveBraveApiKey(searchConfig?: SearchConfigRecord): string | undefined {
   return (
@@ -62,6 +91,7 @@ async function runBraveLlmContextSearch(params: {
   query: string;
   apiKey: string;
   timeoutSeconds: number;
+  diagnostics?: BraveHttpDiagnostics;
   country?: string;
   search_lang?: string;
   freshness?: string;
@@ -95,6 +125,11 @@ async function runBraveLlmContextSearch(params: {
     );
   }
 
+  logBraveHttp(params.diagnostics, "request", {
+    mode: "llm-context",
+    ...describeBraveRequestUrl(url),
+  });
+  const startedAt = Date.now();
   return withTrustedWebSearchEndpoint(
     {
       url: url.toString(),
@@ -108,6 +143,12 @@ async function runBraveLlmContextSearch(params: {
       },
     },
     async (response) => {
+      logBraveHttp(params.diagnostics, "response", {
+        mode: "llm-context",
+        status: response.status,
+        ok: response.ok,
+        durationMs: Date.now() - startedAt,
+      });
       if (!response.ok) {
         const detail = await response.text();
         throw new Error(
@@ -126,6 +167,7 @@ async function runBraveWebSearch(params: {
   count: number;
   apiKey: string;
   timeoutSeconds: number;
+  diagnostics?: BraveHttpDiagnostics;
   country?: string;
   search_lang?: string;
   ui_lang?: string;
@@ -158,6 +200,11 @@ async function runBraveWebSearch(params: {
     url.searchParams.set("freshness", `1970-01-01to${params.dateBefore}`);
   }
 
+  logBraveHttp(params.diagnostics, "request", {
+    mode: "web",
+    ...describeBraveRequestUrl(url),
+  });
+  const startedAt = Date.now();
   return withTrustedWebSearchEndpoint(
     {
       url: url.toString(),
@@ -171,6 +218,12 @@ async function runBraveWebSearch(params: {
       },
     },
     async (response) => {
+      logBraveHttp(params.diagnostics, "response", {
+        mode: "web",
+        status: response.status,
+        ok: response.ok,
+        durationMs: Date.now() - startedAt,
+      });
       if (!response.ok) {
         const detail = await response.text();
         throw new Error(
@@ -199,6 +252,9 @@ async function runBraveWebSearch(params: {
 export async function executeBraveSearch(
   args: Record<string, unknown>,
   searchConfig?: SearchConfigRecord,
+  options?: {
+    diagnosticsEnabled?: boolean;
+  },
 ): Promise<Record<string, unknown>> {
   const apiKey = resolveBraveApiKey(searchConfig);
   if (!apiKey) {
@@ -322,10 +378,13 @@ export async function executeBraveSearch(
           dateBefore,
         ],
   );
+  const diagnostics: BraveHttpDiagnostics = { enabled: options?.diagnosticsEnabled === true };
   const cached = readCachedSearchPayload(cacheKey);
   if (cached) {
+    logBraveHttp(diagnostics, "cache hit", { mode: braveMode, query, cacheKey });
     return cached;
   }
+  logBraveHttp(diagnostics, "cache miss", { mode: braveMode, query, cacheKey });
 
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
@@ -336,6 +395,7 @@ export async function executeBraveSearch(
       query,
       apiKey,
       timeoutSeconds,
+      diagnostics,
       country: country ?? undefined,
       search_lang: normalizedLanguage.search_lang,
       freshness,
@@ -363,6 +423,13 @@ export async function executeBraveSearch(
       sources,
     };
     writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
+    logBraveHttp(diagnostics, "cache write", {
+      mode: "llm-context",
+      query,
+      cacheKey,
+      ttlMs: cacheTtlMs,
+      count: results.length,
+    });
     return payload;
   }
 
@@ -371,6 +438,7 @@ export async function executeBraveSearch(
     count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
     apiKey,
     timeoutSeconds,
+    diagnostics,
     country: country ?? undefined,
     search_lang: normalizedLanguage.search_lang,
     ui_lang: normalizedLanguage.ui_lang,
@@ -392,5 +460,12 @@ export async function executeBraveSearch(
     results,
   };
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
+  logBraveHttp(diagnostics, "cache write", {
+    mode: "web",
+    query,
+    cacheKey,
+    ttlMs: cacheTtlMs,
+    count: results.length,
+  });
   return payload;
 }
