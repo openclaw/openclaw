@@ -72,7 +72,7 @@ const defaultOptions = {
 const DEFAULT_MAX_CONCURRENT_WORKERS = 4;
 const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; weight: number }> = {
   critical: { weight: 6 },
-  standard: { staleAfterMs: 60_000, weight: 3 },
+  standard: { weight: 3 },
   background: { staleAfterMs: 20_000, weight: 1 },
 };
 
@@ -318,14 +318,5 @@ function getRequestPriority(method: string, path: string): RestRequestPriority {
   if (/^\/interactions\/\d+\/[^/]+\/callback$/.test(normalizedPath)) {
     return "critical";
   }
-  if (
-    normalizedPath.startsWith("/webhooks/") &&
-    (normalizedMethod === "POST" || normalizedMethod === "PATCH" || normalizedMethod === "DELETE")
-  ) {
-    return "standard";
-  }
-  if (normalizedMethod !== "GET" && /\/channels\/\d+\/messages/.test(normalizedPath)) {
-    return "standard";
-  }
-  return "background";
+  return normalizedMethod === "GET" ? "background" : "standard";
 }

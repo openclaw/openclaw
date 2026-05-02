@@ -433,6 +433,9 @@ export class RestScheduler<TData> {
     lane: RequestPriority,
     now: number,
   ): void {
+    if (lane !== "background") {
+      return;
+    }
     const staleAfterMs = this.options.lanes[lane].staleAfterMs;
     if (!staleAfterMs || staleAfterMs <= 0) {
       return;

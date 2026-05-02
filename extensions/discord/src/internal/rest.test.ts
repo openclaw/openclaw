@@ -111,6 +111,60 @@ describe("RequestClient", () => {
     );
   });
 
+  it("keeps standard mutations queued until Discord accepts or rejects them", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () =>
+      fetchSpy.mock.calls.length === 1
+        ? await firstResponse.promise
+        : createJsonResponse({ ok: true }),
+    );
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: {
+        maxConcurrency: 1,
+        lanes: {
+          background: { staleAfterMs: 50 },
+          standard: { staleAfterMs: 50 },
+        },
+      },
+    });
+
+    const requests = [
+      client.post("/channels/c1/messages", { body: { content: "send" } }),
+      client.patch("/channels/c1/messages/m1", { body: { content: "edit" } }),
+      client.delete("/channels/c1/messages/m2"),
+      client.post("/webhooks/app/token", { body: { content: "webhook send" } }),
+      client.patch("/webhooks/app/token/messages/@original", {
+        body: { content: "webhook edit" },
+      }),
+      client.delete("/webhooks/app/token/messages/@original"),
+      client.post("/applications/app/commands", { body: { name: "ping" } }),
+    ];
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(51);
+    firstResponse.resolve(createJsonResponse({ ok: true }));
+
+    await expect(Promise.all(requests)).resolves.toEqual([
+      { ok: true },
+      { ok: true },
+      { ok: true },
+      { ok: true },
+      { ok: true },
+      { ok: true },
+      { ok: true },
+    ]);
+    expect(fetchSpy).toHaveBeenCalledTimes(requests.length);
+    expect(client.getSchedulerMetrics()).toEqual(
+      expect.objectContaining({
+        droppedByLane: expect.objectContaining({ standard: 0 }),
+        queueSize: 0,
+      }),
+    );
+  });
+
   it("runs independent route buckets concurrently", async () => {
     const channelResponse = createDeferred<Response>();
     const guildResponse = createDeferred<Response>();
