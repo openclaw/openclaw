@@ -35,6 +35,7 @@ import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { withProgress } from "../progress.js";
 import { parsePort } from "../shared/parse-port.js";
+import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 
 type GatewayRunOpts = {
@@ -504,6 +505,7 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
 }
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
+  installQaParentWatchdog();
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {

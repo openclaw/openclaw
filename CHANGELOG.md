@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - TUI/chat: skip full provider model normalization during context-window warmup while preserving provider-owned context metadata, avoiding cold-start stalls with large model registries. Thanks @547895019.
 - Memory Wiki: accept relative Markdown links that include the `.md` suffix during broken-wikilink validation, avoiding false positives for native render-mode links. Thanks @Kenneth8128.
 - OpenAI Codex: show the device-pairing code in the interactive SSH/headless prompt while keeping the short-lived code out of persistent runtime logs. Fixes #74212. Thanks @da22le123.
+- QA Lab: stop gateway children when the suite parent disappears, so interrupted local QA runs cannot leave hot orphaned gateways behind.
 - Plugins/CLI: cache plugin CLI registration entries per command program so completion state generation does not repeat the full plugin sweep in one invocation. Thanks @ScientificProgrammer.
 - Plugins: reuse gateway-bindable plugin loader cache entries for later default-mode loads without serving default-built registries to gateway-bound requests, reducing repeated plugin registration during dispatch. Refs #61756. Thanks @DmitryPogodaev.
 - Gateway/secrets: include the caught error message in `secrets.reload` and `secrets.resolve` warning logs while keeping RPC errors generic, so operators can diagnose reload and permission failures. Thanks @davidangularme.
