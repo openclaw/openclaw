@@ -123,6 +123,9 @@ the maintainer-only release runbook.
   Telegram E2E against the `release-package-under-test` artifact from release
   checks. Provide `npm_telegram_package_spec` after publishing when the same
   Telegram E2E should prove the published npm package too. Provide
+  `package_acceptance_package_spec` after publishing when Package Acceptance
+  should run its package/update matrix against the shipped npm package instead
+  of the SHA-built artifact. Provide
   `evidence_package_spec` when the private evidence report should prove that the
   validation matches a published npm package without forcing Telegram E2E.
   Example:
@@ -472,11 +475,14 @@ Supported candidate sources:
 `OpenClaw Release Checks` runs Package Acceptance with `source=artifact`, the
 prepared release package artifact, `suite_profile=custom`,
 `docker_lanes=doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update`,
-`published_upgrade_survivor_baselines=release-history`,
+`published_upgrade_survivor_baselines=all-since-2026.4.23`,
 `published_upgrade_survivor_scenarios=reported-issues`, and
 `telegram_mode=mock-openai`. Package Acceptance keeps migration, update, stale
 plugin dependency cleanup, offline plugin fixtures, plugin update, and Telegram
-package QA against the same resolved tarball. It is the GitHub-native
+package QA against the same resolved tarball. The upgrade matrix covers every stable npm-published baseline from `2026.4.23` through `latest`; use
+Package Acceptance with `source=npm` for an already shipped candidate, or
+`source=ref`/`source=artifact` for a SHA-backed local npm tarball before
+publish. It is the GitHub-native
 replacement for most of the package/update coverage that previously required
 Parallels. Cross-OS release checks still matter for OS-specific onboarding,
 installer, and platform behavior, but package/update product validation should
