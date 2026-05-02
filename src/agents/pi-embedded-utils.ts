@@ -151,9 +151,6 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
         if (thinking) {
           return thinking;
         }
-        if (typeof record.thinkingSignature === "string" && record.thinkingSignature.trim()) {
-          return "Native reasoning was produced; no summary text was returned.";
-        }
       }
       return "";
     })

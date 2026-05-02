@@ -312,4 +312,25 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
     expectSinglePayloadText(payloads, "THINKING-OFF-OK");
   });
+
+  it("does not emit a reasoning payload for empty native reasoning summaries", () => {
+    const payloads = buildPayloads({
+      reasoningLevel: "on",
+      thinkingLevel: "high",
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_live", summary: [] }),
+          },
+          { type: "text", text: "EMPTY-REASONING-SUMMARY-OK" },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "EMPTY-REASONING-SUMMARY-OK");
+  });
 });
