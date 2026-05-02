@@ -4,17 +4,17 @@ import {
   buildXaiResponsesToolBody,
   extractXaiWebSearchContent,
   resolveXaiResponseTextCitationsAndInline,
-  XAI_RESPONSES_ENDPOINT,
+  resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import { isRecord } from "./tool-config-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
-const XAI_WEB_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 const XAI_DEFAULT_WEB_SEARCH_MODEL = "grok-4-1-fast";
 
 type XaiWebSearchConfig = Record<string, unknown> & {
+  baseUrl?: unknown;
   model?: unknown;
   inlineCitations?: unknown;
 };
@@ -64,6 +64,10 @@ export function resolveXaiWebSearchModel(searchConfig?: Record<string, unknown>)
     : XAI_DEFAULT_WEB_SEARCH_MODEL;
 }
 
+export function resolveXaiWebSearchEndpoint(searchConfig?: Record<string, unknown>): string {
+  return resolveXaiResponsesEndpoint(resolveXaiSearchConfig(searchConfig).baseUrl);
+}
+
 export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>): boolean {
   return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
 }
@@ -89,12 +93,13 @@ export async function requestXaiWebSearch(params: {
   query: string;
   model: string;
   apiKey: string;
+  endpoint: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
 }): Promise<XaiWebSearchResult> {
   return await postTrustedWebToolsJson(
     {
-      url: XAI_WEB_SEARCH_ENDPOINT,
+      url: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       apiKey: params.apiKey,
       body: buildXaiResponsesToolBody({

@@ -144,6 +144,33 @@ Choose your preferred auth method and follow the setup steps.
 | Thinking/reasoning     | Yes (Gemini 2.5+ / Gemini 3+) |
 | Gemma 4 models         | Yes                           |
 
+## Web search
+
+The bundled `gemini` web-search provider uses Gemini Google Search grounding.
+Configure it under `plugins.entries.google.config.webSearch`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      google: {
+        config: {
+          webSearch: {
+            apiKey: "AIza...", // optional if GEMINI_API_KEY is set
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            model: "gemini-2.5-flash",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`webSearch.baseUrl` is optional and exists for operator proxies or compatible
+Gemini API endpoints. See [Gemini search](/tools/gemini-search) for the
+provider-specific tool behavior.
+
 <Tip>
 Gemini 3 models use `thinkingLevel` rather than `thinkingBudget`. OpenClaw maps
 Gemini 3, Gemini 3.1, and `gemini-*-latest` alias reasoning controls to

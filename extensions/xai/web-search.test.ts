@@ -1,8 +1,8 @@
 import { createTestWizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
-import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
@@ -18,6 +18,29 @@ const {
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
 } = __testing;
+
+function installXaiWebSearchFetch() {
+  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+    Promise.resolve({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          output: [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: "Grounded Grok answer" }],
+            },
+          ],
+        }),
+    } as Response),
+  );
+  global.fetch = withFetchPreconnect(mockFetch);
+  return mockFetch;
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("xai web search config resolution", () => {
   it("prefers configured api keys and resolves grok scoped defaults", () => {
@@ -266,6 +289,32 @@ describe("xai web search config resolution", () => {
     expect(resolveXaiWebSearchModel({ grok: { model: "grok-4-fast-reasoning" } })).toBe(
       "grok-4-fast",
     );
+  });
+
+  it("routes Grok web search through plugin webSearch.baseUrl", async () => {
+    const mockFetch = installXaiWebSearchFetch();
+    const provider = createXaiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-config-test",
+                  baseUrl: "https://api.x.ai/proxy/v1/",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "grok" },
+    });
+
+    await tool?.execute({ query: "OpenClaw Grok proxy test" });
+
+    expect(String(mockFetch.mock.calls[0]?.[0])).toBe("https://api.x.ai/proxy/v1/responses");
   });
 
   it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {

@@ -18,7 +18,16 @@ function extractUrlCitations(annotations: unknown): string[] {
     .map((annotation) => annotation.url as string);
 }
 
-export const XAI_RESPONSES_ENDPOINT = "https://api.x.ai/v1/responses";
+export const XAI_RESPONSES_BASE_URL = "https://api.x.ai/v1";
+export const XAI_RESPONSES_ENDPOINT = `${XAI_RESPONSES_BASE_URL}/responses`;
+
+function trimString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function resolveXaiResponsesEndpoint(baseUrl?: unknown): string {
+  return `${(trimString(baseUrl) ?? XAI_RESPONSES_BASE_URL).replace(/\/+$/, "")}/responses`;
+}
 
 export function buildXaiResponsesToolBody(params: {
   model: string;
@@ -105,5 +114,7 @@ export const __testing = {
   extractXaiWebSearchContent,
   resolveXaiResponseTextCitationsAndInline,
   resolveXaiResponseTextAndCitations,
+  resolveXaiResponsesEndpoint,
+  XAI_RESPONSES_BASE_URL,
   XAI_RESPONSES_ENDPOINT,
 } as const;
