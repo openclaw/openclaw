@@ -117,7 +117,6 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     const startMs = Date.parse("2026-06-15T21:30:00.000Z");
     useFakeHeartbeatTime(startMs);
 
-    const intervalMs = 4 * 60 * 60_000;
     const callTimes: number[] = [];
     const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
       callTimes.push(Date.now());
@@ -148,7 +147,6 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     const startMs = Date.parse("2026-06-15T09:00:00.000Z");
     useFakeHeartbeatTime(startMs);
 
-    const intervalMs = 4 * 60 * 60_000;
     const callTimes: number[] = [];
     const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
       callTimes.push(Date.now());
@@ -209,7 +207,6 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
     const startMs = Date.parse("2026-06-15T14:00:00.000Z");
     useFakeHeartbeatTime(startMs);
 
-    const intervalMs = 4 * 60 * 60_000;
     const callTimes: number[] = [];
     const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
       callTimes.push(Date.now());
