@@ -1,0 +1,88 @@
+name: Upstream Watch
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "23 13 * * *"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-watch
+  cancel-in-progress: false
+
+jobs:
+  check-upstream:
+    name: Check openclaw/openclaw main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out fork
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch --no-tags upstream main
+
+      - name: Open issue when fork is behind
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Fork includes upstream/main."
+            exit 0
+          fi
+
+          upstream_sha="$(git rev-parse --short=12 upstream/main)"
+          fork_sha="$(git rev-parse --short=12 HEAD)"
+          behind_count="$(git rev-list --count HEAD..upstream/main)"
+          title="OpenClaw upstream update available"
+
+          existing="$(
+            gh issue list \
+              --repo "$REPO" \
+              --state open \
+              --search "$title in:title" \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+
+          body="$(
+            cat <<EOF
+          The fork is behind \`openclaw/openclaw:main\`.
+
+          - Fork HEAD: \`$fork_sha\`
+          - Upstream HEAD: \`$upstream_sha\`
+          - Upstream commits not in this fork: \`$behind_count\`
+
+          Suggested update path:
+
+          \`\`\`bash
+          git remote add upstream https://github.com/openclaw/openclaw.git 2>/dev/null || true
+          git fetch upstream main
+          git checkout main
+          git merge upstream/main
+          git push origin main
+          \`\`\`
+          EOF
+          )"
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+            echo "Updated existing issue #$existing."
+          else
+            gh issue create --repo "$REPO" --title "$title" --body "$body"
+            echo "Created upstream update issue."
+          fi
