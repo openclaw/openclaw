@@ -1872,6 +1872,7 @@ export function startHeartbeatRunner(opts: {
     const startedAt = Date.now();
     const now = startedAt;
     let ran = false;
+    let maintenanceBlocked = false;
     // Track retryable busy skips so we can skip re-arm in finally — the wake
     // layer handles retry for this case (DEFAULT_RETRY_MS = 1 s).
     let retryableBusySkip = false;
