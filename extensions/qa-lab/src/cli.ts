@@ -68,6 +68,17 @@ async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; j
   await runtime.runQaCoverageReportCommand(opts);
 }
 
+async function runQaMemoryRetrievalEval(opts: {
+  caseFile: string;
+  outputDir?: string;
+  candidate: string[];
+  timeoutMs?: number;
+  maxTopResults?: number;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaMemoryRetrievalEvalCommand(opts);
+}
+
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -328,6 +339,40 @@ export function registerQaLabCli(program: Command) {
     .action(async (opts: { repoRoot?: string; output?: string; json?: boolean }) => {
       await runQaCoverageReport(opts);
     });
+
+  qa.command("memory-retrieval-eval")
+    .description("Run retrieval-only memory evals from an external case file")
+    .requiredOption("--cases <path>", "External JSON case file")
+    .option("--output-dir <path>", "Artifact directory")
+    .requiredOption(
+      "--candidate <label=template>",
+      "Candidate command template; may use {agent}, {query}, and {caseId} placeholders",
+      collectString,
+      [],
+    )
+    .option("--timeout-ms <n>", "Per-case command timeout", (value: string) => Number(value))
+    .option(
+      "--max-top-results <n>",
+      "Number of top results to keep in the report",
+      (value: string) => Number(value),
+    )
+    .action(
+      async (opts: {
+        cases: string;
+        outputDir?: string;
+        candidate: string[];
+        timeoutMs?: number;
+        maxTopResults?: number;
+      }) => {
+        await runQaMemoryRetrievalEval({
+          caseFile: opts.cases,
+          outputDir: opts.outputDir,
+          candidate: opts.candidate,
+          timeoutMs: opts.timeoutMs,
+          maxTopResults: opts.maxTopResults,
+        });
+      },
+    );
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")

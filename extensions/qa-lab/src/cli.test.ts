@@ -45,6 +45,7 @@ const {
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
+  runQaMemoryRetrievalEvalCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
   runQaTelegramCommand,
@@ -53,6 +54,7 @@ const {
   runQaCredentialsListCommand: vi.fn(),
   runQaCredentialsRemoveCommand: vi.fn(),
   runQaCoverageReportCommand: vi.fn(),
+  runQaMemoryRetrievalEvalCommand: vi.fn(),
   runQaProviderServerCommand: vi.fn(),
   runQaSuiteCommand: vi.fn(),
   runQaTelegramCommand: vi.fn(),
@@ -77,6 +79,7 @@ vi.mock("./cli.runtime.js", () => ({
   runQaCredentialsListCommand,
   runQaCredentialsRemoveCommand,
   runQaCoverageReportCommand,
+  runQaMemoryRetrievalEvalCommand,
   runQaProviderServerCommand,
   runQaSuiteCommand,
 }));
@@ -92,6 +95,7 @@ describe("qa cli registration", () => {
     runQaCredentialsListCommand.mockReset();
     runQaCredentialsRemoveCommand.mockReset();
     runQaCoverageReportCommand.mockReset();
+    runQaMemoryRetrievalEvalCommand.mockReset();
     runQaProviderServerCommand.mockReset();
     runQaSuiteCommand.mockReset();
     runQaTelegramCommand.mockReset();
@@ -130,6 +134,33 @@ describe("qa cli registration", () => {
       repoRoot: "/tmp/openclaw-repo",
       output: ".artifacts/qa-coverage.md",
       json: true,
+    });
+  });
+
+  it("routes memory retrieval eval flags into the qa runtime command", async () => {
+    await program.parseAsync([
+      "node",
+      "openclaw",
+      "qa",
+      "memory-retrieval-eval",
+      "--cases",
+      ".agents/evals/memory-retrieval/cases.json",
+      "--output-dir",
+      ".artifacts/memory-eval",
+      "--candidate",
+      "qmd=openclaw memory search --agent {agent} --query {query} --json",
+      "--timeout-ms",
+      "120000",
+      "--max-top-results",
+      "3",
+    ]);
+
+    expect(runQaMemoryRetrievalEvalCommand).toHaveBeenCalledWith({
+      caseFile: ".agents/evals/memory-retrieval/cases.json",
+      outputDir: ".artifacts/memory-eval",
+      candidate: ["qmd=openclaw memory search --agent {agent} --query {query} --json"],
+      timeoutMs: 120000,
+      maxTopResults: 3,
     });
   });
 

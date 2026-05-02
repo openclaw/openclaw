@@ -15,6 +15,7 @@ import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
+import { runQaMemoryRetrievalEval } from "./memory-retrieval-eval.js";
 import { runQaMultipass } from "./multipass.runtime.js";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE, getQaProvider } from "./providers/index.js";
 import {
@@ -618,6 +619,31 @@ export async function runQaCoverageReportCommand(opts: {
   }
 
   process.stdout.write(body);
+}
+
+export async function runQaMemoryRetrievalEvalCommand(opts: {
+  caseFile: string;
+  outputDir?: string;
+  candidate: string[];
+  timeoutMs?: number;
+  maxTopResults?: number;
+}) {
+  const result = await runQaMemoryRetrievalEval(opts);
+  process.stdout.write(`QA memory retrieval report: ${result.reportPath}\n`);
+  process.stdout.write(`QA memory retrieval summary: ${result.summaryPath}\n`);
+  for (const candidate of result.candidates) {
+    process.stdout.write(
+      `QA memory retrieval ${candidate.label}: pass ${candidate.counts.pass}, weak-pass ${candidate.counts["weak-pass"]}, fail ${candidate.counts.fail}, timeout ${candidate.counts.timeout}, error ${candidate.counts.error}\n`,
+    );
+  }
+  if (
+    result.candidates.some(
+      (candidate) =>
+        candidate.counts.fail > 0 || candidate.counts.timeout > 0 || candidate.counts.error > 0,
+    )
+  ) {
+    process.exitCode = 1;
+  }
 }
 
 export async function runQaCharacterEvalCommand(opts: {

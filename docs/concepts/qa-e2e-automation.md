@@ -255,6 +255,26 @@ When no `--judge-model` is passed, the judges default to
 `openai/gpt-5.4,thinking=xhigh,fast` and
 `anthropic/claude-opus-4-6,thinking=high`.
 
+## Memory retrieval evals
+
+Use `qa memory-retrieval-eval` when you want retrieval-only regression coverage
+for memory search quality without running a full agent conversation. The command
+reads an external JSON case file and one or more candidate command templates,
+then writes a Markdown report and JSON summary.
+
+```bash
+pnpm openclaw qa memory-retrieval-eval \
+  --cases .agents/evals/memory-retrieval/cases.json \
+  --candidate 'qmd=ssh gateway "openclaw memory search --agent {agent} --query {query} --json"' \
+  --output-dir .artifacts/qa-e2e/memory-retrieval-qmd
+```
+
+Templates may use `{agent}`, `{query}`, and `{caseId}` placeholders. The case
+file stays outside the public repo when it contains private operator data.
+Score top-k retrieval separately from final-answer behavior: retrieval evals
+should prove the right source is available before broader ACP or channel
+scenarios judge whether the agent used it well.
+
 ## Related docs
 
 - [Testing](/help/testing)
