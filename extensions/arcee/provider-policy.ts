@@ -75,6 +75,32 @@ export function shouldContributeArceeTrinityLargeThinkingCompat(params: {
   return normalizeBaseUrl(params.model.baseUrl) === normalizeBaseUrl(ARCEE_BASE_URL);
 }
 
+export function applyArceeTrinityLargeThinkingCompat<T extends { id: string; compat?: unknown }>(
+  model: T,
+): T {
+  if (!isArceeTrinityLargeThinkingModelId(model.id)) {
+    return model;
+  }
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as Record<string, unknown>)
+      : undefined;
+  if (
+    compat?.supportsReasoningEffort ===
+      ARCEE_TRINITY_LARGE_THINKING_COMPAT.supportsReasoningEffort &&
+    compat?.supportsTools === ARCEE_TRINITY_LARGE_THINKING_COMPAT.supportsTools
+  ) {
+    return model;
+  }
+  return {
+    ...model,
+    compat: {
+      ...compat,
+      ...ARCEE_TRINITY_LARGE_THINKING_COMPAT,
+    } as T extends { compat?: infer TCompat } ? TCompat : never,
+  } as T;
+}
+
 export function normalizeArceeProviderConfig(
   providerConfig: ModelProviderConfig,
 ): ModelProviderConfig {
@@ -91,24 +117,12 @@ export function normalizeArceeProviderConfig(
   const hasModels = Array.isArray(providerConfig.models);
   const models = hasModels
     ? providerConfig.models.map((model) => {
-        if (!isArceeTrinityLargeThinkingModelId(model.id)) {
-          return model;
-        }
-        if (
-          model.compat?.supportsReasoningEffort ===
-            ARCEE_TRINITY_LARGE_THINKING_COMPAT.supportsReasoningEffort &&
-          model.compat?.supportsTools === ARCEE_TRINITY_LARGE_THINKING_COMPAT.supportsTools
-        ) {
+        const normalizedModel = applyArceeTrinityLargeThinkingCompat(model);
+        if (normalizedModel === model) {
           return model;
         }
         changed = true;
-        return {
-          ...model,
-          compat: {
-            ...model.compat,
-            ...ARCEE_TRINITY_LARGE_THINKING_COMPAT,
-          },
-        };
+        return normalizedModel;
       })
     : providerConfig.models;
 

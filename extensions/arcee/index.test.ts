@@ -150,6 +150,10 @@ describe("arcee provider plugin", () => {
       } as never),
     ).toMatchObject({
       id: "arcee/trinity-large-thinking",
+      compat: {
+        supportsReasoningEffort: false,
+        supportsTools: false,
+      },
     });
 
     expect(
@@ -196,6 +200,10 @@ describe("arcee provider plugin", () => {
     ).toMatchObject({
       id: "arcee/trinity-large-thinking",
       baseUrl: "https://openrouter.ai/api/v1",
+      compat: {
+        supportsReasoningEffort: false,
+        supportsTools: false,
+      },
     });
 
     expect(

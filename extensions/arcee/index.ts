@@ -19,6 +19,7 @@ import {
 } from "./provider-catalog.js";
 import {
   ARCEE_TRINITY_LARGE_THINKING_COMPAT,
+  applyArceeTrinityLargeThinkingCompat,
   normalizeArceeProviderConfig,
   shouldContributeArceeTrinityLargeThinkingCompat,
 } from "./provider-policy.js";
@@ -100,7 +101,7 @@ function normalizeArceeResolvedModel<T extends { baseUrl?: string; id: string }>
     return undefined;
   }
   return {
-    ...model,
+    ...applyArceeTrinityLargeThinkingCompat(model),
     id: normalizedId,
     baseUrl: normalizedBaseUrl,
   };
