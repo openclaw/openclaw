@@ -21828,6 +21828,39 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
+                    artifactKind: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "legacy-zip",
+                        },
+                        {
+                          type: "string",
+                          const: "npm-pack",
+                        },
+                      ],
+                    },
+                    artifactFormat: {
+                      anyOf: [
+                        {
+                          type: "string",
+                          const: "zip",
+                        },
+                        {
+                          type: "string",
+                          const: "tgz",
+                        },
+                      ],
+                    },
+                    npmIntegrity: {
+                      type: "string",
+                    },
+                    npmShasum: {
+                      type: "string",
+                    },
+                    npmTarballName: {
+                      type: "string",
+                    },
                     clawpackSha256: {
                       type: "string",
                     },
