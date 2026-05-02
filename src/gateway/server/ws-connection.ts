@@ -267,12 +267,24 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       payload: { nonce: connectNonce, ts: Date.now() },
     });
 
+    const pingTimer = setInterval(() => {
+      if (!client) {
+        return;
+      }
+      try {
+        socket.ping();
+      } catch {
+        // close() clears the timer; ping can race with a socket already entering CLOSING.
+      }
+    }, 25_000);
+
     const close = (code = 1000, reason?: string) => {
       if (closed) {
         return;
       }
       closed = true;
       clearTimeout(handshakeTimer);
+      clearInterval(pingTimer);
       releasePreauthBudget();
       if (client) {
         clients.delete(client);
