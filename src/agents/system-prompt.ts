@@ -6,6 +6,7 @@ import { resolveChannelApprovalCapability } from "../channels/plugins/approvals.
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
+import { findCodeRegions } from "../shared/text/code-regions.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -74,16 +75,28 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   // actual instruction, and the generated heartbeat section below covers behavior.
   let result = content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "");
 
+  // Mask code regions so literal ~~examples~~ inside fences/inline code survive.
+  const regions = findCodeRegions(result);
+  const saved: string[] = [];
+  let masked = "";
+  let cursor = 0;
+  for (const { start, end } of regions) {
+    masked += result.slice(cursor, start);
+    saved.push(result.slice(start, end));
+    masked += `\x00${saved.length - 1}\x00`;
+    cursor = end;
+  }
+  masked += result.slice(cursor);
+
   // Remove deprecated/struck-through text entirely — strikethrough in bootstrap
   // files signals content that has been removed, so it must not be forwarded to
   // the model (it wastes tokens and can confuse the model with stale instructions).
-  // Lookbehind and lookahead on both ends ensure ~~~ fenced code blocks are never
-  // matched: the opener requires no adjacent ~ before or after the ~~, and the
-  // closer applies the same constraint, so ~~~...~~~ is fully excluded.
-  result = result.replace(/(?<![~])~~(?![~])[\s\S]+?(?<![~])~~(?![~])/g, "");
-  result = result.replace(/<s(?:\s[^>]*)?>[\s\S]+?<\/s>/gi, "");
-  result = result.replace(/<del(?:\s[^>]*)?>[\s\S]+?<\/del>/gi, "");
-  result = result.replace(/<strike(?:\s[^>]*)?>[\s\S]+?<\/strike>/gi, "");
+  masked = masked.replace(/(?<![~])~~(?![~])[\s\S]+?(?<![~])~~(?![~])/g, "");
+  masked = masked.replace(/<s(?:\s[^>]*)?>[\s\S]+?<\/s>/gi, "");
+  masked = masked.replace(/<del(?:\s[^>]*)?>[\s\S]+?<\/del>/gi, "");
+  masked = masked.replace(/<strike(?:\s[^>]*)?>[\s\S]+?<\/strike>/gi, "");
+
+  result = masked.replace(/\x00(\d+)\x00/g, (_, i) => saved[+i]!);
 
   return result.replace(/\n{3,}/g, "\n\n");
 }

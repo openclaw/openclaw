@@ -756,6 +756,37 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("removed");
   });
 
+  it("preserves strikethrough syntax inside fenced code blocks", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "Keep this\n```\nExample: ~~deprecated~~ usage\n```\nAnd this",
+        },
+      ],
+    });
+
+    expect(prompt).toContain("Keep this");
+    expect(prompt).toContain("~~deprecated~~");
+    expect(prompt).toContain("And this");
+  });
+
+  it("preserves strikethrough syntax inside inline code", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "AGENTS.md",
+          content: "Use `~~text~~` to strike through. Keep this.",
+        },
+      ],
+    });
+
+    expect(prompt).toContain("`~~text~~`");
+    expect(prompt).toContain("Keep this");
+  });
+
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
