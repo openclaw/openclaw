@@ -239,7 +239,7 @@ export const runGatewayWatchTmuxMain = (params = {}) => {
     log(deps.stderr, `gateway:watch benchmark CPU profiles: ${resolvedArgs.benchmarkProfileDir}`);
   }
 
-  if (TMUX_DISABLE_VALUES.has(String(deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase())) {
+  if (TMUX_DISABLE_VALUES.has((deps.env.OPENCLAW_GATEWAY_WATCH_TMUX ?? "").toLowerCase())) {
     return runForegroundWatcher({
       args: deps.args,
       cwd: deps.cwd,
