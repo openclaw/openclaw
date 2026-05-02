@@ -10,11 +10,15 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { normalizeSubagentSessionKey } from "./subagent-session-key.js";
 
-export const SUBAGENT_SESSION_ROLES = ["main", "orchestrator", "leaf"] as const;
-export type SubagentSessionRole = (typeof SUBAGENT_SESSION_ROLES)[number];
+export type SubagentSessionRole = "main" | "orchestrator" | "leaf";
+const SUBAGENT_SESSION_ROLES: readonly SubagentSessionRole[] = [
+  "main",
+  "orchestrator",
+  "leaf",
+] as const;
 
-export const SUBAGENT_CONTROL_SCOPES = ["children", "none"] as const;
-export type SubagentControlScope = (typeof SUBAGENT_CONTROL_SCOPES)[number];
+type SubagentControlScope = "children" | "none";
+const SUBAGENT_CONTROL_SCOPES: readonly SubagentControlScope[] = ["children", "none"] as const;
 
 export type SessionCapabilityEntry = {
   sessionId?: unknown;
