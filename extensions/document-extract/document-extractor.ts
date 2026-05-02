@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import path from "node:path";
-import { execSync } from "node:child_process";
+import { execSync, execFileSync } from "node:child_process";
 import type {
   DocumentExtractedImage,
   DocumentExtractionRequest,
@@ -164,39 +164,33 @@ const FS = /* #__PURE__ */ (() => {
 })();
 
 function renderPageWithPdftoppm(
-  pdfBuffer: Buffer,
+  pdfPath: string,
   pageNumber: number,
-  scale: number,
-  maxOutputPixels: number,
-  viewport: PdfViewport,
+  targetWidth: number,
+  targetHeight: number,
 ): Buffer | null {
-  const viewportArea = Math.max(1, viewport.width * viewport.height);
-  const targetArea = Math.min(maxOutputPixels, viewportArea * scale * scale);
-  const dpi = Math.max(72, Math.round(Math.sqrt(targetArea / viewportArea) * 72));
-
-  const rand = Math.random().toString(36).slice(2, 8);
-
-  let tmpDir: string | undefined;
+  if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+    return null;
+  }
   try {
-    tmpDir = FS.mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/openclaw-pdf-`);
-    const pdfPath = path.join(tmpDir!, `doc-${rand}.pdf`);
-    const outputBase = path.join(tmpDir!, `page-${rand}`);
-
-    FS.writeFileSync(pdfPath, pdfBuffer);
-
-    execSync(
-      `pdftoppm -r ${dpi} -png -f ${pageNumber} -l ${pageNumber} "${pdfPath}" "${outputBase}"`,
+    const outputBase = `${pdfPath}-page-${pageNumber}`;
+    execFileSync(
+      "pdftoppm",
+      [
+        "-r", "144",
+        "-png",
+        "-f", String(pageNumber),
+        "-l", String(pageNumber),
+        "-scale-to-x", String(targetWidth),
+        "-scale-to-y", String(targetHeight),
+        pdfPath,
+        outputBase,
+      ],
       { stdio: "ignore", timeout: 30_000 },
     );
-
-    const pngPath = `${outputBase}-${pageNumber}.png`;
-    return FS.readFileSync(pngPath);
+    return FS.readFileSync(`${outputBase}-${pageNumber}.png`);
   } catch {
     return null;
-  } finally {
-    if (tmpDir) {
-      try { FS.rmSync(tmpDir, { recursive: true }); } catch {}
-    }
   }
 }
 
@@ -218,7 +212,7 @@ async function extractTextFromPages(
   pdf: PdfDocument,
   effectivePages: number[],
   minTextChars: number,
-): Promise<string> {
+): Promise<{ text: string; meetsThreshold: boolean }> {
   const textParts: string[] = [];
   let extractedTextLength = 0;
 
@@ -238,7 +232,7 @@ async function extractTextFromPages(
   }
 
   const text = textParts.join("\n\n");
-  return extractedTextLength >= minTextChars ? text.trimEnd() : "";
+  return { text: text.trimEnd(), meetsThreshold: extractedTextLength >= minTextChars };
 }
 
 async function extractImagesFromPages(
@@ -252,28 +246,50 @@ async function extractImagesFromPages(
   const images: DocumentExtractedImage[] = [];
   let remainingPixels = Math.max(1, Math.floor(maxPixels));
 
-  for (const pageNum of effectivePages) {
-    const page = await pdf.getPage(pageNum);
-    const viewport = page.getViewport({ scale: 1 });
-    const plan = resolveRenderPlan(viewport, remainingPixels);
-    if (!plan) {
-      break;
+  let tmpDir: string | undefined;
+  let pdfPath: string | undefined;
+
+  if (usePdftoppmFallback) {
+    const rand = Math.random().toString(36).slice(2, 8);
+    tmpDir = FS.mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/openclaw-pdf-`);
+    pdfPath = path.join(tmpDir, `doc-${rand}.pdf`);
+    FS.writeFileSync(pdfPath, pdfBuffer);
+  }
+
+  try {
+    for (const pageNum of effectivePages) {
+      if (remainingPixels <= 0) {
+        break;
+      }
+
+      const page = await pdf.getPage(pageNum);
+      const viewport = page.getViewport({ scale: 1 });
+      const plan = resolveRenderPlan(viewport, remainingPixels);
+      if (!plan) {
+        break;
+      }
+
+      let pngBuffer: Buffer | null = null;
+
+      if (usePdftoppmFallback && pdfPath) {
+        pngBuffer = renderPageWithPdftoppm(pdfPath, pageNum, plan.width, plan.height);
+      } else if (canvasModule) {
+        pngBuffer = await renderPageWithCanvas(page, canvasModule, plan);
+      } else {
+        break;
+      }
+
+      if (!pngBuffer) {
+        break;
+      }
+
+      images.push({ type: "image", data: pngBuffer.toString("base64"), mimeType: "image/png" });
+      remainingPixels -= plan.pixels;
     }
-
-    let pngBuffer: Buffer | null = null;
-
-    if (usePdftoppmFallback) {
-      pngBuffer = renderPageWithPdftoppm(pdfBuffer, pageNum, plan.scale, remainingPixels, viewport);
-    } else {
-      pngBuffer = await renderPageWithCanvas(page, canvasModule!, plan);
+  } finally {
+    if (tmpDir) {
+      try { FS.rmSync(tmpDir, { recursive: true }); } catch {}
     }
-
-    if (!pngBuffer) {
-      break;
-    }
-
-    images.push({ type: "image", data: pngBuffer.toString("base64"), mimeType: "image/png" });
-    remainingPixels -= plan.pixels;
   }
 
   return images;
@@ -293,8 +309,9 @@ async function extractPdfContent(
     ? request.pageNumbers.filter((p) => p >= 1 && p <= pdf.numPages).slice(0, request.maxPages)
     : Array.from({ length: Math.min(pdf.numPages, request.maxPages) }, (_, i) => i + 1);
 
-  const text = await extractTextFromPages(pdf, effectivePages, request.minTextChars);
-  if (text) {
+  const { text, meetsThreshold } = await extractTextFromPages(pdf, effectivePages, request.minTextChars);
+
+  if (meetsThreshold) {
     return { text, images: [] };
   }
 
@@ -308,7 +325,7 @@ async function extractPdfContent(
       usePdftoppmFallback = true;
     } else {
       request.onImageExtractionError?.(err);
-      return { text: "", images: [] };
+      return { text, images: [] };
     }
   }
 
