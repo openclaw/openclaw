@@ -735,6 +735,138 @@ describe("uninstallPlugin", () => {
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      name: "enabled entry only, no installed code",
+      pluginId: "missing-entry-plugin",
+      config: createPluginConfig({
+        entries: {
+          "missing-entry-plugin": { enabled: true },
+        },
+      }),
+      expectedActions: {
+        entry: true,
+        install: false,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {},
+    },
+    {
+      name: "install record and channel config, no runtime plugin",
+      pluginId: "missing-channel-plugin",
+      config: createPluginConfig({
+        installs: {
+          "missing-channel-plugin": createNpmInstallRecord("missing-channel-plugin"),
+        },
+        channels: {
+          "missing-channel-plugin": { enabled: true, token: "stale" },
+          discord: { enabled: true },
+        },
+      }),
+      expectedActions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: true,
+        directory: false,
+      },
+      expectedConfig: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    },
+    {
+      name: "linked path record, missing source directory",
+      pluginId: "missing-linked-plugin",
+      config: createPluginConfig({
+        installs: {
+          "missing-linked-plugin": createPathInstallRecord(
+            "/missing/openclaw/plugin",
+            "/missing/openclaw/plugin",
+          ),
+        },
+        loadPaths: ["/missing/openclaw/plugin", "/keep/this/plugin"],
+      }),
+      expectedActions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: true,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {
+        plugins: {
+          load: {
+            paths: ["/keep/this/plugin"],
+          },
+        },
+      },
+    },
+    {
+      name: "policy and slots only, no entry or install record",
+      pluginId: "missing-policy-plugin",
+      config: createPluginConfig({
+        allow: ["missing-policy-plugin", "other-plugin"],
+        deny: ["missing-policy-plugin"],
+        slots: {
+          memory: "missing-policy-plugin",
+          contextEngine: "missing-policy-plugin",
+        },
+      }),
+      expectedActions: {
+        entry: false,
+        install: false,
+        allowlist: true,
+        denylist: true,
+        loadPath: false,
+        memorySlot: true,
+        contextEngineSlot: true,
+        channelConfig: false,
+        directory: false,
+      },
+      expectedConfig: {
+        plugins: {
+          allow: ["other-plugin"],
+          slots: {
+            memory: "memory-core",
+            contextEngine: "legacy",
+          },
+        },
+      },
+    },
+  ] as const)(
+    "uninstall teardown matrix: $name",
+    async ({ pluginId, config, expectedActions, expectedConfig }) => {
+      const result = await uninstallPlugin({
+        config,
+        pluginId,
+        deleteFiles: true,
+        extensionsDir: path.join(tempDir, "extensions"),
+      });
+
+      const successfulResult = expectSuccessfulUninstall(result);
+      expect(successfulResult.actions).toEqual(expectedActions);
+      expect(successfulResult.config).toEqual(expectedConfig);
+      expect(successfulResult.warnings).toEqual([]);
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("removes config entries", async () => {
     const config = createPluginConfig({
       entries: createSinglePluginEntries(),
