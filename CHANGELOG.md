@@ -47,6 +47,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gate zalouser startup name matching [AI]. (#77411) Thanks @pgondhi987.
+- Outbound/security: strip echoed leading inbound metadata, including generated location and structured context labels, before channel delivery parses reply directives so AI-facing context blocks cannot leak to users. Fixes #39847. Thanks @p3nchan.
 - fix(device-pair): require pairing scope for pair command [AI]. (#76377) Thanks @pgondhi987.
 - fix(qqbot): keep private commands off framework surface [AI]. (#77212) Thanks @pgondhi987.
 - Memory/wiki: preserve representation from both corpora in `corpus=all` searches while backfilling unused result capacity, so memory hits are not starved by numerically higher wiki integer scores. Fixes #77337. Thanks @hclsys.

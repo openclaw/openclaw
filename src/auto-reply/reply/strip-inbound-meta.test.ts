@@ -69,19 +69,32 @@ describe("stripInboundMetadata", () => {
     expect(stripInboundMetadata(input)).toBe("Got it, thanks!");
   });
 
-  it("strips all six known sentinel types", () => {
+  it("strips all known generated sentinel types", () => {
     const sentinels = [
       "Conversation info (untrusted metadata):",
       "Sender (untrusted metadata):",
       "Thread starter (untrusted, for context):",
       "Reply target of current user message (untrusted, for context):",
       "Forwarded message context (untrusted metadata):",
+      "Location (untrusted metadata):",
       "Chat history since last reply (untrusted, for context):",
     ];
     for (const sentinel of sentinels) {
       const input = `${sentinel}\n\`\`\`json\n{"x": 1}\n\`\`\`\n\nUser message`;
       expect(stripInboundMetadata(input)).toBe("User message");
     }
+  });
+
+  it("strips generated structured metadata label blocks", () => {
+    const input = `context 1 (untrusted metadata):
+\`\`\`json
+{"source":"channel","payload":{"body":"hidden"}}
+\`\`\`
+
+Visible user text`;
+
+    expect(stripInboundMetadata(input)).toBe("Visible user text");
+    expect(stripLeadingInboundMetadata(input)).toBe("Visible user text");
   });
 
   it("handles metadata block with no user text after it", () => {

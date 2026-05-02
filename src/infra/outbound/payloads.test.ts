@@ -508,6 +508,47 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     });
   });
 
+  it("strips generated location metadata from leading LLM echoes", () => {
+    const result = normalizeReplyPayloadsForDelivery([
+      {
+        text: [
+          "Conversation info (untrusted metadata):",
+          "```json",
+          '{"session":"abc"}',
+          "```",
+          "",
+          "Location (untrusted metadata):",
+          "```json",
+          '{"latitude":25.033,"longitude":121.565}',
+          "```",
+          "",
+          "Visible reply.",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe("Visible reply.");
+  });
+
+  it("strips generated structured metadata labels from leading LLM echoes", () => {
+    const result = normalizeReplyPayloadsForDelivery([
+      {
+        text: [
+          "context 1 (untrusted metadata):",
+          "```json",
+          '{"source":"channel","payload":{"body":"hidden"}}',
+          "```",
+          "",
+          "Visible reply.",
+        ].join("\n"),
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe("Visible reply.");
+  });
+
   it("preserves timestamp-prefixed replies without echoed metadata", () => {
     const text = "[Wed 2026-03-11 23:51 PDT] hello";
 
