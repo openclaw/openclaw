@@ -1379,12 +1379,19 @@ export async function runEmbeddedPiAgent(
             const errorText = contextOverflowError.text;
             const msgCount = attempt.messagesSnapshot?.length ?? 0;
             const observedOverflowTokens = extractObservedOverflowTokenCount(errorText);
+            const overflowTokenCountForCompaction =
+              observedOverflowTokens ??
+              (ctxInfo.tokens > 0
+                ? // Confirmed overflow with an unparseable provider message should still
+                  // force budget compaction instead of falling through as "nothing to compact".
+                  ctxInfo.tokens + 1
+                : undefined);
             log.warn(
               `[context-overflow-diag] sessionKey=${params.sessionKey ?? params.sessionId} ` +
                 `provider=${provider}/${modelId} source=${contextOverflowError.source} ` +
                 `messages=${msgCount} sessionFile=${activeSessionFile} ` +
                 `diagId=${overflowDiagId} compactionAttempts=${overflowCompactionAttempts} ` +
-                `observedTokens=${observedOverflowTokens ?? "unknown"} ` +
+                `observedTokens=${overflowTokenCountForCompaction ?? "unknown"} ` +
                 `error=${errorText.slice(0, 200)}`,
             );
             const isCompactionFailure = isCompactionFailureError(errorText);
@@ -1454,8 +1461,8 @@ export async function runEmbeddedPiAgent(
                   ...(attempt.promptCache ? { promptCache: attempt.promptCache } : {}),
                   runId: params.runId,
                   trigger: "overflow",
-                  ...(observedOverflowTokens !== undefined
-                    ? { currentTokenCount: observedOverflowTokens }
+                  ...(overflowTokenCountForCompaction !== undefined
+                    ? { currentTokenCount: overflowTokenCountForCompaction }
                     : {}),
                   diagId: overflowDiagId,
                   attempt: overflowCompactionAttempts,
@@ -1466,8 +1473,8 @@ export async function runEmbeddedPiAgent(
                   sessionKey: params.sessionKey,
                   sessionFile: activeSessionFile,
                   tokenBudget: ctxInfo.tokens,
-                  ...(observedOverflowTokens !== undefined
-                    ? { currentTokenCount: observedOverflowTokens }
+                  ...(overflowTokenCountForCompaction !== undefined
+                    ? { currentTokenCount: overflowTokenCountForCompaction }
                     : {}),
                   force: true,
                   compactionTarget: "budget",
