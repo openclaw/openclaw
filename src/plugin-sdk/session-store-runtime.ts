@@ -13,6 +13,7 @@ export {
   saveSessionStore,
   updateLastRoute,
   updateSessionStore,
+  updateSessionStoreEntry,
 } from "../config/sessions/store.js";
 export {
   evaluateSessionFreshness,

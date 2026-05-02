@@ -1,34 +1,32 @@
 import { clearSessionStoreCaches } from "./store-cache.js";
 
-export type SessionStoreLockTask = {
+export type SessionStoreWriterTask = {
   fn: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
-  timeoutMs?: number;
-  staleMs: number;
 };
 
-export type SessionStoreLockQueue = {
+export type SessionStoreWriterQueue = {
   running: boolean;
-  pending: SessionStoreLockTask[];
+  pending: SessionStoreWriterTask[];
   drainPromise: Promise<void> | null;
 };
 
-export const LOCK_QUEUES = new Map<string, SessionStoreLockQueue>();
+export const WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();
 
 export function clearSessionStoreCacheForTest(): void {
   clearSessionStoreCaches();
-  for (const queue of LOCK_QUEUES.values()) {
+  for (const queue of WRITER_QUEUES.values()) {
     for (const task of queue.pending) {
       task.reject(new Error("session store queue cleared for test"));
     }
   }
-  LOCK_QUEUES.clear();
+  WRITER_QUEUES.clear();
 }
 
-export async function drainSessionStoreLockQueuesForTest(): Promise<void> {
-  while (LOCK_QUEUES.size > 0) {
-    const queues = [...LOCK_QUEUES.values()];
+export async function drainSessionStoreWriterQueuesForTest(): Promise<void> {
+  while (WRITER_QUEUES.size > 0) {
+    const queues = [...WRITER_QUEUES.values()];
     for (const queue of queues) {
       for (const task of queue.pending) {
         task.reject(new Error("session store queue cleared for test"));
@@ -39,13 +37,13 @@ export async function drainSessionStoreLockQueuesForTest(): Promise<void> {
       queue.drainPromise ? [queue.drainPromise] : [],
     );
     if (activeDrains.length === 0) {
-      LOCK_QUEUES.clear();
+      WRITER_QUEUES.clear();
       return;
     }
     await Promise.allSettled(activeDrains);
   }
 }
 
-export function getSessionStoreLockQueueSizeForTest(): number {
-  return LOCK_QUEUES.size;
+export function getSessionStoreWriterQueueSizeForTest(): number {
+  return WRITER_QUEUES.size;
 }

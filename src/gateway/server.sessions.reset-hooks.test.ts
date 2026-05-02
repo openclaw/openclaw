@@ -214,7 +214,7 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   expect(filesAfterResetAttempt.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(false);
 });
 
-test("sessions.reset emits before_reset for the entry actually reset under the store lock", async () => {
+test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
   const { dir } = await createSessionStoreDir();
   const oldTranscriptPath = path.join(dir, "sess-old.jsonl");
   const newTranscriptPath = path.join(dir, "sess-new.jsonl");
@@ -251,7 +251,7 @@ test("sessions.reset emits before_reset for the entry actually reset under the s
   const [
     { getRuntimeConfig },
     { resolveGatewaySessionStoreTarget },
-    { withSessionStoreLockForTest },
+    { withSessionStoreWriterForTest },
   ] = await Promise.all([
     import("../config/config.js"),
     import("./session-utils.js"),
@@ -266,7 +266,7 @@ test("sessions.reset emits before_reset for the entry actually reset under the s
     | ReturnType<(typeof import("./session-reset-service.js"))["performGatewaySessionReset"]>
     | undefined;
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
-  await withSessionStoreLockForTest(gatewayStorePath, async () => {
+  await withSessionStoreWriterForTest(gatewayStorePath, async () => {
     pendingReset = performGatewaySessionReset({
       key: "main",
       reason: "new",
