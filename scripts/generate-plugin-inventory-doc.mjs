@@ -4,6 +4,8 @@ import path from "node:path";
 import process from "node:process";
 
 const DOC_PATH = "docs/plugins/plugin-inventory.md";
+const REFERENCE_INDEX_PATH = "docs/plugins/reference.md";
+const REFERENCE_DIR = "docs/plugins/reference";
 const ROOT = process.cwd();
 const EXTENSIONS_DIR = path.join(ROOT, "extensions");
 
@@ -58,6 +60,138 @@ function normalizeDocPath(value) {
 
 function docLink({ label, href }) {
   return `[${label}](${href})`;
+}
+
+function pluginReferencePath(id) {
+  return `/plugins/reference/${id}`;
+}
+
+function humanizeId(value) {
+  const names = new Map([
+    ["acpx", "ACPx"],
+    ["ai", "AI"],
+    ["api", "API"],
+    ["aws", "AWS"],
+    ["azure", "Azure"],
+    ["bluebubbles", "BlueBubbles"],
+    ["byteplus", "BytePlus"],
+    ["codex", "Codex"],
+    ["cli", "CLI"],
+    ["comfy", "ComfyUI"],
+    ["dashscope", "DashScope"],
+    ["deepgram", "Deepgram"],
+    ["deepinfra", "DeepInfra"],
+    ["deepseek", "DeepSeek"],
+    ["duckduckgo", "DuckDuckGo"],
+    ["exa", "Exa"],
+    ["fal", "fal"],
+    ["feishu", "Feishu"],
+    ["github", "GitHub"],
+    ["googlechat", "Google Chat"],
+    ["gpt", "GPT"],
+    ["groq", "Groq"],
+    ["huggingface", "Hugging Face"],
+    ["imessage", "iMessage"],
+    ["irc", "IRC"],
+    ["kimi", "Kimi"],
+    ["line", "LINE"],
+    ["litellm", "LiteLLM"],
+    ["llm", "LLM"],
+    ["lmstudio", "LM Studio"],
+    ["mdns", "mDNS"],
+    ["minimax", "MiniMax"],
+    ["modelstudio", "Model Studio"],
+    ["msteams", "Microsoft Teams"],
+    ["nextcloud", "Nextcloud"],
+    ["nvidia", "NVIDIA"],
+    ["openai", "OpenAI"],
+    ["opencode", "OpenCode"],
+    ["openrouter", "OpenRouter"],
+    ["otel", "OpenTelemetry"],
+    ["qa", "QA"],
+    ["qqbot", "QQ Bot"],
+    ["qwen", "Qwen"],
+    ["qwencloud", "Qwen Cloud"],
+    ["searxng", "SearXNG"],
+    ["sglang", "SGLang"],
+    ["stepfun", "StepFun"],
+    ["tokenhub", "TokenHub"],
+    ["tts", "TTS"],
+    ["twitch", "Twitch"],
+    ["ui", "UI"],
+    ["vllm", "vLLM"],
+    ["whatsapp", "WhatsApp"],
+    ["xai", "xAI"],
+    ["zai", "Z.AI"],
+    ["zalouser", "Zalo Personal"],
+  ]);
+  return value
+    .split("-")
+    .map((part) => names.get(part) ?? part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function displayList(values) {
+  return values
+    .filter((value) => typeof value === "string" && value.length > 0)
+    .map(humanizeId)
+    .join(", ");
+}
+
+function normalizePackageDescription(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  return value.trim().replace(/\s+/gu, " ").replace(/\.$/u, "");
+}
+
+function resolveDescription({ manifest, packageJson }) {
+  const manifestDescription = normalizePackageDescription(manifest.description);
+  if (manifestDescription) {
+    return `${manifestDescription}.`;
+  }
+
+  const channels = Array.isArray(manifest.channels) ? manifest.channels : [];
+  if (channels.length > 0) {
+    const channelLabel = displayList(channels);
+    const channelNoun = channelLabel.toLowerCase().includes("channel") ? "" : " channel";
+    return `Adds the ${channelLabel}${channelNoun} surface for sending and receiving OpenClaw messages.`;
+  }
+
+  const providers = Array.isArray(manifest.providers) ? manifest.providers : [];
+  if (providers.length > 0) {
+    return `Adds ${displayList(providers)} model provider support to OpenClaw.`;
+  }
+
+  const contracts = Object.keys(manifest.contracts ?? {}).toSorted((left, right) =>
+    left.localeCompare(right),
+  );
+  const contractDescriptions = {
+    agentToolResultMiddleware: "Adds agent tool-result middleware.",
+    documentExtractors: "Adds document extraction for local attachments.",
+    imageGenerationProviders: "Adds image generation provider support.",
+    mediaUnderstandingProviders: "Adds media understanding provider support.",
+    memoryEmbeddingProviders: "Adds memory embedding provider support.",
+    migrationProviders: "Adds migration import support.",
+    musicGenerationProviders: "Adds music generation provider support.",
+    realtimeTranscriptionProviders: "Adds realtime transcription provider support.",
+    realtimeVoiceProviders: "Adds realtime voice provider support.",
+    speechProviders: "Adds text-to-speech provider support.",
+    tools: "Adds agent-callable tools.",
+    videoGenerationProviders: "Adds video generation provider support.",
+    webContentExtractors: "Adds readable web content extraction.",
+    webFetchProviders: "Adds web fetch provider support.",
+    webSearchProviders: "Adds web search provider support.",
+  };
+  const describedContracts = contracts
+    .map((contract) => contractDescriptions[contract])
+    .filter((value) => typeof value === "string");
+  if (describedContracts.length > 0) {
+    return describedContracts.join(" ");
+  }
+
+  const packageDescription = normalizePackageDescription(packageJson.description);
+  return packageDescription ? `${packageDescription}.` : "Provides an OpenClaw plugin.";
 }
 
 function pushUniqueDocLink(values, value) {
@@ -150,7 +284,7 @@ function resolveSurface(manifest) {
   return parts.join("; ");
 }
 
-function resolveInstall(packageJson, status) {
+function resolveInstallRoute(packageJson, status) {
   if (status === "source") {
     return "source checkout only";
   }
@@ -159,14 +293,18 @@ function resolveInstall(packageJson, status) {
   }
   const install = packageJson.openclaw?.install;
   const release = packageJson.openclaw?.release;
+  const npmSpec =
+    typeof install?.npmSpec === "string" && install.npmSpec !== packageJson.name
+      ? `: \`${install.npmSpec}\``
+      : "";
   if (release?.publishToClawHub === true && release?.publishToNpm === true) {
-    return install?.npmSpec ? `ClawHub + npm: \`${install.npmSpec}\`` : "ClawHub + npm";
+    return `ClawHub + npm${npmSpec}`;
   }
   if (release?.publishToClawHub === true) {
-    return install?.npmSpec ? `ClawHub: \`${install.npmSpec}\`` : "ClawHub";
+    return `ClawHub${npmSpec}`;
   }
   if (release?.publishToNpm === true || typeof install?.npmSpec === "string") {
-    return `npm: \`${install.npmSpec}\``;
+    return `npm${npmSpec}`;
   }
   return "installable plugin";
 }
@@ -191,14 +329,12 @@ function escapeCell(value) {
 
 function renderTable(records) {
   const rows = [
-    ["Plugin", "Package", "Surface", "Install"],
+    ["Plugin", "Description", "Distribution", "Surface"],
     ...records.map((record) => [
-      record.docs.length > 0
-        ? docLink({ href: record.docs[0].href, label: escapeCell(record.id) })
-        : escapeCell(record.id),
-      `\`${escapeCell(record.packageName)}\``,
+      docLink({ href: pluginReferencePath(record.id), label: escapeCell(record.id) }),
+      escapeCell(record.description),
+      `\`${escapeCell(record.packageName)}\`<br />${escapeCell(record.installRoute)}`,
       escapeCell(record.surface),
-      escapeCell(record.install),
     ]),
   ];
   const widths = rows[0].map((_, index) => Math.max(...rows.map((row) => row[index].length), 3));
@@ -220,6 +356,61 @@ function formatTableRow(row, widths) {
   return `| ${row.map((cell, index) => cell.padEnd(widths[index])).join(" | ")} |`;
 }
 
+function renderRelatedDocs(record) {
+  if (record.docs.length === 0) {
+    return "";
+  }
+  return `## Related docs
+
+${record.docs.map((link) => `- ${docLink(link)}`).join("\n")}`;
+}
+
+function renderReferencePage(record) {
+  const relatedDocs = renderRelatedDocs(record);
+  return `---
+summary: "${record.description.replaceAll('"', '\\"')}"
+read_when:
+  - You are installing, configuring, or auditing the ${record.id} plugin
+title: "${record.name} plugin"
+---
+
+# ${record.name} plugin
+
+${record.description}
+
+## Distribution
+
+- Package: \`${record.packageName}\`
+- Install route: ${record.installRoute}
+
+## Surface
+
+${record.surface}${relatedDocs ? `\n\n${relatedDocs}` : ""}
+`;
+}
+
+function renderReferenceIndex(records) {
+  return `---
+summary: "Generated index of OpenClaw plugin reference pages"
+read_when:
+  - You need a reference page for a specific OpenClaw plugin
+  - You are auditing plugin docs coverage
+title: "Plugin reference"
+---
+
+# Plugin reference
+
+This page is generated from \`extensions/*/package.json\` and
+\`openclaw.plugin.json\`. Regenerate it with:
+
+\`\`\`bash
+pnpm plugins:inventory:gen
+\`\`\`
+
+${renderTable(records)}
+`;
+}
+
 function collectPluginRecords() {
   const rootPackageJson = readJson("package.json");
   const excludedDirs = collectExcludedPackagedExtensionDirs(rootPackageJson);
@@ -238,9 +429,11 @@ function collectPluginRecords() {
     const id = typeof manifest.id === "string" && manifest.id ? manifest.id : dirName;
     const status = resolveStatus({ dirName, packageJson, excludedDirs });
     records.push({
+      description: resolveDescription({ manifest, packageJson }),
       docs: resolveDocs({ dirName, manifest, packageJson }),
       id,
-      install: resolveInstall(packageJson, status),
+      installRoute: resolveInstallRoute(packageJson, status),
+      name: humanizeId(id),
       packageName: packageJson.name ?? "-",
       status,
       surface: resolveSurface(manifest),
@@ -248,6 +441,28 @@ function collectPluginRecords() {
   }
 
   return records.toSorted((left, right) => left.id.localeCompare(right.id));
+}
+
+function writeGeneratedDocs(records) {
+  fs.mkdirSync(path.join(ROOT, REFERENCE_DIR), { recursive: true });
+  for (const record of records) {
+    fs.writeFileSync(
+      path.join(ROOT, REFERENCE_DIR, `${record.id}.md`),
+      renderReferencePage(record),
+      "utf8",
+    );
+  }
+  fs.writeFileSync(path.join(ROOT, REFERENCE_INDEX_PATH), renderReferenceIndex(records), "utf8");
+}
+
+function readGeneratedDocs(records) {
+  return [
+    [REFERENCE_INDEX_PATH, renderReferenceIndex(records)],
+    ...records.map((record) => [
+      path.join(REFERENCE_DIR, `${record.id}.md`),
+      renderReferencePage(record),
+    ]),
+  ];
 }
 
 function renderDocument() {
@@ -308,10 +523,12 @@ function main(argv = process.argv.slice(2)) {
     process.exit(2);
   }
 
+  const records = collectPluginRecords();
   const next = renderDocument();
   const docPath = path.join(ROOT, DOC_PATH);
   if (write) {
     fs.writeFileSync(docPath, next, "utf8");
+    writeGeneratedDocs(records);
     return;
   }
 
@@ -319,6 +536,14 @@ function main(argv = process.argv.slice(2)) {
   if (current !== next) {
     console.error(`${DOC_PATH} is stale. Run \`pnpm plugins:inventory:gen\`.`);
     process.exit(1);
+  }
+  for (const [relativePath, expected] of readGeneratedDocs(records)) {
+    const fullPath = path.join(ROOT, relativePath);
+    const actual = fs.existsSync(fullPath) ? fs.readFileSync(fullPath, "utf8") : "";
+    if (actual !== expected) {
+      console.error(`${relativePath} is stale. Run \`pnpm plugins:inventory:gen\`.`);
+      process.exit(1);
+    }
   }
 }
 
