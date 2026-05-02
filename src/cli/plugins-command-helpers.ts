@@ -6,7 +6,7 @@ import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-r
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { theme } from "../terminal/theme.js";
 
@@ -129,23 +129,23 @@ export function applySlotSelectionForPlugin(
   return { config: result.config, warnings: result.warnings };
 }
 
-export function createPluginInstallLogger(): {
+export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
   warn: (msg: string) => void;
 } {
   return {
-    info: (msg) => defaultRuntime.log(msg),
-    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+    info: (msg) => runtime.log(msg),
+    warn: (msg) => runtime.log(theme.warn(msg)),
   };
 }
 
-export function createHookPackInstallLogger(): {
+export function createHookPackInstallLogger(runtime: RuntimeEnv = defaultRuntime): {
   info: (msg: string) => void;
   warn: (msg: string) => void;
 } {
   return {
-    info: (msg) => defaultRuntime.log(msg),
-    warn: (msg) => defaultRuntime.log(theme.warn(msg)),
+    info: (msg) => runtime.log(msg),
+    warn: (msg) => runtime.log(theme.warn(msg)),
   };
 }
 
@@ -191,16 +191,16 @@ export function formatPluginInstallWithHookFallbackError(
   return `${pluginError}\nAlso not a valid hook pack: ${hookError}`;
 }
 
-export function logHookPackRestartHint() {
-  defaultRuntime.log("Restart the gateway to load hooks.");
+export function logHookPackRestartHint(runtime: RuntimeEnv = defaultRuntime) {
+  runtime.log("Restart the gateway to load hooks.");
 }
 
-export function logSlotWarnings(warnings: string[]) {
+export function logSlotWarnings(warnings: string[], runtime: RuntimeEnv = defaultRuntime) {
   if (warnings.length === 0) {
     return;
   }
   for (const warning of warnings) {
-    defaultRuntime.log(theme.warn(warning));
+    runtime.log(theme.warn(warning));
   }
 }
 

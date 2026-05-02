@@ -31,6 +31,9 @@ openclaw plugins list
 openclaw plugins list --enabled
 openclaw plugins list --verbose
 openclaw plugins list --json
+openclaw plugins search <query>
+openclaw plugins search <query> --limit 20
+openclaw plugins search <query> --json
 openclaw plugins install <path-or-spec>
 openclaw plugins inspect <id>
 openclaw plugins inspect <id> --runtime
@@ -64,6 +67,7 @@ Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON Sch
 ### Install
 
 ```bash
+openclaw plugins search "calendar"                   # search ClawHub plugins
 openclaw plugins install <package>                      # ClawHub first, then npm
 openclaw plugins install clawhub:<package>              # ClawHub only
 openclaw plugins install npm:<package>                  # npm only
@@ -81,6 +85,10 @@ openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo
 <Warning>
 Bare package names are checked against ClawHub first, then npm. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
+
+`plugins search` queries ClawHub for installable plugin packages and prints
+install-ready package names. It searches code-plugin and bundle-plugin packages,
+not skills. Use `openclaw skills search` for ClawHub skills.
 
 <Note>
 ClawHub is the primary distribution and discovery surface for most plugins. Npm
@@ -217,6 +225,9 @@ openclaw plugins list
 openclaw plugins list --enabled
 openclaw plugins list --verbose
 openclaw plugins list --json
+openclaw plugins search <query>
+openclaw plugins search <query> --limit 20
+openclaw plugins search <query> --json
 ```
 
 <ParamField path="--enabled" type="boolean">
@@ -232,6 +243,11 @@ openclaw plugins list --json
 <Note>
 `plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After changing plugin code, enablement, hook policy, or `plugins.load.paths`, restart the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. For remote/container deployments, verify you are restarting the actual `openclaw gateway run` child, not only a wrapper process.
 </Note>
+
+`plugins search` is a remote ClawHub catalog lookup. It does not inspect local
+state, mutate config, install packages, or load plugin runtime code. Search
+results include the ClawHub package name, family, channel, version, summary, and
+an install hint such as `openclaw plugins install clawhub:<package>`.
 
 For bundled plugin work inside a packaged Docker image, bind-mount the plugin
 source directory over the matching packaged source path, such as
