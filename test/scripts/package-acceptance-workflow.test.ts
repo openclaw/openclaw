@@ -228,7 +228,7 @@ describe("package artifact reuse", () => {
     expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",');
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
     expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
-    expect(publishedUpgradeSurvivor).toContain("openclaw@(beta|latest|");
+    expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
     expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');
     expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
@@ -623,7 +623,7 @@ describe("package artifact reuse", () => {
     });
     expectTextToIncludeAll(validateStep.run, [
       'if [[ -z "${PACKAGE_ARTIFACT_NAME// }" ]]; then',
-      "package_spec must be openclaw@beta",
+      "package_spec must be openclaw@alpha",
     ]);
     expectTextToIncludeAll(runStep.run, [
       'export OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ="${package_tgzs[0]}"',

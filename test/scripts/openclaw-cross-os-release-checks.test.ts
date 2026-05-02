@@ -233,6 +233,8 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(looksLikeReleaseVersionRef("2026.4.5")).toBe(true);
     expect(looksLikeReleaseVersionRef("refs/tags/v2026.4.5-beta.1")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.5-beta.1")).toBe(true);
+    expect(looksLikeReleaseVersionRef("refs/tags/v2026.4.5-alpha.1")).toBe(true);
+    expect(looksLikeReleaseVersionRef("v2026.4.5-alpha.1")).toBe(true);
     expect(looksLikeReleaseVersionRef("v2026.4.7-1")).toBe(true);
     expect(looksLikeReleaseVersionRef("main")).toBe(false);
     expect(looksLikeReleaseVersionRef("codex/cross-os-release-checks")).toBe(false);
