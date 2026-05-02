@@ -779,12 +779,18 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
     const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
+      const withinStartupCronRetryWindow =
+        startupCronRetryTimer !== null ||
+        (startupCronRetryAttempts > 0 &&
+          startupCronRetryAttempts < STARTUP_CRON_RETRY_MAX_ATTEMPTS);
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
-      // The runtime reconciliation path (heartbeat-driven) will still warn if the
-      // cron service remains unavailable after boot.
-      if (params.reason === "startup") {
+      // The runtime reconciliation path still warns when no bounded startup retry
+      // is active, or when the retry budget has been exhausted.
+      if (params.reason === "startup" || withinStartupCronRetryWindow) {
         api.logger.debug?.(
-          "memory-core: cron service not yet available at gateway_start; deferring to runtime reconciliation.",
+          params.reason === "startup"
+            ? "memory-core: cron service not yet available at gateway_start; deferring to runtime reconciliation."
+            : "memory-core: managed dreaming cron not yet reconciled during startup retry window (cron service unavailable).",
         );
       } else {
         api.logger.warn(
