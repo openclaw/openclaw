@@ -107,17 +107,19 @@ function buildPluginGroups(params: {
     suppressNameConflicts: true,
     allowGatewaySubagentBinding: true,
   });
+  const activeRegistry = getActivePluginRegistry();
   const groups = new Map<string, ToolCatalogGroup>();
   // Key metadata by plugin ownership and tool name so we only project metadata that
   // was registered BY the tool's owning plugin. Without this scoping, plugin-X
   // could override the catalog label/description/risk/tags for another plugin's
   // tool by registering metadata with the same toolName.
   const pluginToolMetadata = new Map(
-    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
+    (activeRegistry?.toolMetadata ?? []).map((entry) => [
       buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
       entry.metadata,
     ]),
   );
+  const seenToolIds = new Set<string>();
   for (const tool of pluginTools) {
     const meta = getPluginToolMeta(tool);
     const pluginId = meta?.pluginId ?? "plugin";
@@ -153,7 +155,45 @@ function buildPluginGroups(params: {
       tags: ownedMetadata?.tags,
       defaultProfiles: [],
     });
+    seenToolIds.add(tool.name);
     groups.set(groupId, existing);
+  }
+  for (const entry of activeRegistry?.tools ?? []) {
+    const names = entry.names.length > 0 ? entry.names : (entry.declaredNames ?? []);
+    for (const name of names) {
+      if (seenToolIds.has(name) || params.existingToolNames.has(name)) {
+        continue;
+      }
+      const groupId = `plugin:${entry.pluginId}`;
+      const existing =
+        groups.get(groupId) ??
+        ({
+          id: groupId,
+          label: entry.pluginName ?? entry.pluginId,
+          source: "plugin",
+          pluginId: entry.pluginId,
+          tools: [],
+        } as ToolCatalogGroup);
+      const ownedMetadata = pluginToolMetadata.get(
+        buildPluginToolMetadataKey(entry.pluginId, name),
+      );
+      existing.tools.push({
+        id: name,
+        label: normalizeOptionalString(ownedMetadata?.displayName) ?? name,
+        description:
+          summarizeToolDescriptionText({
+            rawDescription: ownedMetadata?.description,
+          }) || `Plugin tool from ${entry.pluginName ?? entry.pluginId}`,
+        source: "plugin",
+        pluginId: entry.pluginId,
+        optional: entry.optional,
+        risk: ownedMetadata?.risk,
+        tags: ownedMetadata?.tags,
+        defaultProfiles: [],
+      });
+      seenToolIds.add(name);
+      groups.set(groupId, existing);
+    }
   }
   return [...groups.values()]
     .map((group) =>
