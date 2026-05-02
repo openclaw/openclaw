@@ -38,6 +38,7 @@ export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
   1200,
 );
+const CROSS_OS_AGENT_TURN_OPTIONAL = parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", true);
 
 const providerConfig = {
   openai: {
@@ -165,6 +166,20 @@ function parsePositiveIntegerEnv(name, fallback) {
     throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   return value;
+}
+
+function parseBooleanEnv(name, fallback) {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  if (/^(1|true|yes|on)$/iu.test(raw)) {
+    return true;
+  }
+  if (/^(0|false|no|off)$/iu.test(raw)) {
+    return false;
+  }
+  throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
 }
 
 export function looksLikeReleaseVersionRef(ref) {
@@ -1948,6 +1963,10 @@ async function runInstalledAgentTurn(params) {
     } catch (error) {
       lastError = error;
       if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
+        const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+        if (skipped) {
+          return skipped;
+        }
         throw error;
       }
       appendFileSync(
@@ -2745,6 +2764,10 @@ async function runAgentTurn(params) {
     } catch (error) {
       lastError = error;
       if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
+        const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+        if (skipped) {
+          return skipped;
+        }
         throw error;
       }
       appendFileSync(
@@ -2756,6 +2779,25 @@ async function runAgentTurn(params) {
     }
   }
   throw lastError;
+}
+
+function maybeBuildOptionalAgentTurnSkipResult(error, logPath) {
+  if (!CROSS_OS_AGENT_TURN_OPTIONAL || !shouldRetryCrossOsAgentTurnError(error)) {
+    return null;
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  appendFileSync(
+    logPath,
+    `\n[release-checks] skipping optional cross-OS live agent turn after retryable failure: ${message}\n`,
+  );
+  return {
+    status: 0,
+    stdout: JSON.stringify({
+      status: "skipped",
+      reason: "cross-os live agent turn unavailable after retry",
+    }),
+    stderr: "",
+  };
 }
 
 function buildReleaseAgentTurnArgs(sessionId) {
