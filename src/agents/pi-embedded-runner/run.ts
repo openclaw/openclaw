@@ -9,6 +9,7 @@ import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -87,6 +88,7 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import { hasMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -423,9 +425,8 @@ export async function runEmbeddedPiAgent(
         workspaceDir: resolvedWorkspace,
         modelProviderId: provider,
         modelId,
-        messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        ...buildAgentHookContextChannelFields(params),
       };
       if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
         const hookResult = await hookRunner.runBeforeAgentReply(
@@ -1204,7 +1205,7 @@ export async function runEmbeddedPiAgent(
               ? sessionLastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
           const canRestartForLiveSwitch =
-            !attempt.didSendViaMessagingTool &&
+            !hasMessagingToolDeliveryEvidence(attempt) &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
@@ -1287,6 +1288,7 @@ export async function runEmbeddedPiAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,

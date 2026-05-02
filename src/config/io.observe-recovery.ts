@@ -313,6 +313,10 @@ function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => str
   return path.join(resolveStateDir(env, homedir), "logs", "config-health.json");
 }
 
+function formatObserveRecoveryError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function readConfigHealthState(deps: ObserveRecoveryDeps): Promise<ConfigHealthState> {
   try {
     const raw = await deps.fs.promises.readFile(
@@ -340,25 +344,33 @@ async function writeConfigHealthState(
   deps: ObserveRecoveryDeps,
   state: ConfigHealthState,
 ): Promise<void> {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     await deps.fs.promises.mkdir(path.dirname(healthPath), { recursive: true, mode: 0o700 });
     await deps.fs.promises.writeFile(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {}
+  } catch (err) {
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
+  }
 }
 
 function writeConfigHealthStateSync(deps: ObserveRecoveryDeps, state: ConfigHealthState): void {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     deps.fs.mkdirSync(path.dirname(healthPath), { recursive: true, mode: 0o700 });
     deps.fs.writeFileSync(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {}
+  } catch (err) {
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
+  }
 }
 
 function getConfigHealthEntry(state: ConfigHealthState, configPath: string): ConfigHealthEntry {

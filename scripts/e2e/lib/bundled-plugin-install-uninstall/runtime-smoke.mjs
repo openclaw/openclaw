@@ -109,24 +109,8 @@ function buildPluginPlan(manifest) {
     ? contracts.speechProviders.filter(isNonEmptyString)
     : [];
   const tools = Array.isArray(contracts.tools) ? contracts.tools.filter(isNonEmptyString) : [];
-  const hasRuntimeContractSurface =
-    channels.length > 0 ||
-    speechProviders.length > 0 ||
-    tools.length > 0 ||
-    (Array.isArray(manifest.providers) && manifest.providers.length > 0) ||
-    (Array.isArray(manifest.cliBackends) && manifest.cliBackends.length > 0) ||
-    (Array.isArray(contracts.mediaUnderstandingProviders) &&
-      contracts.mediaUnderstandingProviders.length > 0) ||
-    (Array.isArray(contracts.migrationProviders) && contracts.migrationProviders.length > 0);
-  const legacyImplicitStartupSidecar =
-    manifest.activation?.onStartup === undefined &&
-    channels.length === 0 &&
-    !hasRuntimeContractSurface;
   const activeInThisProbe =
-    manifest.activation?.onStartup === true ||
-    legacyImplicitStartupSidecar ||
-    channels.length > 0 ||
-    speechProviders.length > 0;
+    manifest.activation?.onStartup === true || channels.length > 0 || speechProviders.length > 0;
   return {
     channels,
     speechProviders,
@@ -275,6 +259,7 @@ async function assertReadyzProbe(options) {
 }
 
 async function rpcCall(method, params, options) {
+  const rpcStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-runtime-rpc-"));
   const args = [
     options.entrypoint,
     "gateway",
@@ -295,6 +280,7 @@ async function rpcCall(method, params, options) {
       ...process.env,
       ...options.env,
       OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_STATE_DIR: rpcStateDir,
     },
   });
   return unwrapRpcPayload(parseJsonOutput(stdout));
@@ -551,7 +537,6 @@ async function runWatchdog(options) {
   }
   await retryRpcCall("health", {}, options);
   assertNoPostReadyRuntimeDepsWork(options.logPath, readyIndex);
-  assertNoRuntimeDepsLocks();
   await assertNoPackageManagerChildren(options.child.pid);
 }
 
@@ -565,64 +550,11 @@ function findReadyLogIndex(logPath) {
 function assertNoPostReadyRuntimeDepsWork(logPath, readyIndex) {
   const log = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
   const postReady = log.slice(Math.max(0, readyIndex));
-  const forbidden = [
-    /\[plugins\].*installed bundled runtime deps/iu,
-    /\[plugins\].*installing bundled runtime deps/iu,
-    /\[plugins\].*staging bundled runtime deps/iu,
-    /\b(?:npm|pnpm|yarn|corepack) install\b/iu,
-  ];
+  const forbidden = [/\b(?:npm|pnpm|yarn|corepack) install\b/iu];
   const match = forbidden.find((pattern) => pattern.test(postReady));
   if (match) {
     throw new Error(`post-ready runtime dependency work matched ${match}: ${tailText(postReady)}`);
   }
-}
-
-function assertNoRuntimeDepsLocks() {
-  const roots = [
-    ...(process.env.OPENCLAW_PLUGIN_STAGE_DIR ? [process.env.OPENCLAW_PLUGIN_STAGE_DIR] : []),
-    path.join(
-      process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME || os.homedir(), ".openclaw"),
-      "plugin-runtime-deps",
-    ),
-    path.join(process.cwd(), "dist", "extensions"),
-  ];
-  for (const root of roots) {
-    if (!fs.existsSync(root)) {
-      continue;
-    }
-    const locks = findDirs(root, ".openclaw-runtime-deps.lock", 8);
-    if (locks.length > 0) {
-      throw new Error(`runtime dependency lock still exists: ${locks.join(", ")}`);
-    }
-  }
-}
-
-function findDirs(root, basename, maxDepth) {
-  const results = [];
-  const visit = (dir, depth) => {
-    if (depth > maxDepth) {
-      return;
-    }
-    let entries;
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-      const full = path.join(dir, entry.name);
-      if (entry.name === basename) {
-        results.push(full);
-        continue;
-      }
-      visit(full, depth + 1);
-    }
-  };
-  visit(root, 0);
-  return results;
 }
 
 async function assertNoPackageManagerChildren(pid) {

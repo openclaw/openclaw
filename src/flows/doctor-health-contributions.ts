@@ -268,17 +268,6 @@ async function runPluginRegistryHealth(ctx: DoctorHealthFlowContext): Promise<vo
   });
 }
 
-async function runBundledPluginRuntimeDepsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairBundledPluginRuntimeDeps } =
-    await import("../commands/doctor-bundled-plugin-runtime-deps.js");
-  await maybeRepairBundledPluginRuntimeDeps({
-    runtime: ctx.runtime,
-    prompter: ctx.prompter,
-    config: ctx.cfg,
-    includeConfiguredChannels: true,
-  });
-}
-
 async function runStateIntegrityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteStateIntegrity } = await import("../commands/doctor-state-integrity.js");
   await noteStateIntegrity(ctx.cfg, ctx.prompter, ctx.configPath);
@@ -295,7 +284,9 @@ async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promis
 }
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyCronStore } = await import("../commands/doctor-cron.js");
+  const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
+    await import("../commands/doctor-cron.js");
+  await noteLegacyWhatsAppCrontabHealthCheck();
   await maybeRepairLegacyCronStore({
     cfg: ctx.cfg,
     options: ctx.options,
@@ -577,11 +568,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-config",
       label: "Gateway config",
       run: runGatewayConfigHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:bundled-plugin-runtime-deps",
-      label: "Bundled plugin runtime deps",
-      run: runBundledPluginRuntimeDepsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:auth-profiles",

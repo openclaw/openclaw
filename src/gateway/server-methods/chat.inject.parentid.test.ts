@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { appendInjectedAssistantMessageToTranscript } from "./chat-transcript-inject.js";
 import { createTranscriptFixtureSync } from "./chat.test-helpers.js";
 
-// Guardrail: Ensure gateway "injected" assistant transcript messages are appended via SessionManager,
-// so they are attached to the current leaf with a `parentId` and do not sever compaction history.
+// Guardrail: Gateway-injected assistant transcript messages must attach to the
+// current leaf with a `parentId` and must not sever compaction history.
 describe("gateway chat.inject transcript writes", () => {
   it("appends a Pi session entry that includes parentId", async () => {
     const { dir, transcriptPath } = createTranscriptFixtureSync({
@@ -13,7 +13,7 @@ describe("gateway chat.inject transcript writes", () => {
     });
 
     try {
-      const appended = appendInjectedAssistantMessageToTranscript({
+      const appended = await appendInjectedAssistantMessageToTranscript({
         transcriptPath,
         message: "hello",
       });
@@ -55,7 +55,7 @@ describe("gateway chat.inject transcript writes", () => {
         "utf-8",
       );
 
-      const appended = appendInjectedAssistantMessageToTranscript({
+      const appended = await appendInjectedAssistantMessageToTranscript({
         transcriptPath,
         message: "hello",
       });

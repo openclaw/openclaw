@@ -14,7 +14,7 @@ import {
   listReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
 
-const jitiLoaderParams = vi.hoisted(
+const moduleLoaderParams = vi.hoisted(
   () =>
     [] as Array<{
       modulePath: string;
@@ -31,8 +31,9 @@ vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/jiti-loader-cache.js")>();
+vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../plugins/plugin-module-loader-cache.js")>();
   const { createRequire } = await import("node:module");
   const require = createRequire(import.meta.url);
 
@@ -105,12 +106,12 @@ vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
 
   return {
     ...actual,
-    getCachedPluginJitiLoader: ((params) => {
-      jitiLoaderParams.push({
+    getCachedPluginModuleLoader: ((params) => {
+      moduleLoaderParams.push({
         modulePath: params.modulePath,
         tryNative: params.tryNative,
       });
-      const actualLoader = actual.getCachedPluginJitiLoader(params);
+      const actualLoader = actual.getCachedPluginModuleLoader(params);
       return ((modulePath: string) => {
         if (
           modulePath.endsWith("/plugins/loader.js") ||
@@ -119,8 +120,8 @@ vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
           return { loadOpenClawPlugins };
         }
         return actualLoader(modulePath);
-      }) as ReturnType<typeof actual.getCachedPluginJitiLoader>;
-    }) satisfies typeof actual.getCachedPluginJitiLoader,
+      }) as ReturnType<typeof actual.getCachedPluginModuleLoader>;
+    }) satisfies typeof actual.getCachedPluginModuleLoader,
   };
 });
 
@@ -431,7 +432,7 @@ function expectExternalChatSetupOnlyPluginLoaded(params: {
 }
 
 afterEach(() => {
-  jitiLoaderParams.length = 0;
+  moduleLoaderParams.length = 0;
   resetPluginLoaderTestStateForTest();
 });
 
@@ -498,7 +499,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
 
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
     expect(
-      jitiLoaderParams.some(
+      moduleLoaderParams.some(
         (entry) =>
           entry.tryNative === true &&
           (entry.modulePath.endsWith("/plugins/loader.js") ||

@@ -53,7 +53,7 @@ function resolveBraveApiKey(searchConfig?: SearchConfigRecord): string | undefin
 function missingBraveKeyPayload() {
   return {
     error: "missing_brave_api_key",
-    message: `web_search (brave) needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
+    message: `web_search (brave) needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.`,
     docs: "https://docs.openclaw.ai/tools/web",
   };
 }
@@ -65,6 +65,8 @@ async function runBraveLlmContextSearch(params: {
   country?: string;
   search_lang?: string;
   freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
 }): Promise<{
   results: Array<{
     url: string;
@@ -84,6 +86,13 @@ async function runBraveLlmContextSearch(params: {
   }
   if (params.freshness) {
     url.searchParams.set("freshness", params.freshness);
+  } else if (params.dateAfter && params.dateBefore) {
+    url.searchParams.set("freshness", `${params.dateAfter}to${params.dateBefore}`);
+  } else if (params.dateAfter) {
+    url.searchParams.set(
+      "freshness",
+      `${params.dateAfter}to${new Date().toISOString().slice(0, 10)}`,
+    );
   }
 
   return withTrustedWebSearchEndpoint(
@@ -235,14 +244,6 @@ export async function executeBraveSearch(
   }
 
   const rawFreshness = readStringParam(args, "freshness");
-  if (rawFreshness && braveMode === "llm-context") {
-    return {
-      error: "unsupported_freshness",
-      message:
-        "freshness filtering is not supported by Brave llm-context mode. Remove freshness or use Brave web mode.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
   const freshness = rawFreshness ? normalizeFreshness(rawFreshness, "brave") : undefined;
   if (rawFreshness && !freshness) {
     return {
@@ -262,15 +263,6 @@ export async function executeBraveSearch(
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
-  if ((rawDateAfter || rawDateBefore) && braveMode === "llm-context") {
-    return {
-      error: "unsupported_date_filter",
-      message:
-        "date_after/date_before filtering is not supported by Brave llm-context mode. Use Brave web mode for date filters.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
-
   const parsedDateRange = parseIsoDateRange({
     rawDateAfter,
     rawDateBefore,
@@ -283,18 +275,53 @@ export async function executeBraveSearch(
   }
 
   const { dateAfter, dateBefore } = parsedDateRange;
-  const cacheKey = buildSearchCacheKey([
-    "brave",
-    braveMode,
-    query,
-    resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
-    country,
-    normalizedLanguage.search_lang,
-    normalizedLanguage.ui_lang,
-    freshness,
-    dateAfter,
-    dateBefore,
-  ]);
+  if (braveMode === "llm-context") {
+    const today = new Date().toISOString().slice(0, 10);
+    if (dateAfter && !dateBefore && dateAfter > today) {
+      return {
+        error: "invalid_date_range",
+        message: "date_after cannot be in the future for Brave llm-context mode.",
+        docs: "https://docs.openclaw.ai/tools/web",
+      };
+    }
+    if (dateBefore && !dateAfter) {
+      return {
+        error: "unsupported_date_filter",
+        message:
+          "Brave llm-context mode requires date_after when date_before is set. Use a bounded date range or freshness.",
+        docs: "https://docs.openclaw.ai/tools/web",
+      };
+    }
+  }
+  const llmContextDateEnd =
+    braveMode === "llm-context" && dateAfter
+      ? (dateBefore ?? new Date().toISOString().slice(0, 10))
+      : dateBefore;
+  const cacheKey = buildSearchCacheKey(
+    braveMode === "llm-context"
+      ? [
+          "brave",
+          braveMode,
+          query,
+          country,
+          normalizedLanguage.search_lang,
+          freshness,
+          dateAfter,
+          llmContextDateEnd,
+        ]
+      : [
+          "brave",
+          braveMode,
+          query,
+          resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+          country,
+          normalizedLanguage.search_lang,
+          normalizedLanguage.ui_lang,
+          freshness,
+          dateAfter,
+          dateBefore,
+        ],
+  );
   const cached = readCachedSearchPayload(cacheKey);
   if (cached) {
     return cached;
@@ -312,6 +339,8 @@ export async function executeBraveSearch(
       country: country ?? undefined,
       search_lang: normalizedLanguage.search_lang,
       freshness,
+      dateAfter,
+      dateBefore,
     });
     const payload = {
       query,

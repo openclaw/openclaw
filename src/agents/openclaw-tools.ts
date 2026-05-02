@@ -194,6 +194,7 @@ export function createOpenClawTools(
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
+    lateBindRuntimeConfig: true,
   });
   const webFetchTool = createWebFetchTool({
     config: options?.config,

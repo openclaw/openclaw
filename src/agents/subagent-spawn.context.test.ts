@@ -13,6 +13,7 @@ describe("sessions_spawn context modes", () => {
   const callGatewayMock = vi.fn();
   const updateSessionStoreMock = vi.fn();
   const forkSessionFromParentMock = vi.fn();
+  const ensureContextEnginesInitializedMock = vi.fn();
   const resolveContextEngineMock = vi.fn();
   let spawnSubagentDirect: Awaited<
     ReturnType<typeof loadSubagentSpawnModuleForTest>
@@ -23,6 +24,7 @@ describe("sessions_spawn context modes", () => {
       callGatewayMock,
       updateSessionStoreMock,
       forkSessionFromParentMock,
+      ensureContextEnginesInitializedMock,
       resolveContextEngineMock,
       sessionStorePath: storePath,
     }));
@@ -32,6 +34,7 @@ describe("sessions_spawn context modes", () => {
     callGatewayMock.mockReset();
     updateSessionStoreMock.mockReset();
     forkSessionFromParentMock.mockReset();
+    ensureContextEnginesInitializedMock.mockReset();
     resolveContextEngineMock.mockReset();
     setupAcceptedSubagentGatewayMock(callGatewayMock);
     resolveContextEngineMock.mockResolvedValue({});
@@ -109,6 +112,29 @@ describe("sessions_spawn context modes", () => {
         childSessionKey: result.childSessionKey,
         contextMode: "isolated",
       }),
+    );
+  });
+
+  it("initializes built-in context engines before resolving spawn preparation", async () => {
+    let initialized = false;
+    ensureContextEnginesInitializedMock.mockImplementation(() => {
+      initialized = true;
+    });
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockImplementation(async () => {
+      if (!initialized) {
+        throw new Error('Context engine "legacy" is not registered. Available engines: (none)');
+      }
+      return { prepareSubagentSpawn };
+    });
+
+    const result = await spawnSubagentDirect({ task: "clean worker" }, { agentSessionKey: "main" });
+
+    expect(result.status).toBe("accepted");
+    expect(ensureContextEnginesInitializedMock).toHaveBeenCalledTimes(1);
+    expect(resolveContextEngineMock).toHaveBeenCalledTimes(1);
+    expect(ensureContextEnginesInitializedMock.mock.invocationCallOrder[0]).toBeLessThan(
+      resolveContextEngineMock.mock.invocationCallOrder[0],
     );
   });
 

@@ -42,7 +42,7 @@ export type DescribeImageFileWithModelParams = {
   timeoutMs?: number;
 };
 
-export type DescribeImageFileWithModelResult = Awaited<
+type DescribeImageFileWithModelResult = Awaited<
   ReturnType<NonNullable<MediaUnderstandingProvider["describeImage"]>>
 >;
 

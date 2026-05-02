@@ -44,7 +44,8 @@ Notes:
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` when you intentionally want to replace the launcher.
 - State integrity checks now detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires an interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor also scans `~/.openclaw/cron/jobs.json` (or `cron.store`) for legacy cron job shapes and can rewrite them in place before the scheduler has to auto-normalize them at runtime.
-- Doctor repairs missing bundled plugin runtime dependencies without writing into packaged global installs. For root-owned npm installs or hardened systemd units, set `OPENCLAW_PLUGIN_STAGE_DIR` to a writable directory such as `/var/lib/openclaw/plugin-runtime-deps`; it can also be a path-list such as `/opt/openclaw/plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps`, where earlier roots are read-only lookup layers and the final root is the repair target.
+- On Linux, doctor warns when the user's crontab still runs legacy `~/.openclaw/bin/ensure-whatsapp.sh`; that script is no longer maintained and can log false WhatsApp gateway outages when cron lacks the systemd user-bus environment.
+- Doctor cleans legacy plugin dependency staging state created by older OpenClaw versions. It also repairs missing configured downloadable plugins when the registry can resolve them.
 - Doctor repairs stale plugin config by removing missing plugin ids from `plugins.allow`/`plugins.entries`, plus matching dangling channel config, heartbeat targets, and channel model overrides when plugin discovery is healthy.
 - Doctor quarantines invalid plugin config by disabling the affected `plugins.entries.<id>` entry and removing its invalid `config` payload. Gateway startup already skips only that bad plugin so other plugins and channels can keep running.
 - Set `OPENCLAW_SERVICE_REPAIR_POLICY=external` when another supervisor owns the gateway lifecycle. Doctor still reports gateway/service health and applies non-service repairs, but skips service install/start/restart/bootstrap and legacy service cleanup.
@@ -57,6 +58,7 @@ Notes:
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
 - If `gateway.auth.token`/`gateway.auth.password` are SecretRef-managed and unavailable in the current command path, doctor reports a read-only warning and does not write plaintext fallback credentials.
 - If channel SecretRef inspection fails in a fix path, doctor continues and reports a warning instead of exiting early.
+- After state-directory migrations, doctor warns when enabled default Telegram or Discord accounts depend on env fallback and `TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN` is unavailable to the doctor process.
 - Telegram `allowFrom` username auto-resolution (`doctor --fix`) requires a resolvable Telegram token in the current command path. If token inspection is unavailable, doctor reports a warning and skips auto-resolution for that pass.
 
 ## macOS: `launchctl` env overrides

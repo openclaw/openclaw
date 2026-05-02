@@ -10,7 +10,7 @@ import {
   validateArtifactsListParams,
 } from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
-import { loadSessionEntry, visitSessionMessages } from "../session-utils.js";
+import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -300,7 +300,9 @@ function resolveQuerySessionKey(query: ArtifactQuery): string | undefined {
   return undefined;
 }
 
-function loadArtifacts(query: ArtifactQuery): { artifacts: ArtifactRecord[]; sessionKey?: string } {
+async function loadArtifacts(
+  query: ArtifactQuery,
+): Promise<{ artifacts: ArtifactRecord[]; sessionKey?: string }> {
   const sessionKey = resolveQuerySessionKey(query);
   if (!sessionKey) {
     return { artifacts: [] };
@@ -311,7 +313,7 @@ function loadArtifacts(query: ArtifactQuery): { artifacts: ArtifactRecord[]; ses
     return { sessionKey, artifacts: [] };
   }
   const artifacts: ArtifactRecord[] = [];
-  visitSessionMessages(sessionId, storePath, entry?.sessionFile, (message, seq) => {
+  await visitSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, (message, seq) => {
     collectArtifactsFromMessage({
       message,
       messageFallbackSeq: seq,
@@ -342,11 +344,11 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
   return false;
 }
 
-function findArtifact(params: ArtifactsGetParams): {
+async function findArtifact(params: ArtifactsGetParams): Promise<{
   artifact?: ArtifactRecord;
   sessionKey?: string;
-} {
-  const loaded = loadArtifacts(params);
+}> {
+  const loaded = await loadArtifacts(params);
   return {
     sessionKey: loaded.sessionKey,
     artifact: loaded.artifacts.find((artifact) => artifact.id === params.artifactId),
@@ -359,14 +361,14 @@ function toSummary(artifact: ArtifactRecord): ArtifactSummary {
 }
 
 export const artifactsHandlers: GatewayRequestHandlers = {
-  "artifacts.list": ({ params, respond }) => {
+  "artifacts.list": async ({ params, respond }) => {
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {
       return;
     }
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifacts, sessionKey } = loadArtifacts(params);
+    const { artifacts, sessionKey } = await loadArtifacts(params);
     if (!sessionKey && (params.runId || params.taskId)) {
       respond(
         false,
@@ -377,14 +379,14 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { artifacts: artifacts.map(toSummary) });
   },
-  "artifacts.get": ({ params, respond }) => {
+  "artifacts.get": async ({ params, respond }) => {
     if (!assertValidParams(params, validateArtifactsGetParams, "artifacts.get", respond)) {
       return;
     }
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = findArtifact(params);
+    const { artifact } = await findArtifact(params);
     if (!artifact) {
       respond(
         false,
@@ -397,7 +399,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     }
     respond(true, { artifact: toSummary(artifact) });
   },
-  "artifacts.download": ({ params, respond }) => {
+  "artifacts.download": async ({ params, respond }) => {
     if (
       !assertValidParams(params, validateArtifactsDownloadParams, "artifacts.download", respond)
     ) {
@@ -406,7 +408,7 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = findArtifact(params);
+    const { artifact } = await findArtifact(params);
     if (!artifact) {
       respond(
         false,

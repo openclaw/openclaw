@@ -1,12 +1,11 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
+import { listEnabledInstalledPluginRecords } from "./installed-plugin-index.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
-import {
-  getActivePluginRegistry,
-  getActivePluginRegistryKey,
-  getActivePluginRuntimeSubagentMode,
-} from "./runtime.js";
+import { loadPluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import { getActivePluginRegistry } from "./runtime.js";
 import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
@@ -17,6 +16,23 @@ export type PluginToolMeta = {
   pluginId: string;
   optional: boolean;
 };
+
+type PluginToolFactoryTimingResult = "array" | "error" | "null" | "single";
+
+type PluginToolFactoryTiming = {
+  pluginId: string;
+  names: string[];
+  durationMs: number;
+  elapsedMs: number;
+  result: PluginToolFactoryTimingResult;
+  resultCount: number;
+  optional: boolean;
+};
+
+const log = createSubsystemLogger("plugins/tools");
+const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
+const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
+const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 
@@ -77,6 +93,72 @@ function readPluginToolName(tool: unknown): string {
   return typeof tool.name === "string" ? tool.name.trim() : "";
 }
 
+function toElapsedMs(value: number): number {
+  return Math.max(0, Math.round(value));
+}
+
+function describePluginToolFactoryResult(
+  resolved: AnyAgentTool | AnyAgentTool[] | null | undefined,
+  failed: boolean,
+): { result: PluginToolFactoryTimingResult; resultCount: number } {
+  if (failed) {
+    return { result: "error", resultCount: 0 };
+  }
+  if (!resolved) {
+    return { result: "null", resultCount: 0 };
+  }
+  if (Array.isArray(resolved)) {
+    return { result: "array", resultCount: resolved.length };
+  }
+  return { result: "single", resultCount: 1 };
+}
+
+function formatPluginToolFactoryTiming(timing: PluginToolFactoryTiming): string {
+  const names = timing.names.length > 0 ? timing.names.join("|") : "-";
+  return [
+    `${timing.pluginId}:${timing.durationMs}ms@${timing.elapsedMs}ms`,
+    `names=[${names}]`,
+    `result=${timing.result}`,
+    `count=${timing.resultCount}`,
+    `optional=${String(timing.optional)}`,
+  ].join(" ");
+}
+
+function formatPluginToolFactoryTimingSummary(params: {
+  totalMs: number;
+  timings: PluginToolFactoryTiming[];
+}): string {
+  const ranked = params.timings
+    .toSorted(
+      (left, right) =>
+        right.durationMs - left.durationMs || left.pluginId.localeCompare(right.pluginId),
+    )
+    .slice(0, PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT);
+  const omitted = Math.max(0, params.timings.length - ranked.length);
+  const factories =
+    ranked.length > 0
+      ? ranked.map((timing) => formatPluginToolFactoryTiming(timing)).join(", ")
+      : "none";
+  return [
+    "[trace:plugin-tools] factory timings",
+    `totalMs=${params.totalMs}`,
+    `factoryCount=${params.timings.length}`,
+    `shown=${ranked.length}`,
+    `omitted=${omitted}`,
+    `factories=${factories}`,
+  ].join(" ");
+}
+
+function shouldWarnPluginToolFactoryTimings(params: {
+  totalMs: number;
+  timings: PluginToolFactoryTiming[];
+}): boolean {
+  return (
+    params.totalMs >= PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS ||
+    params.timings.some((timing) => timing.durationMs >= PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS)
+  );
+}
+
 function describeMalformedPluginTool(tool: unknown): string | undefined {
   if (!isRecord(tool)) {
     return "tool must be an object";
@@ -94,18 +176,29 @@ function describeMalformedPluginTool(tool: unknown): string | undefined {
   return undefined;
 }
 
-function resolvePluginToolRegistry(params: {
-  loadOptions: PluginLoadOptions;
-  allowGatewaySubagentBinding?: boolean;
-}) {
-  if (
-    params.allowGatewaySubagentBinding &&
-    getActivePluginRegistryKey() &&
-    getActivePluginRuntimeSubagentMode() === "gateway-bindable"
-  ) {
-    return getActivePluginRegistry() ?? resolveRuntimePluginRegistry(params.loadOptions);
+function resolvePluginToolRuntimePluginIds(params: {
+  config: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+}): string[] | undefined {
+  const pluginIds = new Set<string>();
+  const activeRegistry = getActivePluginRegistry();
+  for (const plugin of activeRegistry?.plugins ?? []) {
+    if (plugin.status === undefined || plugin.status === "loaded") {
+      pluginIds.add(plugin.id);
+    }
   }
-  return resolveRuntimePluginRegistry(params.loadOptions);
+  const index = loadPluginRegistrySnapshot({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
+  for (const plugin of listEnabledInstalledPluginRecords(index, params.config)) {
+    pluginIds.add(plugin.pluginId);
+  }
+  return pluginIds.size > 0
+    ? [...pluginIds].toSorted((left, right) => left.localeCompare(right))
+    : undefined;
 }
 
 export function resolvePluginTools(params: {
@@ -133,16 +226,18 @@ export function resolvePluginTools(params: {
   const runtimeOptions = params.allowGatewaySubagentBinding
     ? { allowGatewaySubagentBinding: true as const }
     : undefined;
+  const onlyPluginIds = resolvePluginToolRuntimePluginIds({
+    config: context.config,
+    workspaceDir: context.workspaceDir,
+    env,
+  });
   const loadOptions = buildPluginRuntimeLoadOptions(context, {
-    installBundledRuntimeDeps: false,
     activate: false,
     toolDiscovery: true,
+    ...(onlyPluginIds !== undefined ? { onlyPluginIds } : {}),
     runtimeOptions,
   });
-  const registry = resolvePluginToolRegistry({
-    loadOptions,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-  });
+  const registry = resolveRuntimePluginRegistry(loadOptions);
   if (!registry) {
     return [];
   }
@@ -152,6 +247,8 @@ export function resolvePluginTools(params: {
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const blockedPlugins = new Set<string>();
+  const factoryTimingStartedAt = Date.now();
+  const factoryTimings: PluginToolFactoryTiming[] = [];
 
   for (const entry of registry.tools) {
     if (blockedPlugins.has(entry.pluginId)) {
@@ -172,17 +269,35 @@ export function resolvePluginTools(params: {
       blockedPlugins.add(entry.pluginId);
       continue;
     }
+    const declaredNames = entry.names ?? [];
     let resolved: AnyAgentTool | AnyAgentTool[] | null | undefined = null;
+    let factoryFailed = false;
+    const factoryStartedAt = Date.now();
     try {
       resolved = entry.factory(params.context);
     } catch (err) {
+      factoryFailed = true;
       context.logger.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
+    } finally {
+      const factoryEndedAt = Date.now();
+      const result = describePluginToolFactoryResult(resolved, factoryFailed);
+      factoryTimings.push({
+        pluginId: entry.pluginId,
+        names: declaredNames,
+        durationMs: toElapsedMs(factoryEndedAt - factoryStartedAt),
+        elapsedMs: toElapsedMs(factoryEndedAt - factoryTimingStartedAt),
+        result: result.result,
+        resultCount: result.resultCount,
+        optional: entry.optional,
+      });
+    }
+    if (factoryFailed) {
       continue;
     }
     if (!resolved) {
-      if (entry.names.length > 0) {
+      if (declaredNames.length > 0) {
         context.logger.debug?.(
-          `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
+          `plugin tool factory returned null (${entry.pluginId}): [${declaredNames.join(", ")}]`,
         );
       }
       continue;
@@ -237,6 +352,17 @@ export function resolvePluginTools(params: {
         optional: entry.optional,
       });
       tools.push(tool);
+    }
+  }
+
+  if (factoryTimings.length > 0) {
+    const totalMs =
+      factoryTimings.at(-1)?.elapsedMs ?? toElapsedMs(Date.now() - factoryTimingStartedAt);
+    const timingSummary = { totalMs, timings: factoryTimings };
+    if (shouldWarnPluginToolFactoryTimings(timingSummary)) {
+      log.warn(formatPluginToolFactoryTimingSummary(timingSummary));
+    } else if (log.isEnabled("trace")) {
+      log.trace(formatPluginToolFactoryTimingSummary(timingSummary));
     }
   }
 

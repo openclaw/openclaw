@@ -141,6 +141,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Gateway Metadata Timeout (ms)",
     help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
   },
+  gatewayReadyTimeoutMs: {
+    label: "Discord Gateway READY Timeout (ms)",
+    help: "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset.",
+  },
+  gatewayRuntimeReadyTimeoutMs: {
+    label: "Discord Gateway Runtime READY Timeout (ms)",
+    help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
+  },
   "voice.enabled": {
     label: "Discord Voice Enabled",
     help: "Enable Discord voice channel conversations. Text-only Discord configs leave voice off by default; set true to enable /vc commands and the Guild Voice States intent.",
@@ -224,6 +232,10 @@ export const discordChannelConfigUiHints = {
   allowBots: {
     label: "Discord Allow Bot Messages",
     help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+  },
+  mentionAliases: {
+    label: "Discord Mention Aliases",
+    help: "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases.",
   },
   token: {
     label: "Discord Bot Token",

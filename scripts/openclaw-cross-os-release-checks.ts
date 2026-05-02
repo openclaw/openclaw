@@ -20,7 +20,7 @@ import { createConnection as createNetConnection, createServer as createNetServe
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { assertNoBundledRuntimeDepsStagingDebris } from "../src/infra/package-dist-inventory.ts";
+import { assertNoLegacyPluginDependencyStagingDebris } from "../src/infra/package-dist-inventory.ts";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
@@ -91,7 +91,7 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
-export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = 180;
+export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = 360;
 
 if (isMainModule()) {
   try {
@@ -521,7 +521,7 @@ function isPackagedDistPath(relativePath) {
 }
 
 export async function writePackageDistInventoryForCandidate(params) {
-  await assertNoBundledRuntimeDepsStagingDebris(params.sourceDir);
+  await assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],
@@ -585,11 +585,11 @@ async function runFreshLane(params) {
       env,
       tgzPath: params.build.candidateTgz,
       logPath: join(params.logsDir, "fresh-install.log"),
-      restoreBundledPluginRuntimeDeps: false,
+      restoreBundledPluginPostinstall: false,
     });
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
-    logLanePhase(lane, "restore-bundled-plugin-runtime-deps");
+    logLanePhase(lane, "run-bundled-plugin-postinstall");
     await runBundledPluginPostinstall({
       lane,
       env,
@@ -691,10 +691,10 @@ async function runUpgradeLane(params) {
         env,
         tgzPath: params.baselineTgz,
         logPath: join(params.logsDir, "upgrade-install-baseline.log"),
-        restoreBundledPluginRuntimeDeps: false,
+        restoreBundledPluginPostinstall: false,
       });
     }
-    logLanePhase(lane, "restore-baseline-bundled-plugin-runtime-deps");
+    logLanePhase(lane, "run-baseline-bundled-plugin-postinstall");
     await runBundledPluginPostinstall({
       lane,
       env,
@@ -736,7 +736,7 @@ async function runUpgradeLane(params) {
       logPath: join(params.logsDir, "upgrade-update-status.log"),
       timeoutMs: 2 * 60 * 1000,
     });
-    logLanePhase(lane, "restore-bundled-plugin-runtime-deps");
+    logLanePhase(lane, "run-bundled-plugin-postinstall");
     await runBundledPluginPostinstall({
       lane,
       env,
@@ -1215,7 +1215,7 @@ export function shouldStopManagedGatewayBeforeManualFallback(platform = process.
   return shouldUseManagedGatewayService(platform);
 }
 
-function shouldRestoreBundledPluginRuntimeDeps() {
+function shouldRunBundledPluginPostinstall() {
   return true;
 }
 
@@ -2235,8 +2235,8 @@ async function installTarballPackage(params) {
     timeoutMs: params.timeoutMs,
   });
   if (
-    params.restoreBundledPluginRuntimeDeps !== false &&
-    shouldRestoreBundledPluginRuntimeDeps({ lane: params.lane })
+    params.restoreBundledPluginPostinstall !== false &&
+    shouldRunBundledPluginPostinstall({ lane: params.lane })
   ) {
     await runBundledPluginPostinstall({
       lane: params.lane,
@@ -2689,7 +2689,7 @@ function buildReleaseAgentTurnArgs(sessionId) {
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /failed to (?:install|stage) bundled runtime deps|failed to stage bundled runtime deps after|Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+  return /Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
     message,
   );
 }

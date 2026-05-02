@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { Type } from "typebox";
 import { isRequesterParentOfBackgroundAcpSession } from "../../acp/session-interaction-mode.js";
+import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -251,6 +252,15 @@ export function createSessionsSendTool(opts?: {
           runId: crypto.randomUUID(),
           status: access.status,
           error: access.error,
+          sessionKey: displayKey,
+        });
+      }
+      if (parseSessionThreadInfoFast(resolvedKey).threadId) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error:
+            "sessions_send cannot target a thread session for inter-agent coordination. Use the parent channel session key instead.",
           sessionKey: displayKey,
         });
       }

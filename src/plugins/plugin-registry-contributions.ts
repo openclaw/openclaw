@@ -12,6 +12,7 @@ import type {
   PluginManifestRecord,
   PluginManifestRegistry,
 } from "./manifest-registry.js";
+import { isPackageIncludedInCoreBundle } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
   createPluginRegistryIdNormalizer,
@@ -117,6 +118,10 @@ function sortUnique(values: Iterable<string>): string[] {
   return [...new Set([...values].map((value) => value.trim()).filter(Boolean))].toSorted(
     (left, right) => left.localeCompare(right),
   );
+}
+
+function isCoreBundledManifestSurface(plugin: PluginManifestRecord): boolean {
+  return plugin.origin !== "bundled" || isPackageIncludedInCoreBundle(plugin.packageManifest);
 }
 
 function collectObjectKeys(value: Record<string, unknown> | undefined): readonly string[] {
@@ -415,6 +420,7 @@ export function resolveManifestContractPluginIds(
     .plugins.filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
+        isCoreBundledManifestSurface(plugin) &&
         listManifestContractValues(plugin, params.contract).length > 0,
     )
     .map((plugin) => plugin.id)
@@ -432,6 +438,7 @@ export function resolveManifestContractPluginIdsByCompatibilityRuntimePath(
     .plugins.filter(
       (plugin) =>
         (!params.origin || plugin.origin === params.origin) &&
+        isCoreBundledManifestSurface(plugin) &&
         listManifestContractValues(plugin, params.contract).length > 0 &&
         (plugin.configContracts?.compatibilityRuntimePaths ?? []).includes(normalizedPath),
     )

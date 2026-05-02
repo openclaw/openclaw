@@ -7,6 +7,7 @@ import {
   readStringParam,
   resolvePollMaxSelections,
 } from "../runtime-api.js";
+import { DiscordThreadInitialMessageError } from "../send.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "../send.shared.js";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
@@ -171,12 +172,25 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         content,
         appliedTags: appliedTags ?? undefined,
       };
-      const thread = await discordMessagingActionRuntime.createThreadDiscord(
-        channelId,
-        payload,
-        ctx.withOpts(),
-      );
-      return jsonResult({ ok: true, thread });
+      try {
+        const thread = await discordMessagingActionRuntime.createThreadDiscord(
+          channelId,
+          payload,
+          ctx.withOpts(),
+        );
+        return jsonResult({ ok: true, thread });
+      } catch (error) {
+        if (error instanceof DiscordThreadInitialMessageError) {
+          return jsonResult({
+            ok: true,
+            partial: true,
+            thread: error.thread,
+            warning: "Discord thread was created, but sending the initial message failed.",
+            initialMessageError: error.initialMessageError,
+          });
+        }
+        throw error;
+      }
     }
     case "threadList": {
       if (!ctx.isActionEnabled("threads")) {

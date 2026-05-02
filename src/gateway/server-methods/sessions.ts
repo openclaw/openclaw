@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
@@ -66,6 +66,7 @@ import {
 } from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
+  forkCompactionCheckpointTranscriptAsync,
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
@@ -77,9 +78,9 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readRecentSessionMessagesWithStats,
+  readRecentSessionMessagesWithStatsAsync,
   readRecentSessionTranscriptLines,
-  readSessionMessageCount,
+  readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
@@ -571,7 +572,8 @@ async function handleSessionSend(params: {
     interruptedActiveRun = interruptResult.interrupted;
   }
 
-  const messageSeq = readSessionMessageCount(entry.sessionId, storePath, entry.sessionFile) + 1;
+  const messageSeq =
+    (await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -985,11 +987,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? readSessionMessageCount(
+      ? (await readSessionMessageCountAsync(
           createdEntry.sessionId,
           target.storePath,
           createdEntry.sessionFile,
-        ) + 1
+        )) + 1
       : undefined;
 
     if (initialMessage) {
@@ -1088,26 +1090,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!fs.existsSync(checkpoint.preCompaction.sessionFile)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "checkpoint snapshot transcript is missing"),
-      );
-      return;
-    }
-
-    const snapshotSession = SessionManager.open(
-      checkpoint.preCompaction.sessionFile,
-      path.dirname(checkpoint.preCompaction.sessionFile),
-    );
-    const branchedSession = SessionManager.forkFrom(
-      checkpoint.preCompaction.sessionFile,
-      snapshotSession.getCwd(),
-      path.dirname(checkpoint.preCompaction.sessionFile),
-    );
-    const branchedSessionFile = branchedSession.getSessionFile();
-    if (!branchedSessionFile) {
+    const branchedSession = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile: checkpoint.preCompaction.sessionFile,
+      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
+    });
+    if (!branchedSession?.sessionFile) {
       respond(
         false,
         undefined,
@@ -1119,8 +1106,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const label = entry.label?.trim() ? `${entry.label.trim()} (checkpoint)` : "Checkpoint branch";
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
-      nextSessionId: branchedSession.getSessionId(),
-      nextSessionFile: branchedSessionFile,
+      nextSessionId: branchedSession.sessionId,
+      nextSessionFile: branchedSession.sessionFile,
       label,
       parentSessionKey: canonicalKey,
       totalTokens: checkpoint.tokensBefore,
@@ -1202,15 +1189,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!fs.existsSync(checkpoint.preCompaction.sessionFile)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "checkpoint snapshot transcript is missing"),
-      );
-      return;
-    }
-
     const interruptResult = await interruptSessionRunIfActive({
       req,
       context,
@@ -1225,17 +1203,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const snapshotSession = SessionManager.open(
-      checkpoint.preCompaction.sessionFile,
-      path.dirname(checkpoint.preCompaction.sessionFile),
-    );
-    const restoredSession = SessionManager.forkFrom(
-      checkpoint.preCompaction.sessionFile,
-      snapshotSession.getCwd(),
-      path.dirname(checkpoint.preCompaction.sessionFile),
-    );
-    const restoredSessionFile = restoredSession.getSessionFile();
-    if (!restoredSessionFile) {
+    const restoredSession = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile: checkpoint.preCompaction.sessionFile,
+      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
+    });
+    if (!restoredSession?.sessionFile) {
       respond(
         false,
         undefined,
@@ -1245,8 +1217,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
-      nextSessionId: restoredSession.getSessionId(),
-      nextSessionFile: restoredSessionFile,
+      nextSessionId: restoredSession.sessionId,
+      nextSessionFile: restoredSession.sessionFile,
       totalTokens: checkpoint.tokensBefore,
       preserveCompactionCheckpoints: true,
     });
@@ -1674,7 +1646,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
   },
-  "sessions.get": ({ params, respond, context }) => {
+  "sessions.get": async ({ params, respond, context }) => {
     const p = params;
     const key = requireSessionKey(p.key ?? p.sessionKey, respond);
     if (!key) {
@@ -1695,7 +1667,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { messages: [] }, undefined);
       return;
     }
-    const { messages } = readRecentSessionMessagesWithStats(
+    const { messages } = await readRecentSessionMessagesWithStatsAsync(
       entry.sessionId,
       storePath,
       entry.sessionFile,

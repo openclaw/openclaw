@@ -23,6 +23,7 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
+import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
   extractModelCompat,
@@ -495,6 +496,54 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
 }
 
+const CORE_CODING_TOOL_ALLOWLIST_NAMES = new Set([
+  "agents_list",
+  "apply_patch",
+  "bash",
+  "canvas",
+  "cron",
+  "edit",
+  "exec",
+  "gateway",
+  "heartbeat_response",
+  "image",
+  "image_generate",
+  "message",
+  "music_generate",
+  "nodes",
+  "pdf",
+  "read",
+  "session_status",
+  "sessions_history",
+  "sessions_list",
+  "sessions_send",
+  "sessions_spawn",
+  "sessions_yield",
+  "subagents",
+  "tts",
+  "update_plan",
+  "video_generate",
+  "web_fetch",
+  "web_search",
+  "write",
+]);
+
+function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
+  if (!toolsAllow || toolsAllow.length === 0) {
+    return true;
+  }
+  return toolsAllow.some((toolName) => {
+    const normalized = normalizeToolName(toolName);
+    return (
+      normalized === "*" ||
+      normalized.startsWith("group:") ||
+      normalized === "bundle-mcp" ||
+      normalized.includes(TOOL_NAME_SEPARATOR) ||
+      CORE_CODING_TOOL_ALLOWLIST_NAMES.has(normalized)
+    );
+  });
+}
+
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripToolResultDetails(normalizeAssistantReplayContent(messages));
   return stripRuntimeContextCustomMessages(normalized);
@@ -695,6 +744,10 @@ export async function runEmbeddedAttempt(
     config: params.config,
     agentId: params.agentId,
   });
+  const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
+    config: params.config,
+    sessionAgentId,
+  });
   prepStages.mark("workspace-sandbox");
 
   let restoreSkillEnv: (() => void) | undefined;
@@ -832,6 +885,7 @@ export async function runEmbeddedAttempt(
               currentChannelId: params.currentChannelId,
               currentThreadTs: params.currentThreadTs,
               currentMessageId: params.currentMessageId,
+              includeCoreTools: shouldBuildCoreCodingToolsForAllowlist(params.toolsAllow),
               replyToMode: params.replyToMode,
               hasRepliedRef: params.hasRepliedRef,
               modelHasVision: params.model.input?.includes("image") ?? false,
@@ -940,10 +994,6 @@ export async function runEmbeddedAttempt(
       sessionKey: params.sessionKey,
       config: params.config,
       agentId: params.agentId,
-    });
-    const effectiveFsWorkspaceOnly = resolveAttemptFsWorkspaceOnly({
-      config: params.config,
-      sessionAgentId,
     });
     // Track sessions_yield tool invocation (callback pattern, like clientToolCallDetected)
     let yieldDetected = false;
@@ -2442,9 +2492,8 @@ export async function runEmbeddedAttempt(
           workspaceDir: params.workspaceDir,
           modelProviderId: params.model.provider,
           modelId: params.model.id,
-          messageProvider: params.messageProvider ?? undefined,
           trigger: params.trigger,
-          channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+          ...buildAgentHookContextChannelFields(params),
         };
         const promptBuildMessages =
           pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
@@ -2761,9 +2810,8 @@ export async function runEmbeddedAttempt(
                   sessionKey: params.sessionKey,
                   sessionId: params.sessionId,
                   workspaceDir: params.workspaceDir,
-                  messageProvider: params.messageProvider ?? undefined,
                   trigger: params.trigger,
-                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                  ...buildAgentHookContextChannelFields(params),
                 },
               )
               .catch((err) => {
@@ -3228,9 +3276,8 @@ export async function runEmbeddedAttempt(
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
-                messageProvider: params.messageProvider ?? undefined,
                 trigger: params.trigger,
-                channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                ...buildAgentHookContextChannelFields(params),
               },
             )
             .catch((err) => {
@@ -3336,9 +3383,8 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
-              messageProvider: params.messageProvider ?? undefined,
               trigger: params.trigger,
-              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+              ...buildAgentHookContextChannelFields(params),
             },
           )
           .catch((err) => {

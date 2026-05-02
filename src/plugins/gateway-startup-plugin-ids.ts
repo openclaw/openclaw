@@ -23,18 +23,6 @@ import {
 } from "./plugin-registry-contributions.js";
 import { loadPluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
 
-const DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS_ENV =
-  "OPENCLAW_DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS";
-
-function isTruthyEnvValue(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
-function shouldDisableLegacyImplicitStartupSidecars(env: NodeJS.ProcessEnv): boolean {
-  return isTruthyEnvValue(env[DISABLE_LEGACY_IMPLICIT_STARTUP_SIDECARS_ENV]);
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
@@ -58,18 +46,6 @@ function listPotentialEnabledChannelIds(config: OpenClawConfig, env: NodeJS.Proc
 
 function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boolean {
   return plugin.startup.memory;
-}
-
-/**
- * @deprecated Compatibility fallback for plugins that do not declare
- * `activation.onStartup`. Keep this path visible so we can remove it after
- * plugin manifests migrate to explicit startup activation.
- */
-function isDeprecatedLegacyImplicitStartupSidecar(params: {
-  plugin: InstalledPluginIndexRecord;
-  manifest: PluginManifestRecord | undefined;
-}): boolean {
-  return params.plugin.startup.sidecar && params.manifest?.activation?.onStartup === undefined;
 }
 
 function resolveGatewayStartupDreamingPluginIds(config: OpenClawConfig): Set<string> {
@@ -112,28 +88,11 @@ function resolveMemorySlotStartupPluginId(params: {
 function shouldConsiderForGatewayStartup(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
-  disableLegacyImplicitStartupSidecars: boolean;
   startupDreamingPluginIds: ReadonlySet<string>;
   memorySlotStartupPluginId?: string;
 }): boolean {
   if (params.manifest?.activation?.onStartup === true) {
     return true;
-  }
-  if (params.plugin.startup.sidecar) {
-    if (params.manifest?.activation?.onStartup === false) {
-      return false;
-    }
-    if (params.disableLegacyImplicitStartupSidecars) {
-      return false;
-    }
-    // Deprecated compatibility fallback: plugins without explicit startup
-    // activation metadata may still need startup import to register hooks or
-    // services. All plugins should declare activation.onStartup explicitly as
-    // we migrate away from implicit startup sidecar loading.
-    return isDeprecatedLegacyImplicitStartupSidecar({
-      plugin: params.plugin,
-      manifest: params.manifest,
-    });
   }
   if (!isGatewayStartupMemoryPlugin(params.plugin)) {
     return false;
@@ -391,9 +350,6 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
     collectConfiguredAgentHarnessRuntimes(activationSourceConfig, params.env),
   );
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
-  const disableLegacyImplicitStartupSidecars = shouldDisableLegacyImplicitStartupSidecars(
-    params.env,
-  );
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const memorySlotStartupPluginId = resolveMemorySlotStartupPluginId({
     activationSourceConfig,
@@ -448,7 +404,6 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
         !shouldConsiderForGatewayStartup({
           plugin,
           manifest,
-          disableLegacyImplicitStartupSidecars,
           startupDreamingPluginIds,
           memorySlotStartupPluginId,
         })

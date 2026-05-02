@@ -2,7 +2,7 @@ import type { ReplyPayload } from "./reply-payload.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 export const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
-export const HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY = "openclawHeartbeatResponse";
+const HEARTBEAT_RESPONSE_CHANNEL_DATA_KEY = "openclawHeartbeatResponse";
 
 export const HEARTBEAT_TOOL_OUTCOMES = [
   "no_change",
@@ -11,10 +11,10 @@ export const HEARTBEAT_TOOL_OUTCOMES = [
   "blocked",
   "needs_attention",
 ] as const;
-export type HeartbeatToolOutcome = (typeof HEARTBEAT_TOOL_OUTCOMES)[number];
+type HeartbeatToolOutcome = (typeof HEARTBEAT_TOOL_OUTCOMES)[number];
 
 export const HEARTBEAT_TOOL_PRIORITIES = ["low", "normal", "high"] as const;
-export type HeartbeatToolPriority = (typeof HEARTBEAT_TOOL_PRIORITIES)[number];
+type HeartbeatToolPriority = (typeof HEARTBEAT_TOOL_PRIORITIES)[number];
 
 export type HeartbeatToolResponse = {
   outcome: HeartbeatToolOutcome;
@@ -98,7 +98,7 @@ export function createHeartbeatToolResponsePayload(response: HeartbeatToolRespon
   };
 }
 
-export function getHeartbeatToolResponseFromPayload(
+function getHeartbeatToolResponseFromPayload(
   payload: ReplyPayload | undefined,
 ): HeartbeatToolResponse | undefined {
   return normalizeHeartbeatToolResponse(

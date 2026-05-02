@@ -324,7 +324,6 @@ class MacosSmoke {
           destination: this.tgzDir,
           packageSpec: this.options.targetPackageSpec,
           requireControlUi: true,
-          stageRuntimeDeps: !this.options.targetPackageSpec,
         });
         if (this.options.targetPackageSpec) {
           this.targetExpectVersion =

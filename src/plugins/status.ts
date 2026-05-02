@@ -53,7 +53,7 @@ export type { PluginCapabilityKind, PluginInspectShape } from "./inspect-shape.j
 
 export type PluginCompatibilityNotice = {
   pluginId: string;
-  code: "legacy-before-agent-start" | "legacy-implicit-startup-sidecar" | "hook-only";
+  code: "legacy-before-agent-start" | "hook-only";
   compatCode: PluginCompatCode;
   severity: "warn" | "info";
   message: string;
@@ -124,16 +124,6 @@ function buildCompatibilityNoticesForInspect(
         "still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
     });
   }
-  if (inspect.plugin.compat?.includes("legacy-implicit-startup-sidecar")) {
-    warnings.push({
-      pluginId: inspect.plugin.id,
-      code: "legacy-implicit-startup-sidecar",
-      compatCode: "legacy-implicit-startup-sidecar",
-      severity: "warn",
-      message:
-        "relies on deprecated implicit startup loading; add activation.onStartup: true for startup work or activation.onStartup: false for startup-lazy plugins.",
-    });
-  }
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,
@@ -200,17 +190,19 @@ function buildPluginRecordFromInstalledIndex(
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
     providerIds: [...(manifest?.providers ?? [])],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
+    speechProviderIds: [...(manifest?.contracts?.speechProviders ?? [])],
+    realtimeTranscriptionProviderIds: [
+      ...(manifest?.contracts?.realtimeTranscriptionProviders ?? []),
+    ],
+    realtimeVoiceProviderIds: [...(manifest?.contracts?.realtimeVoiceProviders ?? [])],
+    mediaUnderstandingProviderIds: [...(manifest?.contracts?.mediaUnderstandingProviders ?? [])],
+    imageGenerationProviderIds: [...(manifest?.contracts?.imageGenerationProviders ?? [])],
+    videoGenerationProviderIds: [...(manifest?.contracts?.videoGenerationProviders ?? [])],
+    musicGenerationProviderIds: [...(manifest?.contracts?.musicGenerationProviders ?? [])],
+    webFetchProviderIds: [...(manifest?.contracts?.webFetchProviders ?? [])],
+    webSearchProviderIds: [...(manifest?.contracts?.webSearchProviders ?? [])],
+    migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
+    memoryEmbeddingProviderIds: [...(manifest?.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
     gatewayMethods: [],
     cliCommands: [],
@@ -336,7 +328,6 @@ function buildPluginReport(
               loadModules,
               activate: false,
               cache: false,
-              installBundledRuntimeDeps: false,
               onlyPluginIds,
             }),
           ),
