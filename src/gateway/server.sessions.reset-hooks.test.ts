@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { embeddedRunMock, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
