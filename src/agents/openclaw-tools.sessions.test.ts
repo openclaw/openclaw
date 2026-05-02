@@ -10,6 +10,10 @@ const callGatewayMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+const loadSessionEntryByKeyMock = vi.fn();
+vi.mock("./subagent-announce-delivery.js", () => ({
+  loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
+}));
 
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => ({
@@ -156,6 +160,8 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
 describe("sessions tools", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
+    loadSessionEntryByKeyMock.mockReset();
+    loadSessionEntryByKeyMock.mockReturnValue(undefined);
     installMessagingTestRegistry();
     agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
@@ -1090,6 +1096,85 @@ describe("sessions tools", () => {
       channel: "discord",
       message: "announce now",
     });
+  });
+
+  it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+    const requesterKey = "agent:main:discord:direct:parent";
+    const targetKey = "agent:main:subagent:child";
+    let historyCallCount = 0;
+    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
+      sessionKey === targetKey
+        ? {
+            sessionId: "child-session",
+            updatedAt: 1,
+            spawnedBy: requesterKey,
+            deliveryContext: {
+              channel: "discord",
+              to: "direct:parent",
+            },
+          }
+        : undefined,
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "agent") {
+        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-child", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        historyCallCount += 1;
+        return {
+          messages:
+            historyCallCount === 1
+              ? []
+              : [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "child reply" }],
+                    timestamp: 20,
+                  },
+                ],
+        };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: requesterKey,
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    expect(tool).toBeDefined();
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const waited = await tool.execute("call-parent-owned-native-subagent", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+
+    expect(waited.details).toMatchObject({
+      status: "ok",
+      reply: "child reply",
+      delivery: { status: "skipped", mode: "announce" },
+    });
+    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(
+      calls.some(
+        (call) =>
+          call.method === "agent" &&
+          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+          (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+            "Agent-to-agent reply step",
+          ),
+      ),
+    ).toBe(false);
+    expect(calls.some((call) => call.method === "send")).toBe(false);
   });
 
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {
