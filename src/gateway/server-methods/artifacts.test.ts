@@ -4,7 +4,7 @@ import { artifactsHandlers, collectArtifactsFromMessages } from "./artifacts.js"
 const hoisted = vi.hoisted(() => ({
   getTaskSessionLookupByIdForStatus: vi.fn(),
   loadSessionEntry: vi.fn(),
-  visitSessionMessages: vi.fn(),
+  visitSessionMessagesAsync: vi.fn(),
   resolveSessionKeyForRun: vi.fn(),
 }));
 
@@ -17,7 +17,7 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     loadSessionEntry: hoisted.loadSessionEntry,
-    visitSessionMessages: hoisted.visitSessionMessages,
+    visitSessionMessagesAsync: hoisted.visitSessionMessagesAsync,
   };
 });
 
@@ -67,8 +67,8 @@ describe("artifacts RPC handlers", () => {
   });
 
   function mockedMessages(messages: unknown[]) {
-    hoisted.visitSessionMessages.mockImplementation(
-      (_sessionId, _storePath, _sessionFile, visit) => {
+    hoisted.visitSessionMessagesAsync.mockImplementation(
+      async (_sessionId, _storePath, _sessionFile, visit) => {
         messages.forEach((message, index) => visit(message, index + 1));
         return messages.length;
       },
