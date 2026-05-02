@@ -1089,6 +1089,71 @@ type ConfigReadResolution = {
   envWarnings: EnvSubstitutionWarning[];
 };
 
+const TILDE_PATH_VALUE_RE = /^~(?=$|[\\/])/;
+const PATH_LIKE_CONFIG_KEY_RE = /(dir|path|paths|file|root|workspace)$/i;
+const PATH_LIKE_CONFIG_LIST_KEYS = new Set(["paths", "pathPrepend"]);
+
+function isPathLikeConfigKey(key: string | undefined): boolean {
+  return Boolean(key && (PATH_LIKE_CONFIG_KEY_RE.test(key) || PATH_LIKE_CONFIG_LIST_KEYS.has(key)));
+}
+
+function expandAuthoredTildePath(value: string, home: string): string {
+  const suffix = value.slice(1);
+  if (!suffix) {
+    return home;
+  }
+  if (suffix.startsWith("/") || suffix.startsWith("\\")) {
+    return path.join(home, suffix.slice(1));
+  }
+  return value;
+}
+
+function restoreAuthoredTildePathsForWrite(
+  next: unknown,
+  authored: unknown,
+  key: string | undefined,
+  home: string,
+): unknown {
+  if (
+    typeof next === "string" &&
+    typeof authored === "string" &&
+    isPathLikeConfigKey(key) &&
+    TILDE_PATH_VALUE_RE.test(authored.trim()) &&
+    path.normalize(next) === path.normalize(expandAuthoredTildePath(authored.trim(), home))
+  ) {
+    return authored;
+  }
+
+  if (Array.isArray(next) && Array.isArray(authored)) {
+    const normalizeChildren = isPathLikeConfigKey(key);
+    return next.map((entry, index) =>
+      restoreAuthoredTildePathsForWrite(
+        entry,
+        authored[index],
+        normalizeChildren ? key : undefined,
+        home,
+      ),
+    );
+  }
+
+  if (!isRecord(next) || !isRecord(authored)) {
+    return next;
+  }
+
+  const out: Record<string, unknown> = { ...next };
+  for (const [childKey, childValue] of Object.entries(out)) {
+    if (Object.prototype.hasOwnProperty.call(authored, childKey)) {
+      out[childKey] = restoreAuthoredTildePathsForWrite(
+        childValue,
+        authored[childKey],
+        childKey,
+        home,
+      );
+    }
+  }
+  return out;
+}
+
 function resolveConfigIncludesForRead(
   parsed: unknown,
   configPath: string,
@@ -2069,7 +2134,13 @@ export function createConfigIO(
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
         : cfgToWrite;
-    const outputConfig = applyUnsetPathsForWrite(outputConfigBase, unsetPaths);
+    const tildeRestoredOutputConfig = restoreAuthoredTildePathsForWrite(
+      outputConfigBase,
+      snapshot.parsed,
+      undefined,
+      deps.homedir(),
+    ) as OpenClawConfig;
+    const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(outputConfig);
