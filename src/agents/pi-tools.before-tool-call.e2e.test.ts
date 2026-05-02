@@ -12,11 +12,7 @@ import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
-import {
-  CONSECUTIVE_ERROR_THRESHOLD,
-  CRITICAL_THRESHOLD,
-  GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
-} from "./tool-loop-detection.js";
+import { CRITICAL_THRESHOLD, GLOBAL_CIRCUIT_BREAKER_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
