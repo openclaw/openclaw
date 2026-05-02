@@ -293,6 +293,10 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     ```
 
     Reply metadata fields are also populated when available (`ReplyToId`, `ReplyToBody`, `ReplyToSender`, sender JID/E.164).
+    When the quoted reply target is downloadable media, OpenClaw saves it through
+    the normal inbound media store and exposes it as `MediaPath`/`MediaType` so
+    the agent can inspect the referenced image instead of only seeing
+    `<media:image>`.
 
   </Accordion>
 
