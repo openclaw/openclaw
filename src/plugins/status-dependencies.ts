@@ -91,13 +91,16 @@ function buildDependencyEntries(params: {
       const resolvedPath = params.rootDir
         ? findDependencyPackageDir({ fromDir: params.rootDir, name })
         : undefined;
-      return {
+      const entry: PluginDependencyEntry = {
         name,
         spec,
         installed: resolvedPath !== undefined,
         optional: params.optional,
-        ...(resolvedPath ? { resolvedPath } : {}),
       };
+      if (resolvedPath) {
+        entry.resolvedPath = resolvedPath;
+      }
+      return entry;
     });
 }
 
