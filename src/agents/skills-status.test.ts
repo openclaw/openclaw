@@ -99,6 +99,29 @@ describe("buildWorkspaceSkillStatus", () => {
     expect(skill?.commandVisible).toBe(false);
   });
 
+  it("uses default-visible exposure semantics when older entries omit exposure fields", () => {
+    const entry: SkillEntry = {
+      skill: createFixtureSkill({
+        name: "legacy-exposure",
+        description: "test",
+        filePath: "/tmp/legacy-exposure/SKILL.md",
+        baseDir: "/tmp/legacy-exposure",
+        source: "test",
+      }),
+      frontmatter: {},
+      exposure: {
+        includeInRuntimeRegistry: true,
+      } as SkillEntry["exposure"],
+    };
+
+    const report = buildWorkspaceSkillStatus("/tmp/ws", { entries: [entry] });
+    const skill = report.skills[0];
+    expect(skill?.eligible).toBe(true);
+    expect(skill?.modelVisible).toBe(true);
+    expect(skill?.userInvocable).toBe(true);
+    expect(skill?.commandVisible).toBe(true);
+  });
+
   it("reports skills blocked by an agent skill filter", () => {
     const alpha: SkillEntry = {
       skill: createFixtureSkill({

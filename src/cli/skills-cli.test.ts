@@ -119,6 +119,26 @@ describe("skills-cli", () => {
       expect(output).toContain("eligible-one");
       expect(output).not.toContain("not-eligible");
     });
+
+    it("does not label agent-excluded skills as ready", () => {
+      const report = createMockReport([
+        createMockSkill({ name: "ready-one", eligible: true }),
+        createMockSkill({
+          name: "agent-excluded",
+          eligible: true,
+          blockedByAgentFilter: true,
+        }),
+      ]);
+
+      const output = formatSkillsList(report, {});
+      expect(output).toContain("1/2 ready");
+      expect(output).toContain("agent-excluded");
+      expect(output).toContain("excluded");
+
+      const eligibleOnly = formatSkillsList(report, { eligible: true });
+      expect(eligibleOnly).toContain("ready-one");
+      expect(eligibleOnly).not.toContain("agent-excluded");
+    });
   });
 
   describe("formatSkillInfo", () => {
@@ -201,6 +221,22 @@ describe("skills-cli", () => {
       const output = formatSkillInfo(report, "info-emoji", {});
       expect(output).toContain("🎛️");
     });
+
+    it("shows agent exclusion and visibility details in skill info", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "agent-excluded",
+          eligible: true,
+          blockedByAgentFilter: true,
+        }),
+      ]);
+
+      const output = formatSkillInfo(report, "agent-excluded", {});
+      expect(output).toContain("Excluded by agent allowlist");
+      expect(output).toContain("Visible to model");
+      expect(output).toContain("Available as command");
+      expect(output).toContain("excludes this skill");
+    });
   });
 
   describe("formatSkillsCheck", () => {
@@ -270,8 +306,27 @@ describe("skills-cli", () => {
       expect(output).toContain("Excluded by agent allowlist");
       expect(output).toContain("not-assigned");
       expect(output).toContain("What this means");
+      expect(output).toContain("the agent may still exclude it");
       expect(output).toContain("people, scripts, or cron jobs can call the skill explicitly");
-      expect(output).toContain("kept out of normal chat unless called explicitly");
+      expect(output).toContain("kept out of normal chat");
+      expect(output).toContain("commands/cron may still use it");
+    });
+
+    it("does not imply prompt-hidden non-command skills can be called explicitly", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "internal-hidden",
+          eligible: true,
+          modelVisible: false,
+          commandVisible: false,
+          userInvocable: false,
+        }),
+      ]);
+
+      const output = formatSkillsCheck(report, {});
+      expect(output).toContain("internal-hidden");
+      expect(output).toContain("is not exposed as a command");
+      expect(output).not.toContain("commands/cron may still use it");
     });
 
     it("summarizes a mixed bad skill pack in JSON", () => {

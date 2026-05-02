@@ -28,14 +28,17 @@ function appendClawHubHint(output: string, json?: boolean): string {
 }
 
 function formatSkillStatus(skill: SkillStatusEntry): string {
-  if (skill.eligible) {
-    return theme.success("✓ ready");
-  }
   if (skill.disabled) {
     return theme.warn("⏸ disabled");
   }
   if (skill.blockedByAllowlist) {
     return theme.warn("🚫 blocked");
+  }
+  if (skill.blockedByAgentFilter) {
+    return theme.warn("🚫 excluded");
+  }
+  if (skill.eligible) {
+    return theme.success("✓ ready");
   }
   return theme.warn("△ needs setup");
 }
@@ -96,7 +99,9 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
 }
 
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
-  const skills = opts.eligible ? report.skills.filter((s) => s.eligible) : report.skills;
+  const isReadyForAgent = (skill: SkillStatusEntry) =>
+    skill.eligible && !skill.blockedByAgentFilter;
+  const skills = opts.eligible ? report.skills.filter(isReadyForAgent) : report.skills;
 
   if (opts.json) {
     const jsonReport = sanitizeJsonValue({
@@ -130,7 +135,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
     return appendClawHubHint(message, opts.json);
   }
 
-  const eligible = skills.filter((s) => s.eligible);
+  const ready = skills.filter(isReadyForAgent);
   const tableWidth = getTerminalTableWidth();
   const rows = skills.map((skill) => {
     const missing = formatSkillMissingSummary(skill);
@@ -155,7 +160,7 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
 
   const lines: string[] = [];
   lines.push(
-    `${theme.heading("Skills")} ${theme.muted(`(${eligible.length}/${skills.length} ready)`)}`,
+    `${theme.heading("Skills")} ${theme.muted(`(${ready.length}/${skills.length} ready)`)}`,
   );
   lines.push(
     renderTable({
@@ -191,13 +196,15 @@ export function formatSkillInfo(
 
   const lines: string[] = [];
   const emoji = normalizeSkillEmoji(skill.emoji);
-  const status = skill.eligible
-    ? theme.success("✓ Ready")
-    : skill.disabled
-      ? theme.warn("⏸ Disabled")
-      : skill.blockedByAllowlist
-        ? theme.warn("🚫 Blocked by allowlist")
-        : theme.warn("△ Needs setup");
+  const status = skill.disabled
+    ? theme.warn("⏸ Disabled")
+    : skill.blockedByAllowlist
+      ? theme.warn("🚫 Blocked by allowlist")
+      : skill.blockedByAgentFilter
+        ? theme.warn("🚫 Excluded by agent allowlist")
+        : skill.eligible
+          ? theme.success("✓ Ready")
+          : theme.warn("△ Needs setup");
 
   const safeName = sanitizeForLog(skill.name);
   const safeHomepage = skill.homepage ? sanitizeForLog(skill.homepage) : undefined;
@@ -213,6 +220,15 @@ export function formatSkillInfo(
   lines.push(`${theme.muted("  Path:")} ${shortenHomePath(skill.filePath)}`);
   if (safeHomepage) {
     lines.push(`${theme.muted("  Homepage:")} ${safeHomepage}`);
+  }
+  lines.push(
+    `${theme.muted("  Visible to model:")} ${skill.modelVisible ? theme.success("yes") : theme.warn("no")}`,
+  );
+  lines.push(
+    `${theme.muted("  Available as command:")} ${skill.commandVisible ? theme.success("yes") : theme.warn("no")}`,
+  );
+  if (skill.blockedByAgentFilter) {
+    lines.push(`${theme.muted("  Agent allowlist:")} excludes this skill`);
   }
   if (skill.primaryEnv) {
     lines.push(`${theme.muted("  Primary env:")} ${skill.primaryEnv}`);
@@ -377,6 +393,9 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   if (modelVisible.length > 0 || commandVisible.length > 0 || promptHidden.length > 0) {
     lines.push("");
     lines.push(theme.heading("What this means:"));
+    lines.push(
+      `  ${theme.muted("Eligible:")} installed and requirements pass; the agent may still exclude it.`,
+    );
     if (modelVisible.length > 0) {
       lines.push(
         `  ${theme.muted("Visible to model:")} the agent can see the skill instructions during normal chat.`,
@@ -389,7 +408,7 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     }
     if (promptHidden.length > 0) {
       lines.push(
-        `  ${theme.muted("Hidden from model prompt:")} installed and ready, but kept out of normal chat unless called explicitly.`,
+        `  ${theme.muted("Hidden from model prompt:")} installed and ready, but kept out of normal chat.`,
       );
     }
   }
@@ -408,9 +427,10 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
     lines.push(theme.heading("Ready but hidden from model prompt:"));
     for (const skill of promptHidden) {
       const emoji = normalizeSkillEmoji(skill.emoji);
-      lines.push(
-        `  ${emoji} ${sanitizeForLog(skill.name)} ${theme.muted("(skill hides its instructions from the model; commands/cron may still use it)")}`,
-      );
+      const reason = skill.commandVisible
+        ? "skill hides its instructions from the model; commands/cron may still use it"
+        : "skill hides its instructions from the model and is not exposed as a command";
+      lines.push(`  ${emoji} ${sanitizeForLog(skill.name)} ${theme.muted(`(${reason})`)}`);
     }
   }
 

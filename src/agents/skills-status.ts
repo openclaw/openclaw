@@ -176,20 +176,20 @@ function normalizeInstallOptions(
 
 function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
   if (entry.exposure) {
-    return entry.exposure.includeInAvailableSkillsPrompt;
+    return entry.exposure.includeInAvailableSkillsPrompt !== false;
   }
   if (entry.invocation) {
-    return !entry.invocation.disableModelInvocation;
+    return entry.invocation.disableModelInvocation !== true;
   }
-  return !entry.skill.disableModelInvocation;
+  return entry.skill.disableModelInvocation !== true;
 }
 
 function isSkillUserInvocable(entry: SkillEntry): boolean {
   if (entry.exposure) {
-    return entry.exposure.userInvocable;
+    return entry.exposure.userInvocable !== false;
   }
   if (entry.invocation) {
-    return entry.invocation.userInvocable;
+    return entry.invocation.userInvocable !== false;
   }
   return true;
 }
