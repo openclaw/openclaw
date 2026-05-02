@@ -147,6 +147,11 @@ are filtered out to keep the sub-agent context small).
 Internal hooks can intercept this step via `agent:bootstrap` to mutate or replace
 the injected bootstrap files (for example swapping `SOUL.md` for an alternate persona).
 
+Workspace [capability descriptors](/concepts/workspace-capabilities) under
+`capabilities/*.md` are not part of the fixed bootstrap set by default. Link
+important descriptors from `TOOLS.md` or use an intentional bootstrap/prompt hook
+when the workspace needs agents to discover those local procedures.
+
 If you want to make the agent sound less generic, start with
 [SOUL.md Personality Guide](/concepts/soul).
 
