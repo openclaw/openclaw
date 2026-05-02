@@ -20,7 +20,7 @@ vi.mock("./register.runtime.js", () => ({
   fetchCopilotUsage: vi.fn(),
 }));
 
-import plugin from "./index.js";
+import plugin, { mapCopilotWireModel } from "./index.js";
 
 const tempDirs: string[] = [];
 
@@ -111,34 +111,185 @@ describe("github-copilot plugin", () => {
       baseUrl: "https://api.githubcopilot.live",
     });
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
 
-    const result = await provider.catalog.run({
-      config: {
-        plugins: {
-          entries: {
-            "github-copilot": {
-              config: {
-                discovery: { enabled: true },
+    try {
+      const result = await provider.catalog.run({
+        config: {
+          plugins: {
+            entries: {
+              "github-copilot": {
+                config: {
+                  discovery: { enabled: true },
+                },
               },
             },
           },
         },
-      },
-      agentDir: "/tmp/agent",
-      env: { GH_TOKEN: "gh_test_token" },
-      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
-    } as never);
+        agentDir: "/tmp/agent",
+        env: { GH_TOKEN: "gh_test_token" },
+        resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+      } as never);
 
-    expect(mocks.resolveCopilotApiToken).toHaveBeenCalledWith({
-      githubToken: "gh_test_token",
-      env: { GH_TOKEN: "gh_test_token" },
-    });
-    expect(result).toEqual({
-      provider: {
-        baseUrl: "https://api.githubcopilot.live",
-        models: [],
+      expect(mocks.resolveCopilotApiToken).toHaveBeenCalledWith({
+        githubToken: "gh_test_token",
+        env: { GH_TOKEN: "gh_test_token" },
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.githubcopilot.live/models",
+        expect.any(Object),
+      );
+      expect(result).toEqual({
+        provider: {
+          baseUrl: "https://api.githubcopilot.live",
+          models: [],
+        },
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("maps Copilot /models capabilities into provider catalog metadata", () => {
+    const result = mapCopilotWireModel({
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      capabilities: {
+        limits: {
+          max_context_window_tokens: 400_000,
+          max_output_tokens: 128_000,
+          vision: {
+            max_prompt_images: 1,
+          },
+        },
+        supports: {
+          reasoning_effort: ["none", "low", "medium", "high", "xhigh"],
+          vision: true,
+        },
       },
+      supported_endpoints: ["/responses", "ws:/responses"],
     });
+
+    expect(result).toMatchObject({
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      metadataSource: "models-add",
+    });
+  });
+
+  it("maps Anthropic-compatible endpoints broadly", () => {
+    for (const endpoint of [
+      "/v1/messages",
+      "/messages",
+      "/chat/v1/messages",
+      "/anthropic/messages",
+    ]) {
+      expect(
+        mapCopilotWireModel({
+          id: "claude-opus-4.7",
+          capabilities: { limits: {}, supports: {} },
+          supported_endpoints: [endpoint],
+        }),
+      ).toMatchObject({ api: "anthropic-messages" });
+    }
+  });
+
+  it("skips embedding-only Copilot catalog entries", () => {
+    expect(
+      mapCopilotWireModel({
+        id: "text-embedding-3-small",
+        capabilities: { limits: {}, supports: {} },
+        supported_endpoints: ["/v1/embeddings"],
+      }),
+    ).toBeNull();
+    expect(
+      mapCopilotWireModel({
+        id: "text-embedding-ada-002",
+        capabilities: { limits: {}, supports: {} },
+        supported_endpoints: [],
+      }),
+    ).toBeNull();
+    expect(
+      mapCopilotWireModel({
+        id: "some-model",
+        capabilities: { family: "embedding", limits: {}, supports: {} },
+        supported_endpoints: [],
+      }),
+    ).toBeNull();
+  });
+
+  it("fetches Copilot /models during catalog discovery", async () => {
+    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    const provider = registerProviderWithPluginConfig({});
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: "gpt-5.5",
+                capabilities: {
+                  limits: {
+                    max_context_window_tokens: 400_000,
+                    max_output_tokens: 128_000,
+                  },
+                  supports: {
+                    reasoning_effort: ["none", "high"],
+                  },
+                },
+                supported_endpoints: ["/responses"],
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    try {
+      const result = await provider.catalog.run({
+        config: {},
+        agentDir: "/tmp/agent",
+        env: { GH_TOKEN: "gh_test_token" },
+        resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+      } as never);
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.githubcopilot.live/models",
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            Authorization: "Bearer copilot_api_token",
+            "Copilot-Integration-Id": "vscode-chat",
+          }),
+        }),
+      );
+      expect(result.provider.models).toEqual([
+        expect.objectContaining({
+          id: "gpt-5.5",
+          contextWindow: 400_000,
+          maxTokens: 128_000,
+        }),
+      ]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("offers to reuse an existing token profile during interactive onboarding", async () => {

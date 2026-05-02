@@ -15,6 +15,7 @@ import {
   resolveDefaultSecretProviderAlias,
   upsertAuthProfileWithLock,
 } from "openclaw/plugin-sdk/provider-auth";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
@@ -25,7 +26,163 @@ import { wrapCopilotProviderStream } from "./stream.js";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
-const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-codex"] as const;
+const COPILOT_XHIGH_MODEL_IDS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.3-codex",
+  "gpt-5.2",
+  "gpt-5.2-codex",
+] as const;
+
+type CopilotModelWireEntry = {
+  id?: unknown;
+  model?: unknown;
+  name?: unknown;
+  capabilities?: {
+    family?: unknown;
+    type?: unknown;
+    limits?: {
+      max_context_window_tokens?: unknown;
+      max_output_tokens?: unknown;
+      vision?: unknown;
+    };
+    supports?: {
+      reasoning_effort?: unknown;
+      vision?: unknown;
+    };
+  };
+  supported_endpoints?: unknown;
+};
+
+function positiveInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function isAnthropicMessagesEndpoint(endpoint: string): boolean {
+  const normalized = endpoint.trim().toLowerCase();
+  return (
+    normalized === "/messages" ||
+    normalized.endsWith("/messages") ||
+    normalized.includes("anthropic")
+  );
+}
+
+export function mapCopilotWireModel(entry: CopilotModelWireEntry): ModelDefinitionConfig | null {
+  const id =
+    typeof entry.id === "string" && entry.id.trim()
+      ? entry.id.trim()
+      : typeof entry.model === "string" && entry.model.trim()
+        ? entry.model.trim()
+        : "";
+  if (!id) {
+    return null;
+  }
+
+  const limits = entry.capabilities?.limits ?? {};
+  const supports = entry.capabilities?.supports ?? {};
+  const endpoints = Array.isArray(entry.supported_endpoints)
+    ? entry.supported_endpoints.filter(
+        (endpoint): endpoint is string => typeof endpoint === "string",
+      )
+    : [];
+
+  // Skip embedding-only entries: the Copilot /models endpoint also lists
+  // embedding models (e.g. text-embedding-3-small) consumed by the embedding
+  // provider. They expose /v1/embeddings (or no chat endpoints) and would
+  // fail if surfaced as chat models in the catalog.
+  const family = typeof entry.capabilities?.family === "string" ? entry.capabilities.family : "";
+  const capabilityType =
+    typeof entry.capabilities?.type === "string" ? entry.capabilities.type : "";
+  const looksLikeEmbedding =
+    /embedding/i.test(id) ||
+    /embedding/i.test(family) ||
+    capabilityType.toLowerCase() === "embeddings";
+  const declaresEmbeddingEndpoint = endpoints.some((ep) => ep.toLowerCase().includes("embedding"));
+  const declaresChatEndpoint = endpoints.some((ep) => {
+    const lower = ep.toLowerCase();
+    return (
+      lower.includes("chat") ||
+      lower.includes("responses") ||
+      lower.includes("messages") ||
+      lower.includes("completion")
+    );
+  });
+  if (declaresEmbeddingEndpoint && !declaresChatEndpoint) {
+    return null;
+  }
+  if (looksLikeEmbedding && !declaresChatEndpoint) {
+    return null;
+  }
+  const reasoningEfforts = Array.isArray(supports.reasoning_effort)
+    ? supports.reasoning_effort
+    : [];
+
+  const contextWindow = positiveInteger(limits.max_context_window_tokens) ?? 128_000;
+  const maxTokens = positiveInteger(limits.max_output_tokens) ?? 8192;
+  const supportsVision = supports.vision === true || Boolean(limits.vision);
+  const supportsReasoning = reasoningEfforts.some(
+    (level) => typeof level === "string" && level.trim().toLowerCase() !== "none",
+  );
+
+  return {
+    id,
+    name: typeof entry.name === "string" && entry.name.trim() ? entry.name.trim() : id,
+    api: endpoints.some(isAnthropicMessagesEndpoint) ? "anthropic-messages" : "openai-responses",
+    reasoning: supportsReasoning,
+    input: supportsVision ? ["text", "image"] : ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens,
+    metadataSource: "models-add",
+  };
+}
+
+async function fetchCopilotModelCatalog(params: {
+  baseUrl: string;
+  token: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+}): Promise<ModelDefinitionConfig[]> {
+  const response = await (params.fetchImpl ?? fetch)(
+    `${params.baseUrl.replace(/\/+$/, "")}/models`,
+    {
+      headers: {
+        Accept: "application/json",
+        Authorization: `Bearer ${params.token}`,
+        "Copilot-Integration-Id": "vscode-chat",
+        "Editor-Plugin-Version": "copilot-chat/0.35.0",
+        "Editor-Version": "vscode/1.96.2",
+        "User-Agent": "GitHubCopilotChat/0.26.7",
+      },
+      ...(params.timeoutMs ? { signal: AbortSignal.timeout(params.timeoutMs) } : {}),
+    },
+  );
+  if (!response.ok) {
+    return [];
+  }
+
+  const payload = (await response.json()) as unknown;
+  const models: unknown[] = Array.isArray(payload)
+    ? payload
+    : (() => {
+        if (payload && typeof payload === "object") {
+          const record = payload as { data?: unknown; models?: unknown };
+          if (Array.isArray(record.data)) {
+            return record.data;
+          }
+          if (Array.isArray(record.models)) {
+            return record.models;
+          }
+        }
+        return [];
+      })();
+
+  return models
+    .map((entry) => mapCopilotWireModel(entry as CopilotModelWireEntry))
+    .filter((entry): entry is ModelDefinitionConfig => entry !== null);
+}
 
 type GithubCopilotPluginConfig = {
   discovery?: {
@@ -373,6 +530,7 @@ export default definePluginEntry({
             return null;
           }
           let baseUrl = DEFAULT_COPILOT_API_BASE_URL;
+          let apiToken = "";
           if (githubToken) {
             try {
               const token = await resolveCopilotApiToken({
@@ -380,14 +538,22 @@ export default definePluginEntry({
                 env: ctx.env,
               });
               baseUrl = token.baseUrl;
+              apiToken = token.token;
             } catch {
               baseUrl = DEFAULT_COPILOT_API_BASE_URL;
             }
           }
+          const models = apiToken
+            ? await fetchCopilotModelCatalog({
+                baseUrl,
+                token: apiToken,
+                timeoutMs: 10_000,
+              }).catch(() => [])
+            : [];
           return {
             provider: {
               baseUrl,
-              models: [],
+              models,
             },
           };
         },
