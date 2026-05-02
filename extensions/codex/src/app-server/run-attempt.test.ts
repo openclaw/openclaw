@@ -674,6 +674,31 @@ describe("runCodexAppServerAttempt", () => {
     );
   });
 
+  it("passes OpenClaw bootstrap files through Codex config instructions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
+    const harness = createStartedThreadHarness();
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const threadStart = harness.requests.find((request) => request.method === "thread/start");
+    const config = (threadStart?.params as { config?: { instructions?: string } }).config;
+    expect(config).toEqual(
+      expect.objectContaining({
+        instructions: expect.stringContaining("Soul voice goes here."),
+      }),
+    );
+    expect(config?.instructions).toContain("Codex loads AGENTS.md natively");
+    expect(config?.instructions).not.toContain("Follow AGENTS guidance.");
+  });
+
   it("fires llm_input, llm_output, and agent_end hooks for codex turns", async () => {
     const llmInput = vi.fn();
     const llmOutput = vi.fn();
@@ -996,13 +1021,13 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     expect(startRequest?.params).toEqual(
       expect.objectContaining({
-        config: {
+        config: expect.objectContaining({
           "features.codex_hooks": false,
           "hooks.PreToolUse": [],
           "hooks.PostToolUse": [],
           "hooks.PermissionRequest": [],
           "hooks.Stop": [],
-        },
+        }),
       }),
     );
   });

@@ -160,6 +160,13 @@ heartbeats are disabled for the default agent or
 files concise — especially `MEMORY.md`, which can grow over time and lead to
 unexpectedly high context usage and more frequent compaction.
 
+When a session runs on the native Codex harness, Codex loads `AGENTS.md`
+through its own project-doc discovery. OpenClaw still resolves the remaining
+bootstrap files and forwards them as Codex config instructions, so `SOUL.md`,
+`TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and
+`MEMORY.md` keep the same workspace-context role without duplicating
+`AGENTS.md`.
+
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.
 </Note>
