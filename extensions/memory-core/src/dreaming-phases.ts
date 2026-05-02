@@ -718,7 +718,7 @@ function resolveSessionAgentsForWorkspace(params: {
   // Layer 2: Fail closed when shared workspace has no agent identity (Bug #65374)
   // If multiple agents share a workspace but we don't know WHICH agent is dreaming,
   // we must NOT fall through to ingesting all agents' sessions. Skip dreaming entirely.
-  if (match.shared && !currentAgentId) {
+  if (match.shared && !currentAgentId?.trim()) {
     logger?.warn(
       `memory-core: shared workspace ${match.workspaceDir} has no agent identity — ` +
         `skipping dreaming to prevent cross-agent contamination.`,
