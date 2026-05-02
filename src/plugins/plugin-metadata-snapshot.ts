@@ -17,6 +17,8 @@ import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalize
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 export type {
   LoadPluginMetadataSnapshotParams,
+  PluginMetadataManifestView,
+  PluginMetadataRegistryView,
   PluginMetadataSnapshot,
   PluginMetadataSnapshotMetrics,
   PluginMetadataSnapshotOwnerMaps,
@@ -144,6 +146,12 @@ function buildPluginMetadataOwnerMaps(
     commandAliases: freezeOwnerMap(commandAliases),
     contracts: freezeOwnerMap(contracts),
   };
+}
+
+export function listPluginOriginsFromMetadataSnapshot(
+  snapshot: Pick<PluginMetadataSnapshot, "plugins">,
+): ReadonlyMap<string, PluginManifestRecord["origin"]> {
+  return new Map(snapshot.plugins.map((record) => [record.id, record.origin]));
 }
 
 export function loadPluginMetadataSnapshot(

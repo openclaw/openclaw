@@ -13,18 +13,15 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../plugins/manifest-registry-installed.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
   PluginManifestModelPricingModelIdTransform,
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import {
-  loadPluginRegistrySnapshot,
-  type PluginRegistrySnapshot,
-} from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
 import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
@@ -400,15 +397,19 @@ function filterActiveManifestRegistry(params: {
 
 function resolveModelPricingManifestMetadata(params: {
   config: OpenClawConfig;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  pluginLookUpTable?: PluginMetadataRegistryView;
   manifestRegistry?: PluginManifestRegistry;
 }): ModelPricingManifestMetadata {
-  if (params.pluginLookUpTable) {
+  const metadataSnapshot = params.pluginMetadataSnapshot ?? params.pluginLookUpTable;
+  if (metadataSnapshot) {
     return {
-      allRegistry: params.pluginLookUpTable.manifestRegistry,
+      allRegistry: metadataSnapshot.manifestRegistry,
       activeRegistry: filterActiveManifestRegistry({
-        registry: params.pluginLookUpTable.manifestRegistry,
-        index: params.pluginLookUpTable.index,
+        registry: metadataSnapshot.manifestRegistry,
+        index: metadataSnapshot.index,
         config: params.config,
       }),
     };
@@ -426,17 +427,16 @@ function resolveModelPricingManifestMetadata(params: {
       activeRegistry: emptyRegistry,
     };
   }
-  const index = loadPluginRegistrySnapshot({ config: params.config });
-  const allRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
+  const snapshot = loadPluginMetadataSnapshot({
     config: params.config,
-    includeDisabled: true,
+    env: params.env ?? process.env,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return {
-    allRegistry,
+    allRegistry: snapshot.manifestRegistry,
     activeRegistry: filterActiveManifestRegistry({
-      registry: allRegistry,
-      index,
+      registry: snapshot.manifestRegistry,
+      index: snapshot.index,
       config: params.config,
     }),
   };
@@ -1102,8 +1102,11 @@ function collectSeededPricing(params: {
 
 export async function refreshGatewayModelPricingCache(params: {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  pluginLookUpTable?: PluginMetadataRegistryView;
   manifestRegistry?: PluginManifestRegistry;
 }): Promise<void> {
   if (!isGatewayModelPricingEnabled(params.config)) {
@@ -1117,6 +1120,9 @@ export async function refreshGatewayModelPricingCache(params: {
   inFlightRefresh = (async () => {
     const manifestMetadata = resolveModelPricingManifestMetadata({
       config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
       pluginLookUpTable: params.pluginLookUpTable,
       manifestRegistry: params.manifestRegistry,
     });
@@ -1251,8 +1257,11 @@ export async function refreshGatewayModelPricingCache(params: {
 
 export function startGatewayModelPricingRefresh(params: {
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   fetchImpl?: typeof fetch;
-  pluginLookUpTable?: Pick<PluginLookUpTable, "index" | "manifestRegistry">;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  pluginLookUpTable?: PluginMetadataRegistryView;
   manifestRegistry?: PluginManifestRegistry;
 }): () => void {
   if (!isGatewayModelPricingEnabled(params.config)) {

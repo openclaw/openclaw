@@ -202,6 +202,77 @@ describe("model-pricing-cache", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("uses a provided metadata registry view without rebuilding manifest metadata", async () => {
+    const manifestRegistry = {
+      diagnostics: [],
+      plugins: [
+        createManifestRecord({
+          id: "search-plugin",
+          contracts: { webSearchProviders: ["search-plugin"] },
+        }),
+      ],
+    };
+    const config = {
+      plugins: {
+        entries: {
+          "search-plugin": {
+            config: {
+              webSearch: {
+                model: "local-search/search-model",
+              },
+            },
+          },
+        },
+      },
+      models: {
+        providers: {
+          "local-search": {
+            baseUrl: "http://127.0.0.1:43210/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "search-model",
+                cost: { input: 0.2, output: 0.4 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = vi.fn<typeof fetch>();
+
+    await refreshGatewayModelPricingCache({
+      config,
+      fetchImpl,
+      pluginMetadataSnapshot: {
+        index: {
+          plugins: [
+            {
+              pluginId: "search-plugin",
+              origin: "global",
+              enabled: true,
+              enabledByDefault: true,
+            },
+          ],
+        } as never,
+        manifestRegistry,
+      },
+    });
+
+    expect(
+      pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex,
+    ).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(
+      getCachedGatewayModelPricing({ provider: "local-search", model: "search-model" }),
+    ).toEqual({
+      input: 0.2,
+      output: 0.4,
+      cacheRead: 0,
+      cacheWrite: 0,
+    });
+  });
+
   it("does not load plugin manifests for pricing when plugins are globally disabled", async () => {
     const config = {
       plugins: {
