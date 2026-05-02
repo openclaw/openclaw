@@ -21,7 +21,7 @@ import {
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
-import { SecretProviderResolutionError, SecretRefResolutionError } from "./resolve.js";
+import { SecretProviderResolutionError } from "./resolve.js";
 import { type SecretResolverWarning } from "./runtime-shared.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
@@ -424,7 +424,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       });
       applyResolvedAssignments({ assignments: [assignment], resolved });
     } catch (err) {
-      if (err instanceof SecretProviderResolutionError || err instanceof SecretRefResolutionError) {
+      if (err instanceof SecretProviderResolutionError) {
         context.warnings.push({
           code: "SECRETS_AUTH_PROFILE_REF_UNRESOLVED",
           path: assignment.path,
