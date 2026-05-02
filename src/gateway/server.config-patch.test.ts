@@ -415,8 +415,12 @@ describe("gateway config methods", () => {
       await writeConfigFile({
         talk: {
           provider: "elevenlabs",
-          voiceId: "voice-123",
-          apiKey: "env-elevenlabs-key", // pragma: allowlist secret
+          providers: {
+            elevenlabs: {
+              voiceId: "voice-123",
+              apiKey: "env-elevenlabs-key", // pragma: allowlist secret
+            },
+          },
         },
       });
 
