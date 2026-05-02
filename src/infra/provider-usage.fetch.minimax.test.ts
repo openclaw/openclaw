@@ -8,15 +8,26 @@ async function expectMinimaxUsageResult(params: {
     plan?: string;
     windows: Array<{ label: string; usedPercent: number; resetAt?: number }>;
   };
+  baseUrl?: string;
 }) {
   const mockFetch = createProviderUsageFetch(async (_url, init) => {
+    const expectedOrigin = (() => {
+      const baseUrlRaw = params.baseUrl ?? "https://api.minimax.io/v1";
+      try {
+        return new URL(baseUrlRaw).origin;
+      } catch {
+        return "https://api.minimax.io";
+      }
+    })();
+    expect(_url).toBe(`${expectedOrigin}/v1/api/openplatform/coding_plan/remains`);
+    expect(init?.method).toBe("GET");
     const headers = (init?.headers as Record<string, string> | undefined) ?? {};
     expect(headers.Authorization).toBe("Bearer key");
     expect(headers["MM-API-Source"]).toBe("OpenClaw");
     return makeResponse(200, params.payload);
   });
 
-  const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+  const result = await fetchMinimaxUsage("key", 5000, mockFetch, { baseUrl: params.baseUrl });
   expect(result.plan).toBe(params.expected.plan);
   expect(result.windows).toEqual(params.expected.windows);
 }
@@ -252,5 +263,13 @@ describe("fetchMinimaxUsage", () => {
 
     const result = await fetchMinimaxUsage("key", 5000, mockFetch);
     expect(result.windows).toEqual([{ label: "1h", usedPercent: 20, resetAt: undefined }]);
+  });
+
+  it("derives the usage host from the configured baseUrl (CN endpoint)", async () => {
+    await expectMinimaxUsageResult({
+      baseUrl: "https://api.minimaxi.com/anthropic",
+      payload: { data: { used: 50, total: 100 } },
+      expected: { windows: [{ label: "5h", usedPercent: 50, resetAt: undefined }] },
+    });
   });
 });
