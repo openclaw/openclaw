@@ -57,6 +57,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Doctor/plugins: run a one-time 2026.5.2 configured-plugin install repair based on `meta.lastTouchedVersion`, installing actively used downloadable OpenClaw plugins from ClawHub with npm fallback before marking the config touched for the release.
 - Sessions/transcripts: use one `session.writeLock.acquireTimeoutMs` policy for session transcript lock acquisitions and raise the default wait to 60 seconds, avoiding user-visible lock timeouts during legitimate slow prep, cleanup, compaction, and mirror work. Fixes #75894. Thanks @shandutta.
 - Control UI: contain the standalone iOS PWA viewport with safe-area-aware document locking, so Add-to-Home-Screen launches cannot scroll past the device bounds. Refs #76072. Thanks @kvncrw.
 - Agents/restart recovery: match cleaned transcript locks by exact transcript lock paths plus the canonical session fallback, so interrupted main sessions using topic-suffixed transcripts resume after gateway restart. Refs #76052. Thanks @anyech.

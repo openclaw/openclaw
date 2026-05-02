@@ -5,10 +5,14 @@ import {
 } from "./doctor-health-contributions.js";
 
 describe("doctor health contributions", () => {
-  it("runs plugin registry repair before final config writes", () => {
+  it("runs release configured plugin install repair before plugin registry and final config writes", () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
 
+    expect(ids.indexOf("doctor:release-configured-plugin-installs")).toBeGreaterThan(-1);
     expect(ids.indexOf("doctor:plugin-registry")).toBeGreaterThan(-1);
+    expect(ids.indexOf("doctor:release-configured-plugin-installs")).toBeLessThan(
+      ids.indexOf("doctor:plugin-registry"),
+    );
     expect(ids.indexOf("doctor:plugin-registry")).toBeLessThan(ids.indexOf("doctor:write-config"));
   });
   it("checks command owner configuration before final config writes", () => {
