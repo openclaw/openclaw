@@ -62,6 +62,10 @@ describe("min-host-version", () => {
   it("parses semver floors", () => {
     expect(parseMinHostVersionRequirement(">=2026.3.22")).toEqual(MIN_HOST_REQUIREMENT);
     expect(parseMinHostVersionRequirement(">=2026.5.1-beta.1")).toEqual(BETA_MIN_HOST_REQUIREMENT);
+    expect(parseMinHostVersionRequirement(">=2026.5.1+20260501")).toEqual({
+      raw: ">=2026.5.1+20260501",
+      minimumLabel: "2026.5.1+20260501",
+    });
   });
 
   it("can parse legacy bare semver floors for runtime upgrade compatibility", () => {
