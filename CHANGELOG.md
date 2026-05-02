@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - CLI/directory: report unsupported directory operations for installed channel plugins instead of prompting to reinstall the plugin when it lacks a directory adapter. Fixes #75770. Thanks @lawong888.
 - Web search/SearXNG: show the JSON API `search.formats` prerequisite during SearXNG setup before prompting for the base URL. Supersedes #65592. Thanks @evanpaul14.
 - Web search/SearXNG: pass through `img_src` image URLs from SearXNG image-category results. Supersedes #61416. Thanks @sghael.
+- Web search/Kimi: fail explicitly when Moonshot returns an ungrounded chat answer instead of native web-search evidence, so Kimi no longer reports generic fallback text as a successful search. Fixes #52573. Thanks @wangwllu.
 - Web search: keep public provider requests on the strict SSRF guard and reserve private-network access for explicit self-hosted SearXNG/Firecrawl endpoints. Fixes #74357 and supersedes #74360. Thanks @fede-kamel.
 - Web search/Firecrawl: allow self-hosted private/internal Firecrawl `baseUrl` endpoints, including HTTP for private targets, while keeping hosted Firecrawl on the strict official endpoint. Fixes #63877 and supersedes #59666, #63941, and #74013. Thanks @jhthompson12, @jzakirov, @Mlightsnow, and @shad0wca7.
 - Providers/OpenRouter: strip trailing assistant prefill turns from verified OpenRouter Anthropic model requests when reasoning is enabled, so Claude 4.6 routes no longer fail with Anthropic's prefill rejection through the OpenAI-compatible adapter. Fixes #75395. Thanks @sbmilburn.
