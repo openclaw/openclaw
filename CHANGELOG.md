@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway/logging: keep deferred channel startup logs on the subsystem logger, so Slack, Discord, Telegram, and voice-call startup messages keep timestamped prefixes. Thanks @vincentkoc.
+- Discord/threads: return the created thread as partial success when the follow-up initial message fails, so agents do not retry thread creation and create empty duplicate threads. Fixes #48450. Thanks @dahifi.
 - Discord/components: consume every button or select in a non-reusable component message after the first authorized click, so single-use panels cannot fire sibling callbacks. Fixes #54227. Thanks @fujiwarakasei.
 - Discord/reactions: skip reaction listener registration when DMs and group DMs are disabled and every configured guild has `reactionNotifications: "off"`, avoiding needless reaction-event queue work. Fixes #47516. Thanks @x4v13r1120.
 - CLI sessions: preserve explicit manual-attach reuse bindings so trusted CLI sessions are not invalidated on the first turn when auth, prompt, or MCP fingerprints drift. Fixes #75849. Thanks @alfredjbclaw.

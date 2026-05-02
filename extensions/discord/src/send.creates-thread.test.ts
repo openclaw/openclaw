@@ -12,6 +12,7 @@ vi.mock("openclaw/plugin-sdk/web-media", async () => {
 let addRoleDiscord: typeof import("./send.js").addRoleDiscord;
 let banMemberDiscord: typeof import("./send.js").banMemberDiscord;
 let createThreadDiscord: typeof import("./send.js").createThreadDiscord;
+let DiscordThreadInitialMessageError: typeof import("./send.js").DiscordThreadInitialMessageError;
 let listGuildEmojisDiscord: typeof import("./send.js").listGuildEmojisDiscord;
 let listThreadsDiscord: typeof import("./send.js").listThreadsDiscord;
 let reactMessageDiscord: typeof import("./send.js").reactMessageDiscord;
@@ -60,6 +61,7 @@ beforeAll(async () => {
     addRoleDiscord,
     banMemberDiscord,
     createThreadDiscord,
+    DiscordThreadInitialMessageError,
     listGuildEmojisDiscord,
     listThreadsDiscord,
     reactMessageDiscord,
@@ -233,6 +235,32 @@ describe("sendMessageDiscord", () => {
         body: { content: "Hello thread!" },
       }),
     );
+  });
+
+  it("keeps created non-forum thread details when initial message send fails", async () => {
+    const { rest, getMock, postMock } = makeDiscordRest();
+    getMock.mockResolvedValue({ type: ChannelType.GuildText });
+    postMock
+      .mockResolvedValueOnce({ id: "t1", name: "thread", type: ChannelType.PublicThread })
+      .mockRejectedValueOnce(new Error("missing access"));
+
+    let thrown: unknown;
+    try {
+      await createThreadDiscord(
+        "chan1",
+        { name: "thread", content: "Hello thread!" },
+        discordClientOpts(rest),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(thrown).toBeInstanceOf(DiscordThreadInitialMessageError);
+    expect(thrown).toMatchObject({
+      name: "DiscordThreadInitialMessageError",
+      initialMessageError: "missing access",
+      thread: { id: "t1", name: "thread", type: ChannelType.PublicThread },
+    });
   });
 
   it("sends initial message for message-attached threads with content", async () => {
