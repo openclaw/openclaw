@@ -38,6 +38,8 @@ openclaw browser --browser-profile openclaw doctor
 openclaw browser --browser-profile openclaw doctor --deep
 openclaw browser --browser-profile openclaw status
 openclaw browser --browser-profile openclaw start
+openclaw browser --browser-profile openclaw start --headed   # one-shot visible launch for human handoff
+openclaw browser --browser-profile openclaw start --headless # one-shot headless launch override
 openclaw browser --browser-profile openclaw open https://example.com
 openclaw browser --browser-profile openclaw snapshot
 ```
