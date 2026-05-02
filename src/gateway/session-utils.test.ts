@@ -1295,6 +1295,60 @@ describe("listSessionsFromStore selected model display", () => {
     }
   });
 
+  test("skips transcript usage fallback for default list rows", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-fast-"));
+    try {
+      const storePath = path.join(tmpDir, "sessions.json");
+      fs.writeFileSync(
+        path.join(tmpDir, "sess-fast.jsonl"),
+        [
+          JSON.stringify({ type: "session", version: 1, id: "sess-fast" }),
+          JSON.stringify({
+            message: {
+              role: "assistant",
+              provider: "anthropic",
+              model: "claude-sonnet-4-6",
+              usage: { input: 2_000, output: 500, cacheRead: 1_000, cost: { total: 0.0042 } },
+            },
+          }),
+        ].join("\n"),
+        "utf-8",
+      );
+      const store: Record<string, SessionEntry> = {
+        "agent:main:fast": {
+          sessionId: "sess-fast",
+          updatedAt: Date.now(),
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
+          totalTokens: 0,
+          totalTokensFresh: false,
+        } as SessionEntry,
+      };
+
+      const fast = listSessionsFromStore({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath,
+        store,
+        opts: {},
+      });
+      const detailed = listSessionsFromStore({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath,
+        store,
+        opts: { includeLastMessage: true },
+      });
+
+      expect(fast.sessions[0]?.totalTokens).toBeUndefined();
+      expect(fast.sessions[0]?.totalTokensFresh).toBe(false);
+      expect(fast.sessions[0]?.estimatedCostUsd).toBeUndefined();
+      expect(detailed.sessions[0]?.totalTokens).toBe(3_000);
+      expect(detailed.sessions[0]?.totalTokensFresh).toBe(true);
+      expect(detailed.sessions[0]?.estimatedCostUsd).toBe(0.0042);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   test("caps transcript title and last-message hydration for bulk list responses", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-list-cap-"));
     try {

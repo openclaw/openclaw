@@ -1562,8 +1562,11 @@ export function buildGatewaySessionRow(params: {
       model: resolvedModel.model ?? DEFAULT_MODEL,
       entry,
     }) === undefined;
-  const transcriptUsage =
+  const allowTranscriptUsageFallback =
     !skipTranscriptUsage &&
+    (typeof params.transcriptUsageMaxBytes !== "number" || params.transcriptUsageMaxBytes > 0);
+  const transcriptUsage =
+    allowTranscriptUsageFallback &&
     (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
       ? resolveTranscriptUsageFallback({
           cfg,
@@ -1986,15 +1989,16 @@ export function listSessionsFromStore(params: {
 }): SessionsListResult {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
-  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
+  const includeDerivedTitles = opts.includeDerivedTitles === true;
+  const includeLastMessage = opts.includeLastMessage === true;
+  const sessionListTranscriptUsageMaxBytes =
+    includeDerivedTitles || includeLastMessage ? 64 * 1024 : 0;
   const sessionListTranscriptFieldRows = 100;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => {
     rowContext ??= buildSessionListRowContext({ store, now });
     return rowContext;
   };
-  const includeDerivedTitles = opts.includeDerivedTitles === true;
-  const includeLastMessage = opts.includeLastMessage === true;
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
@@ -2055,15 +2059,16 @@ export async function listSessionsFromStoreAsync(params: {
 }): Promise<SessionsListResult> {
   const { cfg, storePath, store, opts } = params;
   const now = Date.now();
-  const sessionListTranscriptUsageMaxBytes = 64 * 1024;
+  const includeDerivedTitles = opts.includeDerivedTitles === true;
+  const includeLastMessage = opts.includeLastMessage === true;
+  const sessionListTranscriptUsageMaxBytes =
+    includeDerivedTitles || includeLastMessage ? 64 * 1024 : 0;
   const sessionListTranscriptFieldRows = 100;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => {
     rowContext ??= buildSessionListRowContext({ store, now });
     return rowContext;
   };
-  const includeDerivedTitles = opts.includeDerivedTitles === true;
-  const includeLastMessage = opts.includeLastMessage === true;
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({

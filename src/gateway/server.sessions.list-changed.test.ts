@@ -83,7 +83,7 @@ test("sessions.list keeps bulk rows lightweight and uses persisted model fields"
       modelProvider?: string;
       model?: string;
     }>;
-  }>(ws, "sessions.list", {});
+  }>(ws, "sessions.list", { includeDerivedTitles: true });
 
   expect(listed.ok).toBe(true);
   const parent = listed.payload?.sessions.find((session) => session.key === "agent:main:main");
@@ -199,6 +199,51 @@ test("sessions.list marks sessions with active abortable runs", async () => {
           hasActiveRun: true,
         }),
       ]),
+    }),
+    undefined,
+  );
+});
+
+test("sessions.list reuses cached rows for repeated identical requests", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+  });
+
+  const respond = vi.fn();
+  const loadGatewayModelCatalog = vi.fn(async () => []);
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const context = {
+    getRuntimeConfig,
+    loadGatewayModelCatalog,
+  } as never;
+
+  await sessionsHandlers["sessions.list"]({
+    req: { type: "req", id: "req-sessions-list-cache-1", method: "sessions.list", params: {} },
+    params: {},
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context,
+  });
+  await sessionsHandlers["sessions.list"]({
+    req: { type: "req", id: "req-sessions-list-cache-2", method: "sessions.list", params: {} },
+    params: {},
+    respond,
+    client: null,
+    isWebchatConnect: () => false,
+    context,
+  });
+
+  expect(loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+  expect(respond).toHaveBeenCalledTimes(2);
+  expect(respond).toHaveBeenLastCalledWith(
+    true,
+    expect.objectContaining({
+      sessions: expect.arrayContaining([expect.objectContaining({ key: "agent:main:main" })]),
     }),
     undefined,
   );
