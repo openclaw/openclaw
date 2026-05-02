@@ -13,6 +13,8 @@ import {
   readConfigFileSnapshot,
   recoverConfigFromLastKnownGood,
   registerConfigWriteListener,
+  setRuntimeConfigSnapshot,
+  type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../config/io.js";
 import { replaceConfigFile } from "../config/mutate.js";
 import { isNixMode } from "../config/paths.js";
@@ -456,6 +458,11 @@ export type GatewayServerOptions = {
    * Optional startup timestamp used for concise readiness logging.
    */
   startupStartedAt?: number;
+  /**
+   * Config snapshot already read by the CLI gateway preflight. Passing it avoids
+   * reparsing openclaw.json during server startup.
+   */
+  startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 };
 
 type SetupWizardRunner = NonNullable<GatewayServerOptions["wizardRunner"]>;
@@ -491,6 +498,9 @@ export async function startGatewayServer(
       minimalTestGateway,
       log,
       measure: (name, run) => startupTrace.measure(name, run),
+      ...(opts.startupConfigSnapshotRead
+        ? { initialSnapshotRead: opts.startupConfigSnapshotRead }
+        : {}),
     }),
   );
   const configSnapshot = startupConfigLoad.snapshot;
@@ -585,6 +595,7 @@ export async function startGatewayServer(
     startupInternalWriteHash = startupSnapshot.hash ?? null;
     startupLastGoodSnapshot = startupSnapshot;
   }
+  setRuntimeConfigSnapshot(cfgAtStart, startupLastGoodSnapshot.sourceConfig);
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
       cfgAtStart,
