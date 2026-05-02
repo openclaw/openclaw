@@ -14,7 +14,10 @@ export type WebFetchProviderId = string;
 export type WebSearchProviderToolDefinition = {
   description: string;
   parameters: TSchema;
-  execute: (args: Record<string, unknown>) => Promise<Record<string, unknown>>;
+  execute: (
+    args: Record<string, unknown>,
+    context?: WebSearchProviderToolExecutionContext,
+  ) => Promise<Record<string, unknown>>;
 };
 
 export type WebFetchProviderToolDefinition = {
@@ -27,6 +30,10 @@ export type WebSearchProviderContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
   runtimeMetadata?: RuntimeWebSearchMetadata;
+};
+
+export type WebSearchProviderToolExecutionContext = {
+  signal?: AbortSignal;
 };
 
 export type WebFetchProviderContext = {
@@ -85,6 +92,8 @@ export type WebSearchProviderPlugin = {
   placeholder: string;
   signupUrl: string;
   docsUrl?: string;
+  /** Optional note shown before credential collection for provider-specific prerequisites. */
+  credentialNote?: string;
   autoDetectOrder?: number;
   credentialPath: string;
   inactiveSecretPaths?: string[];

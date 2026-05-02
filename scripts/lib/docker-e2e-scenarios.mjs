@@ -10,7 +10,7 @@ const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
 const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor";
 
-export const LIVE_RETRY_PATTERNS = [
+const LIVE_RETRY_PATTERNS = [
   /529\b/i,
   /overloaded/i,
   /capacity/i,

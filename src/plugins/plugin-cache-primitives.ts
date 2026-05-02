@@ -94,22 +94,6 @@ export function createPluginCacheKey(parts: readonly unknown[]): string {
   return JSON.stringify(parts);
 }
 
-export type FileSystemIdentity = {
-  path: string;
-  size: number;
-  mtimeMs: number;
-  ctimeMs?: number;
-};
-
-export function createFileSystemIdentityCacheKey(identity: FileSystemIdentity): string {
-  return createPluginCacheKey([
-    identity.path,
-    identity.size,
-    identity.mtimeMs,
-    identity.ctimeMs ?? null,
-  ]);
-}
-
 function normalizeMaxEntries(value: number, fallback: number): number {
   if (!Number.isFinite(value) || value <= 0) {
     return fallback;

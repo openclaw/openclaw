@@ -1830,6 +1830,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       sessionKey: string;
+      sessionId?: string;
       message: string;
       thinking?: string;
       deliver?: boolean;
@@ -1904,6 +1905,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const requestedSessionId = normalizeOptionalText(p.sessionId);
+    const backingSessionId = entry?.sessionId ?? requestedSessionId;
     const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey);
     if (deletedAgentId !== null) {
       respond(
@@ -2049,7 +2052,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const activeRunAbort = registerChatAbortController({
         chatAbortControllers: context.chatAbortControllers,
         runId: clientRunId,
-        sessionId: entry?.sessionId ?? clientRunId,
+        sessionId: backingSessionId ?? clientRunId,
         sessionKey: rawSessionKey,
         timeoutMs,
         now,
@@ -2167,7 +2170,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         userTranscriptUpdatePromise = (async () => {
           const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-          const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+          const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
           if (!resolvedSessionId) {
             return;
           }
@@ -2199,7 +2202,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+        const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
         if (!resolvedSessionId) {
           return;
         }
@@ -2226,7 +2229,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         const transcriptPayload = stripVisibleTextFromTtsSupplement(payload);
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
         const resolvedTranscriptPath = resolveTranscriptPath({
           sessionId,
           storePath: latestStorePath,
@@ -2262,6 +2265,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
           ? persistedAssistantContent
           : undefined;
+        if (!persistedContentForAppend?.length) {
+          return;
+        }
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
@@ -2400,7 +2406,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     .map((entry) => entry.payload);
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+              const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
               const resolvedTranscriptPath = resolveTranscriptPath({
                 sessionId,
                 storePath: latestStorePath,

@@ -42,7 +42,11 @@ import {
   createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
 } from "./client-factory.js";
-import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
+import {
+  isCodexAppServerApprovalRequest,
+  isCodexAppServerConnectionClosedError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   readCodexPluginConfig,
@@ -74,7 +78,7 @@ import {
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { clearSharedCodexAppServerClient } from "./shared-client.js";
+import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import {
   buildDeveloperInstructions,
   buildTurnStartParams,
@@ -485,6 +489,7 @@ export async function runCodexAppServerAttempt(
   let thread: CodexAppServerThreadBinding;
   let trajectoryEndRecorded = false;
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
+  let startupClientForCleanup: CodexAppServerClient | undefined;
   try {
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -512,32 +517,60 @@ export async function runCodexAppServerAttempt(
       timeoutFloorMs: options.startupTimeoutFloorMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory(appServer.start, startupAuthProfileId, agentDir);
-        await ensureCodexComputerUse({
-          client: startupClient,
-          pluginConfig: options.pluginConfig,
-          timeoutMs: appServer.requestTimeoutMs,
-          signal: runAbortController.signal,
-        });
-        const startupThread = await startOrResumeThread({
-          client: startupClient,
-          params,
-          cwd: effectiveWorkspace,
-          dynamicTools: toolBridge.specs,
-          appServer,
-          developerInstructions: promptBuild.developerInstructions,
-          config: nativeHookRelayConfig,
-        });
-        return { client: startupClient, thread: startupThread };
+        let attemptedClient: CodexAppServerClient | undefined;
+        const startupAttempt = async () => {
+          const startupClient = await clientFactory(
+            appServer.start,
+            startupAuthProfileId,
+            agentDir,
+          );
+          attemptedClient = startupClient;
+          startupClientForCleanup = startupClient;
+          await ensureCodexComputerUse({
+            client: startupClient,
+            pluginConfig: options.pluginConfig,
+            timeoutMs: appServer.requestTimeoutMs,
+            signal: runAbortController.signal,
+          });
+          const startupThread = await startOrResumeThread({
+            client: startupClient,
+            params,
+            cwd: effectiveWorkspace,
+            dynamicTools: toolBridge.specs,
+            appServer,
+            developerInstructions: promptBuild.developerInstructions,
+            config: nativeHookRelayConfig,
+          });
+          return { client: startupClient, thread: startupThread };
+        };
+        try {
+          return await startupAttempt();
+        } catch (error) {
+          if (runAbortController.signal.aborted || !isCodexAppServerConnectionClosedError(error)) {
+            throw error;
+          }
+          embeddedAgentLog.warn(
+            "codex app-server connection closed during startup; restarting app-server and retrying",
+            { error },
+          );
+          const failedClient = attemptedClient;
+          clearSharedCodexAppServerClientIfCurrent(failedClient);
+          if (startupClientForCleanup === failedClient) {
+            startupClientForCleanup = undefined;
+          }
+          attemptedClient = undefined;
+          return await startupAttempt();
+        }
       },
     }));
+    startupClientForCleanup = undefined;
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
   } catch (error) {
     nativeHookRelay?.unregister();
-    clearSharedCodexAppServerClient();
+    clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
   }

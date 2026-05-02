@@ -137,6 +137,43 @@ describe("web search runtime", () => {
     });
   });
 
+  it("passes the run abort signal to provider execution", async () => {
+    const controller = new AbortController();
+    const execute = vi.fn(
+      async (args: Record<string, unknown>, context?: { signal?: AbortSignal }) => ({
+        ...args,
+        aborted: context?.signal?.aborted ?? false,
+        sameSignal: context?.signal === controller.signal,
+      }),
+    );
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({
+        credentialPath: "tools.web.search.custom.apiKey",
+        requiresCredential: false,
+        createTool: () => ({
+          description: "custom",
+          parameters: {},
+          execute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "abort plumbing" },
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: { query: "abort plumbing", aborted: false, sameSignal: true },
+    });
+    expect(execute).toHaveBeenCalledWith(
+      { query: "abort plumbing" },
+      { signal: controller.signal },
+    );
+  });
+
   it("auto-detects a provider from canonical plugin-owned credentials", async () => {
     const provider = createCustomSearchProvider();
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
@@ -183,6 +220,8 @@ describe("web search runtime", () => {
             providers: {
               "custom-search": {
                 apiKey: "custom-provider-key",
+                baseUrl: "https://custom-search.example/v1",
+                models: [],
               },
             },
           },

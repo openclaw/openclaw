@@ -134,7 +134,7 @@ export function ensureObject(
   return next;
 }
 
-export function normalizeKnownProvider(
+function normalizeKnownProvider(
   value: unknown,
   providers: Array<{ id: string }>,
 ): string | undefined {
@@ -191,6 +191,11 @@ export type ResolveRuntimeWebProviderSurfaceParams<
     config: OpenClawConfig;
     toolConfig: TToolConfig;
   }) => unknown;
+  readConfiguredCredentialFallback?: (params: {
+    provider: TProvider;
+    config: OpenClawConfig;
+    toolConfig: TToolConfig;
+  }) => { path: string; value: unknown } | undefined;
   ignoreKeylessProvidersForConfiguredSurface?: boolean;
   emptyProvidersWhenSurfaceMissing?: boolean;
   normalizeConfiguredProviderAgainstActiveProviders?: boolean;

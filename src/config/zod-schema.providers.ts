@@ -2,7 +2,7 @@ import { z } from "zod";
 import { collectBundledChannelConfigs } from "../plugins/bundled-channel-config-metadata.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginManifest } from "../plugins/manifest.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
@@ -87,9 +87,7 @@ function normalizeBundledChannelConfigs(
   let next: ChannelsConfig | undefined;
   let registry: PluginManifestRegistry | undefined;
   for (const channelId of Object.keys(value)) {
-    registry ??= loadPluginManifestRegistryForPluginRegistry({
-      includeDisabled: true,
-    });
+    registry ??= loadPluginMetadataSnapshot({ config: {}, env: process.env }).manifestRegistry;
     const runtimeSchema = getDirectChannelRuntimeSchema(channelId, registry);
     if (!runtimeSchema) {
       continue;

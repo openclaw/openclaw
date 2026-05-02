@@ -39,6 +39,7 @@ const OMITTED_DIST_SUBTREE_PATTERNS = [
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
 ] as const;
 const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
+type ExternalizedBundledExtensionIds = ReadonlySet<string>;
 
 function normalizeRelativePath(value: string): string {
   return value.replace(/\\/g, "/");
@@ -74,8 +75,84 @@ export function isLegacyPluginDependencyInstallStagePath(relativePath: string): 
   );
 }
 
-function isPackagedDistPath(relativePath: string): boolean {
+function isExternalizedBundledExtensionDistPath(
+  relativePath: string,
+  externalizedExtensionIds: ExternalizedBundledExtensionIds,
+): boolean {
+  if (externalizedExtensionIds.size === 0) {
+    return false;
+  }
+  const parts = normalizeRelativePath(relativePath).split("/");
+  return (
+    parts.length >= 3 &&
+    parts[0] === "dist" &&
+    parts[1] === "extensions" &&
+    Boolean(parts[2]) &&
+    externalizedExtensionIds.has(parts[2] ?? "")
+  );
+}
+
+function isPublishableExternalizedBundledManifest(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const openclaw = (value as { openclaw?: unknown }).openclaw;
+  if (!openclaw || typeof openclaw !== "object") {
+    return false;
+  }
+  const release = (openclaw as { release?: unknown }).release;
+  if (!release || typeof release !== "object") {
+    return false;
+  }
+  const typedRelease = release as { publishToClawHub?: unknown; publishToNpm?: unknown };
+  return typedRelease.publishToNpm === true || typedRelease.publishToClawHub === true;
+}
+
+async function collectExternalizedBundledExtensionIds(
+  packageRoot: string,
+): Promise<ExternalizedBundledExtensionIds> {
+  const extensionsDir = path.join(packageRoot, "extensions");
+  let entries: import("node:fs").Dirent[];
+  try {
+    entries = await fs.readdir(extensionsDir, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return new Set();
+    }
+    throw error;
+  }
+
+  const ids = new Set<string>();
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isDirectory()) {
+        return;
+      }
+      const packageJsonPath = path.join(extensionsDir, entry.name, "package.json");
+      try {
+        const parsed = JSON.parse(await fs.readFile(packageJsonPath, "utf8")) as unknown;
+        if (isPublishableExternalizedBundledManifest(parsed)) {
+          ids.add(entry.name);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return;
+        }
+        throw error;
+      }
+    }),
+  );
+  return ids;
+}
+
+function isPackagedDistPath(
+  relativePath: string,
+  externalizedExtensionIds: ExternalizedBundledExtensionIds,
+): boolean {
   if (!relativePath.startsWith("dist/")) {
+    return false;
+  }
+  if (isExternalizedBundledExtensionDistPath(relativePath, externalizedExtensionIds)) {
     return false;
   }
   if (isLegacyPluginDependencyDirPath(relativePath)) {
@@ -106,16 +183,24 @@ function isPackagedDistPath(relativePath: string): boolean {
   return true;
 }
 
-function isOmittedDistSubtree(relativePath: string): boolean {
+function isOmittedDistSubtree(
+  relativePath: string,
+  externalizedExtensionIds: ExternalizedBundledExtensionIds,
+): boolean {
   return (
+    isExternalizedBundledExtensionDistPath(relativePath, externalizedExtensionIds) ||
     isLegacyPluginDependencyDirPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
   );
 }
 
-async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<string[]> {
+async function collectRelativeFiles(
+  rootDir: string,
+  baseDir: string,
+  externalizedExtensionIds: ExternalizedBundledExtensionIds,
+): Promise<string[]> {
   const rootRelativePath = normalizeRelativePath(path.relative(baseDir, rootDir));
-  if (rootRelativePath && isOmittedDistSubtree(rootRelativePath)) {
+  if (rootRelativePath && isOmittedDistSubtree(rootRelativePath, externalizedExtensionIds)) {
     return [];
   }
   try {
@@ -134,10 +219,10 @@ async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<s
           throw new Error(`Unsafe package dist path: ${relativePath}`);
         }
         if (entry.isDirectory()) {
-          return await collectRelativeFiles(entryPath, baseDir);
+          return await collectRelativeFiles(entryPath, baseDir, externalizedExtensionIds);
         }
         if (entry.isFile()) {
-          return isPackagedDistPath(relativePath) ? [relativePath] : [];
+          return isPackagedDistPath(relativePath, externalizedExtensionIds) ? [relativePath] : [];
         }
         return [];
       }),
@@ -152,7 +237,12 @@ async function collectRelativeFiles(rootDir: string, baseDir: string): Promise<s
 }
 
 export async function collectPackageDistInventory(packageRoot: string): Promise<string[]> {
-  return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot);
+  const externalizedExtensionIds = await collectExternalizedBundledExtensionIds(packageRoot);
+  return await collectRelativeFiles(
+    path.join(packageRoot, "dist"),
+    packageRoot,
+    externalizedExtensionIds,
+  );
 }
 
 export async function collectLegacyPluginDependencyStagingDebrisPaths(

@@ -354,6 +354,11 @@ export async function recoverOrphanedSubagentSessions(params: {
           entry.sessionId,
           storePath,
           entry.sessionFile,
+          {
+            mode: "recent",
+            maxMessages: 200,
+            maxBytes: 1024 * 1024,
+          },
         );
         const lastHumanMessage = [...messages]
           .toReversed()

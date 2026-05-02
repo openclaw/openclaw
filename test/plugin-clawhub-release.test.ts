@@ -154,6 +154,9 @@ describe("collectClawHubVersionGateErrors", () => {
             compat: {
               pluginApi: ">=2026.4.1",
             },
+            install: {
+              npmSpec: "@openclaw/demo-plugin",
+            },
             build: {
               openclawVersion: "2026.4.1",
             },
@@ -360,6 +363,9 @@ function createTempPluginRepo(
                     openclawVersion: "2026.4.1",
                   },
                 }),
+            install: {
+              npmSpec: `@openclaw/${currentExtensionId}`,
+            },
             release: {
               publishToClawHub: options.publishToClawHub ?? true,
             },

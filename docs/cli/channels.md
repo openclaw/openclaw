@@ -39,6 +39,12 @@ state plus probe results such as `works`, `probe failed`, `audit ok`, or `audit 
 If the gateway is unreachable, `channels status` falls back to config-only summaries
 instead of live probe output.
 
+Do not use `openclaw sessions`, Gateway `sessions.list`, or the agent
+`sessions_list` tool as a channel socket-health signal. Those surfaces report
+stored conversation rows, not provider runtime state. After a Discord provider
+restart, a connected but quiet account may be healthy while no Discord session
+row appears until the next inbound or outbound conversation event.
+
 ## Add / remove accounts
 
 ```bash

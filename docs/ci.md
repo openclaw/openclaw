@@ -134,6 +134,35 @@ See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
 focused rerun handles.
 
+`OpenClaw Release Publish` is the manual mutating release workflow. Dispatch it
+from `release/YYYY.M.D` or `main` after the release tag exists and after the
+OpenClaw npm preflight has succeeded. It verifies `pnpm plugins:sync:check`,
+dispatches `Plugin NPM Release` for all publishable plugin packages, dispatches
+`Plugin ClawHub Release` for the same release SHA, and only then dispatches
+`OpenClaw NPM Release` with the saved `preflight_run_id`.
+
+```bash
+gh workflow run openclaw-release-publish.yml \
+  --ref release/YYYY.M.D \
+  -f tag=vYYYY.M.D-beta.N \
+  -f preflight_run_id=<successful-openclaw-npm-preflight-run-id> \
+  -f npm_dist_tag=beta
+```
+
+For pinned commit proof on a fast-moving branch, use the helper instead of
+`gh workflow run ... --ref main -f ref=<sha>`:
+
+```bash
+pnpm ci:full-release --sha <full-sha>
+```
+
+GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
+helper pushes a temporary `release-ci/<sha>-...` branch at the target SHA,
+dispatches `Full Release Validation` from that pinned ref, verifies every child
+workflow `headSha` matches the target, and deletes the temporary branch when the
+run completes. The umbrella verifier also fails if any child workflow ran at a
+different SHA.
+
 `release_profile` controls live/provider breadth passed into release checks. The
 manual release workflows default to `stable`; use `full` only when you
 intentionally want the broad advisory provider/media matrix.

@@ -66,7 +66,7 @@ export function createEmptyUninstallActions(
   };
 }
 
-export function createEmptyConfigUninstallActions(): Omit<UninstallActions, "directory"> {
+function createEmptyConfigUninstallActions(): Omit<UninstallActions, "directory"> {
   const { directory: _directory, ...actions } = createEmptyUninstallActions();
   return actions;
 }

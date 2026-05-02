@@ -28,14 +28,14 @@ function runtimeExtensionsLengthMismatchMessage(params: {
   );
 }
 
-export function normalizePackageManifestStringList(value: unknown): string[] {
+function normalizePackageManifestStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
     return [];
   }
   return value.map((entry) => normalizeOptionalString(entry) ?? "").filter(Boolean);
 }
 
-export function resolvePackageRuntimeExtensionEntries(params: {
+function resolvePackageRuntimeExtensionEntries(params: {
   manifest: PackageManifest | null | undefined;
   extensions: readonly string[];
 }): RuntimeExtensionsResolution {

@@ -9,7 +9,7 @@ const TOKEN = "bundled-plugin-runtime-smoke-token";
 const WATCHDOG_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_WATCHDOG_MS, 1000);
 const READY_TIMEOUT_MS = readPositiveInt(
   process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_READY_MS,
-  420000,
+  900000,
 );
 const RPC_TIMEOUT_MS = readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_RPC_MS, 60000);
 const RPC_READY_TIMEOUT_MS = readPositiveInt(
@@ -109,12 +109,14 @@ function buildPluginPlan(manifest) {
     ? contracts.speechProviders.filter(isNonEmptyString)
     : [];
   const tools = Array.isArray(contracts.tools) ? contracts.tools.filter(isNonEmptyString) : [];
+  const toolMetadata =
+    manifest.toolMetadata && typeof manifest.toolMetadata === "object" ? manifest.toolMetadata : {};
   const activeInThisProbe =
     manifest.activation?.onStartup === true || channels.length > 0 || speechProviders.length > 0;
   return {
     channels,
     speechProviders,
-    tools,
+    tools: tools.filter((tool) => !toolMetadata[tool]),
     activeInThisProbe,
     runtimeSlashAliases: commandAliases
       .filter((alias) => alias?.kind === "runtime-slash")

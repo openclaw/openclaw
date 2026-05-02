@@ -63,7 +63,11 @@ type MatrixThreadBindingsConfig = {
   enabled?: boolean;
   idleHours?: number;
   maxAgeHours?: number;
+  spawnSessions?: boolean;
+  defaultSpawnContext?: "isolated" | "fork";
+  /** @deprecated Use spawnSessions instead. */
   spawnSubagentSessions?: boolean;
+  /** @deprecated Use spawnSessions instead. */
   spawnAcpSessions?: boolean;
 };
 

@@ -24,7 +24,7 @@ on:
           - selected
           - all-publishable
       ref:
-        description: Commit SHA on main to publish from (copy from the preview run)
+        description: Commit SHA on main or a release branch to publish from (copy from the preview run)
         required: true
         type: string
       plugins:
@@ -70,11 +70,22 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate ref is on main
+      - name: Validate ref is on main or a release branch
         run: |
           set -euo pipefail
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-          git merge-base --is-ancestor HEAD origin/main
+          git fetch --no-tags origin \
+            +refs/heads/main:refs/remotes/origin/main \
+            '+refs/heads/release/*:refs/remotes/origin/release/*'
+          if git merge-base --is-ancestor HEAD origin/main; then
+            exit 0
+          fi
+          while IFS= read -r release_ref; do
+            if git merge-base --is-ancestor HEAD "${release_ref}"; then
+              exit 0
+            fi
+          done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
+          echo "Plugin npm publishes must target a commit reachable from main or release/*." >&2
+          exit 1
 
       - name: Validate publishable plugin metadata
         env:

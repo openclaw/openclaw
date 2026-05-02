@@ -1,6 +1,4 @@
 import {
-  ACCESS_GROUP_ALLOW_FROM_PREFIX,
-  parseAccessGroupAllowFromEntry,
   resolveAccessGroupAllowFromMatches,
   type AccessGroupMembershipResolver,
 } from "openclaw/plugin-sdk/command-auth";
@@ -8,12 +6,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RequestClient } from "../internal/discord.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
-
-export const DISCORD_ACCESS_GROUP_PREFIX = ACCESS_GROUP_ALLOW_FROM_PREFIX;
-
-export function parseDiscordAccessGroupEntry(entry: string): string | null {
-  return parseAccessGroupAllowFromEntry(entry);
-}
 
 export function createDiscordAccessGroupMembershipResolver(params: {
   token?: string;

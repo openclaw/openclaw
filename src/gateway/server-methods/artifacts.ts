@@ -313,16 +313,25 @@ async function loadArtifacts(
     return { sessionKey, artifacts: [] };
   }
   const artifacts: ArtifactRecord[] = [];
-  await visitSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, (message, seq) => {
-    collectArtifactsFromMessage({
-      message,
-      messageFallbackSeq: seq,
-      artifacts,
-      sessionKey,
-      runId: query.runId,
-      taskId: query.taskId,
-    });
-  });
+  await visitSessionMessagesAsync(
+    sessionId,
+    storePath,
+    entry?.sessionFile,
+    (message, seq) => {
+      collectArtifactsFromMessage({
+        message,
+        messageFallbackSeq: seq,
+        artifacts,
+        sessionKey,
+        runId: query.runId,
+        taskId: query.taskId,
+      });
+    },
+    {
+      mode: "full",
+      reason: "artifact query transcript scan",
+    },
+  );
   return {
     sessionKey,
     artifacts,

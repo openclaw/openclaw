@@ -19,11 +19,21 @@ import {
 } from "../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
-import type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext } from "../plugins/types.js";
+import type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  PluginCommandContext,
+} from "../plugins/types.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-export type { AnyAgentTool, OpenClawPluginApi, PluginCommandContext };
+export type {
+  AnyAgentTool,
+  OpenClawPluginApi,
+  OpenClawPluginCommandDefinition,
+  PluginCommandContext,
+};
 
 type ChannelEntryConfigSchema<TPlugin> =
   TPlugin extends ChannelPlugin<unknown>

@@ -165,7 +165,7 @@ function isTrustedSourceLinkedOfficialPackage(pkg: NonNullable<ClawHubPackageDet
   const sourceRepo = normalizeOptionalString(pkg.verification?.sourceRepo);
   return (
     pkg.channel === "official" &&
-    pkg.isOfficial === true &&
+    pkg.isOfficial &&
     pkg.verification?.tier === "source-linked" &&
     (sourceRepo === "openclaw/openclaw" ||
       sourceRepo === "github.com/openclaw/openclaw" ||

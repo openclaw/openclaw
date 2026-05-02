@@ -13,7 +13,11 @@ import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/bac
 import { createTaskScopedChannelRuntime } from "../infra/channel-runtime-context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
-import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
+import {
+  createSubsystemLogger,
+  runtimeForLogger,
+  type SubsystemLogger,
+} from "../logging/subsystem.js";
 import { resolveAccountEntry, resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -32,8 +36,6 @@ const CHANNEL_RESTART_POLICY: BackoffPolicy = {
 };
 const MAX_RESTART_ATTEMPTS = 10;
 const CHANNEL_STOP_ABORT_TIMEOUT_MS = 5_000;
-
-type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 type ChannelRuntimeStore = {
   aborts: Map<string, AbortController>;
@@ -128,8 +130,8 @@ function applyDescribedAccountFields(
 
 type ChannelManagerOptions = {
   getRuntimeConfig: () => OpenClawConfig;
-  channelLogs: Record<ChannelId, SubsystemLogger>;
-  channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
+  channelLogs: Partial<Record<ChannelId, SubsystemLogger>>;
+  channelRuntimeEnvs: Partial<Record<ChannelId, RuntimeEnv>>;
   /**
    * Optional channel runtime helpers for external channel plugins.
    *
@@ -706,7 +708,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           try {
             await measureStartup(`channels.${plugin.id}.start`, () => startChannel(plugin.id));
           } catch (err) {
-            channelLogs[plugin.id]?.error?.(
+            ensureChannelLog(plugin.id).error?.(
               `[${plugin.id}] channel startup failed: ${formatErrorMessage(err)}`,
             );
           }
