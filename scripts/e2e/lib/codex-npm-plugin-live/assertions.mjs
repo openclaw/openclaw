@@ -39,7 +39,9 @@ function configure() {
   cfg.plugins = {
     ...cfg.plugins,
     enabled: true,
-    allow: Array.from(new Set([...(cfg.plugins?.allow || []), "codex"])).sort(),
+    allow: Array.from(new Set([...(cfg.plugins?.allow || []), "codex"])).toSorted((left, right) =>
+      left.localeCompare(right),
+    ),
     entries: {
       ...cfg.plugins?.entries,
       codex: {
