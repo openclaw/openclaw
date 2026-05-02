@@ -629,12 +629,10 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripDeprecatedValidationKeys(raw);
-  const legacyIssues = findLegacyConfigIssues(
-    normalizedRaw,
-    opts?.sourceRaw,
-    [],
-    opts?.touchedPaths,
-  );
+  const legacyIssues =
+    opts?.touchedPaths && opts.touchedPaths.length > 0
+      ? findLegacyConfigIssues(normalizedRaw, opts.sourceRaw, [], opts.touchedPaths)
+      : [];
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
