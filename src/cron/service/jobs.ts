@@ -245,6 +245,10 @@ export function findJobOrThrow(state: CronServiceState, id: string) {
   return job;
 }
 
+export function findJobByName(state: CronServiceState, name: string): CronJob | undefined {
+  return state.store?.jobs.find((j) => j.name === name);
+}
+
 export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
   return job.enabled ?? true;
 }

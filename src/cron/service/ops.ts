@@ -13,6 +13,7 @@ import {
   assertSupportedJobSpec,
   computeJobNextRunAtMs,
   createJob,
+  findJobByName,
   findJobOrThrow,
   hasScheduledNextRunAtMs,
   isJobEnabled,
@@ -317,6 +318,12 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
     warnIfDisabled(state, "add");
     await ensureLoaded(state);
     const job = createJob(state, input);
+    const collision = findJobByName(state, job.name);
+    if (collision) {
+      throw new Error(
+        `a cron job named '${job.name}' already exists (id=${collision.id}); use 'cron rm ${collision.id}' first or choose a different name`,
+      );
+    }
     state.store?.jobs.push(job);
 
     // Defensive: recompute all next-run times to ensure consistency
@@ -355,6 +362,14 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     const now = state.deps.nowMs();
     const nextJob = structuredClone(job);
     applyJobPatch(nextJob, patch, { defaultAgentId: state.deps.defaultAgentId });
+    if ("name" in patch) {
+      const collision = findJobByName(state, nextJob.name);
+      if (collision && collision.id !== id) {
+        throw new Error(
+          `a cron job named '${nextJob.name}' already exists (id=${collision.id}); choose a different name`,
+        );
+      }
+    }
     if (nextJob.schedule.kind === "every") {
       const anchor = nextJob.schedule.anchorMs;
       if (typeof anchor !== "number" || !Number.isFinite(anchor)) {

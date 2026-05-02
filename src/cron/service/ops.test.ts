@@ -5,7 +5,7 @@ import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-reg
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
-import { run, start, stop, update } from "./ops.js";
+import { add, run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
 import { runMissedJobs } from "./timer.js";
 
@@ -348,5 +348,68 @@ describe("cron service ops seam coverage", () => {
     } finally {
       restoreStateDir();
     }
+  });
+});
+
+describe("cron name uniqueness (#76160)", () => {
+  function makeBaseInput() {
+    return {
+      name: "my-job",
+      enabled: true,
+      schedule: { kind: "every" as const, everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated" as const,
+      wakeMode: "next-heartbeat" as const,
+      payload: { kind: "agentTurn" as const, message: "hello" },
+    };
+  }
+
+  function makeState(storePath: string) {
+    return createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => 1_000_000,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+  }
+
+  it("rejects cron add when a job with the same name already exists (#76160)", async () => {
+    const { storePath } = await makeStorePath();
+    const state = makeState(storePath);
+    await add(state, makeBaseInput());
+    await expect(add(state, makeBaseInput())).rejects.toThrow(
+      "a cron job named 'my-job' already exists",
+    );
+  });
+
+  it("rejects cron add even when existing job is disabled (#76160)", async () => {
+    const { storePath } = await makeStorePath();
+    const state = makeState(storePath);
+    await add(state, { ...makeBaseInput(), enabled: false });
+    await expect(add(state, makeBaseInput())).rejects.toThrow(
+      "a cron job named 'my-job' already exists",
+    );
+  });
+
+  it("rejects cron update rename onto an existing name (#76160)", async () => {
+    const { storePath } = await makeStorePath();
+    const state = makeState(storePath);
+    await add(state, makeBaseInput());
+    const other = await add(state, { ...makeBaseInput(), name: "other-job" });
+    await expect(update(state, other.id, { name: "my-job" })).rejects.toThrow(
+      "a cron job named 'my-job' already exists",
+    );
+  });
+
+  it("allows cron update to keep the same name on the same job (#76160)", async () => {
+    const { storePath } = await makeStorePath();
+    const state = makeState(storePath);
+    const job = await add(state, makeBaseInput());
+    await expect(update(state, job.id, { name: "my-job" })).resolves.toMatchObject({
+      id: job.id,
+      name: "my-job",
+    });
   });
 });
