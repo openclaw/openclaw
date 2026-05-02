@@ -122,7 +122,7 @@ export function resolvePublishablePluginVersion(params: {
   return { version, parsedVersion };
 }
 
-export function normalizeGitDiffPath(path: string): string {
+function normalizeGitDiffPath(path: string): string {
   return path.trim().replaceAll("\\", "/");
 }
 
@@ -361,7 +361,7 @@ export function collectChangedExtensionIdsFromPaths(paths: readonly string[]): s
   return [...extensionIds].toSorted();
 }
 
-export function isNullGitRef(ref: string | undefined): boolean {
+function isNullGitRef(ref: string | undefined): boolean {
   return !ref || /^0+$/.test(ref);
 }
 
@@ -449,7 +449,7 @@ export function resolveChangedPublishablePluginPackages(params: {
   return params.plugins.filter((plugin) => changed.has(plugin.extensionId));
 }
 
-export function isPluginVersionPublished(packageName: string, version: string): boolean {
+function isPluginVersionPublished(packageName: string, version: string): boolean {
   const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-view-"));
   const userconfigPath = join(tempDir, "npmrc");
   writeFileSync(userconfigPath, "");

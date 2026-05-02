@@ -319,7 +319,7 @@ export function collectClawHubVersionGateErrors(params: {
   return errors;
 }
 
-export async function isPluginVersionPublishedOnClawHub(
+async function isPluginVersionPublishedOnClawHub(
   packageName: string,
   version: string,
   options: {
