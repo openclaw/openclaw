@@ -37,6 +37,19 @@ describe("replaceManagedMarkdownBlock", () => {
     ).toBe("# Title\n\n## Generated\n<!-- start -->\n- new\n<!-- end -->\n\n## Notes\nkept\n");
   });
 
+  it("replaces existing block even with CRLF line endings", () => {
+    expect(
+      replaceManagedMarkdownBlock({
+        original:
+          "# Title\r\n\r\n## Generated\r\n<!-- start -->\r\n- old\r\n<!-- end -->\r\n\r\n## Notes\r\nkept\r\n",
+        heading: "## Generated",
+        startMarker: "<!-- start -->",
+        endMarker: "<!-- end -->",
+        body: "- new",
+      }),
+    ).toBe("# Title\n\n## Generated\n<!-- start -->\n- new\n<!-- end -->\n\n## Notes\nkept\n");
+  });
+
   it("supports headingless blocks", () => {
     expect(
       replaceManagedMarkdownBlock({
