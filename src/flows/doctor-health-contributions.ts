@@ -468,6 +468,14 @@ async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<v
   noteWorkspaceStatus(ctx.cfg);
 }
 
+async function runSkillsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { maybeRepairSkillReadiness } = await import("../commands/doctor-skills.js");
+  ctx.cfg = await maybeRepairSkillReadiness({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+  });
+}
+
 async function runBootstrapSizeHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteBootstrapFileSize } = await import("../commands/doctor-bootstrap-size.js");
   await noteBootstrapFileSize(ctx.cfg);
@@ -711,6 +719,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:workspace-status",
       label: "Workspace status",
       run: runWorkspaceStatusHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:skills",
+      label: "Skills",
+      run: runSkillsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
