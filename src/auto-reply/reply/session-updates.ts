@@ -10,6 +10,7 @@ import {
   shouldRefreshSnapshotForVersion,
 } from "../../agents/skills/refresh-state.js";
 import { ensureSkillsWatcher } from "../../agents/skills/refresh.js";
+import { hydrateResolvedSkills } from "../../agents/skills/snapshot-hydration.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -102,22 +103,6 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
   return typeof value === "number" && Number.isFinite(value) && value > 0
     ? Math.floor(value)
     : undefined;
-}
-
-// resolvedSkills is stripped from the persisted snapshot (see store-load.ts).
-// On cold session resume, the snapshot loaded from disk reaches this code path
-// without resolvedSkills. Consumers like prepareClaudeCliSkillsPlugin and the
-// claude-live-session fingerprint read resolvedSkills directly, so re-fill it
-// here from a fresh workspace scan while preserving the persisted prompt /
-// skills / version fields for prompt-cache stability.
-export function hydrateResolvedSkills(
-  snapshot: NonNullable<SessionEntry["skillsSnapshot"]>,
-  rebuild: () => NonNullable<SessionEntry["skillsSnapshot"]>,
-): NonNullable<SessionEntry["skillsSnapshot"]> {
-  if (snapshot.resolvedSkills) {
-    return snapshot;
-  }
-  return { ...snapshot, resolvedSkills: rebuild().resolvedSkills };
 }
 
 export async function ensureSkillSnapshot(params: {

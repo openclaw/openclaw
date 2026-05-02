@@ -4,7 +4,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { resolveEmbeddedRunSkillEntries } from "../../agents/pi-embedded-runner/skills-runtime.js";
 import { createCanonicalFixtureSkill } from "../../agents/skills.test-helpers.js";
 import type { Skill } from "../../agents/skills/skill-contract.js";
-import { hydrateResolvedSkills } from "../../auto-reply/reply/session-updates.js";
+import {
+  hydrateResolvedSkills,
+  hydrateResolvedSkillsAsync,
+} from "../../agents/skills/snapshot-hydration.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import type { SessionEntry, SessionSkillSnapshot } from "./types.js";
 
@@ -268,5 +271,24 @@ describe("hydrateResolvedSkills", () => {
     });
     expect(result).toBe(snapshot);
     expect(buildCalls).toBe(0);
+  });
+
+  it("supports async runtime hydration for CLI resume paths", async () => {
+    const stripped: SessionSkillSnapshot = {
+      prompt: "cached-prompt",
+      skills: [{ name: "x" }],
+      version: 2,
+    };
+    const rebuiltSkills = [makeFixtureSkill("x", 120)];
+    const result = await hydrateResolvedSkillsAsync(stripped, async () => ({
+      prompt: "fresh-prompt",
+      skills: [{ name: "y" }],
+      resolvedSkills: rebuiltSkills,
+      version: 3,
+    }));
+    expect(result.prompt).toBe("cached-prompt");
+    expect(result.skills).toEqual([{ name: "x" }]);
+    expect(result.version).toBe(2);
+    expect(result.resolvedSkills).toBe(rebuiltSkills);
   });
 });

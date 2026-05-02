@@ -66,6 +66,7 @@ import {
 } from "./model-selection.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -663,12 +664,7 @@ async function agentCommandInternal(
       ? await buildSkillsSnapshot()
       : !currentSkillsSnapshot
         ? undefined
-        : currentSkillsSnapshot.resolvedSkills === undefined
-          ? {
-              ...currentSkillsSnapshot,
-              resolvedSkills: (await buildSkillsSnapshot()).resolvedSkills,
-            }
-          : currentSkillsSnapshot;
+        : await hydrateResolvedSkillsAsync(currentSkillsSnapshot, buildSkillsSnapshot);
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
       const now = Date.now();
