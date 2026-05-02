@@ -12,7 +12,7 @@ Adds the Discord channel surface for sending and receiving OpenClaw messages.
 ## Distribution
 
 - Package: `@openclaw/discord`
-- Install route: included in OpenClaw
+- Install route: ClawHub + npm
 
 ## Surface
 
