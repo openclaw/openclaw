@@ -83,7 +83,7 @@ import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
-import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
   buildCronEventPrompt,
@@ -213,6 +213,7 @@ function canHeartbeatDeliverCommitments(heartbeat?: HeartbeatConfig): boolean {
 type HeartbeatAgentState = {
   agentId: string;
   heartbeat?: HeartbeatConfig;
+  activeHoursSchedule?: ActiveHoursSchedule;
   intervalMs: number;
   phaseMs: number;
   nextDueMs: number;
@@ -224,11 +225,34 @@ type HeartbeatAgentState = {
   floodLoggedSinceLastRun: boolean;
 };
 
-type ActiveHoursWindow = NonNullable<HeartbeatConfig>["activeHours"];
+type ActiveHoursSchedule = {
+  start?: string;
+  end?: string;
+  timezone: string;
+};
 
-function activeHoursConfigMatch(a?: ActiveHoursWindow, b?: ActiveHoursWindow): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
+function resolveActiveHoursSchedule(
+  cfg: OpenClawConfig,
+  heartbeat?: HeartbeatConfig,
+): ActiveHoursSchedule | undefined {
+  const activeHours = heartbeat?.activeHours;
+  if (!activeHours) {
+    return undefined;
+  }
+  return {
+    start: activeHours.start,
+    end: activeHours.end,
+    timezone: resolveActiveHoursTimezone(cfg, activeHours.timezone),
+  };
+}
+
+function activeHoursConfigMatch(a?: ActiveHoursSchedule, b?: ActiveHoursSchedule): boolean {
+  if (a === b) {
+    return true;
+  }
+  if (!a || !b) {
+    return false;
+  }
   return a.start === b.start && a.end === b.end && a.timezone === b.timezone;
 }
 
@@ -1912,11 +1936,11 @@ export function startHeartbeatRunner(opts: {
       });
       intervals.push(intervalMs);
       const prevState = prevAgents.get(agent.agentId);
+      const activeHoursSchedule = resolveActiveHoursSchedule(cfg, agent.heartbeat);
       // resolveNextDue only compares intervalMs/phaseMs, so discard
-      // prevState when activeHours changed to avoid a stale far-future slot.
+      // prevState when the effective activeHours window changed to avoid a stale far-future slot.
       const ahChanged =
-        prevState &&
-        !activeHoursConfigMatch(prevState.heartbeat?.activeHours, agent.heartbeat?.activeHours);
+        prevState && !activeHoursConfigMatch(prevState.activeHoursSchedule, activeHoursSchedule);
       const rawNextDueMs = resolveNextDue(
         now,
         intervalMs,
@@ -1932,6 +1956,7 @@ export function startHeartbeatRunner(opts: {
       nextAgents.set(agent.agentId, {
         agentId: agent.agentId,
         heartbeat: agent.heartbeat,
+        activeHoursSchedule,
         intervalMs,
         phaseMs,
         nextDueMs,

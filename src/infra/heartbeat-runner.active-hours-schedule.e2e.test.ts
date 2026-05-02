@@ -245,4 +245,47 @@ describe("heartbeat scheduler: activeHours-aware scheduling (#75487)", () => {
 
     runner.stop();
   });
+
+  it("recomputes schedule when activeHours effective timezone changes via hot reload", async () => {
+    const startMs = Date.parse("2026-06-15T14:00:00.000Z");
+    useFakeHeartbeatTime(startMs);
+
+    const callTimes: number[] = [];
+    const runSpy: RunOnce = vi.fn().mockImplementation(async () => {
+      callTimes.push(Date.now());
+      return { status: "ran", durationMs: 1 };
+    });
+
+    const activeHours = { start: "16:00", end: "17:00" };
+    const runner = startHeartbeatRunner({
+      cfg: heartbeatConfig({
+        every: "4h",
+        activeHours,
+        userTimezone: "America/New_York",
+      }),
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    await vi.advanceTimersByTimeAsync(60 * 60_000);
+    expect(runSpy).not.toHaveBeenCalled();
+
+    runner.updateConfig(
+      heartbeatConfig({
+        every: "4h",
+        activeHours,
+        userTimezone: "UTC",
+      }),
+    );
+
+    const endOfUtcWindow = Date.parse("2026-06-15T17:00:00.000Z");
+    await vi.advanceTimersByTimeAsync(endOfUtcWindow - Date.now());
+
+    expect(runSpy).toHaveBeenCalled();
+    const firstCall = new Date(callTimes[0]!);
+    expect(firstCall.getUTCHours()).toBe(16);
+    expect(firstCall.getUTCDate()).toBe(15);
+
+    runner.stop();
+  });
 });
