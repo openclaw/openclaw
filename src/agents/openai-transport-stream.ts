@@ -1468,6 +1468,7 @@ async function processOpenAICompletionsStream(
     const reasoningDeltas = getCompletionsReasoningDeltas(
       choice.delta as Record<string, unknown>,
       compat.visibleReasoningDetailTypes,
+      compat.thinkingFormat,
     );
     for (const reasoningDelta of reasoningDeltas) {
       if (currentBlock?.type === "toolCall") {
@@ -1566,6 +1567,7 @@ type CompletionsReasoningDelta =
 function getCompletionsReasoningDeltas(
   delta: Record<string, unknown>,
   visibleReasoningDetailTypes: readonly string[],
+  thinkingFormat?: string,
 ): CompletionsReasoningDelta[] {
   const output: CompletionsReasoningDelta[] = [];
   const pushDelta = (next: CompletionsReasoningDelta) => {
@@ -1608,7 +1610,12 @@ function getCompletionsReasoningDeltas(
     for (const field of reasoningFields) {
       const value = delta[field];
       if (typeof value === "string" && value.length > 0) {
-        pushDelta({ kind: "thinking", signature: field, text: value });
+        // Z.AI GLM-5 reasoning models always put their visible response in reasoning_content
+        // even when thinking is disabled. Route to text so the reply reaches the user.
+        const kind = thinkingFormat === "zai" ? "text" : "thinking";
+        pushDelta(
+          kind === "text" ? { kind, text: value } : { kind, signature: field, text: value },
+        );
         break;
       }
     }
