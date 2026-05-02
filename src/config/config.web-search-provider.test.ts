@@ -76,7 +76,12 @@ const mockWebSearchProviders = [
   {
     id: "minimax",
     pluginId: "minimax",
-    envVars: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_OAUTH_TOKEN"],
+    envVars: [
+      "MINIMAX_CODE_PLAN_KEY",
+      "MINIMAX_CODING_API_KEY",
+      "MINIMAX_OAUTH_TOKEN",
+      "MINIMAX_API_KEY",
+    ],
     credentialPath: "plugins.entries.minimax.config.webSearch.apiKey",
     getCredentialValue: getScopedWebSearchCredential("minimax"),
     getConfiguredCredentialValue: getConfiguredPluginWebSearchCredential("minimax"),
@@ -454,6 +459,11 @@ describe("web search provider auto-detection", () => {
   it("auto-detects tavily when only TAVILY_API_KEY is set", () => {
     process.env.TAVILY_API_KEY = "tvly-test-key"; // pragma: allowlist secret
     expect(resolveSearchProvider({})).toBe("tavily");
+  });
+
+  it("auto-detects minimax when only MINIMAX_API_KEY is set", () => {
+    process.env.MINIMAX_API_KEY = "test-minimax-key"; // pragma: allowlist secret
+    expect(resolveSearchProvider({})).toBe("minimax");
   });
 
   it("auto-detects firecrawl when only FIRECRAWL_API_KEY is set", () => {
