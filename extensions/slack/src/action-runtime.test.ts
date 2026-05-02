@@ -2,6 +2,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleSlackAction, slackActionRuntime } from "./action-runtime.js";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import {
+  clearSlackInteractiveMessageOwnerCache,
+  readSlackInteractiveMessageOwner,
+} from "./interactive-message-owner-cache.js";
 
 const originalSlackActionRuntime = { ...slackActionRuntime };
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
@@ -91,6 +95,7 @@ describe("handleSlackAction", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    clearSlackInteractiveMessageOwnerCache();
     Object.assign(slackActionRuntime, originalSlackActionRuntime, {
       deleteSlackMessage,
       downloadSlackFile,
@@ -108,6 +113,41 @@ describe("handleSlackAction", () => {
       removeSlackReaction,
       sendSlackMessage,
       unpinSlackMessage,
+    });
+  });
+
+  it("records session ownership for threaded interactive sends", async () => {
+    sendSlackMessage.mockResolvedValueOnce({
+      channelId: "D123",
+      messageId: "1710000000.000200",
+    });
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:D123",
+        content: "Choose one",
+        threadTs: "1710000000.000100",
+        blocks: [
+          {
+            type: "actions",
+            elements: [{ type: "button", action_id: "openclaw:reply_button:1:1" }],
+          },
+        ],
+      },
+      slackConfig(),
+      { sessionKey: "agent:main:slack:direct:U1" },
+    );
+
+    expect(
+      readSlackInteractiveMessageOwner({
+        accountId: "default",
+        channelId: "D123",
+        messageTs: "1710000000.000200",
+      }),
+    ).toEqual({
+      sessionKey: "agent:main:slack:direct:U1",
+      threadTs: "1710000000.000100",
     });
   });
 
