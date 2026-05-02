@@ -4,8 +4,16 @@ const mocks = vi.hoisted(() => ({
   installPluginFromClawHub: vi.fn(),
   installPluginFromNpmSpec: vi.fn(),
   listChannelPluginCatalogEntries: vi.fn(),
+  listOfficialExternalPluginCatalogEntries: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(),
   loadPluginMetadataSnapshot: vi.fn(),
+  resolveOfficialExternalPluginId: vi.fn((entry: { id?: string }) => entry.id),
+  resolveOfficialExternalPluginInstall: vi.fn(
+    (entry: { install?: unknown }) => entry.install ?? null,
+  ),
+  resolveOfficialExternalPluginLabel: vi.fn(
+    (entry: { label?: string; id?: string }) => entry.label ?? entry.id ?? "plugin",
+  ),
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveProviderInstallCatalogEntries: vi.fn(),
   updateNpmInstalledPlugins: vi.fn(),
@@ -42,6 +50,13 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
+vi.mock("../../../plugins/official-external-plugin-catalog.js", () => ({
+  listOfficialExternalPluginCatalogEntries: mocks.listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId: mocks.resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall: mocks.resolveOfficialExternalPluginInstall,
+  resolveOfficialExternalPluginLabel: mocks.resolveOfficialExternalPluginLabel,
+}));
+
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
   resolveProviderInstallCatalogEntries: mocks.resolveProviderInstallCatalogEntries,
 }));
@@ -59,6 +74,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     mocks.listChannelPluginCatalogEntries.mockReturnValue([]);
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([]);
     mocks.installPluginFromClawHub.mockResolvedValue({
       ok: true,
@@ -219,6 +235,104 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       'Installed missing configured plugin "matrix" from @openclaw/plugin-matrix@1.2.3.',
     ]);
     expect(result.warnings).toEqual([]);
+  });
+
+  it("honors npm-first catalog metadata for missing OpenClaw channel plugins", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "twitch",
+      targetDir: "/tmp/openclaw-plugins/twitch",
+      version: "2026.5.2",
+      npmResolution: {
+        name: "@openclaw/twitch",
+        version: "2026.5.2",
+        resolvedSpec: "@openclaw/twitch@2026.5.2",
+        integrity: "sha512-twitch",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "twitch",
+        pluginId: "twitch",
+        meta: { label: "Twitch" },
+        install: {
+          npmSpec: "@openclaw/twitch",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg: {},
+      pluginIds: [],
+      channelIds: ["twitch"],
+      env: {},
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/twitch",
+        expectedPluginId: "twitch",
+      }),
+    );
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "twitch" from @openclaw/twitch.',
+    ]);
+  });
+
+  it("installs missing configured non-channel plugins from the official external catalog", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "diagnostics-otel",
+      targetDir: "/tmp/openclaw-plugins/diagnostics-otel",
+      version: "2026.5.2",
+      npmResolution: {
+        name: "@openclaw/diagnostics-otel",
+        version: "2026.5.2",
+        resolvedSpec: "@openclaw/diagnostics-otel@2026.5.2",
+        integrity: "sha512-otel",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "diagnostics-otel",
+        label: "Diagnostics OpenTelemetry",
+        install: {
+          clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+          npmSpec: "@openclaw/diagnostics-otel",
+          defaultChoice: "npm",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            "diagnostics-otel": { enabled: true },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/diagnostics-otel",
+        expectedPluginId: "diagnostics-otel",
+      }),
+    );
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "diagnostics-otel" from @openclaw/diagnostics-otel.',
+    ]);
   });
 
   it("installs a missing third-party downloadable plugin from npm only", async () => {

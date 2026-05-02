@@ -117,12 +117,13 @@ describe("listPersistedBundledPluginLocationBridges", () => {
         pluginId: "diagnostics-otel",
         preferredSource: "npm",
         npmSpec: "@openclaw/diagnostics-otel",
+        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
         channelIds: ["diagnostics-otel"],
       },
     ]);
   });
 
-  it("does not create a relocation bridge without npm metadata", async () => {
+  it("uses official external catalog metadata when the persisted bundled row lacks npm metadata", async () => {
     readPersistedInstalledPluginIndexMock.mockResolvedValue(
       makeIndex({
         pluginId: "diagnostics-otel",
@@ -148,6 +149,37 @@ describe("listPersistedBundledPluginLocationBridges", () => {
     loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(
       makeRegistry("diagnostics-otel"),
     );
+
+    await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([
+      {
+        bundledPluginId: "diagnostics-otel",
+        pluginId: "diagnostics-otel",
+        preferredSource: "npm",
+        npmSpec: "@openclaw/diagnostics-otel",
+        clawhubSpec: "clawhub:@openclaw/diagnostics-otel",
+        channelIds: ["diagnostics-otel"],
+      },
+    ]);
+  });
+
+  it("does not create a relocation bridge without persisted or official install metadata", async () => {
+    readPersistedInstalledPluginIndexMock.mockResolvedValue(
+      makeIndex({
+        pluginId: "local-only",
+        manifestPath: "/app/dist/extensions/local-only/openclaw.plugin.json",
+        manifestHash: "hash",
+        source: "/app/dist/extensions/local-only/index.js",
+        rootDir: "/app/dist/extensions/local-only",
+        origin: "bundled",
+        enabled: true,
+        startup: startupInfo,
+        compat: [],
+        packageInstall: {
+          warnings: [],
+        },
+      }),
+    );
+    loadPluginManifestRegistryForInstalledIndexMock.mockReturnValue(makeRegistry("local-only"));
 
     await expect(listPersistedBundledPluginLocationBridges({})).resolves.toEqual([]);
   });
