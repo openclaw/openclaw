@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import {
+  CONSECUTIVE_ERROR_THRESHOLD,
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
   TOOL_CALL_HISTORY_SIZE,
@@ -885,6 +886,103 @@ describe("tool-loop-detection", () => {
       const stats = getToolCallStats(state);
       expect(stats.mostFrequent?.toolName).toBe("read");
       expect(stats.mostFrequent?.count).toBe(7);
+    });
+  });
+
+  describe("consecutive error cascade detection", () => {
+    function recordErroredCall(
+      state: SessionState,
+      toolName: string,
+      params: unknown,
+      index: number,
+      runId?: string,
+    ): void {
+      const toolCallId = `${toolName}-err-${index}`;
+      const scope = runId ? { runId } : undefined;
+      recordToolCall(state, toolName, params, toolCallId, enabledLoopDetectionConfig, scope);
+      recordToolCallOutcome(state, {
+        toolName,
+        toolParams: params,
+        toolCallId,
+        error: new Error("Aborted"),
+        config: enabledLoopDetectionConfig,
+        runId,
+      });
+    }
+
+    it("does not trigger when disabled", () => {
+      const state = createState();
+      for (let i = 0; i < 15; i += 1) {
+        recordErroredCall(state, `tool_${i}`, { idx: i }, i);
+      }
+      const result = detectToolCallLoop(state, "tool_next", {}, { enabled: false });
+      expect(result.stuck).toBe(false);
+    });
+
+    it("does not trigger below threshold", () => {
+      const state = createState();
+      const lowConfig: ToolLoopDetectionConfig = {
+        enabled: true,
+        consecutiveErrorThreshold: 10,
+      };
+      for (let i = 0; i < 9; i += 1) {
+        recordErroredCall(state, `tool_${i}`, { idx: i }, i);
+      }
+      const result = detectToolCallLoop(state, "tool_next", {}, lowConfig);
+      expect(result.stuck).toBe(false);
+    });
+
+    it("triggers critical when consecutive errors across different tools exceed threshold", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        consecutiveErrorThreshold: 10,
+      };
+      for (let i = 0; i < 10; i += 1) {
+        recordErroredCall(state, `tool_${i}`, { idx: i }, i);
+      }
+      const result = detectToolCallLoop(state, "tool_next", { next: true }, config);
+      expect(result.stuck).toBe(true);
+      if (!result.stuck) {
+        return;
+      }
+      expect(result.level).toBe("critical");
+      expect(result.detector).toBe("consecutive_errors");
+      expect(result.count).toBe(10);
+    });
+
+    it("stops counting when a non-error result breaks the streak", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        consecutiveErrorThreshold: 10,
+      };
+      for (let i = 0; i < 5; i += 1) {
+        recordErroredCall(state, `tool_${i}`, { idx: i }, i);
+      }
+      recordSuccessfulCall(state, "read", { path: "/ok.txt" }, { content: "ok" }, 99);
+      for (let i = 0; i < 5; i += 1) {
+        recordErroredCall(state, `tool_b_${i}`, { idx: i }, i + 100);
+      }
+      const result = detectToolCallLoop(state, "tool_next", {}, config);
+      expect(result.stuck).toBe(false);
+    });
+
+    it("does not carry error streaks across run ids", () => {
+      const state = createState();
+      const config: ToolLoopDetectionConfig = {
+        enabled: true,
+        consecutiveErrorThreshold: 3,
+      };
+      for (let i = 0; i < 3; i += 1) {
+        recordErroredCall(state, `tool_${i}`, { idx: i }, i, "run-1");
+      }
+      const result = detectToolCallLoop(state, "tool_next", {}, config, { runId: "run-2" });
+      expect(result.stuck).toBe(false);
+    });
+
+    it("uses default CONSECUTIVE_ERROR_THRESHOLD when not configured", () => {
+      expect(CONSECUTIVE_ERROR_THRESHOLD).toBe(10);
     });
   });
 });

@@ -31,6 +31,7 @@ Global defaults:
       warningThreshold: 10,
       criticalThreshold: 20,
       globalCircuitBreakerThreshold: 30,
+      consecutiveErrorThreshold: 10,
       detectors: {
         genericRepeat: true,
         knownPollNoProgress: true,
@@ -69,12 +70,13 @@ Per-agent override (optional):
 - `warningThreshold`: threshold before classifying a pattern as warning-only.
 - `criticalThreshold`: threshold for blocking repetitive loop patterns.
 - `globalCircuitBreakerThreshold`: global no-progress breaker threshold.
+- `consecutiveErrorThreshold`: blocks a run after this many completed tool calls fail back-to-back, even if the tools differ.
 - `detectors.genericRepeat`: detects repeated same-tool + same-params patterns.
 - `detectors.knownPollNoProgress`: detects known polling-like patterns with no state change.
 - `detectors.pingPong`: detects alternating ping-pong patterns.
 
 For `exec`, no-progress checks compare stable command outcomes and ignore volatile runtime metadata such as duration, PID, session ID, and working directory.
-When a run id is available, recent tool-call history is evaluated only within that run so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts from earlier runs.
+When a run id is available, recent tool-call history is evaluated only within that run so scheduled heartbeat cycles and fresh runs do not inherit stale loop counts from earlier runs. The consecutive-error detector follows the same run boundary.
 
 ## Recommended setup
 
