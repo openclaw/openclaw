@@ -44,6 +44,7 @@ const persistentBindingMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
+  resolveAndPersistSessionFile: vi.fn(),
   resolveStorePath: vi.fn(),
   updateSessionStore: vi.fn(),
 }));
@@ -151,6 +152,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     loadSessionStore: sessionMocks.loadSessionStore,
+    resolveAndPersistSessionFile: sessionMocks.resolveAndPersistSessionFile,
     resolveStorePath: sessionMocks.resolveStorePath,
     updateSessionStore: sessionMocks.updateSessionStore,
   };
@@ -467,6 +469,19 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     commandAuthMocks.resolveCommandArgMenu.mockClear();
     sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
+    sessionMocks.resolveAndPersistSessionFile.mockClear().mockImplementation(async (params) => {
+      const sessionFile =
+        params.fallbackSessionFile ?? `/tmp/openclaw-sessions/${params.sessionId}.jsonl`;
+      return {
+        sessionFile,
+        sessionEntry: {
+          ...params.sessionEntry,
+          sessionId: params.sessionId,
+          sessionFile,
+          updatedAt: Date.now(),
+        },
+      };
+    });
     sessionMocks.resolveStorePath
       .mockClear()
       .mockReturnValue("/tmp/openclaw-sessions/sessions.json");
@@ -1043,9 +1058,14 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       createTelegramTopicCommandContext({ match: "bind --cwd /tmp/work", threadId: 42 }),
     );
 
-    expect(sessionMocks.updateSessionStore).toHaveBeenCalledWith(
-      "/tmp/openclaw-sessions/sessions.json",
-      expect.any(Function),
+    expect(sessionMocks.resolveAndPersistSessionFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-topic",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+        storePath: "/tmp/openclaw-sessions/sessions.json",
+        sessionsDir: "/tmp/openclaw-sessions",
+        fallbackSessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+      }),
     );
     expect(pluginCommandMocks.executePluginCommand).toHaveBeenCalledWith(
       expect.objectContaining({

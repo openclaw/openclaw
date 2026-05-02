@@ -36,9 +36,10 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
+  resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
+  resolveSessionTranscriptPathInDir,
   resolveStorePath,
-  updateSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -175,33 +176,23 @@ async function resolveTelegramCommandSessionFile(params: {
     const store = loadSessionStore(storePath);
     const resolved = resolveSessionStoreEntry({ store, sessionKey });
     const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const existingSessionFile = resolved.existing?.sessionFile?.trim();
-    const sessionFile =
-      existingSessionFile ||
-      path.join(
-        path.dirname(storePath),
-        params.threadId != null
-          ? `${sessionId}-topic-${encodeURIComponent(String(params.threadId))}.jsonl`
-          : `${sessionId}.jsonl`,
-      );
-    if (
-      resolved.existing?.sessionId !== sessionId ||
-      resolved.existing?.sessionFile !== sessionFile
-    ) {
-      store[resolved.normalizedKey] = {
-        ...resolved.existing,
-        sessionId,
-        sessionFile,
-        updatedAt: Date.now(),
-      };
-      await updateSessionStore(storePath, (nextStore) => {
-        nextStore[resolved.normalizedKey] = {
-          ...nextStore[resolved.normalizedKey],
-          ...store[resolved.normalizedKey],
-        };
-      });
-    }
-    return { sessionId, sessionFile };
+    const sessionsDir = path.dirname(storePath);
+    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+      sessionId,
+      sessionsDir,
+      params.threadId,
+    );
+    const persisted = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey: resolved.normalizedKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: resolved.existing,
+      agentId: params.agentId,
+      sessionsDir,
+      fallbackSessionFile,
+    });
+    return { sessionId, sessionFile: persisted.sessionFile };
   } catch {
     return {};
   }
