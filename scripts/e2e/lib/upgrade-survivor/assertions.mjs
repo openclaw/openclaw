@@ -376,6 +376,44 @@ function readInstalledPluginIndex() {
   return readJson(file);
 }
 
+function assertExternalPluginInstall(records, pluginId, packageName) {
+  const record = records[pluginId];
+  assert(record, `configured external ${pluginId} plugin install record missing`);
+  assert(
+    record.source === "clawhub" || record.source === "npm",
+    `configured external ${pluginId} plugin installed from unexpected source: ${record.source}`,
+  );
+  const installPath = resolveHomePath(record.installPath);
+  assert(
+    installPath,
+    `configured external ${pluginId} plugin installPath missing: ${JSON.stringify(record)}`,
+  );
+  assert(
+    fs.existsSync(installPath),
+    `configured external ${pluginId} plugin installPath missing on disk: ${installPath}`,
+  );
+  assert(
+    fs.existsSync(path.join(installPath, "package.json")),
+    `configured external ${pluginId} plugin package.json missing: ${installPath}`,
+  );
+  if (record.source === "clawhub") {
+    assert(
+      String(record.spec ?? "").startsWith(`clawhub:${packageName}`),
+      `configured external ${pluginId} plugin ClawHub spec changed`,
+    );
+  } else {
+    const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+    assert(
+      isPathInside(npmRoot, installPath),
+      `configured external ${pluginId} npm install path outside managed npm root: ${installPath}`,
+    );
+    assert(
+      String(record.spec ?? record.resolvedSpec ?? "").startsWith(packageName),
+      `configured external ${pluginId} plugin npm spec changed`,
+    );
+  }
+}
+
 function assertConfiguredPluginInstalls() {
   const coverage = getCoverage();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
@@ -395,44 +433,12 @@ function assertConfiguredPluginInstalls() {
       "configured matrix plugin is neither present in the plugin index nor installed externally",
     );
     assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
-    assert(!records.discord, "internal discord plugin should not be installed externally");
+    assertExternalPluginInstall(records, "discord", "@openclaw/discord");
     assert(!records.telegram, "internal telegram plugin should not be installed externally");
     return;
   }
-  assert(
-    matrix.source === "clawhub" || matrix.source === "npm",
-    `configured external matrix plugin installed from unexpected source: ${matrix.source}`,
-  );
-  const installPath = resolveHomePath(matrix.installPath);
-  assert(
-    installPath,
-    `configured external matrix plugin installPath missing: ${JSON.stringify(matrix)}`,
-  );
-  assert(
-    fs.existsSync(installPath),
-    `configured external matrix plugin installPath missing on disk: ${installPath}`,
-  );
-  assert(
-    fs.existsSync(path.join(installPath, "package.json")),
-    `configured external matrix plugin package.json missing: ${installPath}`,
-  );
-  if (matrix.source === "clawhub") {
-    assert(
-      String(matrix.spec ?? "").startsWith("clawhub:@openclaw/matrix"),
-      "configured external matrix plugin ClawHub spec changed",
-    );
-  } else {
-    const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
-    assert(
-      isPathInside(npmRoot, installPath),
-      `configured external matrix npm install path outside managed npm root: ${installPath}`,
-    );
-    assert(
-      String(matrix.spec ?? matrix.resolvedSpec ?? "").startsWith("@openclaw/matrix"),
-      "configured external matrix plugin npm spec changed",
-    );
-  }
-  assert(!records.discord, "internal discord plugin should not be installed externally");
+  assertExternalPluginInstall(records, "matrix", "@openclaw/matrix");
+  assertExternalPluginInstall(records, "discord", "@openclaw/discord");
   assert(!records.telegram, "internal telegram plugin should not be installed externally");
 }
 
