@@ -83,7 +83,7 @@ async function runLiveLoop(
     const replyText = extractAssistantText(response);
     replies.push(replyText);
 
-    history.push({ role: "assistant", content: replyText, timestamp: Date.now() });
+    history.push(response);
     history.push({ role: "user", content: "Continue.", timestamp: Date.now() });
 
     const [stop, reason] = await cond.check({ turn, replyText, startedAt });
@@ -314,7 +314,7 @@ describeLive("live — GSAR with real Claude annotations", () => {
         );
 
         const replyText = extractAssistantText(response);
-        history.push({ role: "assistant", content: replyText, timestamp: Date.now() });
+        history.push(response);
         history.push({
           role: "user",
           content: "Verify your claims. Replace any [U] with [G] if you can confirm them.",
