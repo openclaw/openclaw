@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/tools-invoke: wire coding primitive tools (`read`, plus opt-in `write`/`edit`/`exec`/`process`) into the HTTP `/tools/invoke` endpoint via a new unwrapped factory `createOpenClawCodingToolsRaw()`. Enables deterministic automation flows (linting, tests, browser capture) without a full LLM round-trip. The new factory honors the resolver's plugin-suppression intent end-to-end and excludes provider-gated tools (`apply_patch`) that cannot be safely materialized without session-bound model context. The default HTTP deny list now also includes the canonical mutating tool names `write`, `edit`, and `process`, so they require explicit `gateway.tools.allow` opt-in. Refs #37131. Thanks @simonusa.
 - Plugins/active-memory: skip session-store channel entries that contain `:` when resolving the recall subagent's channel, so QQ c2c agent IDs (e.g. `c2c:10D4F7C2…`) and other scoped conversation IDs do not reach bundled-plugin `dirName` validation and crash the recall run. The same guard already applied to explicit `channelId` params (#76704); this extends it to store-derived channels. (#77396) Thanks @hclsys.
 - Models/auth: add `openclaw models auth list [--provider <id>] [--json]` so users can inspect saved per-agent auth profiles without dumping secrets or hitting the old “too many arguments” path. Thanks @vincentkoc.
 - Control UI/header: show the active agent name in dashboard breadcrumbs without adding the current session key, keeping non-chat views oriented without crowding the topbar.

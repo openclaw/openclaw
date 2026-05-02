@@ -312,6 +312,23 @@ export function createOpenClawCodingTools(options?: {
    */
   skipBeforeToolCallHook?: boolean;
   /**
+   * Skip the appended `createOpenClawTools(...)` plugin-capable tool block AND
+   * the channel-defined agent tools. Used by the /tools/invoke HTTP surface so
+   * the resolver's `disablePluginTools` intent is honored end-to-end — without
+   * this, a "core-only" HTTP request would still re-enter plugin resolution
+   * via the coding factory. Independent of `includeCoreTools`: keeps the core
+   * coding tools (read/write/edit/exec/process) materialized, only suppresses
+   * plugin-loading.
+   */
+  disablePluginTools?: boolean;
+  /**
+   * Skip materializing tools that require model/provider context to construct
+   * (currently `apply_patch`, gated to OpenAI providers). Used by the
+   * /tools/invoke HTTP surface where no model context is available — without
+   * this, allowlisting a provider-gated tool would silently produce nothing.
+   */
+  excludeProviderGatedTools?: boolean;
+  /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
    * Example: "anthropic", "openai", "google", "openai-codex".
    */
@@ -500,6 +517,7 @@ export function createOpenClawCodingTools(options?: {
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
   const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
   const applyPatchEnabled =
+    !options?.excludeProviderGatedTools &&
     applyPatchConfig?.enabled !== false &&
     isOpenAIProvider(options?.modelProvider) &&
     isApplyPatchAllowedForModel({
@@ -706,8 +724,13 @@ export function createOpenClawCodingTools(options?: {
     ...(execTool ? [execTool as unknown as AnyAgentTool] : []),
     ...(processTool ? [processTool as unknown as AnyAgentTool] : []),
     // Channel docking: include channel-defined agent tools (login, etc.).
-    ...(includeCoreTools ? listChannelAgentTools({ cfg: options?.config }) : []),
-    ...(includeCoreTools
+    ...(includeCoreTools && !options?.disablePluginTools
+      ? listChannelAgentTools({ cfg: options?.config })
+      : []),
+    // Plugin-capable OpenClaw tools (channel/messaging/skill plugins). Skipped
+    // when `disablePluginTools` is set so a "core-only" caller (e.g. /tools/invoke
+    // HTTP surface) does not re-enter plugin resolution via the coding factory.
+    ...(includeCoreTools && !options?.disablePluginTools
       ? createOpenClawTools({
           sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
           allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
@@ -883,5 +906,17 @@ export function createOpenClawCodingTools(options?: {
 export function createOpenClawCodingToolsRaw(
   options?: Parameters<typeof createOpenClawCodingTools>[0],
 ): AnyAgentTool[] {
-  return createOpenClawCodingTools({ ...options, skipBeforeToolCallHook: true });
+  return createOpenClawCodingTools({
+    ...options,
+    skipBeforeToolCallHook: true,
+    // The /tools/invoke HTTP surface has no session-bound model context, so
+    // provider-gated tools (apply_patch is OpenAI-only) cannot be safely
+    // materialized here. Drop them rather than letting allowlist opt-in
+    // silently produce nothing.
+    excludeProviderGatedTools: true,
+    // The resolver already gates plugin loading (`disablePluginTools`) for
+    // core-only HTTP requests; honor that here so the coding factory does not
+    // re-enter plugin resolution via the appended createOpenClawTools(...) block.
+    disablePluginTools: true,
+  });
 }
