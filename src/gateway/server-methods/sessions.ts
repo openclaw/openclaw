@@ -93,6 +93,7 @@ import {
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
+  type SessionsListResult,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -121,6 +122,8 @@ let sessionsRuntimeModulePromise: Promise<SessionsRuntimeModule> | undefined;
 let loggedSlowSessionsListCatalog = false;
 
 const SESSIONS_LIST_MODEL_CATALOG_TIMEOUT_MS = 750;
+
+type SessionsListHashPayload = Pick<SessionsListResult, "path" | "count" | "defaults" | "sessions">;
 
 function loadSessionsRuntimeModule(): Promise<SessionsRuntimeModule> {
   sessionsRuntimeModulePromise ??= import("./sessions.runtime.js");
@@ -455,7 +458,7 @@ function hasTrackedActiveSessionRun(params: {
   return false;
 }
 
-function attachTrackedActiveSessionRuns<T extends SessionsListResult>(params: {
+function attachTrackedActiveSessionRuns<T extends SessionsListHashPayload>(params: {
   context: GatewayRequestContext;
   result: T;
 }): T {
@@ -473,7 +476,7 @@ function attachTrackedActiveSessionRuns<T extends SessionsListResult>(params: {
   };
 }
 
-function hashSessionsListResult(result: SessionsListResult): string {
+function hashSessionsListResult(result: SessionsListHashPayload): string {
   // `count` is intentionally omitted from the hash payload: when it changes because session
   // data changed, the store/config fingerprint already invalidates the cache entry.
   // `path` is included so clients cannot treat `{ unchanged: true }` as valid across store moves.
