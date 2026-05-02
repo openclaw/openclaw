@@ -122,7 +122,7 @@ describe("web search runtime", () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createCustomSearchProvider({
         credentialPath: "tools.web.search.custom.apiKey",
-        getCredentialValue: () => "configured",
+        requiresCredential: false,
       }),
     ]);
 
@@ -135,6 +135,43 @@ describe("web search runtime", () => {
       provider: "custom",
       result: { query: "hello", ok: true },
     });
+  });
+
+  it("passes the run abort signal to provider execution", async () => {
+    const controller = new AbortController();
+    const execute = vi.fn(
+      async (args: Record<string, unknown>, context?: { signal?: AbortSignal }) => ({
+        ...args,
+        aborted: context?.signal?.aborted ?? false,
+        sameSignal: context?.signal === controller.signal,
+      }),
+    );
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({
+        credentialPath: "tools.web.search.custom.apiKey",
+        requiresCredential: false,
+        createTool: () => ({
+          description: "custom",
+          parameters: {},
+          execute,
+        }),
+      }),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "abort plumbing" },
+        signal: controller.signal,
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: { query: "abort plumbing", aborted: false, sameSignal: true },
+    });
+    expect(execute).toHaveBeenCalledWith(
+      { query: "abort plumbing" },
+      { signal: controller.signal },
+    );
   });
 
   it("auto-detects a provider from canonical plugin-owned credentials", async () => {
@@ -152,6 +189,102 @@ describe("web search runtime", () => {
     ).resolves.toEqual({
       provider: "custom",
       result: { query: "hello", ok: true },
+    });
+  });
+
+  it("auto-detects a provider from a configured credential fallback", async () => {
+    const provider = createCustomSearchProvider({
+      getConfiguredCredentialFallback: (config) => {
+        const modelProvider = config?.models?.providers?.["custom-search"];
+        return modelProvider && typeof modelProvider === "object" && "apiKey" in modelProvider
+          ? {
+              path: "models.providers.custom-search.apiKey",
+              value: (modelProvider as { apiKey?: unknown }).apiKey,
+            }
+          : undefined;
+      },
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      provider,
+      createDuckDuckGoSearchProvider(),
+    ]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([
+      provider,
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          models: {
+            providers: {
+              "custom-search": {
+                apiKey: "custom-provider-key",
+                baseUrl: "https://custom-search.example/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        args: { query: "fallback" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: { query: "fallback", ok: true },
+    });
+  });
+
+  it("uses the active resolved runtime config for matching source config callers", async () => {
+    const provider = createCustomSearchProvider({
+      createTool: ({ config }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          apiKey: getCustomSearchApiKey(config),
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    const sourceConfig = createCustomSearchConfig({
+      source: "exec",
+      provider: "mockexec",
+      id: "custom-search/api-key",
+    });
+    const resolvedConfig = createCustomSearchConfig("resolved-custom-key");
+
+    activateSecretsRuntimeSnapshot({
+      sourceConfig,
+      config: resolvedConfig,
+      authStores: [],
+      warnings: [],
+      webTools: {
+        search: {
+          providerSource: "auto-detect",
+          selectedProvider: "custom",
+          diagnostics: [],
+        },
+        fetch: {
+          providerSource: "none",
+          diagnostics: [],
+        },
+        diagnostics: [],
+      },
+    });
+
+    await expect(
+      runWebSearch({
+        config: structuredClone(sourceConfig),
+        args: { query: "runtime-source" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: {
+        query: "runtime-source",
+        apiKey: "resolved-custom-key",
+      },
     });
   });
 
@@ -264,6 +397,7 @@ describe("web search runtime", () => {
   it("falls back to another provider when auto-selected search execution fails", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
+        requiresCredential: false,
         createTool: () => ({
           description: "google",
           parameters: {},
@@ -283,6 +417,63 @@ describe("web search runtime", () => {
     ).resolves.toEqual({
       provider: "duckduckgo",
       result: { query: "fallback", provider: "duckduckgo" },
+    });
+  });
+
+  it("falls back when an auto-selected provider returns a structured error payload", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        requiresCredential: false,
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => ({
+            error: "missing_google_api_key",
+            message: "google key missing",
+          }),
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "fallback-structured-error" },
+      }),
+    ).resolves.toEqual({
+      provider: "duckduckgo",
+      result: { query: "fallback-structured-error", provider: "duckduckgo" },
+    });
+  });
+
+  it("does not fall back when an auto-selected provider returns a validation error payload", async () => {
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        requiresCredential: false,
+        createTool: () => ({
+          description: "google",
+          parameters: {},
+          execute: async () => ({
+            error: "invalid_freshness",
+            message: "freshness must be day, week, month, or year.",
+          }),
+        }),
+      }),
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {},
+        args: { query: "fallback-validation-error", freshness: "forever" },
+      }),
+    ).resolves.toEqual({
+      provider: "google",
+      result: {
+        error: "invalid_freshness",
+        message: "freshness must be day, week, month, or year.",
+      },
     });
   });
 

@@ -6,10 +6,8 @@ read_when:
 title: "Authentication"
 ---
 
-# Authentication (Model Providers)
-
 <Note>
-This page covers **model provider** authentication (API keys, OAuth, Claude CLI reuse, and Anthropic setup-token). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+This page is the **model provider** authentication reference (API keys, OAuth, Claude CLI reuse, and Anthropic setup-token). For **gateway connection** authentication (token, password, trusted-proxy), see [Configuration](/gateway/configuration) and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 </Note>
 
 OpenClaw supports OAuth and API keys for model providers. For always-on gateway
@@ -71,11 +69,46 @@ For long-lived gateway hosts, an Anthropic API key is still the most predictable
 setup. If you want to reuse an existing Claude login on the same host, use the
 Anthropic Claude CLI path in onboarding/configure.
 
+Recommended host setup for Claude CLI reuse:
+
+```bash
+# Run on the gateway host
+claude auth login
+claude auth status --text
+openclaw models auth login --provider anthropic --method cli --set-default
+```
+
+This is a two-step setup:
+
+1. Log Claude Code itself into Anthropic on the gateway host.
+2. Tell OpenClaw to switch Anthropic model selection to the local `claude-cli`
+   backend and store the matching OpenClaw auth profile.
+
+If `claude` is not on `PATH`, either install Claude Code first or set
+`agents.defaults.cliBackends.claude-cli.command` to the real binary path.
+
 Manual token entry (any provider; writes `auth-profiles.json` + updates config):
 
 ```bash
 openclaw models auth paste-token --provider openrouter
 ```
+
+`auth-profiles.json` stores credentials only. The canonical shape is:
+
+```json
+{
+  "version": 1,
+  "profiles": {
+    "openrouter:default": {
+      "type": "api_key",
+      "provider": "openrouter",
+      "key": "OPENROUTER_API_KEY"
+    }
+  }
+}
+```
+
+OpenClaw expects the canonical `version` + `profiles` shape at runtime. If an older install still has a flat file such as `{ "openrouter": { "apiKey": "..." } }`, run `openclaw doctor --fix` to rewrite it as an `openrouter:default` API-key profile; doctor keeps a `.legacy-flat.*.bak` copy beside the original. Endpoint details such as `baseUrl`, `api`, model ids, headers, and timeouts belong under `models.providers.<id>` in `openclaw.json` or `models.json`, not in `auth-profiles.json`.
 
 Auth profile refs are also supported for static credentials:
 
@@ -184,3 +217,9 @@ openclaw models status
 Run `openclaw models status` to confirm which profile is expiring. If an
 Anthropic token profile is missing or expired, refresh that setup via
 setup-token or migrate to an Anthropic API key.
+
+## Related
+
+- [Secrets management](/gateway/secrets)
+- [Remote access](/gateway/remote)
+- [Auth storage](/concepts/oauth)

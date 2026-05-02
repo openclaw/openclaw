@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildStatusJsonPayload, resolveStatusUpdateChannelInfo } from "./status-json-payload.ts";
+import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
+import { buildStatusJsonPayload } from "./status-json-payload.ts";
 
 const mocks = vi.hoisted(() => ({
   normalizeUpdateChannel: vi.fn((value?: string | null) => value ?? null),
@@ -40,6 +41,7 @@ describe("status-json-payload", () => {
     expect(mocks.normalizeUpdateChannel).toHaveBeenCalledWith("beta");
     expect(mocks.resolveUpdateChannelDisplay).toHaveBeenCalledWith({
       configChannel: "beta",
+      currentVersion: expect.any(String),
       installKind: "package",
       gitTag: "v1.2.3",
       gitBranch: "main",

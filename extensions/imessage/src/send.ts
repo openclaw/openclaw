@@ -1,14 +1,15 @@
-import { loadConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import { resolveOutboundAttachmentFromUrl } from "openclaw/plugin-sdk/media-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-runtime";
 import { stripInlineDirectiveTagsForDelivery } from "openclaw/plugin-sdk/text-runtime";
 import { resolveIMessageAccount, type ResolvedIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient, type IMessageRpcClient } from "./client.js";
 import { formatIMessageChatTarget, type IMessageService, parseIMessageTarget } from "./targets.js";
 
-export type IMessageSendOpts = {
+type IMessageSendOpts = {
   cliPath?: string;
   dbPath?: string;
   service?: IMessageService;
@@ -22,7 +23,7 @@ export type IMessageSendOpts = {
   timeoutMs?: number;
   chatId?: number;
   client?: IMessageRpcClient;
-  config?: ReturnType<typeof loadConfig>;
+  config: OpenClawConfig;
   account?: ResolvedIMessageAccount;
   resolveAttachmentImpl?: (
     mediaUrl: string,
@@ -35,7 +36,7 @@ export type IMessageSendOpts = {
   createClient?: (params: { cliPath: string; dbPath?: string }) => Promise<IMessageRpcClient>;
 };
 
-export type IMessageSendResult = {
+type IMessageSendResult = {
   messageId: string;
   sentText: string;
 };
@@ -97,9 +98,9 @@ function resolveDeliveredIMessageText(text: string, mediaContentType?: string): 
 export async function sendMessageIMessage(
   to: string,
   text: string,
-  opts: IMessageSendOpts = {},
+  opts: IMessageSendOpts,
 ): Promise<IMessageSendResult> {
-  const cfg = opts.config ?? loadConfig();
+  const cfg = requireRuntimeConfig(opts.config, "iMessage send");
   const account =
     opts.account ??
     resolveIMessageAccount({

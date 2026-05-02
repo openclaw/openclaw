@@ -13,6 +13,7 @@ vi.mock("../../../globals.js", () => ({
 vi.mock("../../plugin-registry.js", () => ({
   ensurePluginRegistryLoaded: vi.fn(),
 }));
+const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
@@ -95,8 +96,44 @@ describe("runMessageAction", () => {
   it("calls exit(0) after successful message delivery", async () => {
     await runSendAction();
 
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["discord"],
+    });
     expect(exitMock).toHaveBeenCalledOnce();
     expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("loads configured channel plugins when no target channel is known yet", async () => {
+    await runSendAction({ channel: undefined });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+    });
+  });
+
+  it("narrows plugin loading from a channel-prefixed target", async () => {
+    await runSendAction({ channel: undefined, target: "telegram:12345" });
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+      onlyChannelIds: ["telegram"],
+    });
+  });
+
+  it("loads configured channel plugins for mixed broadcast target prefixes", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("broadcast", {
+        targets: ["discord:channel:1", "telegram:123"],
+        message: "hi",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(ensurePluginRegistryLoaded).toHaveBeenCalledWith({
+      scope: "configured-channels",
+    });
   });
 
   it("runs gateway_stop hooks before exit when registered", async () => {
@@ -105,6 +142,41 @@ describe("runMessageAction", () => {
 
     expect(runGatewayStopMock).toHaveBeenCalledWith({ reason: "cli message action complete" }, {});
     expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("skips gateway_stop hooks for read-only message reads", async () => {
+    hasHooksMock.mockReturnValueOnce(true);
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("read", {
+        channel: "discord",
+        target: "channel:123",
+        limit: 1,
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(runGlobalGatewayStopSafelyMock).not.toHaveBeenCalled();
+    expect(runGatewayStopMock).not.toHaveBeenCalled();
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("bounds gateway_stop hooks so message actions still exit", async () => {
+    vi.useFakeTimers();
+    try {
+      hasHooksMock.mockReturnValueOnce(true);
+      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => undefined));
+      const runMessageAction = createRunMessageAction();
+
+      const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");
+      await vi.advanceTimersByTimeAsync(2500);
+      await pending;
+
+      expect(errorMock).toHaveBeenCalledWith("gateway_stop hook exceeded 2500ms; continuing");
+      expect(exitMock).toHaveBeenCalledWith(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("calls exit(1) when message delivery fails", async () => {

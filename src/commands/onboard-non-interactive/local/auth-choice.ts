@@ -163,7 +163,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   });
   if (deprecatedChoice) {
     runtime.error(
-      `"${authChoice as string}" is no longer supported. Use --auth-choice ${deprecatedChoice.choiceId} instead.`,
+      `${JSON.stringify(authChoice as string)} is no longer supported. Use --auth-choice ${JSON.stringify(deprecatedChoice.choiceId)} instead.`,
     );
     runtime.exit(1);
     return null;
@@ -177,6 +177,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: opts.customCompatibility,
         apiKey: opts.customApiKey,
         providerId: opts.customProviderId,
+        supportsImageInput: opts.customImageInput,
       });
       const resolvedProviderId = resolveCustomProviderId({
         config: nextConfig,
@@ -213,6 +214,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         compatibility: customAuth.compatibility,
         apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
+        supportsImageInput: customAuth.supportsImageInput,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
         runtime.log(

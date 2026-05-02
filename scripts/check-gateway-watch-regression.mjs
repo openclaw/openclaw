@@ -6,7 +6,12 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { writeBuildStamp } from "./build-stamp.mjs";
+import { pathToFileURL } from "node:url";
+import {
+  BUILD_STAMP_FILE,
+  writeBuildStamp,
+  writeRuntimePostBuildStamp,
+} from "./lib/local-build-metadata.mjs";
 import { resolveBuildRequirement } from "./run-node.mjs";
 
 const DEFAULTS = {
@@ -32,6 +37,8 @@ const WATCH_GATEWAY_SKIP_ENV = {
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_SKIP_CRON: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+  NODE_ENV: "test",
 };
 
 function parseArgs(argv) {
@@ -92,6 +99,17 @@ function removePathIfExists(targetPath) {
   fs.rmSync(targetPath, { recursive: true, force: true });
 }
 
+function lstatIfExists(targetPath) {
+  try {
+    return fs.lstatSync(targetPath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+}
+
 function normalizePath(filePath) {
   return filePath.replaceAll("\\", "/");
 }
@@ -109,7 +127,15 @@ function listTreeEntries(rootName) {
     if (!current) {
       continue;
     }
-    const dirents = fs.readdirSync(current, { withFileTypes: true });
+    let dirents;
+    try {
+      dirents = fs.readdirSync(current, { withFileTypes: true });
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
     for (const dirent of dirents) {
       const fullPath = path.join(current, dirent.name);
       const relativePath = normalizePath(path.relative(process.cwd(), fullPath));
@@ -156,7 +182,10 @@ function snapshotTree(rootName) {
     if (!current) {
       continue;
     }
-    const currentStats = fs.lstatSync(current);
+    const currentStats = lstatIfExists(current);
+    if (!currentStats) {
+      continue;
+    }
     stats.entries += 1;
     if (currentStats.isDirectory()) {
       stats.directories += 1;
@@ -310,10 +339,14 @@ function readProcessTreeCpuMs(rootPid) {
   return totalCpuMs;
 }
 
+export function hasGatewayReadyLog(text) {
+  return /\[gateway\] (?:http server listening|ready \()/.test(text);
+}
+
 async function waitForGatewayReady(readText, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (/\[gateway\] ready \(/.test(readText())) {
+    if (hasGatewayReadyLog(readText())) {
       return true;
     }
     await sleep(100);
@@ -347,7 +380,7 @@ function buildTimedWatchCommand(pidFilePath, timeFilePath, isolatedHomeDir, port
   const shellSource = [
     'echo "$$" > "$OPENCLAW_WATCH_PID_FILE"',
     'mkdir -p "$OPENCLAW_HOME/.openclaw"',
-    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
+    `printf '%s\n' '{"gateway":{"controlUi":{"enabled":false}},"plugins":{"enabled":false}}' > "$OPENCLAW_HOME/.openclaw/openclaw.json"`,
     `exec node scripts/watch-node.mjs gateway --force --allow-unconfigured --port ${String(port)} --token watch-regression-token`,
   ].join("\n");
   const env = {
@@ -548,7 +581,7 @@ function buildRunNodeDeps(env) {
     spawnSync,
     distRoot: path.join(cwd, "dist"),
     distEntry: path.join(cwd, "dist", "/entry.js"),
-    buildStampPath: path.join(cwd, "dist", ".buildstamp"),
+    buildStampPath: path.join(cwd, "dist", BUILD_STAMP_FILE),
     sourceRoots: ["src", "extensions"].map((sourceRoot) => ({
       name: sourceRoot,
       path: path.join(cwd, sourceRoot),
@@ -559,18 +592,48 @@ function buildRunNodeDeps(env) {
   };
 }
 
+export function shouldRefreshBuildStampForRestoredArtifacts(params) {
+  return (
+    params.skipBuild === true &&
+    params.buildRequirement?.shouldBuild === true &&
+    params.buildRequirement.reason === "config_newer"
+  );
+}
+
+export function writeBuildAndRuntimePostBuildStamps(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  writeBuildStamp({ cwd });
+  writeRuntimePostBuildStamp({ cwd });
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   ensureDir(options.outputDir);
   if (!options.skipBuild) {
-    runCheckedCommand("pnpm", ["build"]);
-    // The watch harness must start from a completed-build baseline. Refresh
-    // the build stamp after the full build pipeline finishes so run-node does
-    // not spuriously rebuild inside the bounded watch window.
-    writeBuildStamp({ cwd: process.cwd() });
+    runCheckedCommand("node", ["scripts/build-all.mjs", "gatewayWatch"]);
+    // The watch harness must start from a completed dist/runtime baseline.
+    // Refresh both stamps after the gateway build finishes so run-node does not
+    // leave stale local artifact metadata after the bounded watch window.
+    writeBuildAndRuntimePostBuildStamps();
+  } else {
+    // Restored CI artifacts can be older than the fresh checkout mtimes.
+    // Refresh the local artifact stamps so run-node trusts the already-built dist.
+    writeBuildAndRuntimePostBuildStamps();
   }
 
-  const preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  let preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  if (
+    shouldRefreshBuildStampForRestoredArtifacts({
+      skipBuild: options.skipBuild,
+      buildRequirement: preflightBuildRequirement,
+    })
+  ) {
+    // CI's skip-build path restores a built dist artifact after checkout.
+    // Refresh the stamps so checkout mtimes for package/config files do not
+    // force a duplicate build during the bounded gateway:watch window.
+    writeBuildAndRuntimePostBuildStamps();
+    preflightBuildRequirement = resolveBuildRequirement(buildRunNodeDeps(process.env));
+  }
   if (
     preflightBuildRequirement.shouldBuild &&
     preflightBuildRequirement.reason === "dirty_watched_tree"
@@ -604,11 +667,14 @@ async function main() {
   const post = writeSnapshot(postDir);
   const diff = writeDiffArtifacts(options.outputDir, preDir, postDir);
 
-  const distRuntimeFileGrowth = post.distRuntime.files - pre.distRuntime.files;
-  const distRuntimeByteGrowth = post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
   const distRuntimeAddedPaths = diff.added.filter((entry) =>
     entry.startsWith("dist-runtime/"),
   ).length;
+  const distRuntimeFileGrowth = distRuntimeAddedPaths;
+  const distRuntimeByteGrowth =
+    distRuntimeAddedPaths === 0
+      ? 0
+      : post.distRuntime.apparentBytes - pre.distRuntime.apparentBytes;
   const totalCpuMs = Math.round(
     (watchResult.timing.userSeconds + watchResult.timing.sysSeconds) * 1000,
   );
@@ -697,4 +763,6 @@ async function main() {
   process.exit(0);
 }
 
-await main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main();
+}

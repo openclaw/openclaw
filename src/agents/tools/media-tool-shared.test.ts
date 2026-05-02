@@ -1,10 +1,30 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveMediaToolLocalRoots } from "./media-tool-shared.js";
+import {
+  hasGenerationToolAvailability,
+  resolveMediaToolLocalRoots,
+  resolveModelFromRegistry,
+} from "./media-tool-shared.js";
 
 function normalizeHostPath(value: string): string {
   return path.normalize(path.resolve(value));
+}
+
+function createModelRegistryStub(resolve: (provider: string, modelId: string) => unknown): {
+  calls: Array<[string, string]>;
+  registry: { find: (provider: string, modelId: string) => unknown };
+} {
+  const calls: Array<[string, string]> = [];
+  return {
+    calls,
+    registry: {
+      find(provider, modelId) {
+        calls.push([provider, modelId]);
+        return resolve(provider, modelId);
+      },
+    },
+  };
 }
 
 describe("resolveMediaToolLocalRoots", () => {
@@ -33,5 +53,116 @@ describe("resolveMediaToolLocalRoots", () => {
     expect(normalizedRoots).not.toContain(normalizeHostPath(picturesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath(moviesDir));
     expect(normalizedRoots).not.toContain(normalizeHostPath("/"));
+  });
+});
+
+describe("resolveModelFromRegistry", () => {
+  it("normalizes provider and model refs before registry lookup", () => {
+    const foundModel = { provider: "ollama", id: "qwen3.5:397b-cloud" };
+    const { calls, registry } = createModelRegistryStub(() => foundModel);
+
+    const result = resolveModelFromRegistry({
+      modelRegistry: registry,
+      provider: " OLLAMA ",
+      modelId: " qwen3.5:397b-cloud ",
+    });
+
+    expect(calls).toEqual([["ollama", "qwen3.5:397b-cloud"]]);
+    expect(result).toBe(foundModel);
+  });
+
+  it("reports the normalized ref when the registry lookup misses", () => {
+    const { registry } = createModelRegistryStub(() => null);
+
+    expect(() =>
+      resolveModelFromRegistry({
+        modelRegistry: registry,
+        provider: " OLLAMA ",
+        modelId: " qwen3.5:397b-cloud ",
+      }),
+    ).toThrow("Unknown model: ollama/qwen3.5:397b-cloud");
+  });
+
+  it("falls back to provider-prefixed custom model IDs", () => {
+    const foundModel = { provider: "kimchi", id: "kimchi/claude-opus-4-6" };
+    const { calls, registry } = createModelRegistryStub((_, modelId) =>
+      modelId === "kimchi/claude-opus-4-6" ? foundModel : null,
+    );
+
+    const result = resolveModelFromRegistry({
+      modelRegistry: registry,
+      provider: "kimchi",
+      modelId: "claude-opus-4-6",
+    });
+
+    expect(calls).toEqual([
+      ["kimchi", "claude-opus-4-6"],
+      ["kimchi", "kimchi/claude-opus-4-6"],
+    ]);
+    expect(result).toBe(foundModel);
+  }, 180_000);
+});
+
+describe("hasGenerationToolAvailability", () => {
+  it("allows generation tools for runtime providers configured without auth", () => {
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        providers: [
+          {
+            id: "local-image",
+            defaultModel: "workflow",
+            isConfigured: () => true,
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("omits generation tools when runtime providers are not configured", () => {
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        providers: [
+          {
+            id: "local-image",
+            defaultModel: "workflow",
+            isConfigured: () => false,
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps explicit model config sufficient for generation tool registration", () => {
+    const loadProviders = vi.fn(() => []);
+
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        modelConfig: { primary: "local-image/workflow" },
+        providers: loadProviders,
+      }),
+    ).toBe(true);
+    expect(loadProviders).not.toHaveBeenCalled();
+  });
+
+  it("checks configured runtime providers against the supplied auth store", () => {
+    expect(
+      hasGenerationToolAvailability({
+        providerKey: "imageGenerationProviders",
+        authStore: {
+          version: 1,
+          profiles: {
+            "local-image:default": {
+              provider: "local-image",
+              type: "api_key",
+              key: "test",
+            },
+          },
+        },
+        providers: [{ id: "local-image", defaultModel: "workflow" }],
+      }),
+    ).toBe(true);
   });
 });

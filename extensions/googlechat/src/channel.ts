@@ -30,12 +30,18 @@ import {
   isGoogleChatUserTarget,
   listGoogleChatAccountIds,
   normalizeGoogleChatTarget,
+  type GoogleChatConfigAccessorAccount,
+  resolveGoogleChatConfigAccessorAccount,
   resolveDefaultGoogleChatAccountId,
   resolveGoogleChatAccount,
   type ChannelMessageActionAdapter,
   type ChannelStatusIssue,
   type ResolvedGoogleChatAccount,
 } from "./channel.deps.runtime.js";
+import {
+  legacyConfigRules as GOOGLECHAT_LEGACY_CONFIG_RULES,
+  normalizeCompatibilityConfig as normalizeGoogleChatCompatibilityConfig,
+} from "./doctor-contract.js";
 import { collectGoogleChatMutableAllowlistWarnings } from "./doctor.js";
 import { startGoogleChatGatewayAccount } from "./gateway.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
@@ -61,10 +67,14 @@ const meta = {
   markdownCapable: true,
 };
 
-const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleChatAccount>({
+const googleChatConfigAdapter = createScopedChannelConfigAdapter<
+  ResolvedGoogleChatAccount,
+  GoogleChatConfigAccessorAccount
+>({
   sectionKey: "googlechat",
   listAccountIds: listGoogleChatAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveGoogleChatAccount),
+  resolveAccessorAccount: resolveGoogleChatConfigAccessorAccount,
   defaultAccountId: resolveDefaultGoogleChatAccountId,
   clearBaseFields: [
     "serviceAccount",
@@ -76,13 +86,13 @@ const googleChatConfigAdapter = createScopedChannelConfigAdapter<ResolvedGoogleC
     "botUser",
     "name",
   ],
-  resolveAllowFrom: (account: ResolvedGoogleChatAccount) => account.config.dm?.allowFrom,
+  resolveAllowFrom: (account) => account.config.dm?.allowFrom,
   formatAllowFrom: (allowFrom) =>
     formatNormalizedAllowFromEntries({
       allowFrom,
       normalizeEntry: formatAllowFromEntry,
     }),
-  resolveDefaultTo: (account: ResolvedGoogleChatAccount) => account.config.defaultTo,
+  resolveDefaultTo: (account) => account.config.defaultTo,
 });
 
 const googlechatActions: ChannelMessageActionAdapter = {
@@ -134,6 +144,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     },
     groups: googlechatGroupsAdapter,
     messaging: {
+      targetPrefixes: ["googlechat", "google-chat", "gchat"],
       normalizeTarget: normalizeGoogleChatTarget,
       targetResolver: {
         looksLikeId: (raw, normalized) => {
@@ -172,6 +183,8 @@ export const googlechatPlugin = createChatChannelPlugin({
       groupModel: "route",
       groupAllowFromFallbackToAllowFrom: false,
       warnOnEmptyGroupSenderAllowlist: false,
+      legacyConfigRules: GOOGLECHAT_LEGACY_CONFIG_RULES,
+      normalizeCompatibilityConfig: normalizeGoogleChatCompatibilityConfig,
       collectMutableAllowlistWarnings: collectGoogleChatMutableAllowlistWarnings,
     },
     status: createComputedAccountStatusAdapter<ResolvedGoogleChatAccount>({

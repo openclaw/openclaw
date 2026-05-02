@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   normalizeAgentId,
@@ -108,7 +110,43 @@ export function resolveAgentEffectiveModelPrimary(
   );
 }
 
-// Backward-compatible alias. Prefer explicit/effective helpers at new call sites.
+function findMutableAgentEntry(cfg: OpenClawConfig, agentId: string): AgentConfig | undefined {
+  const id = normalizeAgentId(agentId);
+  return cfg.agents?.list?.find((entry) => normalizeAgentId(entry?.id) === id);
+}
+
+function updateAgentModelPrimary(
+  existing: AgentModelConfig | undefined,
+  primary: string,
+): AgentModelConfig {
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    return { ...existing, primary };
+  }
+  return primary;
+}
+
+export type AgentModelPrimaryWriteTarget = "agent" | "defaults";
+
+export function setAgentEffectiveModelPrimary(
+  cfg: OpenClawConfig,
+  agentId: string,
+  primary: string,
+): AgentModelPrimaryWriteTarget {
+  const id = normalizeAgentId(agentId);
+  if (resolveAgentExplicitModelPrimary(cfg, id)) {
+    const entry = findMutableAgentEntry(cfg, id);
+    if (entry) {
+      entry.model = updateAgentModelPrimary(entry.model, primary);
+      return "agent";
+    }
+  }
+  cfg.agents ??= {};
+  cfg.agents.defaults ??= {};
+  cfg.agents.defaults.model = updateAgentModelPrimary(cfg.agents.defaults.model, primary);
+  return "defaults";
+}
+
+/** @deprecated Prefer explicit/effective helpers at new call sites. */
 export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
   return resolveAgentExplicitModelPrimary(cfg, agentId);
 }
@@ -118,12 +156,15 @@ export function resolveAgentModelFallbacksOverride(
   agentId: string,
 ): string[] | undefined {
   const raw = resolveAgentConfig(cfg, agentId)?.model;
-  if (!raw || typeof raw === "string") {
+  if (!raw) {
     return undefined;
+  }
+  if (typeof raw === "string") {
+    return resolvePrimaryStringValue(raw) ? [] : undefined;
   }
   // Important: treat an explicitly provided empty array as an override to disable global fallbacks.
   if (!Object.hasOwn(raw, "fallbacks")) {
-    return undefined;
+    return Object.hasOwn(raw, "primary") && resolvePrimaryStringValue(raw) ? [] : undefined;
   }
   return Array.isArray(raw.fallbacks) ? raw.fallbacks : undefined;
 }
@@ -167,10 +208,14 @@ export function resolveEffectiveModelFallbacks(params: {
   cfg: OpenClawConfig;
   agentId: string;
   hasSessionModelOverride: boolean;
+  modelOverrideSource?: "auto" | "user";
 }): string[] | undefined {
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(params.cfg, params.agentId);
   if (!params.hasSessionModelOverride) {
     return agentFallbacksOverride;
+  }
+  if (params.modelOverrideSource !== "auto") {
+    return [];
   }
   const defaultFallbacks = resolveAgentModelFallbackValues(params.cfg.agents?.defaults?.model);
   return agentFallbacksOverride ?? defaultFallbacks;

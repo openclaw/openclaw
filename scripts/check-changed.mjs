@@ -1,32 +1,67 @@
-import { spawn } from "node:child_process";
 import { performance } from "node:perf_hooks";
 import {
-  detectChangedLanes,
+  detectChangedLanesForPaths,
   listChangedPathsFromGit,
   listStagedChangedPaths,
   normalizeChangedPath,
 } from "./changed-lanes.mjs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mjs";
-import { resolveChangedTestTargetPlan } from "./test-projects.test-support.mjs";
+import {
+  acquireLocalHeavyCheckLockSync,
+  resolveLocalHeavyCheckEnv,
+} from "./lib/local-heavy-check-runtime.mjs";
+import { runManagedCommand } from "./lib/managed-child-process.mjs";
+import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mjs";
 
-export function createChangedCheckPlan(result) {
+const LIVE_DOCKER_AUTH_SHELL_TARGETS = [
+  "scripts/lib/live-docker-auth.sh",
+  "scripts/test-live-acp-bind-docker.sh",
+  "scripts/test-live-cli-backend-docker.sh",
+  "scripts/test-live-codex-harness-docker.sh",
+  "scripts/test-live-gateway-models-docker.sh",
+  "scripts/test-live-models-docker.sh",
+];
+
+export function createChangedCheckChildEnv(baseEnv = process.env) {
+  const resolvedBaseEnv = resolveLocalHeavyCheckEnv(baseEnv);
+  return {
+    ...resolvedBaseEnv,
+    OPENCLAW_OXLINT_SKIP_LOCK: "1",
+    OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD: "1",
+    OPENCLAW_TSGO_HEAVY_CHECK_LOCK_HELD: "1",
+  };
+}
+
+export function createChangedCheckPlan(result, options = {}) {
   const commands = [];
-  const add = (name, args) => {
+  const baseEnv = createChangedCheckChildEnv(options.env ?? process.env);
+  const add = (name, args, env) => {
     if (!commands.some((command) => command.name === name && sameArgs(command.args, args))) {
-      commands.push({ name, args });
+      commands.push({ name, args, ...(env ? { env } : {}) });
     }
   };
+  const addCommand = (name, bin, args, env) => {
+    if (
+      !commands.some(
+        (command) => command.name === name && command.bin === bin && sameArgs(command.args, args),
+      )
+    ) {
+      commands.push({ name, bin, args, ...(env ? { env } : {}) });
+    }
+  };
+  const addTypecheck = (name, args) => add(name, args, createSparseTsgoSkipEnv(baseEnv));
+  const addLint = (name, args) => add(name, args, baseEnv);
 
   add("conflict markers", ["check:no-conflict-markers"]);
+  add("changelog attributions", ["check:changelog-attributions"]);
+  add("guarded extension wildcard re-exports", ["lint:extensions:no-guarded-wildcard-reexports"]);
+  add("plugin-sdk wildcard re-exports", ["lint:extensions:no-plugin-sdk-wildcard-reexports"]);
+  add("duplicate scan target coverage", ["dup:check:coverage"]);
 
   if (result.docsOnly) {
     return {
       commands,
-      testTargets: [],
-      runChangedTestsBroad: false,
-      runFullTests: false,
-      runExtensionTests: false,
       summary: "docs-only",
     };
   }
@@ -34,47 +69,70 @@ export function createChangedCheckPlan(result) {
   const lanes = result.lanes;
   const runAll = lanes.all;
 
+  if (lanes.releaseMetadata) {
+    add("release metadata guard", [
+      "release-metadata:check",
+      "--",
+      ...(options.staged
+        ? ["--staged"]
+        : ["--base", options.base ?? "origin/main", "--head", options.head ?? "HEAD"]),
+    ]);
+    add("iOS version sync", ["ios:version:check"]);
+    add("config schema baseline", ["config:schema:check"]);
+    add("config docs baseline", ["config:docs:check"]);
+    add("root dependency ownership", ["deps:root-ownership:check"]);
+    return {
+      commands,
+      summary: "release metadata",
+    };
+  }
+
   if (runAll) {
-    add("typecheck all", ["tsgo:all"]);
-    add("lint", ["lint"]);
+    add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
+    addTypecheck("typecheck all", ["tsgo:all"]);
+    addLint("lint", ["lint"]);
     add("runtime import cycles", ["check:import-cycles"]);
     return {
       commands,
-      testTargets: [],
-      runChangedTestsBroad: false,
-      runFullTests: true,
-      runExtensionTests: false,
       summary: "all",
     };
   }
 
   if (lanes.core) {
-    add("typecheck core", ["tsgo:core"]);
+    addTypecheck("typecheck core", ["tsgo:core"]);
   }
   if (lanes.coreTests) {
-    add("typecheck core tests", ["tsgo:core:test"]);
+    addTypecheck("typecheck core tests", ["tsgo:core:test"]);
   }
   if (lanes.extensions) {
-    add("typecheck extensions", ["tsgo:extensions"]);
+    addTypecheck("typecheck extensions", ["tsgo:extensions"]);
   }
   if (lanes.extensionTests) {
-    add("typecheck extension tests", ["tsgo:extensions:test"]);
+    addTypecheck("typecheck extension tests", ["tsgo:extensions:test"]);
   }
 
   if (lanes.core || lanes.coreTests) {
-    add("lint core", ["lint:core"]);
+    addLint("lint core", ["lint:core"]);
+  }
+  if (
+    lanes.liveDockerTooling &&
+    result.paths.some((changedPath) => changedPath.startsWith("src/"))
+  ) {
+    addTypecheck("typecheck core tests", ["tsgo:core:test"]);
+    addLint("lint core", ["lint:core"]);
   }
   if (lanes.extensions || lanes.extensionTests) {
-    add("lint extensions", ["lint:extensions"]);
+    addLint("lint extensions", ["lint:extensions"]);
   }
-  if (lanes.tooling) {
-    add("lint scripts", ["lint:scripts"]);
+  if (lanes.tooling || lanes.liveDockerTooling) {
+    addLint("lint scripts", ["lint:scripts"]);
   }
   if (lanes.apps) {
-    add("lint apps", ["lint:apps"]);
+    addLint("lint apps", ["lint:apps"]);
   }
 
   if (lanes.core || lanes.extensions) {
+    add("runtime sidecar loader guard", ["check:runtime-sidecar-loaders"]);
     add("runtime import cycles", ["check:import-cycles"]);
   }
   if (lanes.core) {
@@ -83,14 +141,17 @@ export function createChangedCheckPlan(result) {
     add("pairing account guard", ["lint:auth:pairing-account-scope"]);
   }
 
-  const testPlan = resolveChangedTestTargetPlan(result.paths);
-  const runChangedTestsBroad = testPlan.mode === "broad";
+  if (lanes.liveDockerTooling) {
+    addCommand("live Docker shell syntax", "bash", ["-n", ...LIVE_DOCKER_AUTH_SHELL_TARGETS]);
+    addCommand("live Docker scheduler dry run", "node", ["scripts/test-docker-all.mjs"], {
+      ...baseEnv,
+      OPENCLAW_DOCKER_ALL_DRY_RUN: "1",
+      OPENCLAW_DOCKER_ALL_LIVE_MODE: "only",
+    });
+  }
+
   return {
     commands,
-    testTargets: testPlan.targets,
-    runChangedTestsBroad,
-    runFullTests: false,
-    runExtensionTests: result.extensionImpactFromCore,
     summary: Object.entries(lanes)
       .filter(([, enabled]) => enabled)
       .map(([lane]) => lane)
@@ -99,67 +160,38 @@ export function createChangedCheckPlan(result) {
 }
 
 export async function runChangedCheck(result, options = {}) {
-  const plan = createChangedCheckPlan(result);
-  printPlan(result, plan, options);
+  const baseEnv = resolveLocalHeavyCheckEnv(options.env ?? process.env);
+  const childEnv = createChangedCheckChildEnv(baseEnv);
+  const plan = createChangedCheckPlan(result, { ...options, env: childEnv });
+  const releaseLock = options.dryRun
+    ? () => {}
+    : acquireLocalHeavyCheckLockSync({
+        cwd: process.cwd(),
+        env: baseEnv,
+        toolName: "check:changed",
+      });
 
-  if (options.dryRun) {
+  try {
+    printPlan(result, plan, options);
+
+    if (options.dryRun) {
+      return 0;
+    }
+
+    const timings = [];
+    for (const command of plan.commands) {
+      const status = await runPlanCommand(command, timings);
+      if (status !== 0) {
+        printSummary(timings, options);
+        return status;
+      }
+    }
+
+    printSummary(timings, options);
     return 0;
+  } finally {
+    releaseLock();
   }
-
-  const timings = [];
-  for (const command of plan.commands) {
-    const status = await runPnpm(command, timings);
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  }
-
-  if (plan.runFullTests) {
-    const status = await runPnpm({ name: "tests all", args: ["test"] }, timings);
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  } else if (plan.runChangedTestsBroad) {
-    const testArgs = options.explicitPaths
-      ? ["scripts/test-projects.mjs"]
-      : ["scripts/test-projects.mjs", "--changed", options.base ?? "origin/main"];
-    const status = await runNode(
-      {
-        name: options.explicitPaths ? "tests all" : "tests changed broad",
-        args: testArgs,
-      },
-      timings,
-    );
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  } else if (plan.testTargets.length > 0) {
-    const status = await runNode(
-      {
-        name: "tests changed",
-        args: ["scripts/test-projects.mjs", ...plan.testTargets],
-      },
-      timings,
-    );
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  }
-
-  if (plan.runExtensionTests) {
-    const status = await runPnpm({ name: "tests extensions", args: ["test:extensions"] }, timings);
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
-    }
-  }
-
-  printSummary(timings, options);
-  return 0;
 }
 
 function sameArgs(left, right) {
@@ -170,16 +202,10 @@ function printPlan(result, plan, options) {
   const prefix = options.dryRun ? "[check:changed:dry-run]" : "[check:changed]";
   console.error(`${prefix} lanes=${plan.summary || "none"}`);
   if (result.extensionImpactFromCore) {
-    console.error(`${prefix} core contract changed; extension tests included`);
-  }
-  if (plan.runChangedTestsBroad) {
-    console.error(`${prefix} broad changed tests included`);
+    console.error(`${prefix} extension-impacting surface; extension typecheck included`);
   }
   for (const reason of result.reasons) {
     console.error(`${prefix} ${reason}`);
-  }
-  if (plan.testTargets.length > 0) {
-    console.error(`${prefix} test targets=${plan.testTargets.length}`);
   }
 }
 
@@ -187,38 +213,33 @@ async function runPnpm(command, timings) {
   return await runCommand({ ...command, bin: "pnpm" }, timings);
 }
 
-async function runNode(command, timings) {
-  return await runCommand({ ...command, bin: process.execPath }, timings);
+async function runPlanCommand(command, timings) {
+  if (command.bin) {
+    return await runCommand(command, timings);
+  }
+  return await runPnpm(command, timings);
 }
 
 async function runCommand(command, timings) {
   const startedAt = performance.now();
   console.error(`\n[check:changed] ${command.name}`);
-  const child = spawn(command.bin, command.args, {
-    stdio: "inherit",
-    shell: process.platform === "win32",
-  });
+  let status = 1;
+  try {
+    status = await runManagedCommand({
+      bin: command.bin,
+      args: command.args,
+      env: command.env ?? resolveLocalHeavyCheckEnv(),
+    });
+  } catch (error) {
+    console.error(error);
+  }
 
-  return await new Promise((resolve) => {
-    child.once("error", (error) => {
-      console.error(error);
-      timings.push({
-        name: command.name,
-        durationMs: performance.now() - startedAt,
-        status: 1,
-      });
-      resolve(1);
-    });
-    child.once("close", (status) => {
-      const resolvedStatus = status ?? 1;
-      timings.push({
-        name: command.name,
-        durationMs: performance.now() - startedAt,
-        status: resolvedStatus,
-      });
-      resolve(resolvedStatus);
-    });
+  timings.push({
+    name: command.name,
+    durationMs: performance.now() - startedAt,
+    status,
   });
+  return status;
 }
 
 function printSummary(timings, options) {
@@ -246,6 +267,9 @@ function parseArgs(argv) {
     ],
     {
       onUnhandledArg(arg, target) {
+        if (arg === "--") {
+          return "handled";
+        }
         target.paths.push(normalizeChangedPath(arg));
         return "handled";
       },
@@ -266,7 +290,12 @@ if (isDirectRun()) {
       : args.staged
         ? listStagedChangedPaths()
         : listChangedPathsFromGit({ base: args.base, head: args.head });
-  const result = detectChangedLanes(paths);
+  const result = detectChangedLanesForPaths({
+    paths,
+    base: args.base,
+    head: args.head,
+    staged: args.staged,
+  });
   process.exitCode = await runChangedCheck(result, {
     ...args,
     explicitPaths: args.paths.length > 0,

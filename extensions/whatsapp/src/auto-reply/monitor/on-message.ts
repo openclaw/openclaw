@@ -1,3 +1,4 @@
+import type { AckReactionHandle } from "openclaw/plugin-sdk/channel-feedback";
 import type { getReplyFromConfig } from "openclaw/plugin-sdk/reply-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -6,9 +7,10 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
 import { normalizeE164 } from "../../text-runtime.js";
-import { loadConfig } from "../config.runtime.js";
+import { getRuntimeConfig } from "../config.runtime.js";
 import type { MentionConfig } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
+import { maybeSendAckReaction } from "./ack-reaction.js";
 import { maybeBroadcastMessage } from "./broadcast.js";
 import type { EchoTracker } from "./echo.js";
 import type { GroupHistoryEntry } from "./group-gating.js";
@@ -18,7 +20,7 @@ import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
 
 export function createWebOnMessageHandler(params: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: ReturnType<typeof getRuntimeConfig>;
   verbose: boolean;
   connectionId: string;
   maxMediaBytes: number;
@@ -39,9 +41,12 @@ export function createWebOnMessageHandler(params: {
     opts?: {
       groupHistory?: GroupHistoryEntry[];
       suppressGroupHistoryClear?: boolean;
+      preflightAudioTranscript?: string | null;
+      ackAlreadySent?: boolean;
+      ackReaction?: AckReactionHandle | null;
     },
-  ) =>
-    processMessage({
+  ) => {
+    const processParams: Parameters<typeof processMessage>[0] = {
       cfg: params.cfg,
       msg,
       route,
@@ -58,16 +63,31 @@ export function createWebOnMessageHandler(params: {
       echoHas: params.echoTracker.has,
       echoForget: params.echoTracker.forget,
       buildCombinedEchoKey: params.echoTracker.buildCombinedKey,
-      groupHistory: opts?.groupHistory,
-      suppressGroupHistoryClear: opts?.suppressGroupHistoryClear,
-    });
+    };
+    if (opts?.groupHistory !== undefined) {
+      processParams.groupHistory = opts.groupHistory;
+    }
+    if (opts?.suppressGroupHistoryClear !== undefined) {
+      processParams.suppressGroupHistoryClear = opts.suppressGroupHistoryClear;
+    }
+    if (opts?.preflightAudioTranscript !== undefined) {
+      processParams.preflightAudioTranscript = opts.preflightAudioTranscript;
+    }
+    if (opts?.ackAlreadySent === true) {
+      processParams.ackAlreadySent = true;
+    }
+    if (opts?.ackReaction !== undefined) {
+      processParams.ackReaction = opts.ackReaction;
+    }
+    return processMessage(processParams);
+  };
 
   return async (msg: WebInboundMsg) => {
     const conversationId = msg.conversationId ?? msg.from;
     const peerId = resolvePeerId(msg);
     // Fresh config for bindings lookup; other routing inputs are payload-derived.
     const baseRoute = resolveAgentRoute({
-      cfg: loadConfig(),
+      cfg: getRuntimeConfig(),
       channel: "whatsapp",
       accountId: msg.accountId,
       peer: {
@@ -99,6 +119,58 @@ export function createWebOnMessageHandler(params: {
       return;
     }
 
+    // Preflight audio transcription: run once before broadcast fan-out so all
+    // agents share the same transcript instead of each making a separate STT call.
+    // For DMs, only do this on the real inbound path after access-control/pairing
+    // checks have already passed in inbound/monitor.ts. For groups, the first
+    // gating pass must approve the group/sender before STT is attempted.
+    // null = preflight was attempted but produced no transcript (failed / disabled / no audio);
+    // undefined = preflight was not attempted (non-audio message).
+    let preflightAudioTranscript: string | null | undefined;
+    const hasAudioBody =
+      msg.mediaType?.startsWith("audio/") === true && msg.body === "<media:audio>";
+    const canRunEarlyAudioPreflight = msg.chatType === "group" || msg.accessControlPassed === true;
+    let ackAlreadySent = false;
+    let ackReaction: AckReactionHandle | null = null;
+    const runAudioPreflightOnce = async () => {
+      if (
+        preflightAudioTranscript !== undefined ||
+        !canRunEarlyAudioPreflight ||
+        !hasAudioBody ||
+        !msg.mediaPath
+      ) {
+        return;
+      }
+      ackReaction = await maybeSendAckReaction({
+        cfg: params.cfg,
+        msg,
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        conversationId,
+        verbose: params.verbose,
+        accountId: route.accountId,
+        info: params.replyLogger.info.bind(params.replyLogger),
+        warn: params.replyLogger.warn.bind(params.replyLogger),
+      });
+      ackAlreadySent = ackReaction !== null;
+      try {
+        const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
+        // transcribeFirstAudio returns undefined on failure/disabled; store null so
+        // processMessage knows the attempt was already made and does not retry.
+        preflightAudioTranscript =
+          (await transcribeFirstAudio({
+            ctx: {
+              MediaPaths: [msg.mediaPath],
+              MediaTypes: msg.mediaType ? [msg.mediaType] : undefined,
+            },
+            cfg: params.cfg,
+          })) ?? null;
+      } catch {
+        // Non-fatal: store null so per-agent retries are suppressed.
+        preflightAudioTranscript = null;
+      }
+    };
+
     if (msg.chatType === "group") {
       const sender = getSenderIdentity(msg);
       const metaCtx = {
@@ -129,9 +201,10 @@ export function createWebOnMessageHandler(params: {
         warn: params.replyLogger.warn.bind(params.replyLogger),
       });
 
-      const gating = await applyGroupGating({
+      let gating = await applyGroupGating({
         cfg: params.cfg,
         msg,
+        deferMissingMention: hasAudioBody && Boolean(msg.mediaPath),
         conversationId,
         groupHistoryKey,
         agentId: route.agentId,
@@ -145,6 +218,32 @@ export function createWebOnMessageHandler(params: {
         logVerbose,
         replyLogger: params.replyLogger,
       });
+      if (
+        !gating.shouldProcess &&
+        "needsMentionText" in gating &&
+        gating.needsMentionText === true
+      ) {
+        await runAudioPreflightOnce();
+        gating = await applyGroupGating({
+          cfg: params.cfg,
+          msg,
+          ...(typeof preflightAudioTranscript === "string"
+            ? { mentionText: preflightAudioTranscript }
+            : {}),
+          conversationId,
+          groupHistoryKey,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          baseMentionConfig: params.baseMentionConfig,
+          authDir: params.account.authDir,
+          selfChatMode: params.account.selfChatMode,
+          groupHistories: params.groupHistories,
+          groupHistoryLimit: params.groupHistoryLimit,
+          groupMemberNames: params.groupMemberNames,
+          logVerbose,
+          replyLogger: params.replyLogger,
+        });
+      }
       if (!gating.shouldProcess) {
         return;
       }
@@ -159,6 +258,8 @@ export function createWebOnMessageHandler(params: {
       }
     }
 
+    await runAudioPreflightOnce();
+
     // Broadcast groups: when we'd reply anyway, run multiple agents.
     // Does not bypass group mention/activation gating above.
     if (
@@ -169,12 +270,22 @@ export function createWebOnMessageHandler(params: {
         route,
         groupHistoryKey,
         groupHistories: params.groupHistories,
-        processMessage: processForRoute,
+        ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
+        // Group ack eligibility depends on the target agent/session, so a
+        // preflight ack attempt on the base route must not suppress downstream
+        // per-agent checks during broadcast fan-out.
+        ...(ackAlreadySent && msg.chatType !== "group" ? { ackAlreadySent: true } : {}),
+        ...(ackReaction && msg.chatType !== "group" ? { ackReaction } : {}),
+        processMessage: (m, r, k, opts) => processForRoute(m, r, k, opts),
       })
     ) {
       return;
     }
 
-    await processForRoute(msg, route, groupHistoryKey);
+    await processForRoute(msg, route, groupHistoryKey, {
+      ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
+      ...(ackAlreadySent ? { ackAlreadySent: true } : {}),
+      ...(ackReaction ? { ackReaction } : {}),
+    });
   };
 }

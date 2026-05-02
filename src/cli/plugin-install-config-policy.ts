@@ -3,10 +3,15 @@ import path from "node:path";
 import type { Command } from "commander";
 import { findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { loadPluginManifest } from "../plugins/manifest.js";
+import {
+  listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+} from "../plugins/official-external-plugin-catalog.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
+import { parseNpmPrefixSpec, resolveFileNpmSpecToLocalPath } from "./plugins-command-helpers.js";
 
-export type PluginInstallInvalidConfigPolicy = "deny" | "allow-bundled-recovery";
+type PluginInstallInvalidConfigPolicy = "deny" | "allow-bundled-recovery";
 
 export type PluginInstallRequestContext = {
   rawSpec: string;
@@ -73,7 +78,14 @@ function resolveBundledInstallRecoveryMetadata(
       return direct;
     }
   }
-  for (const value of [request.rawSpec.trim(), request.normalizedSpec.trim()]) {
+  const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
+  const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
+  for (const value of [
+    request.rawSpec.trim(),
+    request.normalizedSpec.trim(),
+    rawNpmPrefixSpec ?? "",
+    normalizedNpmPrefixSpec ?? "",
+  ]) {
     if (!value) {
       continue;
     }
@@ -87,6 +99,40 @@ function resolveBundledInstallRecoveryMetadata(
     return {
       pluginId: recovered.pluginId ?? bundled.pluginId,
       allowInvalidConfigRecovery: recovered.allowInvalidConfigRecovery,
+    };
+  }
+  return {};
+}
+
+function resolveOfficialExternalInstallRecoveryMetadata(
+  request: Pick<PluginInstallRequestContext, "rawSpec" | "normalizedSpec" | "marketplace">,
+): {
+  pluginId?: string;
+  allowInvalidConfigRecovery?: boolean;
+} {
+  if (request.marketplace) {
+    return {};
+  }
+  const rawNpmPrefixSpec = parseNpmPrefixSpec(request.rawSpec);
+  const normalizedNpmPrefixSpec = parseNpmPrefixSpec(request.normalizedSpec);
+  const values = new Set(
+    [request.rawSpec, request.normalizedSpec, rawNpmPrefixSpec ?? "", normalizedNpmPrefixSpec ?? ""]
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (values.size === 0) {
+    return {};
+  }
+  for (const entry of listOfficialExternalPluginCatalogEntries()) {
+    const install = resolveOfficialExternalPluginInstall(entry);
+    const npmSpec = install?.npmSpec?.trim() || entry.name?.trim();
+    if (!npmSpec || !values.has(npmSpec)) {
+      continue;
+    }
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    return {
+      ...(pluginId ? { pluginId } : {}),
+      allowInvalidConfigRecovery: install?.allowInvalidConfigRecovery === true,
     };
   }
   return {};
@@ -158,12 +204,21 @@ export function resolvePluginInstallRequestContext(params: {
     };
   }
   const normalizedSpec = fileSpec && fileSpec.ok ? fileSpec.path : params.rawSpec;
-  const recovered = resolveBundledInstallRecoveryMetadata({
+  const bundledRecovered = resolveBundledInstallRecoveryMetadata({
     rawSpec: params.rawSpec,
     normalizedSpec,
     resolvedPath: resolveUserPath(normalizedSpec),
     marketplace: params.marketplace,
   });
+  const officialRecovered = resolveOfficialExternalInstallRecoveryMetadata({
+    rawSpec: params.rawSpec,
+    normalizedSpec,
+    marketplace: params.marketplace,
+  });
+  const recovered =
+    officialRecovered.pluginId || officialRecovered.allowInvalidConfigRecovery !== undefined
+      ? officialRecovered
+      : bundledRecovered;
   return {
     ok: true,
     request: {

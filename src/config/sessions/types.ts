@@ -58,6 +58,8 @@ export type AcpSessionRuntimeOptions = {
   runtimeMode?: string;
   /** ACP runtime config option: model id. */
   model?: string;
+  /** ACP runtime config option: thinking/reasoning effort. */
+  thinking?: string;
   /** Working directory override for ACP session turns. */
   cwd?: string;
   /** ACP runtime config option: permission profile id. */
@@ -70,10 +72,14 @@ export type AcpSessionRuntimeOptions = {
 
 export type CliSessionBinding = {
   sessionId: string;
+  /** Trust an explicitly attached CLI session even when auth, prompt, or MCP fingerprints drift. */
+  forceReuse?: boolean;
   authProfileId?: string;
   authEpoch?: string;
+  authEpochVersion?: number;
   extraSystemPromptHash?: string;
   mcpConfigHash?: string;
+  mcpResumeHash?: string;
 };
 
 export type SessionCompactionCheckpointReason =
@@ -108,6 +114,39 @@ export type SessionPluginDebugEntry = {
   lines: string[];
 };
 
+export type SessionPluginJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SessionPluginJsonValue[]
+  | { [key: string]: SessionPluginJsonValue };
+
+export type SessionPluginNextTurnInjection = {
+  id: string;
+  pluginId: string;
+  pluginName?: string;
+  text: string;
+  idempotencyKey?: string;
+  placement: "prepend_context" | "append_context";
+  ttlMs?: number;
+  createdAt: number;
+  metadata?: SessionPluginJsonValue;
+};
+
+export type SubagentRecoveryState = {
+  /** Consecutive accepted automatic orphan-recovery resumes in the rapid re-wedge window. */
+  automaticAttempts?: number;
+  /** Timestamp (ms) of the latest accepted automatic orphan-recovery resume. */
+  lastAttemptAt?: number;
+  /** Registry run id that triggered the latest automatic orphan-recovery resume. */
+  lastRunId?: string;
+  /** Timestamp (ms) when automatic recovery was tombstoned for this session. */
+  wedgedAt?: number;
+  /** Human-readable reason automatic recovery was tombstoned. */
+  wedgedReason?: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -124,6 +163,10 @@ export type SessionEntry = {
   heartbeatIsolatedBaseSessionKey?: string;
   /** Heartbeat task state (task name -> last run timestamp ms). */
   heartbeatTaskState?: Record<string, number>;
+  /** Plugin-owned session state, grouped by plugin id then extension namespace. */
+  pluginExtensions?: Record<string, Record<string, SessionPluginJsonValue>>;
+  /** Durable one-shot prompt additions drained before the next agent turn. */
+  pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
   sessionId: string;
   updatedAt: number;
   sessionFile?: string;
@@ -141,8 +184,16 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Plugin id that created this session through api.runtime.subagent. */
+  pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Durable guard state for automatic subagent orphan recovery. */
+  subagentRecovery?: SubagentRecoveryState;
+  /** Timestamp (ms) when the current sessionId first became active. */
+  sessionStartedAt?: number;
+  /** Timestamp (ms) of the last user/channel interaction that should extend idle lifetime. */
+  lastInteractionAt?: number;
   /** Stable first-run start time for subagent sessions, persisted after completion. */
   startedAt?: number;
   /** Latest completed run end time for subagent sessions, persisted after completion. */
@@ -167,6 +218,10 @@ export type SessionEntry = {
   reasoningLevel?: string;
   elevatedLevel?: string;
   ttsAuto?: TtsAutoMode;
+  /** Hash of the latest assistant reply that was sent through `/tts latest`. */
+  lastTtsReadLatestHash?: string;
+  /** Timestamp (ms) when `/tts latest` last sent audio for this session. */
+  lastTtsReadLatestAt?: number;
   execHost?: string;
   execSecurity?: string;
   execAsk?: string;
@@ -174,6 +229,8 @@ export type SessionEntry = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   providerOverride?: string;
   modelOverride?: string;
+  /** Session-scoped agent runtime/harness override selected with the model picker. */
+  agentRuntimeOverride?: string;
   /**
    * Tracks whether the persisted model override came from an explicit user
    * action (`/model`, `sessions.patch`) or from a temporary runtime fallback.
@@ -219,6 +276,12 @@ export type SessionEntry = {
   cacheWrite?: number;
   modelProvider?: string;
   model?: string;
+  /**
+   * Embedded agent harness selected for this session id.
+   * Prevents config/env changes from moving an existing transcript between
+   * incompatible runtime harnesses.
+   */
+  agentHarnessId?: string;
   /**
    * Last selected/runtime model pair for which a fallback notice was emitted.
    * Used to avoid repeating the same fallback notice every turn.
@@ -357,10 +420,20 @@ function resolveMergedUpdatedAt(
   patch: Partial<SessionEntry>,
   options?: MergeSessionEntryOptions,
 ): number {
+  const now = options?.now ?? Date.now();
+  const existingUpdatedAt = normalizeMergedUpdatedAt(existing?.updatedAt, now);
+  const patchUpdatedAt = normalizeMergedUpdatedAt(patch.updatedAt, now);
   if (options?.policy === "preserve-activity" && existing) {
-    return existing.updatedAt ?? patch.updatedAt ?? options.now ?? Date.now();
+    return existingUpdatedAt ?? patchUpdatedAt ?? now;
   }
-  return Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, options?.now ?? Date.now());
+  return Math.max(existingUpdatedAt ?? 0, patchUpdatedAt ?? 0, now);
+}
+
+function normalizeMergedUpdatedAt(value: number | undefined, now: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.min(value, now);
 }
 
 export function mergeSessionEntryWithPolicy(
@@ -371,9 +444,22 @@ export function mergeSessionEntryWithPolicy(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = resolveMergedUpdatedAt(existing, patch, options);
   if (!existing) {
-    return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
+    return normalizeSessionRuntimeModelFields({
+      ...patch,
+      sessionId,
+      updatedAt,
+      sessionStartedAt: patch.sessionStartedAt ?? updatedAt,
+    });
   }
-  const next = { ...existing, ...patch, sessionId, updatedAt };
+  const next = {
+    ...existing,
+    ...patch,
+    sessionId,
+    updatedAt,
+    sessionStartedAt:
+      patch.sessionStartedAt ??
+      (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
+  };
 
   // Guard against stale provider carry-over when callers patch runtime model
   // without also patching runtime provider.
@@ -444,6 +530,14 @@ export type SessionSkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  /**
+   * Runtime-only, never persisted. Carries the full parsed Skill[] (including
+   * each SKILL.md body) so the embedded runner can skip a workspace skill
+   * scan within a turn. Stripped from sessions.json on every read and write
+   * via normalizeSessionStore — see store-load.ts. On a cold session resume
+   * this is undefined and src/agents/pi-embedded-runner/skills-runtime.ts
+   * rebuilds it by reloading skill entries from disk.
+   */
   resolvedSkills?: Skill[];
   version?: number;
 };

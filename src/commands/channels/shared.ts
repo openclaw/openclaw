@@ -1,5 +1,5 @@
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
-import { type ChannelId, getChannelPlugin } from "../../channels/plugins/index.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import type { CommandSecretResolutionMode } from "../../cli/command-secret-gateway.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
@@ -37,7 +37,7 @@ export async function requireValidConfig(
   return effectiveConfig;
 }
 
-export function formatAccountLabel(params: { accountId: string; name?: string }) {
+function formatAccountLabel(params: { accountId: string; name?: string }) {
   const base = params.accountId || DEFAULT_ACCOUNT_ID;
   if (params.name?.trim()) {
     return `${base} (${params.name.trim()})`;
@@ -45,19 +45,15 @@ export function formatAccountLabel(params: { accountId: string; name?: string })
   return base;
 }
 
-export const channelLabel = (channel: ChatChannel) => {
-  const plugin = getChannelPlugin(channel);
-  return plugin?.meta.label ?? channel;
-};
-
 export function formatChannelAccountLabel(params: {
   channel: ChatChannel;
   accountId: string;
   name?: string;
+  channelLabel?: string;
   channelStyle?: (value: string) => string;
   accountStyle?: (value: string) => string;
 }): string {
-  const channelText = channelLabel(params.channel);
+  const channelText = params.channelLabel ?? params.channel;
   const accountText = formatAccountLabel({
     accountId: params.accountId,
     name: params.name,
@@ -122,6 +118,7 @@ export function buildChannelAccountLine(
   provider: ChatChannel,
   account: Record<string, unknown>,
   bits: string[],
+  opts?: { channelLabel?: string },
 ): string {
   const accountId = typeof account.accountId === "string" ? account.accountId : DEFAULT_ACCOUNT_ID;
   const name = typeof account.name === "string" ? account.name : undefined;
@@ -129,6 +126,7 @@ export function buildChannelAccountLine(
     channel: provider,
     accountId,
     name,
+    channelLabel: opts?.channelLabel,
   });
   return `- ${labelText}: ${bits.join(", ")}`;
 }

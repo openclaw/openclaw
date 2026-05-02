@@ -1,18 +1,31 @@
-import type { WebClient as SlackWebClient } from "@slack/web-api";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeHostname } from "openclaw/plugin-sdk/host-runtime";
-import { fetchWithRuntimeDispatcher } from "openclaw/plugin-sdk/infra-runtime";
-import type { FetchLike } from "openclaw/plugin-sdk/media-runtime";
-import { fetchRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import { saveMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+import { formatSlackFileReference } from "../file-reference.js";
 import type { SlackAttachment, SlackFile } from "../types.js";
+export { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
+import { MAX_SLACK_MEDIA_FILES, type SlackMediaResult } from "./media-types.js";
+import {
+  type FetchLike,
+  fetchRemoteMedia,
+  fetchWithRuntimeDispatcher,
+  saveMediaBuffer,
+} from "./media.runtime.js";
+export {
+  resetSlackThreadStarterCacheForTest,
+  resolveSlackThreadHistory,
+  resolveSlackThreadStarter,
+  type SlackThreadMessage,
+  type SlackThreadStarter,
+} from "./thread.js";
+
+function normalizeLowercaseStringOrEmpty(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function normalizeOptionalLowercaseString(value: unknown): string | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(value);
+  return normalized || undefined;
+}
 
 function isSlackHostname(hostname: string): boolean {
   const normalized = normalizeHostname(hostname);
@@ -88,6 +101,10 @@ function createSlackMediaFetch(): FetchLike {
   };
 }
 
+function resolveSlackFetchForRuntime(): typeof fetch {
+  return isMockedFetch(globalThis.fetch) ? globalThis.fetch : fetchWithRuntimeDispatcher;
+}
+
 /**
  * Fetches a URL with Authorization header while keeping same-origin redirects
  * authenticated and dropping auth once the redirect crosses origins.
@@ -95,8 +112,9 @@ function createSlackMediaFetch(): FetchLike {
 export async function fetchWithSlackAuth(url: string, token: string): Promise<Response> {
   const parsed = assertSlackFileUrl(url);
   const authHeaders = createSlackAuthHeaders(token);
+  const fetchImpl = resolveSlackFetchForRuntime();
 
-  const initialRes = await fetch(parsed.href, {
+  const initialRes = await fetchImpl(parsed.href, {
     headers: authHeaders,
     redirect: "manual",
   });
@@ -115,12 +133,12 @@ export async function fetchWithSlackAuth(url: string, token: string): Promise<Re
     return initialRes;
   }
   if (resolvedUrl.origin === parsed.origin) {
-    return fetch(resolvedUrl.toString(), {
+    return fetchImpl(resolvedUrl.toString(), {
       headers: authHeaders,
       redirect: "follow",
     });
   }
-  return fetch(resolvedUrl.toString(), { redirect: "follow" });
+  return fetchImpl(resolvedUrl.toString(), { redirect: "follow" });
 }
 
 const SLACK_MEDIA_SSRF_POLICY = {
@@ -128,6 +146,92 @@ const SLACK_MEDIA_SSRF_POLICY = {
   hostnameAllowlist: ["*.slack.com", "*.slack-edge.com", "*.slack-files.com"],
   allowRfc2544BenchmarkRange: true,
 };
+export const SLACK_MEDIA_READ_IDLE_TIMEOUT_MS = 60_000;
+export const SLACK_MEDIA_TOTAL_TIMEOUT_MS = 120_000;
+type SlackFetchRemoteMediaOptions = Parameters<typeof fetchRemoteMedia>[0];
+
+function mergeAbortSignals(signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
+  const activeSignals = signals.filter((signal): signal is AbortSignal => Boolean(signal));
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  if (typeof AbortSignal.any === "function") {
+    return AbortSignal.any(activeSignals);
+  }
+  const controller = new AbortController();
+  for (const signal of activeSignals) {
+    if (signal.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+  }
+  const abort = () => {
+    controller.abort();
+    for (const signal of activeSignals) {
+      signal.removeEventListener("abort", abort);
+    }
+  };
+  for (const signal of activeSignals) {
+    signal.addEventListener("abort", abort, { once: true });
+  }
+  return controller.signal;
+}
+
+async function fetchSlackMedia(params: {
+  options: SlackFetchRemoteMediaOptions;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
+}): ReturnType<typeof fetchRemoteMedia> {
+  const timeoutAbortController = params.totalTimeoutMs ? new AbortController() : undefined;
+  const signal = mergeAbortSignals([
+    params.abortSignal,
+    params.options.requestInit?.signal ?? undefined,
+    timeoutAbortController?.signal,
+  ]);
+  let timedOut = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+  const fetchPromise = fetchRemoteMedia({
+    ...params.options,
+    readIdleTimeoutMs: params.readIdleTimeoutMs ?? SLACK_MEDIA_READ_IDLE_TIMEOUT_MS,
+    ...(signal
+      ? {
+          requestInit: {
+            ...params.options.requestInit,
+            signal,
+          },
+        }
+      : {}),
+  }).catch((error) => {
+    if (timedOut) {
+      return new Promise<never>(() => {});
+    }
+    throw error;
+  });
+
+  try {
+    if (!params.totalTimeoutMs) {
+      return await fetchPromise;
+    }
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        timeoutAbortController?.abort();
+        reject(new Error(`slack media download timed out after ${params.totalTimeoutMs}ms`));
+      }, params.totalTimeoutMs);
+      timeoutHandle.unref?.();
+    });
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
+}
 
 /**
  * Slack voice messages (audio clips, huddle recordings) carry a `subtype` of
@@ -153,13 +257,6 @@ function looksLikeHtmlBuffer(buffer: Buffer): boolean {
   return head.startsWith("<!doctype html") || head.startsWith("<html");
 }
 
-export type SlackMediaResult = {
-  path: string;
-  contentType?: string;
-  placeholder: string;
-};
-
-export const MAX_SLACK_MEDIA_FILES = 8;
 const MAX_SLACK_MEDIA_CONCURRENCY = 3;
 const MAX_SLACK_FORWARDED_ATTACHMENTS = 8;
 
@@ -218,6 +315,9 @@ export async function resolveSlackMedia(params: {
   files?: SlackFile[];
   token: string;
   maxBytes: number;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }): Promise<SlackMediaResult[] | null> {
   const files = params.files ?? [];
   const limitedFiles =
@@ -234,13 +334,18 @@ export async function resolveSlackMedia(params: {
       try {
         const { url: slackUrl, requestInit } = createSlackMediaRequest(url, params.token);
         const fetchImpl = createSlackMediaFetch();
-        const fetched = await fetchRemoteMedia({
-          url: slackUrl,
-          fetchImpl,
-          requestInit,
-          filePathHint: file.name,
-          maxBytes: params.maxBytes,
-          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+        const fetched = await fetchSlackMedia({
+          options: {
+            url: slackUrl,
+            fetchImpl,
+            requestInit,
+            filePathHint: file.name,
+            maxBytes: params.maxBytes,
+            ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+          },
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
+          abortSignal: params.abortSignal,
         });
         if (fetched.buffer.byteLength > params.maxBytes) {
           return null;
@@ -271,7 +376,7 @@ export async function resolveSlackMedia(params: {
         return {
           path: saved.path,
           ...(contentType ? { contentType } : {}),
-          placeholder: label ? `[Slack file: ${label}]` : "[Slack file]",
+          placeholder: `[Slack file: ${formatSlackFileReference({ ...file, name: label })}]`,
         };
       } catch {
         return null;
@@ -288,6 +393,9 @@ export async function resolveSlackAttachmentContent(params: {
   attachments?: SlackAttachment[];
   token: string;
   maxBytes: number;
+  readIdleTimeoutMs?: number;
+  totalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }): Promise<{ text: string; media: SlackMediaResult[] } | null> {
   const attachments = params.attachments;
   if (!attachments || attachments.length === 0) {
@@ -317,12 +425,17 @@ export async function resolveSlackAttachmentContent(params: {
       try {
         const { url: slackUrl, requestInit } = createSlackMediaRequest(imageUrl, params.token);
         const fetchImpl = createSlackMediaFetch();
-        const fetched = await fetchRemoteMedia({
-          url: slackUrl,
-          fetchImpl,
-          requestInit,
-          maxBytes: params.maxBytes,
-          ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+        const fetched = await fetchSlackMedia({
+          options: {
+            url: slackUrl,
+            fetchImpl,
+            requestInit,
+            maxBytes: params.maxBytes,
+            ssrfPolicy: SLACK_MEDIA_SSRF_POLICY,
+          },
+          readIdleTimeoutMs: params.readIdleTimeoutMs,
+          totalTimeoutMs: params.totalTimeoutMs ?? SLACK_MEDIA_TOTAL_TIMEOUT_MS,
+          abortSignal: params.abortSignal,
         });
         if (fetched.buffer.byteLength <= params.maxBytes) {
           const saved = await saveMediaBuffer(
@@ -348,6 +461,9 @@ export async function resolveSlackAttachmentContent(params: {
         files: att.files,
         token: params.token,
         maxBytes: params.maxBytes,
+        readIdleTimeoutMs: params.readIdleTimeoutMs,
+        totalTimeoutMs: params.totalTimeoutMs,
+        abortSignal: params.abortSignal,
       });
       if (fileMedia) {
         allMedia.push(...fileMedia);
@@ -360,187 +476,4 @@ export async function resolveSlackAttachmentContent(params: {
     return null;
   }
   return { text: combinedText, media: allMedia };
-}
-
-export type SlackThreadStarter = {
-  text: string;
-  userId?: string;
-  botId?: string;
-  ts?: string;
-  files?: SlackFile[];
-};
-
-type SlackThreadStarterCacheEntry = {
-  value: SlackThreadStarter;
-  cachedAt: number;
-};
-
-const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarterCacheEntry>();
-const THREAD_STARTER_CACHE_TTL_MS = 6 * 60 * 60_000;
-const THREAD_STARTER_CACHE_MAX = 2000;
-
-function evictThreadStarterCache(): void {
-  const now = Date.now();
-  for (const [cacheKey, entry] of THREAD_STARTER_CACHE.entries()) {
-    if (now - entry.cachedAt > THREAD_STARTER_CACHE_TTL_MS) {
-      THREAD_STARTER_CACHE.delete(cacheKey);
-    }
-  }
-  pruneMapToMaxSize(THREAD_STARTER_CACHE, THREAD_STARTER_CACHE_MAX);
-}
-
-function formatSlackFilePlaceholder(files: SlackFile[] | undefined): string {
-  return `[attached: ${files?.map((file) => file.name ?? "file").join(", ") ?? "file"}]`;
-}
-
-export async function resolveSlackThreadStarter(params: {
-  channelId: string;
-  threadTs: string;
-  client: SlackWebClient;
-}): Promise<SlackThreadStarter | null> {
-  evictThreadStarterCache();
-  const cacheKey = `${params.channelId}:${params.threadTs}`;
-  const cached = THREAD_STARTER_CACHE.get(cacheKey);
-  if (cached && Date.now() - cached.cachedAt <= THREAD_STARTER_CACHE_TTL_MS) {
-    return cached.value;
-  }
-  if (cached) {
-    THREAD_STARTER_CACHE.delete(cacheKey);
-  }
-  try {
-    const response = (await params.client.conversations.replies({
-      channel: params.channelId,
-      ts: params.threadTs,
-      limit: 1,
-      inclusive: true,
-    })) as {
-      messages?: Array<{
-        text?: string;
-        user?: string;
-        bot_id?: string;
-        ts?: string;
-        files?: SlackFile[];
-      }>;
-    };
-    const message = response?.messages?.[0];
-    const text = (message?.text ?? "").trim();
-    const files = message?.files?.length ? message.files : undefined;
-    if (!message || (!text && !files)) {
-      return null;
-    }
-    const starter: SlackThreadStarter = {
-      text: text || formatSlackFilePlaceholder(files),
-      userId: message.user,
-      botId: message.bot_id,
-      ts: message.ts,
-      files,
-    };
-    if (THREAD_STARTER_CACHE.has(cacheKey)) {
-      THREAD_STARTER_CACHE.delete(cacheKey);
-    }
-    THREAD_STARTER_CACHE.set(cacheKey, {
-      value: starter,
-      cachedAt: Date.now(),
-    });
-    evictThreadStarterCache();
-    return starter;
-  } catch (err) {
-    logVerbose(
-      `slack thread starter fetch failed channel=${params.channelId} ts=${params.threadTs}: ${formatErrorMessage(err)}`,
-    );
-    return null;
-  }
-}
-
-export function resetSlackThreadStarterCacheForTest(): void {
-  THREAD_STARTER_CACHE.clear();
-}
-
-export type SlackThreadMessage = {
-  text: string;
-  userId?: string;
-  ts?: string;
-  botId?: string;
-  files?: SlackFile[];
-};
-
-type SlackRepliesPageMessage = {
-  text?: string;
-  user?: string;
-  bot_id?: string;
-  ts?: string;
-  files?: SlackFile[];
-};
-
-type SlackRepliesPage = {
-  messages?: SlackRepliesPageMessage[];
-  response_metadata?: { next_cursor?: string };
-};
-
-/**
- * Fetches the most recent messages in a Slack thread (excluding the current message).
- * Used to populate thread context when a new thread session starts.
- *
- * Uses cursor pagination and keeps only the latest N retained messages so long threads
- * still produce up-to-date context without unbounded memory growth.
- */
-export async function resolveSlackThreadHistory(params: {
-  channelId: string;
-  threadTs: string;
-  client: SlackWebClient;
-  currentMessageTs?: string;
-  limit?: number;
-}): Promise<SlackThreadMessage[]> {
-  const maxMessages = params.limit ?? 20;
-  if (!Number.isFinite(maxMessages) || maxMessages <= 0) {
-    return [];
-  }
-
-  // Slack recommends no more than 200 per page.
-  const fetchLimit = 200;
-  const retained: SlackRepliesPageMessage[] = [];
-  let cursor: string | undefined;
-
-  try {
-    do {
-      const response = (await params.client.conversations.replies({
-        channel: params.channelId,
-        ts: params.threadTs,
-        limit: fetchLimit,
-        inclusive: true,
-        ...(cursor ? { cursor } : {}),
-      })) as SlackRepliesPage;
-
-      for (const msg of response.messages ?? []) {
-        // Keep messages with text OR file attachments
-        if (!msg.text?.trim() && !msg.files?.length) {
-          continue;
-        }
-        if (params.currentMessageTs && msg.ts === params.currentMessageTs) {
-          continue;
-        }
-        retained.push(msg);
-        if (retained.length > maxMessages) {
-          retained.shift();
-        }
-      }
-
-      const next = response.response_metadata?.next_cursor;
-      cursor = typeof next === "string" && next.trim().length > 0 ? next.trim() : undefined;
-    } while (cursor);
-
-    return retained.map((msg) => ({
-      // For file-only messages, create a placeholder showing attached filenames
-      text: msg.text?.trim() ? msg.text : formatSlackFilePlaceholder(msg.files),
-      userId: msg.user,
-      botId: msg.bot_id,
-      ts: msg.ts,
-      files: msg.files,
-    }));
-  } catch (err) {
-    logVerbose(
-      `slack thread history fetch failed channel=${params.channelId} ts=${params.threadTs}: ${formatErrorMessage(err)}`,
-    );
-    return [];
-  }
 }

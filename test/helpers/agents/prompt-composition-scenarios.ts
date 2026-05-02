@@ -10,7 +10,11 @@ import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-fil
 import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
-import { buildGroupChatContext, buildGroupIntro } from "../../../src/auto-reply/reply/groups.js";
+import {
+  buildDirectChatContext,
+  buildGroupChatContext,
+  buildGroupIntro,
+} from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -57,8 +61,8 @@ function buildCommonSystemParams(workspaceDir: string) {
       os: "Darwin 24.0.0",
       arch: "arm64",
       node: process.version,
-      model: "anthropic/claude-sonnet-4-5",
-      defaultModel: "anthropic/claude-sonnet-4-5",
+      model: "anthropic/claude-sonnet-4-6",
+      defaultModel: "anthropic/claude-sonnet-4-6",
       shell: "zsh",
     },
     userTimezone: "America/Los_Angeles",
@@ -74,6 +78,7 @@ function buildSystemPrompt(params: {
   skillsPrompt?: string;
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
+  silentReplyPromptMode?: "generic" | "none";
 }) {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
     buildCommonSystemParams(params.workspaceDir);
@@ -87,6 +92,7 @@ function buildSystemPrompt(params: {
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
+    silentReplyPromptMode: params.silentReplyPromptMode,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: params.reactionGuidance,
@@ -118,7 +124,21 @@ function buildAutoReplySystemPrompt(params: {
 }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx),
-    params.includeGroupChatContext ? buildGroupChatContext({ sessionCtx: params.sessionCtx }) : "",
+    params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
+      ? buildDirectChatContext({
+          sessionCtx: params.sessionCtx,
+          silentToken: SILENT_REPLY_TOKEN,
+          silentReplyPolicy: "disallow",
+          silentReplyRewrite: true,
+        })
+      : "",
+    params.includeGroupChatContext
+      ? buildGroupChatContext({
+          sessionCtx: params.sessionCtx,
+          silentToken: SILENT_REPLY_TOKEN,
+          silentReplyPolicy: "allow",
+        })
+      : "",
     params.includeGroupIntro
       ? buildGroupIntro({
           cfg: {} as OpenClawConfig,
@@ -132,6 +152,12 @@ function buildAutoReplySystemPrompt(params: {
   return buildSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+    silentReplyPromptMode:
+      params.sessionCtx.ChatType === "direct" ||
+      params.sessionCtx.ChatType === "dm" ||
+      params.includeGroupChatContext
+        ? "none"
+        : "generic",
   });
 }
 
@@ -179,7 +205,7 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
     OriginatingChannel: "slack",
     OriginatingTo: "D123",
     AccountId: "A1",
-    ChatType: "direct",
+    ChatType: "dm",
     SenderId: "U1",
     SenderName: "Alice",
     Body: "hi",

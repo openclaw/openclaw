@@ -127,13 +127,17 @@ describe("resolveBuildAllSteps", () => {
     expect(BUILD_ALL_PROFILES.full).toEqual(BUILD_ALL_STEPS.map((step) => step.label));
   });
 
-  it("uses a runtime-only profile for ci artifacts", () => {
+  it("uses a runtime artifact plus plugin SDK export profile for ci artifacts", () => {
     expect(resolveBuildAllSteps("ciArtifacts").map((step) => step.label)).toEqual([
       "canvas:a2ui:bundle",
       "tsdown",
+      "check-cli-bootstrap-imports",
       "runtime-postbuild",
-      "write-npm-update-compat-sidecars",
       "build-stamp",
+      "runtime-postbuild-stamp",
+      "build:plugin-sdk:dts",
+      "write-plugin-sdk-entry-dts",
+      "check-plugin-sdk-exports",
       "canvas-a2ui-copy",
       "copy-hook-metadata",
       "copy-export-html-templates",
@@ -143,8 +147,34 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it("uses a minimal built runtime profile for gateway watch regression", () => {
+    expect(resolveBuildAllSteps("gatewayWatch").map((step) => step.label)).toEqual([
+      "tsdown",
+      "check-cli-bootstrap-imports",
+      "runtime-postbuild",
+      "build-stamp",
+      "runtime-postbuild-stamp",
+    ]);
+  });
+
+  it("writes the runtime postbuild stamp after the build stamp", () => {
+    expect(resolveBuildAllSteps("full").map((step) => step.label)).toEqual(
+      expect.arrayContaining(["runtime-postbuild", "build-stamp", "runtime-postbuild-stamp"]),
+    );
+    const labels = resolveBuildAllSteps("full").map((step) => step.label);
+    expect(labels.indexOf("runtime-postbuild-stamp")).toBeGreaterThan(
+      labels.indexOf("build-stamp"),
+    );
+  });
+
   it("does not cache plugin-sdk entry shims over compiled JS", () => {
     const step = BUILD_ALL_STEPS.find((entry) => entry.label === "write-plugin-sdk-entry-dts");
+    expect(step).toBeTruthy();
+    expect(step?.cache).toBeUndefined();
+  });
+
+  it("does not cache hook metadata over compiled hook handlers", () => {
+    const step = BUILD_ALL_STEPS.find((entry) => entry.label === "copy-hook-metadata");
     expect(step).toBeTruthy();
     expect(step?.cache).toBeUndefined();
   });

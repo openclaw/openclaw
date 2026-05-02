@@ -1,4 +1,4 @@
-import { describePackageManifestContract } from "../../../test/helpers/plugins/package-manifest-contract.js";
+import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test-contracts";
 
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
 
@@ -6,46 +6,30 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
-    pluginLocalRuntimeDeps: [
-      "@buape/carbon",
-      "@discordjs/voice",
-      "discord-api-types",
-      "opusscript",
-    ],
-    mirroredRootRuntimeDeps: ["https-proxy-agent"],
+    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
     pluginId: "feishu",
     pluginLocalRuntimeDeps: ["@larksuiteoapi/node-sdk"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "qrcode-terminal"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "google", pluginLocalRuntimeDeps: ["@google/genai"] },
+  { pluginId: "google" },
+  { pluginId: "google-meet" },
   {
     pluginId: "googlechat",
-    pluginLocalRuntimeDeps: ["google-auth-library"],
+    pluginLocalRuntimeDeps: ["gaxios", "google-auth-library"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "irc", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "line", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "amazon-bedrock",
-    pluginLocalRuntimeDeps: [
-      "@aws-sdk/client-bedrock",
-      "@aws-sdk/client-bedrock-runtime",
-      "@aws-sdk/credential-provider-node",
-    ],
-  },
-  {
-    pluginId: "amazon-bedrock-mantle",
-    pluginLocalRuntimeDeps: ["@aws/bedrock-token-generator"],
-  },
+  { pluginId: "amazon-bedrock" },
+  { pluginId: "amazon-bedrock-mantle" },
   {
     pluginId: "diffs",
-    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme", "playwright-core"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox"],
+    pluginLocalRuntimeDeps: ["@pierre/diffs", "@pierre/theme"],
   },
+  { pluginId: "file-transfer" },
   {
     pluginId: "matrix",
     pluginLocalRuntimeDeps: [
@@ -55,14 +39,12 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "matrix-js-sdk",
       "music-metadata",
     ],
-    mirroredRootRuntimeDeps: ["markdown-it"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "mattermost", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "memory-lancedb",
     pluginLocalRuntimeDeps: ["@lancedb/lancedb"],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "openai"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -74,7 +56,6 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
       "jsonwebtoken",
       "jwks-rsa",
     ],
-    mirroredRootRuntimeDeps: ["@sinclair/typebox", "express"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },
@@ -83,29 +64,20 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
     pluginLocalRuntimeDeps: ["nostr-tools"],
     minHostVersionBaseline: "2026.3.22",
   },
-  { pluginId: "openshell", pluginLocalRuntimeDeps: ["openshell"] },
+  { pluginId: "openshell" },
   {
     pluginId: "qqbot",
-    pluginLocalRuntimeDeps: ["mpg123-decoder", "silk-wasm"],
-    mirroredRootRuntimeDeps: ["ws"],
+    pluginLocalRuntimeDeps: ["@tencent-connect/qqbot-connector", "mpg123-decoder", "silk-wasm"],
   },
-  {
-    pluginId: "slack",
-    pluginLocalRuntimeDeps: ["@slack/bolt", "@slack/web-api"],
-    mirroredRootRuntimeDeps: ["https-proxy-agent"],
-  },
+  { pluginId: "slack" },
   { pluginId: "synology-chat", minHostVersionBaseline: "2026.3.22" },
-  {
-    pluginId: "telegram",
-    pluginLocalRuntimeDeps: ["@grammyjs/runner", "@grammyjs/transformer-throttler", "grammy"],
-  },
+  { pluginId: "telegram" },
   { pluginId: "tlon", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "twitch", minHostVersionBaseline: "2026.3.22" },
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",
     pluginLocalRuntimeDeps: ["@whiskeysockets/baileys", "jimp"],
-    mirroredRootRuntimeDeps: ["qrcode-terminal"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },

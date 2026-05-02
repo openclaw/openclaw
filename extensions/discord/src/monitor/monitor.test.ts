@@ -1,14 +1,14 @@
+import { ChannelType } from "discord-api-types/v10";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
 import type {
   ButtonInteraction,
   ComponentData,
   ModalInteraction,
   StringSelectMenuInteraction,
-} from "@buape/carbon";
-import { ChannelType } from "discord-api-types/v10";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
+} from "../internal/discord.js";
 import {
   dispatchPluginInteractiveHandlerMock,
   dispatchReplyMock,
@@ -842,7 +842,7 @@ describe("discord component interactions", () => {
       "user:123456789",
       "msg-1",
       { text: expect.any(String) },
-      { accountId: "default" },
+      expect.objectContaining({ accountId: "default" }),
     );
     expect(dispatchReplyMock).not.toHaveBeenCalled();
   });

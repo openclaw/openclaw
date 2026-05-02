@@ -8,6 +8,7 @@ import {
 } from "./control-ui-assets.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
 import { normalizePackageTagInput } from "./package-tag.js";
+import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import { trimLogTail } from "./restart-sentinel.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import {
@@ -20,15 +21,12 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
-  collectInstalledGlobalPackageErrors,
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
-  globalInstallArgs,
-  globalInstallFallbackArgs,
-  resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
+  type GlobalInstallManager,
 } from "./update-global.js";
 import {
   managerInstallIgnoreScriptsArgs,
@@ -57,6 +55,39 @@ export type UpdateRunResult = {
   after?: { sha?: string | null; version?: string | null };
   steps: UpdateStepResult[];
   durationMs: number;
+  postUpdate?: {
+    plugins?: {
+      status: "ok" | "skipped" | "error";
+      reason?: string;
+      changed: boolean;
+      sync: {
+        changed: boolean;
+        switchedToBundled: string[];
+        switchedToNpm: string[];
+        warnings: string[];
+        errors: string[];
+      };
+      npm: {
+        changed: boolean;
+        outcomes: Array<{
+          pluginId: string;
+          status: "updated" | "unchanged" | "skipped" | "error";
+          message: string;
+          currentVersion?: string;
+          nextVersion?: string;
+        }>;
+      };
+      integrityDrifts: Array<{
+        pluginId: string;
+        spec: string;
+        expectedIntegrity: string;
+        actualIntegrity: string;
+        resolvedSpec?: string;
+        resolvedVersion?: string;
+        action: "aborted";
+      }>;
+    };
+  };
 };
 
 type CommandRunner = (
@@ -93,6 +124,32 @@ type UpdateRunnerOptions = {
   progress?: UpdateStepProgress;
 };
 
+export type UpdateInstallSurface =
+  | {
+      kind: "git";
+      mode: "git";
+      root: string;
+      packageRoot: string;
+    }
+  | {
+      kind: "global";
+      mode: GlobalInstallManager;
+      root: string;
+      packageRoot: string;
+    }
+  | {
+      kind: "package-root";
+      mode: "unknown";
+      root: string;
+      packageRoot: string;
+    }
+  | {
+      kind: "missing";
+      mode: "unknown";
+      root?: string;
+      packageRoot?: undefined;
+    };
+
 function mapManagerResolutionFailure(
   reason: UpdatePackageManagerFailureReason,
 ): UpdateRunResult["reason"] {
@@ -102,12 +159,14 @@ function mapManagerResolutionFailure(
 const DEFAULT_TIMEOUT_MS = 20 * 60_000;
 const MAX_LOG_CHARS = 8000;
 const PREFLIGHT_MAX_COMMITS = 10;
-const START_DIRS = ["cwd", "argv1", "process"];
 const DEFAULT_PACKAGE_NAME = "openclaw";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
+const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 const PREFLIGHT_TEMP_PREFIX =
   process.platform === "win32" ? "ocu-pf-" : "openclaw-update-preflight-";
 const PREFLIGHT_WORKTREE_DIRNAME = process.platform === "win32" ? "wt" : "worktree";
+const PREFLIGHT_CLEANUP_TIMEOUT_MS = 60_000;
 const WINDOWS_PREFLIGHT_BASE_DIR = "ocu";
 const WINDOWS_BUILD_MAX_OLD_SPACE_MB = 4096;
 
@@ -185,10 +244,7 @@ async function removePathRecursive(target: string) {
     .catch(() => {});
 }
 
-async function repairWindowsPreflightCleanup(worktreeDir: string, preflightRoot: string) {
-  if (process.platform !== "win32") {
-    return false;
-  }
+async function repairPreflightCleanup(worktreeDir: string, preflightRoot: string) {
   try {
     await fs.rm(worktreeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
     await fs.rm(preflightRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
@@ -503,18 +559,104 @@ function mergeCommandEnvironments(
   };
 }
 
-export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
-  const startedAt = Date.now();
+function shouldRunDevPreflightLint(): boolean {
+  return process.platform !== "win32";
+}
+
+function normalizeFallbackFailureReason(stepName: string): NonNullable<UpdateRunResult["reason"]> {
+  switch (stepName) {
+    case "global update":
+    case "global update (omit optional)":
+    case "global install stage":
+    case "global install verify":
+    case "global install swap":
+      return "global-install-failed";
+    case "openclaw doctor":
+      return "doctor-failed";
+    case "ui:build (post-doctor repair)":
+      return "ui-build-failed";
+    default:
+      return "unexpected-error";
+  }
+}
+
+async function buildUpdateCommandRunner(
+  runCommand?: CommandRunner,
+): Promise<{ defaultCommandEnv: NodeJS.ProcessEnv | undefined; runCommand: CommandRunner }> {
   const defaultCommandEnv = await createGlobalInstallEnv();
-  const runCommand =
-    opts.runCommand ??
-    (async (argv, options) => {
+  if (runCommand) {
+    return {
+      defaultCommandEnv,
+      runCommand,
+    };
+  }
+  return {
+    defaultCommandEnv,
+    runCommand: async (argv, options) => {
       const res = await runCommandWithTimeout(argv, {
         ...options,
         env: mergeCommandEnvironments(defaultCommandEnv, options.env),
       });
       return { stdout: res.stdout, stderr: res.stderr, code: res.code };
-    });
+    },
+  };
+}
+
+export async function resolveUpdateInstallSurface(
+  opts: Pick<UpdateRunnerOptions, "cwd" | "argv1" | "timeoutMs" | "runCommand"> = {},
+): Promise<UpdateInstallSurface> {
+  const { runCommand } = await buildUpdateCommandRunner(opts.runCommand);
+  const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const candidates = buildStartDirs(opts);
+  const pkgRoot = await findPackageRoot(candidates);
+
+  let gitRoot = await resolveGitRoot(runCommand, candidates, timeoutMs);
+  if (gitRoot && pkgRoot && path.resolve(gitRoot) !== path.resolve(pkgRoot)) {
+    gitRoot = null;
+  }
+  if (gitRoot && !pkgRoot) {
+    return {
+      kind: "missing",
+      mode: "unknown",
+      root: gitRoot,
+    };
+  }
+  if (gitRoot && pkgRoot && path.resolve(gitRoot) === path.resolve(pkgRoot)) {
+    return {
+      kind: "git",
+      mode: "git",
+      root: gitRoot,
+      packageRoot: pkgRoot,
+    };
+  }
+  if (!pkgRoot) {
+    return {
+      kind: "missing",
+      mode: "unknown",
+    };
+  }
+
+  const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
+  if (globalManager) {
+    return {
+      kind: "global",
+      mode: globalManager,
+      root: pkgRoot,
+      packageRoot: pkgRoot,
+    };
+  }
+
+  return {
+    kind: "package-root",
+    mode: "unknown",
+    root: pkgRoot,
+    packageRoot: pkgRoot,
+  };
+}
+
+export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
+  const startedAt = Date.now();
+  const { defaultCommandEnv, runCommand } = await buildUpdateCommandRunner(opts.runCommand);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const progress = opts.progress;
   const steps: UpdateStepResult[] = [];
@@ -885,39 +1027,44 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             continue;
           }
 
-          const lintStep = await runStep(
-            step(
-              `preflight lint (${shortSha})`,
-              managerScriptArgs(manager.manager, "lint"),
-              worktreeDir,
-              manager.env,
-            ),
-          );
-          steps.push(lintStep);
-          if (lintStep.exitCode !== 0) {
-            continue;
+          if (shouldRunDevPreflightLint()) {
+            const lintStep = await runStep(
+              step(
+                `preflight lint (${shortSha})`,
+                managerScriptArgs(manager.manager, "lint"),
+                worktreeDir,
+                manager.env,
+              ),
+            );
+            steps.push(lintStep);
+            if (lintStep.exitCode !== 0) {
+              continue;
+            }
           }
 
           selectedSha = sha;
           break;
         }
       } finally {
-        const removeStep = await runStep(
-          step(
+        const removeStep = await runStep({
+          ...step(
             "preflight cleanup",
             ["git", "-C", gitRoot, "worktree", "remove", "--force", worktreeDir],
             gitRoot,
           ),
-        );
+          timeoutMs: Math.min(timeoutMs, PREFLIGHT_CLEANUP_TIMEOUT_MS),
+        });
         if (
           removeStep.exitCode !== 0 &&
-          (await repairWindowsPreflightCleanup(worktreeDir, preflightRoot))
+          (await repairPreflightCleanup(worktreeDir, preflightRoot))
         ) {
           removeStep.exitCode = 0;
+          const fallbackMessage =
+            process.platform === "win32"
+              ? "windows fallback cleanup removed preflight tree"
+              : "fallback cleanup removed preflight tree";
           removeStep.stderrTail = trimLogTail(
-            [removeStep.stderrTail, "windows fallback cleanup removed preflight tree"]
-              .filter(Boolean)
-              .join("\n"),
+            [removeStep.stderrTail, fallbackMessage].filter(Boolean).join("\n"),
             MAX_LOG_CHARS,
           );
         }
@@ -1147,9 +1294,23 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       const doctorNodePath = await resolveStableNodePath(process.execPath);
       const doctorArgv = [doctorNodePath, doctorEntry, "doctor", "--non-interactive", "--fix"];
       const doctorStep = await runStep(
-        step("openclaw doctor", doctorArgv, gitRoot, { OPENCLAW_UPDATE_IN_PROGRESS: "1" }),
+        step("openclaw doctor", doctorArgv, gitRoot, {
+          OPENCLAW_UPDATE_IN_PROGRESS: "1",
+          [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
+        }),
       );
       steps.push(doctorStep);
+      if (doctorStep.exitCode !== 0) {
+        return {
+          status: "error",
+          mode: "git",
+          root: gitRoot,
+          reason: "doctor-failed",
+          before: { sha: beforeSha, version: beforeVersion },
+          steps,
+          durationMs: Date.now() - startedAt,
+        };
+      }
 
       const uiIndexHealth = await resolveControlUiDistIndexHealth({ root: gitRoot });
       if (!uiIndexHealth.exists) {
@@ -1176,7 +1337,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
             status: "error",
             mode: "git",
             root: gitRoot,
-            reason: repairStep.name,
+            reason: "ui-build-failed",
             before: { sha: beforeSha, version: beforeVersion },
             steps,
             durationMs: Date.now() - startedAt,
@@ -1218,7 +1379,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         status: failedStep ? "error" : "ok",
         mode: "git",
         root: gitRoot,
-        reason: failedStep ? failedStep.name : undefined,
+        reason: failedStep ? normalizeFallbackFailureReason(failedStep.name) : undefined,
         before: { sha: beforeSha, version: beforeVersion },
         after: {
           sha: afterShaStep.stdoutTail?.trim() ?? null,
@@ -1236,7 +1397,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     return {
       status: "error",
       mode: "unknown",
-      reason: `no root (${START_DIRS.join(",")})`,
+      reason: "not-openclaw-root",
       steps: [],
       durationMs: Date.now() - startedAt,
     };
@@ -1258,83 +1419,41 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     });
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
-    const steps: UpdateStepResult[] = [];
     const globalInstallEnv = await createGlobalInstallEnv();
     const spec = resolveGlobalInstallSpec({
       packageName,
       tag,
       env: globalInstallEnv,
     });
-    const updateStep = await runStep({
+    const packageUpdate = await runGlobalPackageUpdateSteps({
+      installTarget,
+      installSpec: spec,
+      packageName,
+      packageRoot: pkgRoot,
       runCommand,
-      name: "global update",
-      argv: globalInstallArgs(installTarget, spec),
-      cwd: pkgRoot,
       timeoutMs,
-      env: globalInstallEnv,
-      progress,
-      stepIndex: 0,
-      totalSteps: 1,
-    });
-    steps.push(updateStep);
-
-    let finalStep = updateStep;
-    if (updateStep.exitCode !== 0) {
-      const fallbackArgv = globalInstallFallbackArgs(installTarget, spec);
-      if (fallbackArgv) {
-        const fallbackStep = await runStep({
+      ...(globalInstallEnv === undefined ? {} : { env: globalInstallEnv }),
+      installCwd: pkgRoot,
+      runStep: (stepParams) =>
+        runStep({
           runCommand,
-          name: "global update (omit optional)",
-          argv: fallbackArgv,
-          cwd: pkgRoot,
-          timeoutMs,
-          env: globalInstallEnv,
+          ...stepParams,
+          cwd: stepParams.cwd ?? pkgRoot,
           progress,
           stepIndex: 0,
           totalSteps: 1,
-        });
-        steps.push(fallbackStep);
-        finalStep = fallbackStep;
-      }
-    }
-
-    const verifiedPackageRoot =
-      (
-        await resolveGlobalInstallTarget({
-          manager: installTarget,
-          runCommand,
-          timeoutMs,
-        })
-      ).packageRoot ?? pkgRoot;
-    const expectedVersion = resolveExpectedInstalledVersionFromSpec(packageName, spec);
-    const verificationErrors = await collectInstalledGlobalPackageErrors({
-      packageRoot: verifiedPackageRoot,
-      expectedVersion,
+        }),
     });
-    if (verificationErrors.length > 0) {
-      steps.push({
-        name: "global install verify",
-        command: `verify ${verifiedPackageRoot}`,
-        cwd: verifiedPackageRoot,
-        durationMs: 0,
-        exitCode: 1,
-        stderrTail: verificationErrors.join("\n"),
-      });
-    }
-    const afterVersion = await readPackageVersion(verifiedPackageRoot);
-    const failedStep =
-      finalStep.exitCode !== 0
-        ? finalStep
-        : (steps.find((step) => step.name === "global install verify" && step.exitCode !== 0) ??
-          null);
     return {
-      status: failedStep ? "error" : "ok",
+      status: packageUpdate.failedStep ? "error" : "ok",
       mode: globalManager,
-      root: verifiedPackageRoot,
-      reason: failedStep ? failedStep.name : undefined,
+      root: packageUpdate.verifiedPackageRoot ?? pkgRoot,
+      reason: packageUpdate.failedStep
+        ? normalizeFallbackFailureReason(packageUpdate.failedStep.name)
+        : undefined,
       before: { version: beforeVersion },
-      after: { version: afterVersion },
-      steps,
+      after: { version: packageUpdate.afterVersion },
+      steps: packageUpdate.steps,
       durationMs: Date.now() - startedAt,
     };
   }

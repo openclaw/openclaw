@@ -12,34 +12,64 @@ function listContractTestFiles(rootDir = "src/channels/plugins/contracts") {
     .toSorted((a, b) => a.localeCompare(b));
 }
 
+const CONTRACT_FILE_WEIGHTS = new Map([
+  ["channel-import-guardrails.test.ts", 18],
+  ["outbound-payload.contract.test.ts", 18],
+  ["plugins-core.catalog.paths.contract.test.ts", 28],
+  ["plugins-core.catalog.entries.contract.test.ts", 16],
+  ["session-binding.registry-backed.contract.test.ts", 16],
+]);
+
+function resolveContractFileWeight(file) {
+  const name = file.replaceAll("\\", "/").split("/").pop();
+  if (name.startsWith("plugin.registry-backed-shard-")) {
+    return 40;
+  }
+  if (name.startsWith("surfaces-only.registry-backed-shard-")) {
+    return 40;
+  }
+  if (name.startsWith("directory.registry-backed-shard-")) {
+    return 24;
+  }
+  if (name.startsWith("threading.registry-backed-shard-")) {
+    return 18;
+  }
+  return CONTRACT_FILE_WEIGHTS.get(name) ?? 8;
+}
+
 export function createChannelContractTestShards() {
   const rootDir = "src/channels/plugins/contracts";
-  const groups = {
-    "checks-fast-contracts-channels-registry-a": [],
-    "checks-fast-contracts-channels-registry-b": [],
-    "checks-fast-contracts-channels-core-a": [],
-    "checks-fast-contracts-channels-core-b": [],
-  };
-  const pushBalanced = (firstKey, secondKey, file) => {
-    const target = groups[firstKey].length <= groups[secondKey].length ? firstKey : secondKey;
+  const suffixes = ["a", "b", "c"];
+  const groups = Object.fromEntries(
+    suffixes.map((suffix) => [`checks-fast-contracts-channels-${suffix}`, []]),
+  );
+  const groupKeys = suffixes.map((suffix) => `checks-fast-contracts-channels-${suffix}`);
+  const weights = Object.fromEntries(Object.keys(groups).map((key) => [key, 0]));
+  const pushBalanced = (keys, file) => {
+    const target = keys.toSorted((a, b) => weights[a] - weights[b] || a.localeCompare(b))[0];
     groups[target].push(file);
+    weights[target] += resolveContractFileWeight(file);
   };
 
+  const coreFiles = [];
+  const registryFiles = [];
   for (const file of listContractTestFiles(rootDir)) {
     const name = relative(rootDir, file).replaceAll("\\", "/");
-    if (name.startsWith("plugins-core.") || name.startsWith("plugin.")) {
-      pushBalanced(
-        "checks-fast-contracts-channels-core-a",
-        "checks-fast-contracts-channels-core-b",
-        file,
-      );
-    } else {
-      pushBalanced(
-        "checks-fast-contracts-channels-registry-a",
-        "checks-fast-contracts-channels-registry-b",
-        file,
-      );
-    }
+    (name.startsWith("plugins-core.") || name.startsWith("plugin.")
+      ? coreFiles
+      : registryFiles
+    ).push(file);
+  }
+
+  const byDescendingWeight = (left, right) => {
+    const delta = resolveContractFileWeight(right) - resolveContractFileWeight(left);
+    return delta === 0 ? left.localeCompare(right) : delta;
+  };
+  for (const file of registryFiles.toSorted(byDescendingWeight)) {
+    pushBalanced(groupKeys, file);
+  }
+  for (const file of coreFiles.toSorted(byDescendingWeight)) {
+    pushBalanced(groupKeys, file);
   }
 
   return Object.entries(groups).map(([checkName, includePatterns]) => ({

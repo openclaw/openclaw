@@ -3,7 +3,6 @@ import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";
 
 export const POSIX_OPENCLAW_TMP_DIR = "/tmp/openclaw";
-const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
 
 type ResolvePreferredOpenClawTmpDirOptions = {
   accessSync?: (path: string, mode?: number) => void;
@@ -34,6 +33,8 @@ function isNodeErrorWithCode(err: unknown, code: string): err is MaybeNodeError 
 export function resolvePreferredOpenClawTmpDir(
   options: ResolvePreferredOpenClawTmpDirOptions = {},
 ): string {
+  // Evaluated here (not at module load) so this file is safe to import in browser bundles.
+  const TMP_DIR_ACCESS_MODE = fs.constants.W_OK | fs.constants.X_OK;
   const accessSync = options.accessSync ?? fs.accessSync;
   const chmodSync = options.chmodSync ?? fs.chmodSync;
   const lstatSync = options.lstatSync ?? fs.lstatSync;
@@ -105,10 +106,24 @@ export function resolvePreferredOpenClawTmpDir(
       if (uid !== undefined && typeof st.uid === "number" && st.uid !== uid) {
         return false;
       }
-      if (typeof st.mode !== "number" || (st.mode & 0o022) === 0) {
+      if (typeof st.mode !== "number") {
         return false;
       }
-      chmodSync(candidatePath, 0o700);
+      if ((st.mode & 0o022) === 0) {
+        return resolveDirState(candidatePath) === "available";
+      }
+      try {
+        chmodSync(candidatePath, 0o700);
+      } catch (chmodErr) {
+        if (
+          isNodeErrorWithCode(chmodErr, "EPERM") ||
+          isNodeErrorWithCode(chmodErr, "EACCES") ||
+          isNodeErrorWithCode(chmodErr, "ENOENT")
+        ) {
+          return resolveDirState(candidatePath) === "available";
+        }
+        throw chmodErr;
+      }
       warn(`[openclaw] tightened permissions on temp dir: ${candidatePath}`);
       return resolveDirState(candidatePath) === "available";
     } catch {

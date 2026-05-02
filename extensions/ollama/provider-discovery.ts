@@ -1,18 +1,13 @@
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  OLLAMA_DEFAULT_API_KEY,
   OLLAMA_PROVIDER_ID,
   resolveOllamaDiscoveryResult,
+  shouldUseSyntheticOllamaAuth,
   type OllamaPluginConfig,
 } from "./src/discovery-shared.js";
-import {
-  buildOllamaModelDefinition,
-  enrichOllamaModelsWithContext,
-  fetchOllamaModels,
-  resolveOllamaApiBase,
-} from "./src/provider-models.js";
-
-const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
+import { buildOllamaProvider } from "./src/provider-models.js";
 
 type OllamaProviderPlugin = {
   id: string;
@@ -20,33 +15,18 @@ type OllamaProviderPlugin = {
   docsPath: string;
   envVars: string[];
   auth: [];
+  resolveSyntheticAuth: (ctx: { provider?: string; providerConfig?: ModelProviderConfig }) =>
+    | {
+        apiKey: string;
+        source: string;
+        mode: "api-key";
+      }
+    | undefined;
   discovery: {
     order: "late";
     run: (ctx: ProviderCatalogContext) => ReturnType<typeof runOllamaDiscovery>;
   };
 };
-
-async function buildOllamaProvider(
-  configuredBaseUrl?: string,
-  opts?: { quiet?: boolean },
-): Promise<ModelProviderConfig> {
-  const apiBase = resolveOllamaApiBase(configuredBaseUrl);
-  const { reachable, models } = await fetchOllamaModels(apiBase);
-  if (!reachable && !opts?.quiet) {
-    console.warn(`Ollama could not be reached at ${apiBase}.`);
-  }
-  const discovered = await enrichOllamaModelsWithContext(
-    apiBase,
-    models.slice(0, OLLAMA_CONTEXT_ENRICH_LIMIT),
-  );
-  return {
-    baseUrl: apiBase,
-    api: "ollama",
-    models: discovered.map((model) =>
-      buildOllamaModelDefinition(model.name, model.contextWindow, model.capabilities),
-    ),
-  };
-}
 
 function resolveOllamaPluginConfig(ctx: ProviderCatalogContext): OllamaPluginConfig {
   const entries = (ctx.config.plugins?.entries ?? {}) as Record<
@@ -70,6 +50,16 @@ export const ollamaProviderDiscovery: OllamaProviderPlugin = {
   docsPath: "/providers/ollama",
   envVars: ["OLLAMA_API_KEY"],
   auth: [],
+  resolveSyntheticAuth: ({ provider, providerConfig }) => {
+    if (!shouldUseSyntheticOllamaAuth(providerConfig)) {
+      return undefined;
+    }
+    return {
+      apiKey: OLLAMA_DEFAULT_API_KEY,
+      source: `models.providers.${provider ?? OLLAMA_PROVIDER_ID} (synthetic local key)`,
+      mode: "api-key",
+    };
+  },
   discovery: {
     order: "late",
     run: runOllamaDiscovery,

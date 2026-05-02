@@ -3,12 +3,15 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  presentationToInteractiveReply,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveOutboundSendDep,
-  sanitizeForPlainText,
   type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
+} from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
@@ -17,7 +20,9 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
+import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
+import { pinMessageTelegram } from "./send.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 
@@ -79,7 +84,7 @@ export async function sendTelegramPayloadMessages(params: {
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
   const text =
-    resolveInteractiveTextFallback({
+    resolveTelegramInteractiveTextFallback({
       text: params.payload.text,
       interactive: params.payload.interactive,
     }) ?? "";
@@ -91,6 +96,7 @@ export async function sendTelegramPayloadMessages(params: {
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
+    ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
 
   // Telegram allows reply_markup on media; attach buttons only to the first send.
@@ -116,9 +122,33 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
+  extractMarkdownImages: true,
   textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
   sanitizeText: ({ text }) => sanitizeForPlainText(text),
   shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: false,
+  },
+  deliveryCapabilities: {
+    pin: true,
+  },
+  renderPresentation: ({ payload, presentation }) => ({
+    ...payload,
+    text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+    interactive: presentationToInteractiveReply(presentation),
+  }),
+  pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
+    await pinMessageTelegram(target.to, messageId, {
+      cfg,
+      accountId: target.accountId ?? undefined,
+      notify: pin.notify,
+      verbose: false,
+    });
+  },
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
     typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
   ...createAttachedChannelResultAdapter({

@@ -205,6 +205,27 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage(sample)).toBe(false);
     expect(classifyFailoverReason(sample)).toBeNull();
   });
+  it("matches insufficient_balance snake_case error codes (#74079)", () => {
+    expect(isBillingErrorMessage("insufficient_balance")).toBe(true);
+    expect(classifyFailoverReason("insufficient_balance")).toBe("billing");
+  });
+  it("matches 'Insufficient MBT balance' with intervening words (#74079)", () => {
+    const msg = "Insufficient MBT balance. Top up or upgrade your subscription to continue.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
+  it("matches provider spending-limit exhaustion messages", () => {
+    const msg =
+      "Your team has either used all available credits or reached its monthly spending limit.";
+    expect(isBillingErrorMessage(msg)).toBe(true);
+    expect(classifyFailoverReason(msg)).toBe("billing");
+  });
+  it("classifies flat JSON billing payloads with string error code (#74079)", () => {
+    const raw =
+      '{"error":"insufficient_balance","message":"Insufficient MBT balance. Top up or upgrade your subscription to continue.","upgradeUrl":"/settings/billing"}';
+    expect(isBillingErrorMessage(raw)).toBe(true);
+    expect(classifyFailoverReason(raw)).toBe("billing");
+  });
   it("still matches explicit 402 markers in long payloads", () => {
     const longStructuredError =
       '{"error":{"code":402,"message":"payment required","details":"' + "x".repeat(700) + '"}}';
@@ -575,8 +596,21 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     expect(classifyFailoverReasonFromHttpStatus(401, "invalid_api_key")).toBe("auth");
   });
 
-  it("treats HTTP 422 as format error", () => {
-    expect(classifyFailoverReasonFromHttpStatus(422)).toBe("format");
+  it("treats body-less HTTP 422 as unknown instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(422)).toBeNull();
+  });
+
+  it("treats no-body HTTP 400/422 wrappers as unknown instead of format", () => {
+    expect(classifyFailoverReasonFromHttpStatus(400, "No body response")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(400, "400 status code (no body)")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No body")).toBeNull();
+    expect(classifyFailoverReasonFromHttpStatus(422, "HTTP 422: No response body")).toBeNull();
+    expect(
+      classifyFailoverReasonFromHttpStatus(422, "Error: HTTP 422: No response body"),
+    ).toBeNull();
+  });
+
+  it("treats HTTP 422 with an unclassifiable body as format error", () => {
     expect(classifyFailoverReasonFromHttpStatus(422, "check open ai req parameter error")).toBe(
       "format",
     );
@@ -686,6 +720,15 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("HTTP 404: No body")).toBe("model_not_found");
   });
 
+  it("keeps HTTP 400/422 no-body wrappers out of the format bucket", () => {
+    expect(classifyFailoverReason("400 status code (no body)")).toBeNull();
+    expect(classifyFailoverReason("HTTP 400: No body")).toBeNull();
+    expect(classifyFailoverReason("422 status code (no body)")).toBeNull();
+    expect(classifyFailoverReason("HTTP 422: No body")).toBeNull();
+    expect(classifyFailoverReason("HTTP 422: No response body")).toBeNull();
+    expect(classifyFailoverReason("Error: HTTP 422: No response body")).toBeNull();
+  });
+
   it("preserves session and auth billing signals on HTTP 404 text", () => {
     expect(classifyFailoverReason("HTTP 404: session not found")).toBe("session_expired");
     expect(classifyFailoverReason("HTTP 404: invalid_api_key")).toBe("auth");
@@ -711,16 +754,45 @@ describe("classifyFailoverReason", () => {
     ).toBeNull();
   });
 
-  it("classifies OpenAI Responses unknown-no-details message as unknown", () => {
+  it("classifies OpenAI Responses unknown-no-details message distinctly", () => {
     const message = "Unknown error (no error details in response)";
-    expect(classifyFailoverReason(message)).toBe("unknown");
+    expect(classifyFailoverReason(message)).toBe("no_error_details");
     expect(isFailoverErrorMessage(message)).toBe(true);
   });
 
-  it("classifies provider-scoped generic upstream messages", () => {
+  it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {
+    // pi-ai providers throw `Error("An unknown error occurred")` provider-agnostically
+    // when streams end with stopReason "aborted" | "error" with no specific info.
+    for (const sample of [
+      "An unknown error occurred",
+      "an unknown error occurred",
+      "AN UNKNOWN ERROR OCCURRED",
+      "An unknown error occurred.",
+      "  An unknown error occurred  ",
+    ]) {
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
     expect(classifyFailoverReason("An unknown error occurred", { provider: "anthropic" })).toBe(
       "timeout",
     );
+    expect(classifyFailoverReason("An unknown error occurred", { provider: "google" })).toBe(
+      "timeout",
+    );
+    expect(classifyFailoverReason("An unknown error occurred", { provider: "openrouter" })).toBe(
+      "timeout",
+    );
+  });
+
+  it("does not match wrapped or unrelated unknown-error phrases as bare wrapper", () => {
+    // Wrapped messages must not slip into failover-as-timeout via the bare match.
+    expect(classifyFailoverReason("LLM request failed with an unknown error.")).toBeNull();
+    expect(
+      classifyFailoverReason("user reported that an unknown error occurred during sync"),
+    ).toBeNull();
+  });
+
+  it("classifies openrouter-scoped upstream messages", () => {
     expect(classifyFailoverReason("Provider returned error", { provider: "openrouter" })).toBe(
       "timeout",
     );
@@ -729,11 +801,7 @@ describe("classifyFailoverReason", () => {
     );
   });
 
-  it("does not classify provider-scoped generic upstream messages without provider context", () => {
-    expect(classifyFailoverReason("An unknown error occurred")).toBeNull();
-    expect(
-      classifyFailoverReason("An unknown error occurred", { provider: "openrouter" }),
-    ).toBeNull();
+  it("does not classify openrouter-scoped upstream messages without provider context", () => {
     expect(classifyFailoverReason("Provider returned error")).toBeNull();
     expect(classifyFailoverReason("Provider returned error", { provider: "anthropic" })).toBeNull();
     expect(classifyFailoverReason("Key limit exceeded")).toBeNull();
@@ -843,6 +911,34 @@ describe("isFailoverErrorMessage", () => {
     expect(isTimeoutErrorMessage(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe(false);
     expect(classifyFailoverReason(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe("timeout");
     expect(isFailoverErrorMessage(INTERNAL_SERVER_ERROR_STATUS_WITH_500_SAMPLE)).toBe(true);
+  });
+
+  it("matches bare undici transport failures as timeout (#69368)", () => {
+    expectTimeoutFailoverSamples([
+      "terminated",
+      "Terminated",
+      "  terminated  ",
+      "UND_ERR_SOCKET",
+      "Error: UND_ERR_SOCKET other side closed",
+      "UND_ERR_CONNECT_TIMEOUT",
+      "UND_ERR_HEADERS_TIMEOUT",
+      "UND_ERR_BODY_TIMEOUT",
+      "UND_ERR_ABORTED",
+      "UND_ERR_REQ_CONTENT_LENGTH_MISMATCH",
+    ]);
+  });
+
+  it("matches pi-ai openai-codex bare transport failures as timeout (#69368)", () => {
+    expectTimeoutFailoverSamples([
+      "Request failed",
+      "request failed",
+      "  Request failed  ",
+      "Request failed after repeated internal retries.",
+    ]);
+  });
+
+  it("does not classify unrelated 'terminated' prose as timeout", () => {
+    expectNotFailoverSample("The user terminated the session manually.");
   });
 });
 
@@ -1191,6 +1287,62 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("auth_permanent");
   });
+
+  it("classifies Chinese provider error messages correctly", () => {
+    // ZhipuAI/GLM error code 1234: "网络错误" (network error) — real production error
+    // from https://github.com/openclaw/openclaw/issues/56242
+    expect(
+      classifyFailoverReason(
+        "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
+      ),
+    ).toBe("timeout");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":"1234","message":"网络错误，错误id：abc123，请联系客服。"},"request_id":"abc123"}',
+      ),
+    ).toBe("timeout");
+
+    // Network/connection errors
+    expect(classifyFailoverReason("网络异常，请稍后重试")).toBe("timeout");
+    expect(classifyFailoverReason("连接超时")).toBe("timeout");
+    expect(classifyFailoverReason("请求超时，请重试")).toBe("timeout");
+    expect(classifyFailoverReason("服务暂时不可用")).toBe("timeout");
+    expect(classifyFailoverReason("连接错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务繁忙，请稍后再试")).toBe("timeout");
+
+    // Server errors
+    expect(classifyFailoverReason("内部错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务器错误")).toBe("timeout");
+    expect(classifyFailoverReason("服务器内部错误")).toBe("timeout");
+    expect(classifyFailoverReason("系统错误，请稍后重试")).toBe("timeout");
+    expect(classifyFailoverReason("系统繁忙")).toBe("timeout");
+    expect(classifyFailoverReason("系统异常")).toBe("timeout");
+
+    // Rate limit errors
+    expect(classifyFailoverReason("请求过于频繁，请稍后重试")).toBe("rate_limit");
+    expect(classifyFailoverReason("调用频率超限")).toBe("rate_limit");
+    expect(classifyFailoverReason("频率限制")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额不足")).toBe("rate_limit");
+    expect(classifyFailoverReason("配额已用尽")).toBe("rate_limit");
+    expect(classifyFailoverReason("额度不足，请充值")).toBe("rate_limit");
+    expect(classifyFailoverReason("额度已用尽")).toBe("rate_limit");
+
+    // Billing errors
+    expect(classifyFailoverReason("余额不足，请充值")).toBe("billing");
+    expect(classifyFailoverReason("账户余额不足")).toBe("billing");
+    expect(classifyFailoverReason("账户已欠费")).toBe("billing");
+
+    // Auth errors
+    expect(classifyFailoverReason("无权访问该模型")).toBe("auth");
+    expect(classifyFailoverReason("403 您无权访问glm-5.1。")).toBe("auth");
+    expect(classifyFailoverReason("认证失败")).toBe("auth");
+    expect(classifyFailoverReason("鉴权失败，请检查API Key")).toBe("auth");
+    expect(classifyFailoverReason("密钥无效")).toBe("auth");
+
+    // Overloaded errors
+    expect(classifyFailoverReason("服务过载，请稍后重试")).toBe("overloaded");
+    expect(classifyFailoverReason("当前负载过高")).toBe("overloaded");
+  });
 });
 
 describe("classifyProviderRuntimeFailureKind", () => {
@@ -1299,6 +1451,16 @@ describe("classifyProviderRuntimeFailureKind", () => {
     expect(
       classifyProviderRuntimeFailureKind("401 input item ID does not belong to this connection"),
     ).toBe("replay_invalid");
+  });
+
+  it("splits ambiguous provider runtime failures instead of collapsing to unknown", () => {
+    expect(classifyProviderRuntimeFailureKind({})).toBe("empty_response");
+    expect(classifyProviderRuntimeFailureKind("Unknown error (no error details in response)")).toBe(
+      "no_error_details",
+    );
+    expect(classifyProviderRuntimeFailureKind("provider sent a strange opaque failure")).toBe(
+      "unclassified",
+    );
   });
 
   it("does not classify generic config errors that mention proxy settings as proxy failures", () => {

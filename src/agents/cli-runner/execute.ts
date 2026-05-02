@@ -1,7 +1,8 @@
+import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import { requestHeartbeatNow as requestHeartbeatNowImpl } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
@@ -17,6 +18,7 @@ import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
 import { classifyFailoverReason } from "../pi-embedded-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { applySkillEnvOverridesFromSnapshot } from "../skills.js";
+import { runClaudeLiveSessionTurn, shouldUseClaudeLiveSession } from "./claude-live-session.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import {
   buildCliSupervisorScopeKey,
@@ -40,7 +42,7 @@ import type { PreparedCliRunContext } from "./types.js";
 const executeDeps = {
   getProcessSupervisor: getProcessSupervisorImpl,
   enqueueSystemEvent: enqueueSystemEventImpl,
-  requestHeartbeatNow: requestHeartbeatNowImpl,
+  requestHeartbeat: requestHeartbeatImpl,
 };
 
 export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDeps>): void {
@@ -155,11 +157,49 @@ function formatCliEnvKeyList(keys: readonly string[]): string {
 function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
   return [
     `token=${childEnv.OPENCLAW_MCP_TOKEN ? "set" : "missing"}`,
-    `sessionKey=${childEnv.OPENCLAW_MCP_SESSION_KEY || "<empty>"}`,
+    `sessionKey=${childEnv.OPENCLAW_MCP_SESSION_KEY ? "set" : "<empty>"}`,
     `agentId=${childEnv.OPENCLAW_MCP_AGENT_ID || "<empty>"}`,
     `accountId=${childEnv.OPENCLAW_MCP_ACCOUNT_ID || "<empty>"}`,
     `messageChannel=${childEnv.OPENCLAW_MCP_MESSAGE_CHANNEL || "<empty>"}`,
     `senderIsOwner=${childEnv.OPENCLAW_MCP_SENDER_IS_OWNER || "<empty>"}`,
+  ].join(" ");
+}
+
+function fingerprintCliSessionId(sessionId?: string): string {
+  const trimmed = sessionId?.trim();
+  if (!trimmed) {
+    return "none";
+  }
+  return crypto.createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+}
+
+export function buildCliExecLogLine(params: {
+  provider: string;
+  model: string;
+  promptChars: number;
+  trigger?: string;
+  useResume: boolean;
+  cliSessionId?: string;
+  resolvedSessionId?: string;
+  reusableSessionId?: string;
+  invalidatedReason?: string;
+  hasHistoryPrompt: boolean;
+}): string {
+  const reuseState = params.reusableSessionId
+    ? "reusable"
+    : params.invalidatedReason
+      ? `invalidated:${params.invalidatedReason}`
+      : "none";
+  return [
+    `cli exec: provider=${params.provider}`,
+    `model=${params.model}`,
+    `promptChars=${params.promptChars}`,
+    `trigger=${params.trigger ?? "unknown"}`,
+    `useResume=${params.useResume ? "true" : "false"}`,
+    `session=${params.cliSessionId ? "present" : "none"}`,
+    `resumeSession=${params.useResume ? fingerprintCliSessionId(params.resolvedSessionId) : "none"}`,
+    `reuse=${reuseState}`,
+    `historyPrompt=${params.hasHistoryPrompt ? "present" : "none"}`,
   ].join(" ");
 }
 
@@ -204,8 +244,11 @@ export async function executePreparedCliRun(
         })
       : undefined;
 
+  const basePrompt = cliSessionIdToUse
+    ? params.prompt
+    : (context.openClawHistoryPrompt ?? params.prompt);
   let prompt = applyPluginTextReplacements(
-    prependBootstrapPromptWarning(params.prompt, context.bootstrapPromptWarningLines, {
+    prependBootstrapPromptWarning(basePrompt, context.bootstrapPromptWarningLines, {
       preserveExactPrompt: context.heartbeatPrompt,
     }),
     context.backendResolved.textTransforms?.input,
@@ -235,6 +278,7 @@ export async function executePreparedCliRun(
     backendId: context.backendResolved.id,
     skillsSnapshot: params.skillsSnapshot,
   });
+  let claudeSkillsPluginCleanupOwned = false;
   const args = buildCliArgs({
     backend,
     baseArgs:
@@ -268,7 +312,18 @@ export async function executePreparedCliRun(
         : undefined;
       try {
         cliBackendLog.info(
-          `cli exec: provider=${params.provider} model=${context.normalizedModel} promptChars=${params.prompt.length}`,
+          buildCliExecLogLine({
+            provider: params.provider,
+            model: context.normalizedModel,
+            promptChars: basePrompt.length,
+            trigger: params.trigger,
+            useResume,
+            cliSessionId: cliSessionIdToUse,
+            resolvedSessionId,
+            reusableSessionId: context.reusableCliSession.sessionId,
+            invalidatedReason: context.reusableCliSession.invalidatedReason,
+            hasHistoryPrompt: Boolean(context.openClawHistoryPrompt),
+          }),
         );
         const logOutputText =
           isTruthyEnvValue(process.env[CLI_BACKEND_LOG_OUTPUT_ENV]) ||
@@ -329,29 +384,79 @@ export async function executePreparedCliRun(
           timeoutMs: params.timeoutMs,
           useResume,
         });
-        const streamingParser =
-          backend.output === "jsonl"
-            ? createCliJsonlStreamingParser({
-                backend,
-                providerId: context.backendResolved.id,
-                onAssistantDelta: ({ text, delta }) => {
-                  emitAgentEvent({
-                    runId: params.runId,
-                    stream: "assistant",
-                    data: {
-                      text: applyPluginTextReplacements(
-                        text,
-                        context.backendResolved.textTransforms?.output,
-                      ),
-                      delta: applyPluginTextReplacements(
-                        delta,
-                        context.backendResolved.textTransforms?.output,
-                      ),
-                    },
-                  });
+        const hasJsonlOutput = backend.output === "jsonl";
+        if (shouldUseClaudeLiveSession(context)) {
+          if (!hasJsonlOutput) {
+            throw new Error("Claude live session requires JSONL streaming parser");
+          }
+          claudeSkillsPluginCleanupOwned = true;
+          const ownedPreparedBackendCleanup = context.preparedBackend.cleanup;
+          context.preparedBackend.cleanup = undefined;
+          const liveResult = await runClaudeLiveSessionTurn({
+            context,
+            args,
+            env,
+            prompt,
+            useResume,
+            noOutputTimeoutMs,
+            getProcessSupervisor: executeDeps.getProcessSupervisor,
+            onAssistantDelta: ({ text, delta }) => {
+              emitAgentEvent({
+                runId: params.runId,
+                stream: "assistant",
+                data: {
+                  text: applyPluginTextReplacements(
+                    text,
+                    context.backendResolved.textTransforms?.output,
+                  ),
+                  delta: applyPluginTextReplacements(
+                    delta,
+                    context.backendResolved.textTransforms?.output,
+                  ),
                 },
-              })
-            : null;
+              });
+            },
+            cleanup: async () => {
+              try {
+                await claudeSkillsPlugin.cleanup();
+              } finally {
+                await ownedPreparedBackendCleanup?.();
+              }
+            },
+          });
+          const rawText = liveResult.output.text;
+          return {
+            ...liveResult.output,
+            rawText,
+            finalPromptText: prompt,
+            text: applyPluginTextReplacements(
+              rawText,
+              context.backendResolved.textTransforms?.output,
+            ),
+          };
+        }
+        const streamingParser = hasJsonlOutput
+          ? createCliJsonlStreamingParser({
+              backend,
+              providerId: context.backendResolved.id,
+              onAssistantDelta: ({ text, delta }) => {
+                emitAgentEvent({
+                  runId: params.runId,
+                  stream: "assistant",
+                  data: {
+                    text: applyPluginTextReplacements(
+                      text,
+                      context.backendResolved.textTransforms?.output,
+                    ),
+                    delta: applyPluginTextReplacements(
+                      delta,
+                      context.backendResolved.textTransforms?.output,
+                    ),
+                  },
+                });
+              },
+            })
+          : null;
         const supervisor = executeDeps.getProcessSupervisor();
         const scopeKey = buildCliSupervisorScopeKey({
           backend,
@@ -373,13 +478,14 @@ export async function executePreparedCliRun(
           input: stdinPayload,
           onStdout: streamingParser ? (chunk: string) => streamingParser.push(chunk) : undefined,
         });
+        let replyBackendCompleted = false;
         const replyBackendHandle = params.replyOperation
           ? {
               kind: "cli" as const,
               cancel: () => {
                 managedRun.cancel("manual-cancel");
               },
-              isStreaming: () => false,
+              isStreaming: () => !replyBackendCompleted,
             }
           : undefined;
         if (replyBackendHandle) {
@@ -396,6 +502,7 @@ export async function executePreparedCliRun(
         try {
           result = await managedRun.wait();
         } finally {
+          replyBackendCompleted = true;
           if (replyBackendHandle) {
             params.replyOperation?.detachBackend(replyBackendHandle);
           }
@@ -438,14 +545,20 @@ export async function executePreparedCliRun(
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
               executeDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
-              executeDeps.requestHeartbeatNow(
-                scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
+              executeDeps.requestHeartbeat(
+                scopedHeartbeatWakeOptions(params.sessionKey, {
+                  source: "cli-watchdog",
+                  intent: "event",
+                  reason: "cli:watchdog:stall",
+                }),
               );
             }
             throw new FailoverError(timeoutReason, {
               reason: "timeout",
               provider: params.provider,
               model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
               status: resolveFailoverStatus("timeout"),
             });
           }
@@ -455,6 +568,8 @@ export async function executePreparedCliRun(
               reason: "timeout",
               provider: params.provider,
               model: context.modelId,
+              sessionId: params.sessionId,
+              lane: params.lane,
               status: resolveFailoverStatus("timeout"),
             });
           }
@@ -469,6 +584,8 @@ export async function executePreparedCliRun(
             reason,
             provider: params.provider,
             model: context.modelId,
+            sessionId: params.sessionId,
+            lane: params.lane,
             status,
           });
         }
@@ -495,7 +612,9 @@ export async function executePreparedCliRun(
       }
     });
   } finally {
-    await claudeSkillsPlugin.cleanup();
+    if (!claudeSkillsPluginCleanupOwned) {
+      await claudeSkillsPlugin.cleanup();
+    }
     if (systemPromptFile) {
       await systemPromptFile.cleanup();
     }

@@ -49,7 +49,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          all_locales_json='["zh-CN","zh-TW","pt-BR","de","es","ja-JP","ko","fr","tr","uk","id","pl"]'
+          all_locales_json='["zh-CN","zh-TW","pt-BR","de","es","ja-JP","ko","fr","ar","it","tr","uk","id","pl","th","vi","nl","fa"]'
 
           if [ "$EVENT_NAME" != "push" ]; then
             echo "has_locales=true" >> "$GITHUB_OUTPUT"
@@ -137,7 +137,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCLAW_CONTROL_UI_I18N_MODEL: gpt-5.4
+          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           LOCALE: ${{ matrix.locale }}
         run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write

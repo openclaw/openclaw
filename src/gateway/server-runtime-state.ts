@@ -1,4 +1,4 @@
-import type { Server as HttpServer } from "node:http";
+import type { IncomingMessage, Server as HttpServer, ServerResponse } from "node:http";
 import { WebSocketServer } from "ws";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import { type CanvasHostHandler, createCanvasHostHandler } from "../canvas-host/server.js";
@@ -18,6 +18,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
+import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import { isLoopbackHost, resolveGatewayListenHosts } from "./net.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
@@ -25,21 +26,14 @@ import {
   type ChatRunEntry,
   createChatRunState,
   createToolEventRecipientRegistry,
-} from "./server-chat.js";
+} from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import {
-  attachGatewayUpgradeHandler,
-  createGatewayHttpServer,
-  type HookClientIpConfig,
-} from "./server-http.js";
+import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
 import type { DedupeEntry } from "./server-shared.js";
-import { createGatewayHooksRequestHandler } from "./server/hooks.js";
+import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
-import {
-  createGatewayPluginRequestHandler,
-  shouldEnforceGatewayAuthForPluginPath,
-  type PluginRoutePathContext,
-} from "./server/plugins-http.js";
+import type { PluginRoutePathContext } from "./server/plugins-http/path-context.js";
+import { shouldEnforceGatewayAuthForPluginPath } from "./server/plugins-http/route-auth.js";
 import {
   createPreauthConnectionBudget,
   type PreauthConnectionBudget,
@@ -47,6 +41,17 @@ import {
 import type { ReadinessChecker } from "./server/readiness.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+
+type GatewayPluginRequestHandler = (
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathContext?: PluginRoutePathContext,
+  dispatchContext?: {
+    gatewayAuthSatisfied?: boolean;
+    gatewayRequestAuth?: AuthorizedGatewayHttpRequest;
+    gatewayRequestOperatorScopes?: readonly string[];
+  },
+) => Promise<boolean>;
 
 export async function createGatewayRuntimeState(params: {
   cfg: import("../config/config.js").OpenClawConfig;
@@ -84,6 +89,7 @@ export async function createGatewayRuntimeState(params: {
   httpServer: HttpServer;
   httpServers: HttpServer[];
   httpBindHosts: string[];
+  startListening: () => Promise<void>;
   wss: WebSocketServer;
   preauthConnectionBudget: PreauthConnectionBudget;
   clients: Set<GatewayWsClient>;
@@ -135,19 +141,51 @@ export async function createGatewayRuntimeState(params: {
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
-    const handleHooksRequest = createGatewayHooksRequestHandler({
-      deps: params.deps,
-      getHooksConfig: params.hooksConfig,
-      getClientIpConfig: params.getHookClientIpConfig,
-      bindHost: params.bindHost,
-      port: params.port,
-      logHooks: params.logHooks,
-    });
+    let loadedHooksRequestHandler: HooksRequestHandler | null = null;
+    const handleHooksRequest: HooksRequestHandler = async (req, res) => {
+      const hooksConfig = params.hooksConfig();
+      if (!hooksConfig) {
+        return false;
+      }
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const basePath = hooksConfig.basePath;
+      if (url.pathname !== basePath && !url.pathname.startsWith(`${basePath}/`)) {
+        return false;
+      }
+      if (!loadedHooksRequestHandler) {
+        const { createGatewayHooksRequestHandler } = await import("./server/hooks.js");
+        loadedHooksRequestHandler = createGatewayHooksRequestHandler({
+          deps: params.deps,
+          getHooksConfig: params.hooksConfig,
+          getClientIpConfig: params.getHookClientIpConfig,
+          bindHost: params.bindHost,
+          port: params.port,
+          logHooks: params.logHooks,
+        });
+      }
+      return await loadedHooksRequestHandler(req, res);
+    };
 
-    const handlePluginRequest = createGatewayPluginRequestHandler({
-      registry: params.pluginRegistry,
-      log: params.logPlugins,
-    });
+    let loadedPluginRequestHandler: GatewayPluginRequestHandler | null = null;
+    const handlePluginRequest: GatewayPluginRequestHandler = async (
+      req,
+      res,
+      pathContext,
+      dispatchContext,
+    ) => {
+      const registry = resolveActivePluginHttpRouteRegistry(params.pluginRegistry);
+      if ((registry.httpRoutes ?? []).length === 0) {
+        return false;
+      }
+      if (!loadedPluginRequestHandler) {
+        const { createGatewayPluginRequestHandler } = await import("./server/plugins-http.js");
+        loadedPluginRequestHandler = createGatewayPluginRequestHandler({
+          registry: params.pluginRegistry,
+          log: params.logPlugins,
+        });
+      }
+      return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
+    };
     const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
       return shouldEnforceGatewayAuthForPluginPath(
         resolveActivePluginHttpRouteRegistry(params.pluginRegistry),
@@ -168,9 +206,18 @@ export async function createGatewayRuntimeState(params: {
           "Host-header origin fallback weakens origin checks and should only be used as break-glass.",
       );
     }
+    // Create WebSocketServer first (with noServer: true) so we can attach upgrade handlers
+    // before HTTP servers start listening. This prevents a race condition where connections
+    // arrive before the upgrade handler is attached, which causes silent 1006 errors.
+    const wss = new WebSocketServer({
+      noServer: true,
+      maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
+    });
+    const preauthConnectionBudget = createPreauthConnectionBudget();
+
     const httpServers: HttpServer[] = [];
     const httpBindHosts: string[] = [];
-    for (const host of bindHosts) {
+    for (const _host of bindHosts) {
       const httpServer = createGatewayHttpServer({
         canvasHost,
         clients,
@@ -191,36 +238,9 @@ export async function createGatewayRuntimeState(params: {
         getReadiness: params.getReadiness,
         tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
       });
-      try {
-        await listenGatewayHttpServer({
-          httpServer,
-          bindHost: host,
-          port: params.port,
-        });
-        httpServers.push(httpServer);
-        httpBindHosts.push(host);
-      } catch (err) {
-        if (host === bindHosts[0]) {
-          throw err;
-        }
-        params.log.warn(
-          `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
-        );
-      }
-    }
-    const httpServer = httpServers[0];
-    if (!httpServer) {
-      throw new Error("Gateway HTTP server failed to start");
-    }
-
-    const wss = new WebSocketServer({
-      noServer: true,
-      maxPayload: MAX_PREAUTH_PAYLOAD_BYTES,
-    });
-    const preauthConnectionBudget = createPreauthConnectionBudget();
-    for (const server of httpServers) {
+      // Attach upgrade handler BEFORE listening to prevent race condition
       attachGatewayUpgradeHandler({
-        httpServer: server,
+        httpServer,
         wss,
         canvasHost,
         clients,
@@ -228,9 +248,53 @@ export async function createGatewayRuntimeState(params: {
         resolvedAuth: params.resolvedAuth,
         getResolvedAuth: params.getResolvedAuth,
         rateLimiter: params.rateLimiter,
+        log: params.log,
       });
+      httpServers.push(httpServer);
     }
-
+    const httpServer = httpServers[0];
+    if (!httpServer) {
+      throw new Error("Gateway HTTP server failed to start");
+    }
+    let startListeningPromise: Promise<void> | null = null;
+    const startListening = async (): Promise<void> => {
+      if (startListeningPromise) {
+        await startListeningPromise;
+        return;
+      }
+      startListeningPromise = (async () => {
+        for (const [index, host] of bindHosts.entries()) {
+          const server = httpServers[index];
+          if (!server) {
+            throw new Error(`Missing gateway HTTP server for bind host ${host}`);
+          }
+          try {
+            await listenGatewayHttpServer({
+              httpServer: server,
+              bindHost: host,
+              port: params.port,
+            });
+            httpBindHosts.push(host);
+          } catch (err) {
+            if (host === bindHosts[0]) {
+              throw err;
+            }
+            params.log.warn(
+              `gateway: failed to bind loopback alias ${host}:${params.port} (${String(err)})`,
+            );
+          }
+        }
+        if (httpBindHosts.length === 0) {
+          throw new Error("Gateway HTTP server failed to start");
+        }
+      })();
+      try {
+        await startListeningPromise;
+      } catch (err) {
+        startListeningPromise = null;
+        throw err;
+      }
+    };
     const agentRunSeq = new Map<string, number>();
     const dedupe = new Map<string, DedupeEntry>();
     const chatRunState = createChatRunState();
@@ -247,7 +311,10 @@ export async function createGatewayRuntimeState(params: {
       canvasHost,
       releasePluginRouteRegistry: () => {
         // Releases both pinned HTTP-route and channel registries set at startup.
-        releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+        // Release unconditionally: plugin startup/reload can re-pin these
+        // surfaces to a registry that differs from the original runtime-state
+        // bootstrap registry.
+        releasePinnedPluginHttpRouteRegistry();
         // Release unconditionally (no registry arg): the channel pin may have
         // been re-pinned to a deferred-reload registry that differs from the
         // original params.pluginRegistry, so an identity-guarded release would
@@ -257,6 +324,7 @@ export async function createGatewayRuntimeState(params: {
       httpServer,
       httpServers,
       httpBindHosts,
+      startListening,
       wss,
       preauthConnectionBudget,
       clients,
@@ -274,7 +342,7 @@ export async function createGatewayRuntimeState(params: {
       toolEventRecipients,
     };
   } catch (err) {
-    releasePinnedPluginHttpRouteRegistry(params.pluginRegistry);
+    releasePinnedPluginHttpRouteRegistry();
     releasePinnedPluginChannelRegistry();
     throw err;
   }

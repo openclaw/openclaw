@@ -11,7 +11,7 @@ import {
   makeCfg,
   mockRunEmbeddedPiAgentOk,
   requireSessionStorePath,
-  runGreetingPromptForBareNewOrReset,
+  expectBareNewOrResetAcknowledged,
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
@@ -375,7 +375,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("prepends runtime-loaded daily memory context on bare /new", async () => {
+  it("acknowledges bare /new without invoking the model or loading startup memory", async () => {
     await withTempHome(async (home) => {
       const workspaceDir = join(home, "openclaw");
       const nowMs = Date.now();
@@ -392,18 +392,12 @@ describe("trigger handling", () => {
 
       const res = await runAuthorizedSmsCommand("/new", cfg);
 
-      expect(maybeReplyText(res)).toBe("hello");
-      const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
-      expect(prompt).toContain("[Startup context loaded by runtime]");
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
-      expect(prompt).toContain("BEGIN_QUOTED_NOTES");
-      expect(prompt).toContain("today startup note");
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${yesterdayStamp}.md]`);
-      expect(prompt).toContain("yesterday startup note");
+      expect(maybeReplyText(res)).toBe("✅ New session started.");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 
-  it("treats normalized /RESET as reset for startupContext.applyOn", async () => {
+  it("acknowledges normalized bare /RESET without invoking the model", async () => {
     await withTempHome(async (home) => {
       const workspaceDir = join(home, "openclaw");
       const nowMs = Date.now();
@@ -418,10 +412,8 @@ describe("trigger handling", () => {
 
       const res = await runAuthorizedSmsCommand("/RESET", cfg);
 
-      expect(maybeReplyText(res)).toBe("hello");
-      const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
-      expect(prompt).toContain(`[Untrusted daily memory: memory/${todayStamp}.md]`);
-      expect(prompt).toContain("reset startup note");
+      expect(maybeReplyText(res)).toBe("✅ Session reset.");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 
@@ -684,6 +676,65 @@ describe("trigger handling", () => {
     });
   });
 
+  it("applies native model changes to Telegram topic thread sessions", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          models: {
+            ...cfg.agents?.defaults?.models,
+            "deepseek/deepseek-v4-pro": {},
+          },
+        },
+      };
+      cfg.session = { ...cfg.session, store: join(home, "native-model-thread.sessions.json") };
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockReset();
+      const storePath = requireSessionStorePath(cfg);
+      const slashSessionKey = "agent:main:telegram:slash:7595562691";
+      const targetSessionKey = "agent:main:main:thread:7595562691:12812";
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [targetSessionKey]: {
+            sessionId: "session-target",
+            updatedAt: Date.now(),
+            providerOverride: "zai",
+            modelOverride: "glm-5.1",
+          },
+        }),
+      );
+
+      const res = await getReplyFromConfig(
+        makeNativeTelegramCommandMessage({
+          body: "/model deepseek/deepseek-v4-pro",
+          slashSessionKey,
+          targetSessionKey,
+        }),
+        {},
+        cfg,
+      );
+
+      expect(maybeReplyText(res)).toContain("Model set to deepseek/deepseek-v4-pro");
+
+      const store = loadSessionStore(storePath);
+      expect(store[targetSessionKey]?.providerOverride).toBe("deepseek");
+      expect(store[targetSessionKey]?.modelOverride).toBe("deepseek-v4-pro");
+      expect(store[slashSessionKey]).toBeUndefined();
+
+      await expectNextRunUsesTargetSession(
+        { cfg, targetSessionKey, runEmbeddedPiAgentMock },
+        {
+          provider: "deepseek",
+          model: "deepseek-v4-pro",
+        },
+      );
+    });
+  });
+
   it("applies native model auth profile overrides to the target session", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
@@ -765,7 +816,7 @@ describe("trigger handling", () => {
 
   it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
     await withTempHome(async (home) => {
-      await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
+      await expectBareNewOrResetAcknowledged({ home, body: "/new", getReplyFromConfig });
       await expectResetBlockedForNonOwner({ home });
       await expectInlineCommandHandledAndStripped({
         home,

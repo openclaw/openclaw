@@ -24,13 +24,14 @@ import {
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import {
   addQaCredentialSet,
+  diagnoseQaCredentialBroker,
   listQaCredentialSets,
   QaCredentialAdminError,
   removeQaCredentialSet,
   type QaCredentialRecord,
 } from "./qa-credentials-admin.runtime.js";
 import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-gateway-config.js";
-import { normalizeQaTransportId } from "./qa-transport-registry.js";
+import { normalizeQaTransportId, type QaTransportId } from "./qa-transport-registry.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
@@ -40,6 +41,8 @@ import {
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
+
+const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 
 type InterruptibleServer = {
   baseUrl: string;
@@ -73,7 +76,9 @@ function parseQaThinkingLevel(
   }
   const normalized = normalizeQaThinkingLevel(value);
   if (!normalized) {
-    throw new Error(`${label} must be one of off, minimal, low, medium, high, xhigh, adaptive`);
+    throw new Error(
+      `${label} must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
+    );
   }
   return normalized;
 }
@@ -122,6 +127,11 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
   return Math.floor(value);
 }
 
+function normalizeQaOptionalModelRef(input: string | undefined) {
+  const model = input?.trim();
+  return model && model.length > 0 ? model : undefined;
+}
+
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
   let summaryText: string;
   try {
@@ -148,6 +158,98 @@ async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
   throw new Error(
     `QA summary at ${summaryPath} did not include counts.failed or scenarios[].status.`,
   );
+}
+
+function isQaSuiteInfraRetryableError(error: unknown) {
+  const message = formatErrorMessage(error).toLowerCase();
+  return (
+    message.includes("agent.wait timeout") ||
+    message.includes("qa cli timed out") ||
+    message.includes("readyz") ||
+    message.includes("gateway healthy") ||
+    message.includes("transport ready") ||
+    message.includes("waiting for qa-channel ready") ||
+    message.includes("econnreset") ||
+    message.includes("econnrefused") ||
+    message.includes("socket hang up") ||
+    message.includes("could not read qa summary json") ||
+    message.includes("could not parse qa summary json") ||
+    message.includes("did not include counts.failed or scenarios[].status") ||
+    message.includes("did not produce report artifact")
+  );
+}
+
+async function assertQaSuiteArtifacts(result: { reportPath: string; summaryPath: string }) {
+  try {
+    await fs.access(result.reportPath);
+  } catch (error) {
+    throw new Error(
+      `QA suite did not produce report artifact at ${result.reportPath}: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+  await readQaFailedScenarioCountFromSummary(result.summaryPath);
+}
+
+async function runQaSuiteFromRuntimeWithInfraRetry(
+  params: Parameters<typeof runQaSuiteFromRuntime>[0],
+  maxRetries = QA_SUITE_INFRA_RETRY_LIMIT,
+) {
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    try {
+      const result = await runQaSuiteFromRuntime(params);
+      await assertQaSuiteArtifacts(result);
+      return result;
+    } catch (error) {
+      const retryable = isQaSuiteInfraRetryableError(error);
+      if (!retryable || attempt >= maxRetries) {
+        throw error;
+      }
+      process.stderr.write(
+        `[qa-suite] infra retry ${attempt + 1}/${maxRetries}: ${formatErrorMessage(error)}\n`,
+      );
+    }
+  }
+  throw new Error("unreachable qa suite retry state");
+}
+
+async function runQaParityPreflight(params: {
+  repoRoot: string;
+  transportId: QaTransportId;
+  providerMode: QaProviderMode;
+  primaryModel?: string;
+  alternateModel?: string;
+  allowFailures?: boolean;
+}) {
+  const outputDir = path.join(
+    params.repoRoot,
+    ".artifacts",
+    "qa-e2e",
+    "preflight",
+    `suite-${Date.now().toString(36)}`,
+  );
+  const result = await runQaSuiteFromRuntimeWithInfraRetry({
+    repoRoot: params.repoRoot,
+    outputDir,
+    transportId: params.transportId,
+    providerMode: params.providerMode,
+    primaryModel: params.primaryModel,
+    alternateModel: params.alternateModel,
+    scenarioIds: ["approval-turn-tool-followthrough"],
+    concurrency: 1,
+  });
+  process.stdout.write(`QA parity preflight watch: ${result.watchUrl}\n`);
+  process.stdout.write(`QA parity preflight report: ${result.reportPath}\n`);
+  process.stdout.write(`QA parity preflight summary: ${result.summaryPath}\n`);
+  const failedScenarioCount = await readQaFailedScenarioCountFromSummary(result.summaryPath);
+  if (failedScenarioCount > 0) {
+    if (params.allowFailures === true) {
+      return;
+    }
+    throw new Error(
+      `QA parity preflight failed with ${failedScenarioCount} failing scenario${failedScenarioCount === 1 ? "" : "s"}.`,
+    );
+  }
 }
 
 function parseQaCliBackendAuthMode(value: string | undefined): QaCliBackendAuthMode | undefined {
@@ -238,7 +340,7 @@ function parseQaModelSpecs(label: string, entries: readonly string[] | undefined
           const thinkingDefault = parseQaThinkingLevel(`${label} thinking`, value);
           if (!thinkingDefault) {
             throw new Error(
-              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive`,
+              `${label} thinking must be one of off, minimal, low, medium, high, xhigh, adaptive, max`,
             );
           }
           options.thinkingDefault = thinkingDefault;
@@ -331,6 +433,18 @@ function printQaCredentialListTable(credentials: QaCredentialRecord[]) {
   }
 }
 
+function printQaCredentialDoctorTable(
+  result: Awaited<ReturnType<typeof diagnoseQaCredentialBroker>>,
+) {
+  process.stdout.write(`QA credentials doctor: ${result.status}\n`);
+  const nameWidth = Math.max("check".length, ...result.checks.map((check) => check.name.length));
+  for (const check of result.checks) {
+    process.stdout.write(
+      `${check.name.padEnd(nameWidth)}  ${check.status.padEnd(4)}  ${check.details ?? ""}\n`,
+    );
+  }
+}
+
 export async function runQaLabSelfCheckCommand(opts: { repoRoot?: string; output?: string }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const server = await startQaLabServer({
@@ -354,15 +468,18 @@ export async function runQaSuiteCommand(opts: {
   primaryModel?: string;
   alternateModel?: string;
   fastMode?: boolean;
+  thinking?: string;
   cliAuthMode?: string;
   parityPack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   allowFailures?: boolean;
+  enabledPluginIds?: string[];
   image?: string;
   cpus?: number;
   memory?: string;
   disk?: string;
+  preflight?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
@@ -377,6 +494,11 @@ export async function runQaSuiteCommand(opts: {
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
+  const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
+  const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
+  if (opts.preflight === true && runner !== "host") {
+    throw new Error("--preflight requires --runner host.");
+  }
   if (
     runner === "host" &&
     (opts.image !== undefined ||
@@ -390,14 +512,16 @@ export async function runQaSuiteCommand(opts: {
     throw new Error("--cli-auth-mode requires --runner host.");
   }
   if (runner === "multipass") {
+    const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
     const result = await runQaMultipass({
       repoRoot,
       outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
       transportId,
       providerMode,
-      primaryModel: opts.primaryModel,
-      alternateModel: opts.alternateModel,
+      primaryModel,
+      alternateModel,
       fastMode: opts.fastMode,
+      ...(thinkingDefault ? { thinkingDefault } : {}),
       allowFailures: true,
       scenarioIds,
       ...(opts.concurrency !== undefined
@@ -421,16 +545,30 @@ export async function runQaSuiteCommand(opts: {
     }
     return;
   }
-  const result = await runQaSuiteFromRuntime({
+  if (opts.preflight === true) {
+    await runQaParityPreflight({
+      repoRoot,
+      transportId,
+      providerMode,
+      primaryModel,
+      alternateModel,
+      allowFailures,
+    });
+    return;
+  }
+  const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
+  const result = await runQaSuiteFromRuntimeWithInfraRetry({
     repoRoot,
     outputDir: resolveRepoRelativeOutputDir(repoRoot, opts.outputDir),
     transportId,
     providerMode,
-    primaryModel: opts.primaryModel,
-    alternateModel: opts.alternateModel,
+    primaryModel,
+    alternateModel,
     fastMode: opts.fastMode,
+    ...(thinkingDefault ? { thinkingDefault } : {}),
     ...(claudeCliAuthMode ? { claudeCliAuthMode } : {}),
     scenarioIds,
+    ...(opts.enabledPluginIds !== undefined ? { enabledPluginIds: opts.enabledPluginIds } : {}),
     ...(opts.concurrency !== undefined
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),
@@ -721,6 +859,27 @@ export async function runQaCredentialsListCommand(opts: {
       return;
     }
     throw error;
+  }
+}
+
+export async function runQaCredentialsDoctorCommand(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  siteUrl?: string;
+}) {
+  const result = await diagnoseQaCredentialBroker({
+    actorId: opts.actorId,
+    endpointPrefix: opts.endpointPrefix,
+    siteUrl: opts.siteUrl,
+  });
+  if (opts.json) {
+    process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+  } else {
+    printQaCredentialDoctorTable(result);
+  }
+  if (result.status === "fail") {
+    process.exitCode = 1;
   }
 }
 

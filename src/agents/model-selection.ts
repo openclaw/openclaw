@@ -4,6 +4,7 @@ import {
   toAgentModelListLike,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
   resolveAgentConfig,
   resolveAgentEffectiveModelPrimary,
@@ -29,8 +30,10 @@ import {
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
   getModelRefStatusWithFallbackModels,
+  inferUniqueProviderFromCatalog,
   inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
+  resolveBareModelDefaultProvider,
   resolveAllowedModelRefFromAliasIndex,
   resolveAllowlistModelKey as resolveAllowlistModelKeyFromShared,
   resolveConfiguredModelRef,
@@ -43,7 +46,15 @@ import {
 
 export type { ModelAliasIndex, ModelRef, ModelRefStatus };
 
-export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive";
+export type ThinkLevel =
+  | "off"
+  | "minimal"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "adaptive"
+  | "max";
 
 export {
   buildConfiguredAllowlistKeys,
@@ -52,6 +63,7 @@ export {
   findNormalizedProviderKey,
   findNormalizedProviderValue,
   inferUniqueProviderFromConfiguredModels,
+  inferUniqueProviderFromCatalog,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
@@ -59,6 +71,7 @@ export {
   normalizeProviderId,
   normalizeProviderIdForAuth,
   parseModelRef,
+  resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
   resolveModelRefFromString,
@@ -69,6 +82,7 @@ export function resolvePersistedOverrideModelRef(params: {
   defaultProvider: string;
   overrideProvider?: string;
   overrideModel?: string;
+  allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const defaultProvider = params.defaultProvider.trim();
   const overrideProvider = params.overrideProvider?.trim();
@@ -78,7 +92,9 @@ export function resolvePersistedOverrideModelRef(params: {
   }
   const encodedOverride = overrideProvider ? `${overrideProvider}/${overrideModel}` : overrideModel;
   return (
-    parseModelRef(encodedOverride, defaultProvider) ?? {
+    parseModelRef(encodedOverride, defaultProvider, {
+      allowPluginNormalization: params.allowPluginNormalization,
+    }) ?? {
       provider: overrideProvider || defaultProvider,
       model: overrideModel,
     }
@@ -95,6 +111,7 @@ export function resolvePersistedModelRef(params: {
   runtimeModel?: string;
   overrideProvider?: string;
   overrideModel?: string;
+  allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const defaultProvider = params.defaultProvider.trim();
   const runtimeProvider = params.runtimeProvider?.trim();
@@ -104,7 +121,9 @@ export function resolvePersistedModelRef(params: {
       return { provider: runtimeProvider, model: runtimeModel };
     }
     return (
-      parseModelRef(runtimeModel, defaultProvider) ?? {
+      parseModelRef(runtimeModel, defaultProvider, {
+        allowPluginNormalization: params.allowPluginNormalization,
+      }) ?? {
         provider: defaultProvider,
         model: runtimeModel,
       }
@@ -114,6 +133,7 @@ export function resolvePersistedModelRef(params: {
     defaultProvider,
     overrideProvider: params.overrideProvider,
     overrideModel: params.overrideModel,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
 }
 
@@ -128,11 +148,13 @@ export function resolvePersistedSelectedModelRef(params: {
   runtimeModel?: string;
   overrideProvider?: string;
   overrideModel?: string;
+  allowPluginNormalization?: boolean;
 }): ModelRef | null {
   const override = resolvePersistedOverrideModelRef({
     defaultProvider: params.defaultProvider,
     overrideProvider: params.overrideProvider,
     overrideModel: params.overrideModel,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
   if (override) {
     return override;
@@ -141,6 +163,7 @@ export function resolvePersistedSelectedModelRef(params: {
     defaultProvider: params.defaultProvider,
     runtimeProvider: params.runtimeProvider,
     runtimeModel: params.runtimeModel,
+    allowPluginNormalization: params.allowPluginNormalization,
   });
 }
 
@@ -226,6 +249,26 @@ export function resolveSubagentConfiguredModelSelection(params: {
   );
 }
 
+/**
+ * Resolve a normalized model string through a pre-built alias index, returning
+ * a fully qualified `provider/model` string.  If the value is already qualified
+ * or not a known alias, returns it unchanged.
+ */
+function resolveModelThroughAliases(value: string, aliasIndex: ModelAliasIndex): string {
+  // Already a provider/model ref — no alias resolution needed.
+  if (value.includes("/")) {
+    return value;
+  }
+  // Check if the value is a known alias; if so, resolve to provider/model.
+  // Unknown bare strings are returned as-is (don't guess the provider).
+  const aliasKey = normalizeLowercaseStringOrEmpty(value);
+  const aliasMatch = aliasIndex.byAlias.get(aliasKey);
+  if (aliasMatch) {
+    return `${aliasMatch.ref.provider}/${aliasMatch.ref.model}`;
+  }
+  return value;
+}
+
 export function resolveSubagentSpawnModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -235,15 +278,19 @@ export function resolveSubagentSpawnModelSelection(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  return (
+  const raw =
     normalizeModelSelection(params.modelOverride) ??
     resolveSubagentConfiguredModelSelection({
       cfg: params.cfg,
       agentId: params.agentId,
     }) ??
     normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
-    `${runtimeDefault.provider}/${runtimeDefault.model}`
-  );
+    `${runtimeDefault.provider}/${runtimeDefault.model}`;
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: runtimeDefault.provider,
+  });
+  return resolveModelThroughAliases(raw, aliasIndex);
 }
 
 export function buildAllowedModelSet(params: {

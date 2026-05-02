@@ -1,4 +1,3 @@
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import type { OpenClawPluginCommandDefinition } from "./types.js";
@@ -51,46 +50,37 @@ export function clearPluginCommandsForPlugin(pluginId: string): void {
   }
 }
 
-function resolvePluginNativeName(
-  command: OpenClawPluginCommandDefinition,
-  provider?: string,
-): string {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  const providerOverride = providerName ? command.nativeNames?.[providerName] : undefined;
-  if (typeof providerOverride === "string" && providerOverride.trim()) {
-    return providerOverride.trim();
-  }
-  const defaultOverride = command.nativeNames?.default;
-  if (typeof defaultOverride === "string" && defaultOverride.trim()) {
-    return defaultOverride.trim();
-  }
-  return command.name;
+export function isTrustedReservedCommandOwner(command: RegisteredPluginCommand): boolean {
+  return command.ownership === "reserved";
 }
 
-export function getPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-}> {
-  const providerName = normalizeOptionalLowercaseString(provider);
-  if (
-    providerName &&
-    getChannelPlugin(providerName)?.commands?.nativeCommandsAutoEnabled !== true
-  ) {
-    return [];
-  }
-  return listProviderPluginCommandSpecs(provider);
+export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
+  return Array.from(pluginCommands.values());
 }
 
-/** Resolve plugin command specs for a provider's native naming surface without support gating. */
-export function listProviderPluginCommandSpecs(provider?: string): Array<{
-  name: string;
-  description: string;
-  acceptsArgs: boolean;
-}> {
-  return Array.from(pluginCommands.values()).map((cmd) => ({
-    name: resolvePluginNativeName(cmd, provider),
-    description: cmd.description,
-    acceptsArgs: cmd.acceptsArgs ?? false,
-  }));
+export function listRegisteredPluginAgentPromptGuidance(): string[] {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  for (const command of pluginCommands.values()) {
+    for (const line of command.agentPromptGuidance ?? []) {
+      const trimmed = line.trim();
+      if (!trimmed || seen.has(trimmed)) {
+        continue;
+      }
+      seen.add(trimmed);
+      lines.push(trimmed);
+    }
+  }
+  return lines;
+}
+
+export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {
+  pluginCommands.clear();
+  for (const command of commands) {
+    const name = normalizeOptionalLowercaseString(command.name);
+    if (!name) {
+      continue;
+    }
+    pluginCommands.set(`/${name}`, command);
+  }
 }

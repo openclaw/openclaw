@@ -29,7 +29,7 @@ function buildIsolatedAgentTurnJob(name: string): CronAddInput {
 function buildAnnounceIsolatedAgentTurnJob(name: string): CronAddInput {
   return {
     ...buildIsolatedAgentTurnJob(name),
-    delivery: { mode: "announce", channel: "telegram", to: "123" },
+    delivery: { mode: "announce", channel: "forum", to: "123" },
   };
 }
 
@@ -56,7 +56,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
       summary: "done",

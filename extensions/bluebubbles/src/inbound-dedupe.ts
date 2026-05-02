@@ -159,7 +159,7 @@ export function resolveBlueBubblesInboundDedupeKey(
   return base;
 }
 
-export type InboundDedupeClaim =
+type InboundDedupeClaim =
   | { kind: "claimed"; finalize: () => Promise<void>; release: () => void }
   | { kind: "duplicate" }
   | { kind: "inflight" }
@@ -208,6 +208,35 @@ export async function claimBlueBubblesInboundMessage(params: {
       impl.release(normalized, { namespace: params.accountId });
     },
   };
+}
+
+/**
+ * Mark a set of source messageIds as already processed, without going through
+ * the `claim()` protocol. Intended for the coalesced-batch case: when the
+ * debouncer merges N webhook events into one agent turn, only the primary
+ * messageId reaches `claimBlueBubblesInboundMessage`. The remaining source
+ * messageIds must still be remembered so a later MessagePoller replay of any
+ * single source event is recognized as a duplicate rather than re-processed.
+ *
+ * Best-effort — disk errors on secondary commits are surfaced via
+ * `onDiskError` but never thrown, so a single persistence hiccup cannot block
+ * the caller's main finalize path.
+ */
+export async function commitBlueBubblesCoalescedMessageIds(params: {
+  messageIds: readonly string[];
+  accountId: string;
+  onDiskError?: (error: unknown) => void;
+}): Promise<void> {
+  for (const raw of params.messageIds) {
+    const normalized = sanitizeGuid(raw);
+    if (!normalized) {
+      continue;
+    }
+    await impl.commit(normalized, {
+      namespace: params.accountId,
+      onDiskError: params.onDiskError,
+    });
+  }
 }
 
 /**

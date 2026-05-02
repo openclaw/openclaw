@@ -1,7 +1,8 @@
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./channel-config-shared.js";
+import "./bridge/bootstrap.js";
+import { qqbotConfigAdapter, qqbotMeta, qqbotSetupAdapterShared } from "./bridge/config-shared.js";
+import { qqbotSetupWizard } from "./bridge/setup/surface.js";
 import { qqbotChannelConfigSchema } from "./config-schema.js";
-import { qqbotSetupWizard } from "./setup-surface.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 /**

@@ -1,5 +1,7 @@
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { DmPolicySchema } from "../../config/zod-schema.core.js";
+import { validateJsonSchemaValue } from "../../plugins/schema-validator.js";
+import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import type {
   ChannelConfigRuntimeIssue,
   ChannelConfigRuntimeParseResult,
@@ -40,6 +42,12 @@ type BuildChannelConfigSchemaOptions = {
   uiHints?: Record<string, ChannelConfigUiHint>;
 };
 
+type BuildJsonChannelConfigSchemaOptions = {
+  cacheKey?: string;
+  uiHints?: Record<string, ChannelConfigUiHint>;
+  runtime?: ChannelConfigSchema["runtime"];
+};
+
 function cloneRuntimeIssue(issue: unknown): ChannelConfigRuntimeIssue {
   const record = issue && typeof issue === "object" ? (issue as Record<string, unknown>) : {};
   const path = Array.isArray(record.path)
@@ -71,6 +79,53 @@ function safeParseRuntimeSchema(
   };
 }
 
+function toIssuePath(path: string): Array<string | number> {
+  if (!path || path === "<root>") {
+    return [];
+  }
+  return path.split(".").map((segment) => {
+    const index = Number(segment);
+    return Number.isInteger(index) && String(index) === segment ? index : segment;
+  });
+}
+
+function safeParseJsonSchema(
+  schema: JsonSchemaObject,
+  cacheKey: string,
+  value: unknown,
+): ChannelConfigRuntimeParseResult {
+  const result = validateJsonSchemaValue({
+    schema,
+    cacheKey,
+    value,
+    applyDefaults: true,
+  });
+  if (result.ok) {
+    return { success: true, data: result.value };
+  }
+  return {
+    success: false,
+    issues: result.errors.map((issue) => ({
+      path: toIssuePath(issue.path),
+      message: issue.message,
+    })),
+  };
+}
+
+export function buildJsonChannelConfigSchema(
+  schema: JsonSchemaObject,
+  options?: BuildJsonChannelConfigSchemaOptions,
+): ChannelConfigSchema {
+  return {
+    schema,
+    ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
+    runtime: options?.runtime ?? {
+      safeParse: (value) =>
+        safeParseJsonSchema(schema, options?.cacheKey ?? "channel-config-schema:json", value),
+    },
+  };
+}
+
 export function buildChannelConfigSchema(
   schema: ZodTypeAny,
   options?: BuildChannelConfigSchemaOptions,
@@ -81,7 +136,7 @@ export function buildChannelConfigSchema(
       schema: schemaWithJson.toJSONSchema({
         target: "draft-07",
         unrepresentable: "any",
-      }) as Record<string, unknown>,
+      }) as JsonSchemaObject,
       ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
       runtime: {
         safeParse: (value) => safeParseRuntimeSchema(schema, value),

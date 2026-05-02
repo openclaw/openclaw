@@ -1,14 +1,26 @@
-import { Type } from "@sinclair/typebox";
-import { loadConfig } from "../../config/config.js";
+import { Type } from "typebox";
+import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import {
+  resolveThreadBindingSpawnPolicy,
+  supportsAutomaticThreadBindingSpawn,
+} from "../../channels/thread-bindings-policy.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { SpawnedToolContext } from "../spawned-context.js";
 import { registerSubagentRun } from "../subagent-registry.js";
-import { SUBAGENT_SPAWN_MODES, spawnSubagentDirect } from "../subagent-spawn.js";
+import {
+  SUBAGENT_SPAWN_CONTEXT_MODES,
+  SUBAGENT_SPAWN_MODES,
+  spawnSubagentDirect,
+} from "../subagent-spawn.js";
 import {
   describeSessionsSpawnTool,
+  SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
@@ -36,11 +48,12 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
-let acpSpawnModulePromise: Promise<AcpSpawnModule> | undefined;
+const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
+  () => import("../acp-spawn.js"),
+);
 
 async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
-  acpSpawnModulePromise ??= import("../acp-spawn.js");
-  return await acpSpawnModulePromise;
+  return await acpSpawnModuleLoader.load();
 }
 
 function summarizeError(err: unknown): string {
@@ -93,56 +106,129 @@ async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
   }
 }
 
-const SessionsSpawnToolSchema = Type.Object({
-  task: Type.String(),
-  label: Type.Optional(Type.String()),
-  runtime: optionalStringEnum(SESSIONS_SPAWN_RUNTIMES),
-  agentId: Type.Optional(Type.String()),
-  resumeSessionId: Type.Optional(
-    Type.String({
-      description:
-        'Resume an existing agent session by its ID (e.g. a Codex session UUID from ~/.codex/sessions/). Requires runtime="acp". The agent replays conversation history via session/load instead of starting fresh.',
-    }),
-  ),
-  model: Type.Optional(Type.String()),
-  thinking: Type.Optional(Type.String()),
-  cwd: Type.Optional(Type.String()),
-  runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-  // Back-compat: older callers used timeoutSeconds for this tool.
-  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-  thread: Type.Optional(Type.Boolean()),
-  mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
-  cleanup: optionalStringEnum(["delete", "keep"] as const),
-  sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
-  streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS),
-  lightContext: Type.Optional(
-    Type.Boolean({
-      description:
-        "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
-    }),
-  ),
+type SessionsSpawnThreadAvailability = {
+  subagent: boolean;
+  acp: boolean;
+};
 
-  // Inline attachments (snapshot-by-value).
-  // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
-  attachments: Type.Optional(
-    Type.Array(
-      Type.Object({
-        name: Type.String(),
-        content: Type.String(),
-        encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
-        mimeType: Type.Optional(Type.String()),
-      }),
-      { maxItems: 50 },
+function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability): boolean {
+  return availability.subagent || availability.acp;
+}
+
+function resolveSessionsSpawnThreadAvailability(opts?: {
+  config?: OpenClawConfig;
+  agentChannel?: GatewayMessageChannel;
+  agentAccountId?: string;
+}): SessionsSpawnThreadAvailability {
+  const channel = opts?.agentChannel;
+  const cfg = opts?.config;
+  if (!channel || !cfg || !supportsAutomaticThreadBindingSpawn(channel)) {
+    return { subagent: false, acp: false };
+  }
+  const resolve = (kind: "subagent" | "acp") => {
+    const policy = resolveThreadBindingSpawnPolicy({
+      cfg,
+      channel,
+      accountId: opts?.agentAccountId,
+      kind,
+    });
+    return policy.enabled && policy.spawnEnabled;
+  };
+  return {
+    subagent: resolve("subagent"),
+    acp: resolve("acp"),
+  };
+}
+
+function createSessionsSpawnToolSchema(params: {
+  acpAvailable: boolean;
+  threadAvailable: boolean;
+}) {
+  const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
+  const schema = {
+    task: Type.String(),
+    label: Type.Optional(Type.String()),
+    runtime: optionalStringEnum(
+      params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
     ),
-  ),
-  attachAs: Type.Optional(
-    Type.Object({
-      // Where the spawned agent should look for attachments.
-      // Kept as a hint; implementation materializes into the child workspace.
-      mountPath: Type.Optional(Type.String()),
+    agentId: Type.Optional(Type.String()),
+    model: Type.Optional(Type.String()),
+    thinking: Type.Optional(Type.String()),
+    cwd: Type.Optional(Type.String()),
+    runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    // Back-compat: older callers used timeoutSeconds for this tool.
+    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    ...(params.threadAvailable
+      ? {
+          thread: Type.Optional(
+            Type.Boolean({
+              description:
+                'Bind the spawned session to a new chat thread when the current channel/account supports thread-bound session spawns. `thread=true` defaults mode to "session".',
+            }),
+          ),
+        }
+      : {}),
+    mode: optionalStringEnum(spawnModes),
+    cleanup: optionalStringEnum(["delete", "keep"] as const),
+    sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
+    context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
+      description:
+        'Native subagent context mode. Omit or use "isolated" for a clean child session; use "fork" only when the child needs the requester transcript context.',
     }),
-  ),
-});
+    lightContext: Type.Optional(
+      Type.Boolean({
+        description:
+          "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
+      }),
+    ),
+
+    // Inline attachments (snapshot-by-value).
+    // NOTE: Attachment contents are redacted from transcript persistence by sanitizeToolCallInputs.
+    attachments: Type.Optional(
+      Type.Array(
+        Type.Object({
+          name: Type.String(),
+          content: Type.String(),
+          encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
+          mimeType: Type.Optional(Type.String()),
+        }),
+        { maxItems: 50 },
+      ),
+    ),
+    attachAs: Type.Optional(
+      Type.Object({
+        // Where the spawned agent should look for attachments.
+        // Kept as a hint; implementation materializes into the child workspace.
+        mountPath: Type.Optional(Type.String()),
+      }),
+    ),
+    ...(params.acpAvailable
+      ? {
+          resumeSessionId: Type.Optional(
+            Type.String({
+              description:
+                'ACP-only resume target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use only an ACP/harness session ID already recorded for this requester so the ACP backend replays conversation history instead of starting fresh.',
+            }),
+          ),
+          streamTo: optionalStringEnum(SESSIONS_SPAWN_ACP_STREAM_TARGETS, {
+            description:
+              'ACP-only stream target. Only meaningful with runtime="acp"; ignored for runtime="subagent". Use "parent" to stream the ACP turn back to the requester instead of tracking it as a background sessions_spawn run.',
+          }),
+        }
+      : {}),
+  };
+  return Type.Object(schema);
+}
+
+function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: OpenClawConfig }) {
+  if (opts?.sandboxed === true) {
+    return 'runtime="acp" is unavailable from sandboxed sessions because ACP sessions run on the host. Use runtime="subagent".';
+  }
+  if (opts?.config?.acp?.enabled === false) {
+    return 'runtime="acp" is unavailable because ACP is disabled by policy (`acp.enabled=false`). Use runtime="subagent".';
+  }
+  return 'runtime="acp" is unavailable in this session because no ACP runtime backend is loaded. Enable the acpx plugin or use runtime="subagent".';
+}
 
 export function createSessionsSpawnTool(
   opts?: {
@@ -152,16 +238,25 @@ export function createSessionsSpawnTool(
     agentTo?: string;
     agentThreadId?: string | number;
     sandboxed?: boolean;
+    config?: OpenClawConfig;
     /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
     requesterAgentIdOverride?: string;
   } & SpawnedToolContext,
 ): AnyAgentTool {
+  const acpAvailable = isAcpRuntimeSpawnAvailable({
+    config: opts?.config,
+    sandboxed: opts?.sandboxed,
+  });
+  const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
+  const threadAvailable = hasAnyThreadAvailability(threadAvailability);
   return {
     label: "Sessions",
     name: "sessions_spawn",
-    displaySummary: SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool(),
-    parameters: SessionsSpawnToolSchema,
+    displaySummary: acpAvailable
+      ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
+      : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
+    description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
+    parameters: createSessionsSpawnToolSchema({ acpAvailable, threadAvailable }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
@@ -185,10 +280,23 @@ export function createSessionsSpawnTool(
         params.cleanup === "keep" || params.cleanup === "delete" ? params.cleanup : "keep";
       const expectsCompletionMessage = params.expectsCompletionMessage !== false;
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
+      const context =
+        params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
+      const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
+      if (runtime === "acp" && !acpAvailable) {
+        return jsonResult({
+          status: "error",
+          error: resolveAcpUnavailableMessage(opts),
+          ...roleContext,
+        });
+      }
       if (runtime === "acp" && lightContext) {
         throw new Error("lightContext is only supported for runtime='subagent'.");
+      }
+      if (runtime === "acp" && context === "fork") {
+        throw new Error('context="fork" is only supported for runtime="subagent".');
       }
       // Back-compat: older callers used timeoutSeconds for this tool.
       const timeoutSecondsCandidate =
@@ -211,24 +319,6 @@ export function createSessionsSpawnTool(
           }>)
         : undefined;
 
-      const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
-
-      if (streamTo && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `streamTo is only supported for runtime=acp; got runtime=${runtime}`,
-          ...roleContext,
-        });
-      }
-
-      if (resumeSessionId && runtime !== "acp") {
-        return jsonResult({
-          status: "error",
-          error: `resumeSessionId is only supported for runtime=acp; got runtime=${runtime}`,
-          ...roleContext,
-        });
-      }
-
       if (runtime === "acp") {
         const { isSpawnAcpAcceptedResult, spawnAcpDirect } = await loadAcpSpawnModule();
         if (Array.isArray(attachments) && attachments.length > 0) {
@@ -245,6 +335,9 @@ export function createSessionsSpawnTool(
             label: label || undefined,
             agentId: requestedAgentId,
             resumeSessionId,
+            model: modelOverride,
+            thinking: thinkingOverrideRaw,
+            runTimeoutSeconds,
             cwd,
             mode: mode === "run" || mode === "session" ? mode : undefined,
             thread,
@@ -271,7 +364,7 @@ export function createSessionsSpawnTool(
           Boolean(childRunId) &&
           streamTo !== "parent";
         if (shouldTrackViaRegistry && childSessionKey && childRunId) {
-          const cfg = loadConfig();
+          const cfg = getRuntimeConfig();
           const trackedSpawnMode = resolveTrackedSpawnMode({
             requestedMode: result.mode,
             threadRequested: thread,
@@ -296,6 +389,9 @@ export function createSessionsSpawnTool(
             to: opts?.agentTo,
             threadId: opts?.agentThreadId,
           });
+          const shouldExpectCompletionMessage = result.inlineDelivery
+            ? false
+            : expectsCompletionMessage;
           try {
             registerSubagentRun({
               runId: childRunId,
@@ -307,7 +403,7 @@ export function createSessionsSpawnTool(
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds,
-              expectsCompletionMessage,
+              expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
           } catch (err) {
@@ -338,6 +434,7 @@ export function createSessionsSpawnTool(
           mode,
           cleanup,
           sandbox,
+          context,
           lightContext,
           expectsCompletionMessage,
           attachments,

@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCronStorePath, loadCronStore, saveCronStore } from "../cron/store.js";
@@ -8,6 +10,10 @@ import {
 } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import {
+  countStaleDreamingJobs,
+  migrateLegacyDreamingPayloadShape,
+} from "./doctor-cron-dreaming-payload-migration.js";
 import { normalizeStoredCronJobs } from "./doctor-cron-store-migration.js";
 import type { DoctorPrompter, DoctorOptions } from "./doctor-prompter.js";
 
@@ -15,6 +21,12 @@ type CronDoctorOutcome = {
   changed: boolean;
   warnings: string[];
 };
+
+type CrontabReader = () => Promise<{ stdout: string; stderr?: string }>;
+
+const execFileAsync = promisify(execFile);
+const LEGACY_WHATSAPP_HEALTH_SCRIPT_RE =
+  /(?:^|\s)(?:"[^"]*ensure-whatsapp\.sh"|'[^']*ensure-whatsapp\.sh'|[^\s#;|&]*ensure-whatsapp\.sh)\b/u;
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -24,6 +36,12 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   const lines: string[] = [];
   if (issues.jobId) {
     lines.push(`- ${pluralize(issues.jobId, "job")} still uses legacy \`jobId\``);
+  }
+  if (issues.missingId) {
+    lines.push(`- ${pluralize(issues.missingId, "job")} is missing a canonical string \`id\``);
+  }
+  if (issues.nonStringId) {
+    lines.push(`- ${pluralize(issues.nonStringId, "job")} stores \`id\` as a non-string value`);
   }
   if (issues.legacyScheduleString) {
     lines.push(
@@ -119,6 +137,58 @@ function migrateLegacyNotifyFallback(params: {
   return { changed, warnings };
 }
 
+async function readUserCrontab(): Promise<{ stdout: string; stderr?: string }> {
+  const result = await execFileAsync("crontab", ["-l"], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
+function findLegacyWhatsAppHealthCrontabLines(crontab: string): string[] {
+  return crontab
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"))
+    .filter((line) => LEGACY_WHATSAPP_HEALTH_SCRIPT_RE.test(line));
+}
+
+export async function noteLegacyWhatsAppCrontabHealthCheck(
+  params: {
+    platform?: NodeJS.Platform;
+    readCrontab?: CrontabReader;
+  } = {},
+): Promise<void> {
+  if ((params.platform ?? process.platform) !== "linux") {
+    return;
+  }
+
+  let crontab: string;
+  try {
+    crontab = (await (params.readCrontab ?? readUserCrontab)()).stdout;
+  } catch {
+    return;
+  }
+
+  const legacyLines = findLegacyWhatsAppHealthCrontabLines(crontab);
+  if (legacyLines.length === 0) {
+    return;
+  }
+
+  note(
+    [
+      "Legacy WhatsApp crontab health check detected.",
+      "`~/.openclaw/bin/ensure-whatsapp.sh` is not maintained by current OpenClaw and can misreport `Gateway inactive` from cron when the systemd user bus environment is missing.",
+      `Remove the stale crontab entry with ${formatCliCommand("crontab -e")}; use ${formatCliCommand("openclaw channels status --probe")}, ${formatCliCommand("openclaw doctor")}, and ${formatCliCommand("openclaw gateway status")} for current health checks.`,
+      `Matched ${pluralize(legacyLines.length, "entry")}.`,
+    ].join("\n"),
+    "Cron",
+  );
+}
+
 export async function maybeRepairLegacyCronStore(params: {
   cfg: OpenClawConfig;
   options: DoctorOptions;
@@ -134,10 +204,16 @@ export async function maybeRepairLegacyCronStore(params: {
   const normalized = normalizeStoredCronJobs(rawJobs);
   const legacyWebhook = normalizeOptionalString(params.cfg.cron?.webhook);
   const notifyCount = rawJobs.filter((job) => job.notify === true).length;
+  const dreamingStaleCount = countStaleDreamingJobs(rawJobs);
   const previewLines = formatLegacyIssuePreview(normalized.issues);
   if (notifyCount > 0) {
     previewLines.push(
       `- ${pluralize(notifyCount, "job")} still uses legacy \`notify: true\` webhook fallback`,
+    );
+  }
+  if (dreamingStaleCount > 0) {
+    previewLines.push(
+      `- ${pluralize(dreamingStaleCount, "managed dreaming job")} still has the legacy heartbeat-coupled shape`,
     );
   }
   if (previewLines.length === 0) {
@@ -165,7 +241,8 @@ export async function maybeRepairLegacyCronStore(params: {
     jobs: rawJobs,
     legacyWebhook,
   });
-  const changed = normalized.mutated || notifyMigration.changed;
+  const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
+  const changed = normalized.mutated || notifyMigration.changed || dreamingMigration.changed;
   if (!changed && notifyMigration.warnings.length === 0) {
     return;
   }
@@ -176,6 +253,12 @@ export async function maybeRepairLegacyCronStore(params: {
       jobs: rawJobs as unknown as CronJob[],
     });
     note(`Cron store normalized at ${shortenHomePath(storePath)}.`, "Doctor changes");
+    if (dreamingMigration.rewrittenCount > 0) {
+      note(
+        `Rewrote ${pluralize(dreamingMigration.rewrittenCount, "managed dreaming job")} to run as an isolated agent turn so dreaming no longer requires heartbeat.`,
+        "Doctor changes",
+      );
+    }
   }
 
   if (notifyMigration.warnings.length > 0) {

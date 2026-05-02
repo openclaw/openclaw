@@ -6,7 +6,7 @@ import {
   formatChannelAllowFrom,
 } from "../../channels/account-summary.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import { listChannelPlugins } from "../../channels/plugins/index.js";
+import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
 import type {
   ChannelAccountSnapshot,
@@ -41,6 +41,63 @@ type ResolvedChannelAccountRowParams = {
   sourceConfig: OpenClawConfig;
   accountId: string;
 };
+
+function getLiveChannelAccounts(params: {
+  liveChannelStatus: unknown;
+  channelId: string;
+}): Array<Record<string, unknown>> {
+  const payload = asRecord(params.liveChannelStatus);
+  const accountsByChannel = asRecord(payload.channelAccounts);
+  const raw = accountsByChannel[params.channelId];
+  return Array.isArray(raw) ? raw.map(asRecord) : [];
+}
+
+function getLiveAccountId(account: Record<string, unknown>): string {
+  return (
+    normalizeOptionalString(account.accountId) ??
+    normalizeOptionalString(account.id) ??
+    normalizeOptionalString(account.name) ??
+    "default"
+  );
+}
+
+function findLiveChannelAccount(params: {
+  liveAccounts: Array<Record<string, unknown>>;
+  accountId: string;
+}): Record<string, unknown> | null {
+  return (
+    params.liveAccounts.find((account) => getLiveAccountId(account) === params.accountId) ??
+    (params.accountId === "default" && params.liveAccounts.length === 1
+      ? (params.liveAccounts[0] ?? null)
+      : null)
+  );
+}
+
+function hasLiveCredentialAvailable(params: {
+  liveAccounts: Array<Record<string, unknown>>;
+  accountId: string;
+}): boolean {
+  const account = findLiveChannelAccount(params);
+  if (!account) {
+    return false;
+  }
+  if (hasConfiguredUnavailableCredentialStatus(account)) {
+    return false;
+  }
+  return account.running === true || account.connected === true;
+}
+
+function markConfiguredUnavailableCredentialStatusesAvailable(
+  account: unknown,
+): Record<string, unknown> {
+  const record = { ...asRecord(account) };
+  for (const key of ["tokenStatus", "botTokenStatus", "appTokenStatus", "signingSecretStatus"]) {
+    if (record[key] === "configured_unavailable") {
+      record[key] = "available";
+    }
+  }
+  return record;
+}
 
 function existsSyncMaybe(p: string | undefined): boolean | null {
   const path = normalizeOptionalString(p) ?? "";
@@ -87,6 +144,7 @@ const buildAccountNotes = (params: {
   plugin: ChannelPlugin;
   cfg: OpenClawConfig;
   entry: ChannelAccountRow;
+  liveCredentialAvailable?: boolean;
 }) => {
   const { plugin, cfg, entry } = params;
   const notes: string[] = [];
@@ -112,7 +170,9 @@ const buildAccountNotes = (params: {
   ) {
     notes.push(`signing:${snapshot.signingSecretSource}`);
   }
-  if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
+  if (params.liveCredentialAvailable) {
+    notes.push("credential available in gateway runtime");
+  } else if (hasConfiguredUnavailableCredentialStatus(entry.account)) {
     notes.push("secret unavailable in this command path");
   }
   if (snapshot.baseUrl) {
@@ -188,7 +248,12 @@ function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
 // Keep this generic: channel-specific rules belong in the channel plugin.
 export async function buildChannelsTable(
   cfg: OpenClawConfig,
-  opts?: { showSecrets?: boolean; sourceConfig?: OpenClawConfig },
+  opts?: {
+    showSecrets?: boolean;
+    sourceConfig?: OpenClawConfig;
+    includeSetupFallbackPlugins?: boolean;
+    liveChannelStatus?: unknown;
+  },
 ): Promise<{
   rows: ChannelRow[];
   details: Array<{
@@ -205,7 +270,12 @@ export async function buildChannelsTable(
     rows: Array<Record<string, string>>;
   }> = [];
 
-  for (const plugin of listChannelPlugins()) {
+  const sourceConfig = opts?.sourceConfig ?? cfg;
+  const includeSetupFallbackPlugins = opts?.includeSetupFallbackPlugins ?? true;
+  for (const plugin of listReadOnlyChannelPluginsForConfig(cfg, {
+    activationSourceConfig: sourceConfig,
+    includeSetupFallbackPlugins,
+  })) {
     const accountIds = plugin.config.listAccountIds(cfg);
     const defaultAccountId = resolveChannelDefaultAccountId({
       plugin,
@@ -215,7 +285,6 @@ export async function buildChannelsTable(
     const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
 
     const accounts: ChannelAccountRow[] = [];
-    const sourceConfig = opts?.sourceConfig ?? cfg;
     for (const accountId of resolvedAccountIds) {
       accounts.push(
         await resolveChannelAccountRow({
@@ -226,12 +295,27 @@ export async function buildChannelsTable(
         }),
       );
     }
+    const liveAccounts = getLiveChannelAccounts({
+      liveChannelStatus: opts?.liveChannelStatus,
+      channelId: plugin.id,
+    });
 
     const anyEnabled = accounts.some((a) => a.enabled);
     const enabledAccounts = accounts.filter((a) => a.enabled);
     const configuredAccounts = enabledAccounts.filter((a) => a.configured);
-    const unavailableConfiguredAccounts = enabledAccounts.filter((a) =>
-      hasConfiguredUnavailableCredentialStatus(a.account),
+    const unavailableConfiguredAccounts = enabledAccounts.filter(
+      (a) =>
+        hasConfiguredUnavailableCredentialStatus(a.account) &&
+        !hasLiveCredentialAvailable({ liveAccounts, accountId: a.accountId }),
+    );
+    const accountsForTokenSummary = accounts.map((entry) =>
+      hasConfiguredUnavailableCredentialStatus(entry.account) &&
+      hasLiveCredentialAvailable({ liveAccounts, accountId: entry.accountId })
+        ? {
+            ...entry,
+            account: markConfiguredUnavailableCredentialStatusesAvailable(entry.account),
+          }
+        : entry,
     );
     const defaultEntry = accounts.find((a) => a.accountId === defaultAccountId) ?? accounts[0];
 
@@ -248,7 +332,7 @@ export async function buildChannelsTable(
     const link = resolveLinkFields(summary);
     const missingPaths = collectMissingPaths(enabledAccounts);
     const tokenSummary = summarizeTokenConfig({
-      accounts,
+      accounts: accountsForTokenSummary,
       showSecrets,
     });
 
@@ -375,14 +459,19 @@ export async function buildChannelsTable(
         title: `${label} accounts`,
         columns: ["Account", "Status", "Notes"],
         rows: configuredAccounts.map((entry) => {
-          const notes = buildAccountNotes({ plugin, cfg, entry });
+          const liveCredentialAvailable = hasLiveCredentialAvailable({
+            liveAccounts,
+            accountId: entry.accountId,
+          });
+          const notes = buildAccountNotes({ plugin, cfg, entry, liveCredentialAvailable });
           return {
             Account: formatAccountLabel({
               accountId: entry.accountId,
               name: entry.snapshot.name,
             }),
             Status:
-              entry.enabled && !hasConfiguredUnavailableCredentialStatus(entry.account)
+              entry.enabled &&
+              (!hasConfiguredUnavailableCredentialStatus(entry.account) || liveCredentialAvailable)
                 ? "OK"
                 : "WARN",
             Notes: notes.join(" · "),

@@ -1,11 +1,11 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPluginSetupWizardStatus,
   createQueuedWizardPrompter,
   runSetupWizardFinalize,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/setup";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { whatsappSetupWizard } from "./setup-surface.js";
 import {
   createWhatsAppAllowlistModeInput,
@@ -65,25 +65,22 @@ vi.mock("openclaw/plugin-sdk/setup", async () => {
 
 vi.mock("./accounts.js", async () => {
   const actual = await vi.importActual<typeof import("./accounts.js")>("./accounts.js");
-  return {
-    ...actual,
+  return Object.assign({}, actual, {
     resolveWhatsAppAuthDir: hoisted.resolveWhatsAppAuthDir,
-  };
+  });
 });
 
 vi.mock("./auth-store.js", async () => {
   const actual = await vi.importActual<typeof import("./auth-store.js")>("./auth-store.js");
-  return {
-    ...actual,
+  return Object.assign({}, actual, {
     readWebAuthState: hoisted.readWebAuthState,
-  };
+  });
 });
 
-function createRuntime(): RuntimeEnv {
-  return {
+const createRuntime = (): RuntimeEnv =>
+  ({
     error: vi.fn(),
-  } as unknown as RuntimeEnv;
-}
+  }) as unknown as RuntimeEnv;
 
 const whatsappGetStatus = createPluginSetupWizardStatus({
   id: "whatsapp",

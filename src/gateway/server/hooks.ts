@@ -1,25 +1,40 @@
 import { randomUUID } from "node:crypto";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
-import { loadConfig } from "../../config/config.js";
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
+import { getRuntimeConfig } from "../../config/io.js";
+import {
+  resolveAgentMainSessionKey,
+  resolveMainSessionKey,
+  resolveMainSessionKeyFromConfig,
+} from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { runCronIsolatedAgentTurn } from "../../cron/isolated-agent.js";
+import type { RunCronAgentTurnResult } from "../../cron/isolated-agent/run.types.js";
 import type { CronJob } from "../../cron/types.js";
-import { requestHeartbeatNow } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
-import { createHooksRequestHandler, type HookClientIpConfig } from "../server-http.js";
+import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
-export function resolveHookClientIpConfig(cfg: OpenClawConfig): HookClientIpConfig {
-  return {
-    trustedProxies: cfg.gateway?.trustedProxies,
-    allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
-  };
+function resolveHookEventSessionKey(params: { cfg: OpenClawConfig; agentId?: string }): string {
+  return params.agentId
+    ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
+    : resolveMainSessionKey(params.cfg);
+}
+
+function shouldAnnounceHookRunResult(params: {
+  deliver: boolean;
+  result: RunCronAgentTurnResult;
+}): boolean {
+  if (params.result.status !== "ok") {
+    return true;
+  }
+  return (
+    params.deliver && params.result.delivered !== true && params.result.deliveryAttempted !== true
+  );
 }
 
 export function createGatewayHooksRequestHandler(params: {
@@ -36,15 +51,15 @@ export function createGatewayHooksRequestHandler(params: {
     const sessionKey = resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, { sessionKey, trusted: false });
     if (value.mode === "now") {
-      requestHeartbeatNow({ reason: "hook:wake" });
+      requestHeartbeat({ source: "hook", intent: "immediate", reason: "hook:wake" });
     }
   };
 
   const dispatchAgentHook = (value: HookAgentDispatchPayload) => {
     const sessionKey = value.sessionKey;
-    const mainSessionKey = resolveMainSessionKeyFromConfig();
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
+    const runId = randomUUID();
     const now = Date.now();
     const delivery = value.deliver
       ? {
@@ -76,10 +91,15 @@ export function createGatewayHooksRequestHandler(params: {
       state: { nextRunAtMs: now },
     };
 
-    const runId = randomUUID();
+    let hookEventSessionKey: string | undefined;
     void (async () => {
       try {
-        const cfg = loadConfig();
+        const cfg = getRuntimeConfig();
+        hookEventSessionKey = resolveHookEventSessionKey({
+          cfg,
+          agentId: value.agentId,
+        });
+        const { runCronIsolatedAgentTurn } = await import("../../cron/isolated-agent.js");
         const result = await runCronIsolatedAgentTurn({
           cfg,
           deps,
@@ -87,7 +107,6 @@ export function createGatewayHooksRequestHandler(params: {
           message: value.message,
           sessionKey,
           lane: "cron",
-          deliveryContract: "shared",
         });
         const summary =
           normalizeOptionalString(result.summary) ||
@@ -95,23 +114,39 @@ export function createGatewayHooksRequestHandler(params: {
           result.status;
         const prefix =
           result.status === "ok" ? `Hook ${safeName}` : `Hook ${safeName} (${result.status})`;
-        if (!result.delivered) {
+        const shouldAnnounce = shouldAnnounceHookRunResult({ deliver: value.deliver, result });
+        if (shouldAnnounce) {
+          const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
-            sessionKey: mainSessionKey,
+            sessionKey: eventSessionKey,
             trusted: false,
           });
           if (value.wakeMode === "now") {
-            requestHeartbeatNow({ reason: `hook:${jobId}` });
+            requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
           }
+        } else if (result.status === "ok" && !value.deliver) {
+          logHooks.info("hook agent run completed without announcement", {
+            sourcePath: value.sourcePath,
+            name: safeName,
+            runId,
+            jobId,
+            agentId: value.agentId,
+            sessionKey,
+            completedAt: new Date().toISOString(),
+          });
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
         enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
-          sessionKey: mainSessionKey,
+          sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
           trusted: false,
         });
         if (value.wakeMode === "now") {
-          requestHeartbeatNow({ reason: `hook:${jobId}:error` });
+          requestHeartbeat({
+            source: "hook",
+            intent: "immediate",
+            reason: `hook:${jobId}:error`,
+          });
         }
       }
     })();

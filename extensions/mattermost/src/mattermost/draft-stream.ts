@@ -9,16 +9,18 @@ import {
 const MATTERMOST_STREAM_MAX_CHARS = 4000;
 const DEFAULT_THROTTLE_MS = 1000;
 
-export type MattermostDraftStream = {
+type MattermostDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   postId: () => string | undefined;
   clear: () => Promise<void>;
+  discardPending: () => Promise<void>;
+  seal: () => Promise<void>;
   stop: () => Promise<void>;
   forceNewMessage: () => void;
 };
 
-export function normalizeMattermostDraftText(text: string, maxChars: number): string {
+function normalizeMattermostDraftText(text: string, maxChars: number): string {
   const trimmed = text.trim();
   if (!trimmed) {
     return "";
@@ -95,7 +97,7 @@ export function createMattermostDraftStream(params: {
     }
   };
 
-  const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
+  const { loop, update, stop, clear, discardPending, seal } = createFinalizableDraftLifecycle({
     throttleMs,
     state: streamState,
     sendOrEditStreamMessage,
@@ -125,6 +127,8 @@ export function createMattermostDraftStream(params: {
     flush: loop.flush,
     postId: () => streamPostId,
     clear,
+    discardPending,
+    seal,
     stop,
     forceNewMessage,
   };

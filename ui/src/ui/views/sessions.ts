@@ -1,12 +1,15 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
-import { formatRelativeTimestamp } from "../format.ts";
+import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
+import { normalizeThinkLevel } from "../thinking.ts";
 import type {
+  AgentIdentityResult,
   GatewaySessionRow,
+  GatewayThinkingLevelOption,
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
@@ -21,6 +24,7 @@ export type SessionsProps = {
   includeUnknown: boolean;
   basePath: string;
   searchQuery: string;
+  agentIdentityById: Record<string, AgentIdentityResult>;
   sortColumn: "key" | "kind" | "updated" | "tokens";
   sortDir: "asc" | "desc";
   page: number;
@@ -63,39 +67,44 @@ export type SessionsProps = {
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
 };
 
-const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high", "xhigh"] as const;
-const BINARY_THINK_LEVELS = ["", "off", "on"] as const;
-const VERBOSE_LEVELS = [
-  { value: "", label: "inherit" },
-  { value: "off", label: "off (explicit)" },
-  { value: "on", label: "on" },
-  { value: "full", label: "full" },
-] as const;
-const FAST_LEVELS = [
-  { value: "", label: "inherit" },
-  { value: "on", label: "on" },
-  { value: "off", label: "off" },
-] as const;
+const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
+const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
+const FAST_LEVEL_VALUES = ["", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
-function normalizeProviderId(provider?: string | null): string {
-  if (!provider) {
-    return "";
-  }
-  const normalized = normalizeLowercaseStringOrEmpty(provider);
-  if (normalized === "z.ai" || normalized === "z-ai") {
-    return "zai";
-  }
-  return normalized;
+function getAgentIdentity(
+  agentIdentityById: Record<string, AgentIdentityResult>,
+  agentId: string,
+): AgentIdentityResult | null {
+  return Object.prototype.hasOwnProperty.call(agentIdentityById, agentId)
+    ? (agentIdentityById[agentId] ?? null)
+    : null;
 }
 
-function isBinaryThinkingProvider(provider?: string | null): boolean {
-  return normalizeProviderId(provider) === "zai";
+function normalizeThinkingOptionValue(raw: string): string {
+  return normalizeThinkLevel(raw) ?? normalizeLowercaseStringOrEmpty(raw);
 }
 
-function resolveThinkLevelOptions(provider?: string | null): readonly string[] {
-  return isBinaryThinkingProvider(provider) ? BINARY_THINK_LEVELS : THINK_LEVELS;
+function resolveThinkLevelOptions(
+  row: GatewaySessionRow,
+): readonly { value: string; label: string }[] {
+  const defaultLabel = row.thinkingDefault
+    ? t("sessionsView.defaultOption", { value: row.thinkingDefault })
+    : t("sessionsView.inherit");
+  const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
+    ? row.thinkingLevels
+    : (row.thinkingOptions?.length ? row.thinkingOptions : DEFAULT_THINK_LEVELS).map((label) => ({
+        id: normalizeThinkingOptionValue(label),
+        label,
+      }));
+  return [
+    { value: "", label: defaultLabel },
+    ...options.map((option) => ({
+      value: normalizeThinkingOptionValue(option.id),
+      label: option.label,
+    })),
+  ];
 }
 
 function withCurrentOption(options: readonly string[], current: string): string[] {
@@ -118,33 +127,43 @@ function withCurrentLabeledOption(
   if (options.some((option) => option.value === current)) {
     return [...options];
   }
-  return [...options, { value: current, label: `${current} (custom)` }];
+  return [
+    ...options,
+    { value: current, label: t("sessionsView.customOption", { value: current }) },
+  ];
 }
 
-function resolveThinkLevelDisplay(value: string, isBinary: boolean): string {
-  if (!isBinary) {
-    return value;
-  }
-  if (!value || value === "off") {
-    return value;
-  }
-  return "on";
+function buildVerboseLevelOptions(): Array<{ value: string; label: string }> {
+  return VERBOSE_LEVEL_VALUES.map((value) => ({
+    value,
+    label:
+      value === ""
+        ? t("sessionsView.inherit")
+        : value === "off"
+          ? t("sessionsView.offExplicit")
+          : t(`sessionsView.${value}`),
+  }));
 }
 
-function resolveThinkLevelPatchValue(value: string, isBinary: boolean): string | null {
+function buildFastLevelOptions(): Array<{ value: string; label: string }> {
+  return FAST_LEVEL_VALUES.map((value) => ({
+    value,
+    label: value === "" ? t("sessionsView.inherit") : t(`sessionsView.${value}`),
+  }));
+}
+
+function resolveThinkLevelPatchValue(value: string): string | null {
   if (!value) {
     return null;
-  }
-  if (!isBinary) {
-    return value;
-  }
-  if (value === "on") {
-    return "low";
   }
   return value;
 }
 
-function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow[] {
+function filterRows(
+  rows: GatewaySessionRow[],
+  query: string,
+  agentIdentityById: Record<string, AgentIdentityResult>,
+): GatewaySessionRow[] {
   const q = normalizeLowercaseStringOrEmpty(query);
   if (!q) {
     return rows;
@@ -154,7 +173,14 @@ function filterRows(rows: GatewaySessionRow[], query: string): GatewaySessionRow
     const label = normalizeLowercaseStringOrEmpty(row.label);
     const kind = normalizeLowercaseStringOrEmpty(row.kind);
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
-    return key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q);
+    if (key.includes(q) || label.includes(q) || kind.includes(q) || displayName.includes(q)) {
+      return true;
+    }
+    const keyParts = parseSessionKeyParts(row.key);
+    const identityName = keyParts
+      ? normalizeLowercaseStringOrEmpty(getAgentIdentity(agentIdentityById, keyParts.agentId)?.name)
+      : "";
+    return identityName.includes(q);
   });
 }
 
@@ -198,13 +224,13 @@ function paginateRows<T>(rows: T[], page: number, pageSize: number): T[] {
 function formatCheckpointReason(reason: SessionCompactionCheckpoint["reason"]): string {
   switch (reason) {
     case "manual":
-      return "manual";
+      return t("sessionsView.manual");
     case "auto-threshold":
-      return "auto-threshold";
+      return t("sessionsView.autoThreshold");
     case "overflow-retry":
-      return "overflow retry";
+      return t("sessionsView.overflowRetry");
     case "timeout-retry":
-      return "timeout retry";
+      return t("sessionsView.timeoutRetry");
     default:
       return reason;
   }
@@ -217,17 +243,20 @@ function formatCheckpointDelta(checkpoint: SessionCompactionCheckpoint): string 
     Number.isFinite(checkpoint.tokensBefore) &&
     Number.isFinite(checkpoint.tokensAfter)
   ) {
-    return `${checkpoint.tokensBefore.toLocaleString()} → ${checkpoint.tokensAfter.toLocaleString()} tokens`;
+    return t("sessionsView.tokenRange", {
+      before: checkpoint.tokensBefore.toLocaleString(),
+      after: checkpoint.tokensAfter.toLocaleString(),
+    });
   }
   if (typeof checkpoint.tokensBefore === "number" && Number.isFinite(checkpoint.tokensBefore)) {
-    return `${checkpoint.tokensBefore.toLocaleString()} tokens before`;
+    return t("sessionsView.tokensBefore", { count: checkpoint.tokensBefore.toLocaleString() });
   }
-  return "token delta unavailable";
+  return t("sessionsView.tokenDeltaUnavailable");
 }
 
 export function renderSessions(props: SessionsProps) {
   const rawRows = props.result?.sessions ?? [];
-  const filtered = filterRows(rawRows, props.searchQuery);
+  const filtered = filterRows(rawRows, props.searchQuery, props.agentIdentityById);
   const sorted = sortRows(filtered, props.sortColumn, props.sortDir);
   const totalRows = sorted.length;
   const totalPages = Math.max(1, Math.ceil(totalRows / props.pageSize));
@@ -258,11 +287,11 @@ export function renderSessions(props: SessionsProps) {
     <section class="card">
       <div class="row" style="justify-content: space-between; margin-bottom: 12px;">
         <div>
-          <div class="card-title">Sessions</div>
+          <div class="card-title">${t("sessionsView.title")}</div>
           <div class="card-sub">
             ${props.result
-              ? `Store: ${props.result.path}`
-              : "Active session keys and per-session overrides."}
+              ? t("sessionsView.store", { path: props.result.path })
+              : t("sessionsView.subtitle")}
           </div>
         </div>
         <button class="btn" ?disabled=${props.loading} @click=${props.onRefresh}>
@@ -272,10 +301,10 @@ export function renderSessions(props: SessionsProps) {
 
       <div class="filters" style="margin-bottom: 12px;">
         <label class="field-inline">
-          <span>Active</span>
+          <span>${t("sessionsView.active")}</span>
           <input
             style="width: 72px;"
-            placeholder="min"
+            placeholder=${t("sessionsView.minutesPlaceholder")}
             .value=${props.activeMinutes}
             @input=${(e: Event) =>
               props.onFiltersChange({
@@ -287,7 +316,7 @@ export function renderSessions(props: SessionsProps) {
           />
         </label>
         <label class="field-inline">
-          <span>Limit</span>
+          <span>${t("sessionsView.limit")}</span>
           <input
             style="width: 64px;"
             .value=${props.limit}
@@ -312,7 +341,7 @@ export function renderSessions(props: SessionsProps) {
                 includeUnknown: props.includeUnknown,
               })}
           />
-          <span>Global</span>
+          <span>${t("sessionsView.global")}</span>
         </label>
         <label class="field-inline checkbox">
           <input
@@ -326,7 +355,7 @@ export function renderSessions(props: SessionsProps) {
                 includeUnknown: (e.target as HTMLInputElement).checked,
               })}
           />
-          <span>Unknown</span>
+          <span>${t("sessionsView.unknown")}</span>
         </label>
       </div>
 
@@ -339,7 +368,7 @@ export function renderSessions(props: SessionsProps) {
           <div class="data-table-search">
             <input
               type="text"
-              placeholder="Filter by key, label, kind…"
+              placeholder=${t("sessionsView.searchPlaceholder")}
               .value=${props.searchQuery}
               @input=${(e: Event) => props.onSearchChange((e.target as HTMLInputElement).value)}
             />
@@ -349,7 +378,9 @@ export function renderSessions(props: SessionsProps) {
         ${props.selectedKeys.size > 0
           ? html`
               <div class="data-table-bulk-bar">
-                <span>${props.selectedKeys.size} selected</span>
+                <span
+                  >${t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span
+                >
                 <button class="btn btn--sm" @click=${props.onDeselectAll}>
                   ${t("common.unselect")}
                 </button>
@@ -358,7 +389,7 @@ export function renderSessions(props: SessionsProps) {
                   ?disabled=${props.loading}
                   @click=${props.onDeleteSelected}
                 >
-                  ${icons.trash} Delete
+                  ${icons.trash} ${t("sessionsView.deleteSelected")}
                 </button>
               </div>
             `
@@ -384,19 +415,20 @@ export function renderSessions(props: SessionsProps) {
                             props.onSelectPage(paginated.map((r) => r.key));
                           }
                         }}
-                        aria-label="Select all on page"
+                        aria-label=${t("sessionsView.selectAllOnPage")}
                       />`
                     : nothing}
                 </th>
-                ${sortHeader("key", "Key", "data-table-key-col")}
-                <th>Label</th>
-                ${sortHeader("kind", "Kind")} ${sortHeader("updated", "Updated")}
-                ${sortHeader("tokens", "Tokens")}
-                <th>Compaction</th>
-                <th>Thinking</th>
-                <th>Fast</th>
-                <th>Verbose</th>
-                <th>Reasoning</th>
+                ${sortHeader("key", t("sessionsView.key"), "data-table-key-col")}
+                <th>${t("sessionsView.label")}</th>
+                ${sortHeader("kind", t("sessionsView.kind"))}
+                ${sortHeader("updated", t("sessionsView.updated"))}
+                ${sortHeader("tokens", t("sessionsView.tokens"))}
+                <th>${t("sessionsView.compaction")}</th>
+                <th>${t("sessionsView.thinking")}</th>
+                <th>${t("sessionsView.fast")}</th>
+                <th>${t("sessionsView.verbose")}</th>
+                <th>${t("sessionsView.reasoning")}</th>
               </tr>
             </thead>
             <tbody>
@@ -407,7 +439,7 @@ export function renderSessions(props: SessionsProps) {
                         colspan="11"
                         style="text-align: center; padding: 48px 16px; color: var(--muted)"
                       >
-                        No sessions found.
+                        ${t("sessionsView.noSessions")}
                       </td>
                     </tr>
                   `
@@ -439,7 +471,7 @@ export function renderSessions(props: SessionsProps) {
                     ?disabled=${page >= totalPages - 1}
                     @click=${() => props.onPageChange(page + 1)}
                   >
-                    Next
+                    ${t("common.next")}
                   </button>
                 </div>
               </div>
@@ -453,13 +485,12 @@ export function renderSessions(props: SessionsProps) {
 function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : t("common.na");
   const rawThinking = row.thinkingLevel ?? "";
-  const isBinaryThinking = isBinaryThinkingProvider(row.modelProvider);
-  const thinking = resolveThinkLevelDisplay(rawThinking, isBinaryThinking);
-  const thinkLevels = withCurrentOption(resolveThinkLevelOptions(row.modelProvider), thinking);
+  const thinking = rawThinking ? normalizeThinkingOptionValue(rawThinking) : "";
+  const thinkLevels = withCurrentLabeledOption(resolveThinkLevelOptions(row), thinking);
   const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
-  const fastLevels = withCurrentLabeledOption(FAST_LEVELS, fastMode);
+  const fastLevels = withCurrentLabeledOption(buildFastLevelOptions(), fastMode);
   const verbose = row.verboseLevel ?? "";
-  const verboseLevels = withCurrentLabeledOption(VERBOSE_LEVELS, verbose);
+  const verboseLevels = withCurrentLabeledOption(buildVerboseLevelOptions(), verbose);
   const reasoning = row.reasoningLevel ?? "";
   const reasoningLevels = withCurrentOption(REASONING_LEVELS, reasoning);
   const latestCheckpoint = row.latestCompactionCheckpoint;
@@ -472,6 +503,17 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const showDisplayName = Boolean(
     displayName && displayName !== row.key && displayName !== trimmedLabel,
   );
+  const keyParts = parseSessionKeyParts(row.key);
+  const agentIdentity = keyParts
+    ? getAgentIdentity(props.agentIdentityById, keyParts.agentId)
+    : null;
+  const identityEmoji = normalizeOptionalString(agentIdentity?.emoji) ?? "";
+  const identityName = normalizeOptionalString(agentIdentity?.name) ?? "";
+  const friendlyKeyLabel =
+    identityName && keyParts
+      ? `${identityEmoji ? `${identityEmoji} ` : ""}${identityName} (${keyParts.channel})`
+      : null;
+  const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
     ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
@@ -492,11 +534,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           type="checkbox"
           .checked=${props.selectedKeys.has(row.key)}
           @change=${() => props.onToggleSelect(row.key)}
-          aria-label="Select session"
+          aria-label=${t("sessionsView.selectSession")}
         />
       </td>
       <td class="data-table-key-col">
-        <div class="mono session-key-cell">
+        <div
+          class=${friendlyKeyLabel ? "session-key-cell" : "mono session-key-cell"}
+          title=${keyCellTitle}
+        >
           ${canLink
             ? html`<a
                 href=${chatUrl}
@@ -517,9 +562,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                     props.onNavigateToChat(row.key);
                   }
                 }}
-                >${row.key}</a
+                >${friendlyKeyLabel ?? row.key}</a
               >`
-            : row.key}
+            : (friendlyKeyLabel ?? row.key)}
           ${showDisplayName
             ? html`<span class="muted session-key-display-name">${displayName}</span>`
             : nothing}
@@ -529,7 +574,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         <input
           .value=${row.label ?? ""}
           ?disabled=${props.loading}
-          placeholder="(optional)"
+          placeholder=${t("sessionsView.optionalPlaceholder")}
           style="width: 100%; max-width: 140px; padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm);"
           @change=${(e: Event) => {
             const value = normalizeOptionalString((e.target as HTMLInputElement).value) ?? null;
@@ -546,8 +591,10 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
         <div style="display: grid; gap: 6px;">
           <span class="muted" style="font-size: 12px;">
             ${checkpointCount > 0
-              ? `${checkpointCount} checkpoint${checkpointCount === 1 ? "" : "s"}`
-              : "none"}
+              ? checkpointCount === 1
+                ? t("sessionsView.checkpoint", { count: String(checkpointCount) })
+                : t("sessionsView.checkpoints", { count: String(checkpointCount) })
+              : t("common.none")}
           </span>
           ${latestCheckpoint
             ? html`
@@ -562,7 +609,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
             ?disabled=${props.checkpointLoadingKey === row.key}
             @click=${() => props.onToggleCheckpointDetails(row.key)}
           >
-            ${isExpanded ? "Hide checkpoints" : "Show checkpoints"}
+            ${isExpanded ? t("sessionsView.hideCheckpoints") : t("sessionsView.showCheckpoints")}
           </button>
         </div>
       </td>
@@ -573,14 +620,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
             props.onPatch(row.key, {
-              thinkingLevel: resolveThinkLevelPatchValue(value, isBinaryThinking),
+              thinkingLevel: resolveThinkLevelPatchValue(value),
             });
           }}
         >
           ${thinkLevels.map(
             (level) =>
-              html`<option value=${level} ?selected=${thinking === level}>
-                ${level || "inherit"}
+              html`<option value=${level.value} ?selected=${thinking === level.value}>
+                ${level.label}
               </option>`,
           )}
         </select>
@@ -631,7 +678,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           ${reasoningLevels.map(
             (level) =>
               html`<option value=${level} ?selected=${reasoning === level}>
-                ${level || "inherit"}
+                ${level || t("sessionsView.inherit")}
               </option>`,
           )}
         </select>
@@ -645,13 +692,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                 style="padding: 14px 16px; border-top: 1px solid var(--border); background: var(--surface-2, rgba(127, 127, 127, 0.05));"
               >
                 ${props.checkpointLoadingKey === row.key
-                  ? html`<div class="muted">Loading checkpoints…</div>`
+                  ? html`<div class="muted">${t("sessionsView.loadingCheckpoints")}</div>`
                   : checkpointError
                     ? html`<div class="callout danger">${checkpointError}</div>`
                     : checkpointItems.length === 0
-                      ? html`<div class="muted">
-                          No compaction checkpoints recorded for this session.
-                        </div>`
+                      ? html`<div class="muted">${t("sessionsView.noCheckpoints")}</div>`
                       : html`
                           <div style="display: grid; gap: 10px;">
                             ${checkpointItems.map(
@@ -674,7 +719,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                                     ? html`<div style="white-space: pre-wrap;">
                                         ${checkpoint.summary}
                                       </div>`
-                                    : html`<div class="muted">No summary captured.</div>`}
+                                    : html`<div class="muted">${t("sessionsView.noSummary")}</div>`}
                                   <div style="display: flex; gap: 8px; flex-wrap: wrap;">
                                     <button
                                       class="btn btn--sm"
@@ -686,7 +731,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                                           checkpoint.checkpointId,
                                         )}
                                     >
-                                      Branch from checkpoint
+                                      ${t("sessionsView.branchFromCheckpoint")}
                                     </button>
                                     <button
                                       class="btn btn--sm"
@@ -695,7 +740,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                                       @click=${() =>
                                         props.onRestoreCheckpoint(row.key, checkpoint.checkpointId)}
                                     >
-                                      Restore
+                                      ${t("sessionsView.restoreCheckpoint")}
                                     </button>
                                   </div>
                                 </div>

@@ -1,6 +1,9 @@
 import fs from "node:fs";
+import { isDeepStrictEqual } from "node:util";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { saveJsonFile } from "../../infra/json-file.js";
+import { cloneAuthProfileStore } from "./clone.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   AUTH_STORE_VERSION,
@@ -8,6 +11,8 @@ import {
   log,
 } from "./constants.js";
 import { overlayExternalAuthProfiles, shouldPersistExternalAuthProfile } from "./external-auth.js";
+import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
+import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import {
   ensureAuthStoreFile,
   resolveAuthStatePath,
@@ -34,13 +39,24 @@ import type { AuthProfileStore } from "./types.js";
 
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
+  config?: OpenClawConfig;
+  externalCli?: ExternalCliAuthDiscovery;
   readOnly?: boolean;
   syncExternalCli?: boolean;
+  externalCliProviderIds?: Iterable<string>;
+  externalCliProfileIds?: Iterable<string>;
 };
 
 type SaveAuthProfileStoreOptions = {
   filterExternalAuthProfiles?: boolean;
   syncExternalCli?: boolean;
+};
+
+type ResolvedExternalCliOverlayOptions = {
+  allowKeychainPrompt?: boolean;
+  config?: OpenClawConfig;
+  externalCliProviderIds?: Iterable<string>;
+  externalCliProfileIds?: Iterable<string>;
 };
 
 const loadedAuthStoreCache = new Map<
@@ -53,8 +69,53 @@ const loadedAuthStoreCache = new Map<
   }
 >();
 
-function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
-  return structuredClone(store);
+function isInheritedMainOAuthCredential(params: {
+  agentDir?: string;
+  profileId: string;
+  credential: AuthProfileStore["profiles"][string];
+}): boolean {
+  if (!params.agentDir || params.credential.type !== "oauth") {
+    return false;
+  }
+  const authPath = resolveAuthStorePath(params.agentDir);
+  const mainAuthPath = resolveAuthStorePath();
+  if (authPath === mainAuthPath) {
+    return false;
+  }
+
+  const localStore = loadPersistedAuthProfileStore(params.agentDir);
+  if (localStore?.profiles[params.profileId]) {
+    return false;
+  }
+
+  const mainCredential = loadPersistedAuthProfileStore()?.profiles[params.profileId];
+  return (
+    mainCredential?.type === "oauth" &&
+    (isDeepStrictEqual(mainCredential, params.credential) ||
+      shouldUseMainOwnerForLocalOAuthCredential({
+        local: params.credential,
+        main: mainCredential,
+      }))
+  );
+}
+
+function shouldUseMainOwnerForLocalOAuthCredential(params: {
+  local: AuthProfileStore["profiles"][string];
+  main: AuthProfileStore["profiles"][string] | undefined;
+}): boolean {
+  if (params.local.type !== "oauth" || params.main?.type !== "oauth") {
+    return false;
+  }
+  if (!isSafeToAdoptMainStoreOAuthIdentity(params.local, params.main)) {
+    return false;
+  }
+  if (isDeepStrictEqual(params.local, params.main)) {
+    return true;
+  }
+  return (
+    Number.isFinite(params.main.expires) &&
+    (!Number.isFinite(params.local.expires) || params.main.expires >= params.local.expires)
+  );
 }
 
 function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
@@ -74,7 +135,11 @@ function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | n
     return mergeAuthProfileStores(mainStore, requestedStore);
   }
   if (requestedStore) {
-    return requestedStore;
+    const persistedMainStore = loadAuthProfileStoreForAgent(undefined, {
+      readOnly: true,
+      syncExternalCli: false,
+    });
+    return mergeAuthProfileStores(persistedMainStore, requestedStore);
   }
   if (mainStore) {
     return mainStore;
@@ -122,6 +187,126 @@ function writeCachedAuthProfileStore(params: {
     syncedAtMs: Date.now(),
     store: cloneAuthProfileStore(params.store),
   });
+}
+
+function resolveExternalCliOverlayOptions(
+  options: LoadAuthProfileStoreOptions | undefined,
+): ResolvedExternalCliOverlayOptions {
+  const discovery = options?.externalCli;
+  if (!discovery) {
+    return {
+      ...(options?.allowKeychainPrompt !== undefined
+        ? { allowKeychainPrompt: options.allowKeychainPrompt }
+        : {}),
+      ...(options?.config ? { config: options.config } : {}),
+      ...(options?.externalCliProviderIds
+        ? { externalCliProviderIds: options.externalCliProviderIds }
+        : {}),
+      ...(options?.externalCliProfileIds
+        ? { externalCliProfileIds: options.externalCliProfileIds }
+        : {}),
+    };
+  }
+  if (discovery.mode === "none") {
+    const config = discovery.config ?? options?.config;
+    return {
+      allowKeychainPrompt: false,
+      ...(config ? { config } : {}),
+      externalCliProviderIds: [],
+      externalCliProfileIds: [],
+    };
+  }
+  if (discovery.mode === "existing") {
+    const allowKeychainPrompt = discovery.allowKeychainPrompt ?? options?.allowKeychainPrompt;
+    const config = discovery.config ?? options?.config;
+    return {
+      ...(allowKeychainPrompt !== undefined ? { allowKeychainPrompt } : {}),
+      ...(config ? { config } : {}),
+    };
+  }
+  const allowKeychainPrompt = discovery.allowKeychainPrompt ?? options?.allowKeychainPrompt;
+  const config = discovery.config ?? options?.config;
+  return {
+    ...(allowKeychainPrompt !== undefined ? { allowKeychainPrompt } : {}),
+    ...(config ? { config } : {}),
+    ...(discovery.providerIds ? { externalCliProviderIds: discovery.providerIds } : {}),
+    ...(discovery.profileIds ? { externalCliProfileIds: discovery.profileIds } : {}),
+  };
+}
+
+function shouldKeepProfileInLocalStore(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  credential: AuthProfileStore["profiles"][string];
+  agentDir?: string;
+  options?: SaveAuthProfileStoreOptions;
+}): boolean {
+  if (params.credential.type !== "oauth") {
+    return true;
+  }
+  if (
+    isInheritedMainOAuthCredential({
+      agentDir: params.agentDir,
+      profileId: params.profileId,
+      credential: params.credential,
+    })
+  ) {
+    return false;
+  }
+  if (params.options?.filterExternalAuthProfiles === false) {
+    return true;
+  }
+  return shouldPersistExternalAuthProfile({
+    store: params.store,
+    profileId: params.profileId,
+    credential: params.credential,
+    agentDir: params.agentDir,
+  });
+}
+
+function buildLocalAuthProfileStoreForSave(params: {
+  store: AuthProfileStore;
+  agentDir?: string;
+  options?: SaveAuthProfileStoreOptions;
+}): AuthProfileStore {
+  const localStore = cloneAuthProfileStore(params.store);
+  localStore.profiles = Object.fromEntries(
+    Object.entries(localStore.profiles).filter(([profileId, credential]) =>
+      shouldKeepProfileInLocalStore({
+        store: params.store,
+        profileId,
+        credential,
+        agentDir: params.agentDir,
+        options: params.options,
+      }),
+    ),
+  );
+  const keptProfileIds = new Set(Object.keys(localStore.profiles));
+  localStore.order = localStore.order
+    ? Object.fromEntries(
+        Object.entries(localStore.order)
+          .map(([provider, profileIds]) => [
+            provider,
+            profileIds.filter((profileId) => keptProfileIds.has(profileId)),
+          ])
+          .filter(([, profileIds]) => profileIds.length > 0),
+      )
+    : undefined;
+  localStore.lastGood = localStore.lastGood
+    ? Object.fromEntries(
+        Object.entries(localStore.lastGood).filter(([, profileId]) =>
+          keptProfileIds.has(profileId),
+        ),
+      )
+    : undefined;
+  localStore.usageStats = localStore.usageStats
+    ? Object.fromEntries(
+        Object.entries(localStore.usageStats).filter(([profileId]) =>
+          keptProfileIds.has(profileId),
+        ),
+      )
+    : undefined;
+  return localStore;
 }
 
 export async function updateAuthProfileStoreWithLock(params: {
@@ -199,24 +384,6 @@ function loadAuthProfileStoreForAgent(
     return asStore;
   }
 
-  // Fallback: inherit auth-profiles from main agent if subagent has none
-  if (agentDir && !readOnly) {
-    const mainStore = loadPersistedAuthProfileStore();
-    if (mainStore && Object.keys(mainStore.profiles).length > 0) {
-      // Clone only secret-bearing profiles to subagent directory for auth inheritance.
-      saveJsonFile(authPath, buildPersistedAuthProfileSecretsStore(mainStore));
-      log.info("inherited auth-profiles from main agent", { agentDir });
-      const inherited = { version: mainStore.version, profiles: { ...mainStore.profiles } };
-      writeCachedAuthProfileStore({
-        authPath,
-        authMtimeMs: readAuthStoreMtimeMs(authPath),
-        stateMtimeMs: readAuthStoreMtimeMs(statePath),
-        store: inherited,
-      });
-      return inherited;
-    }
-  }
-
   const legacy = loadLegacyAuthProfileStore(agentDir);
   const store: AuthProfileStore = {
     version: AUTH_STORE_VERSION,
@@ -268,13 +435,18 @@ export function loadAuthProfileStoreForRuntime(
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
+  const externalCli = resolveExternalCliOverlayOptions(options);
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    return overlayExternalAuthProfiles(store, {
+      agentDir,
+      ...externalCli,
+    });
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
   return overlayExternalAuthProfiles(mergeAuthProfileStores(mainStore, store), {
     agentDir,
+    ...externalCli,
   });
 }
 
@@ -297,24 +469,41 @@ export function loadAuthProfileStoreWithoutExternalProfiles(agentDir?: string): 
 
 export function ensureAuthProfileStore(
   agentDir?: string,
+  options?: {
+    allowKeychainPrompt?: boolean;
+    config?: OpenClawConfig;
+    externalCli?: ExternalCliAuthDiscovery;
+    externalCliProviderIds?: Iterable<string>;
+    externalCliProfileIds?: Iterable<string>;
+  },
+): AuthProfileStore {
+  const externalCli = resolveExternalCliOverlayOptions(options);
+  return overlayExternalAuthProfiles(
+    ensureAuthProfileStoreWithoutExternalProfiles(agentDir, options),
+    {
+      agentDir,
+      ...externalCli,
+    },
+  );
+}
+
+export function ensureAuthProfileStoreWithoutExternalProfiles(
+  agentDir?: string,
   options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
   const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
   if (runtimeStore) {
-    return overlayExternalAuthProfiles(runtimeStore, { agentDir });
+    return runtimeStore;
   }
-
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
-    return overlayExternalAuthProfiles(store, { agentDir });
+    return store;
   }
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
-  const merged = mergeAuthProfileStores(mainStore, store);
-
-  return overlayExternalAuthProfiles(merged, { agentDir });
+  return mergeAuthProfileStores(mainStore, store);
 }
 
 export function findPersistedAuthProfileCredential(params: {
@@ -334,6 +523,34 @@ export function findPersistedAuthProfileCredential(params: {
   }
 
   return loadPersistedAuthProfileStore()?.profiles[params.profileId];
+}
+
+export function resolvePersistedAuthProfileOwnerAgentDir(params: {
+  agentDir?: string;
+  profileId: string;
+}): string | undefined {
+  if (!params.agentDir) {
+    return undefined;
+  }
+  const requestedStore = loadPersistedAuthProfileStore(params.agentDir);
+  const requestedPath = resolveAuthStorePath(params.agentDir);
+  const mainPath = resolveAuthStorePath();
+  if (requestedPath === mainPath) {
+    return undefined;
+  }
+
+  const mainStore = loadPersistedAuthProfileStore();
+  const requestedProfile = requestedStore?.profiles[params.profileId];
+  if (requestedProfile) {
+    return shouldUseMainOwnerForLocalOAuthCredential({
+      local: requestedProfile,
+      main: mainStore?.profiles[params.profileId],
+    })
+      ? undefined
+      : params.agentDir;
+  }
+
+  return mainStore?.profiles[params.profileId] ? undefined : params.agentDir;
 }
 
 export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
@@ -372,30 +589,17 @@ export function saveAuthProfileStore(
 ): void {
   const authPath = resolveAuthStorePath(agentDir);
   const statePath = resolveAuthStatePath(agentDir);
-  const payload = buildPersistedAuthProfileSecretsStore(store, ({ profileId, credential }) => {
-    if (credential.type !== "oauth") {
-      return true;
-    }
-    if (options?.filterExternalAuthProfiles === false) {
-      return true;
-    }
-    return shouldPersistExternalAuthProfile({
-      store,
-      profileId,
-      credential,
-      agentDir,
-    });
-  });
+  const localStore = buildLocalAuthProfileStoreForSave({ store, agentDir, options });
+  const payload = buildPersistedAuthProfileSecretsStore(localStore);
   saveJsonFile(authPath, payload);
-  savePersistedAuthProfileState(store, agentDir);
-  const runtimeStore = cloneAuthProfileStore(store);
+  savePersistedAuthProfileState(localStore, agentDir);
   writeCachedAuthProfileStore({
     authPath,
     authMtimeMs: readAuthStoreMtimeMs(authPath),
     stateMtimeMs: readAuthStoreMtimeMs(statePath),
-    store: runtimeStore,
+    store: localStore,
   });
   if (hasRuntimeAuthProfileStoreSnapshot(agentDir)) {
-    setRuntimeAuthProfileStoreSnapshot(runtimeStore, agentDir);
+    setRuntimeAuthProfileStoreSnapshot(localStore, agentDir);
   }
 }

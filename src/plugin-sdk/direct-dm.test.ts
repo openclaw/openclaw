@@ -70,6 +70,62 @@ describe("plugin-sdk/direct-dm", () => {
     expect(result.commandAuthorized).toBe(true);
   });
 
+  it("blocks open DMs unless the effective allowlist matches", async () => {
+    const result = await resolveInboundDirectDmAccessWithRuntime({
+      cfg: baseCfg,
+      channel: "nostr",
+      accountId: "default",
+      dmPolicy: "open",
+      allowFrom: [],
+      senderId: "random-user",
+      rawBody: "hello",
+      isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
+      readStoreAllowFrom: async () => ["random-user"],
+      runtime: {
+        shouldComputeCommandAuthorized: () => false,
+        resolveCommandAuthorizedFromAuthorizers: () => true,
+      },
+    });
+
+    expect(result.access.decision).toBe("block");
+    expect(result.access.reason).toBe("dmPolicy=open (not allowlisted)");
+    expect(result.access.effectiveAllowFrom).toEqual([]);
+    expect(result.commandAuthorized).toBeUndefined();
+  });
+
+  it("resolves generic message sender access groups for direct DMs", async () => {
+    const result = await resolveInboundDirectDmAccessWithRuntime({
+      cfg: {
+        ...baseCfg,
+        accessGroups: {
+          owners: {
+            type: "message.senders",
+            members: {
+              nostr: ["owner-pubkey"],
+              telegram: ["12345"],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      channel: "nostr",
+      accountId: "default",
+      dmPolicy: "allowlist",
+      allowFrom: ["accessGroup:owners"],
+      senderId: "owner-pubkey",
+      rawBody: "/status",
+      isSenderAllowed: (senderId, allowFrom) => allowFrom.includes(senderId),
+      runtime: {
+        shouldComputeCommandAuthorized: () => true,
+        resolveCommandAuthorizedFromAuthorizers: ({ authorizers }) =>
+          authorizers.some((entry) => entry.configured && entry.allowed),
+      },
+    });
+
+    expect(result.access.decision).toBe("allow");
+    expect(result.access.effectiveAllowFrom).toEqual(["accessGroup:owners", "owner-pubkey"]);
+    expect(result.commandAuthorized).toBe(true);
+  });
+
   it("creates a pre-crypto authorizer that issues pairing and blocks unknown senders", async () => {
     const issuePairingChallenge = vi.fn(async () => {});
     const onBlocked = vi.fn();

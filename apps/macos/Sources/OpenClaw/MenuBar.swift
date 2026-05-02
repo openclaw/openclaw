@@ -51,7 +51,6 @@ struct OpenClawApp: App {
                 animationsEnabled: self.state.iconAnimationsEnabled && !self.isGatewaySleeping,
                 iconState: self.effectiveIconState)
         }
-        .menuBarExtraStyle(.menu)
         .menuBarExtraAccess(isPresented: self.$isMenuPresented) { item in
             self.statusItem = item
             MenuSessionsInjector.shared.install(into: item)
@@ -59,6 +58,7 @@ struct OpenClawApp: App {
             self.installStatusItemMouseHandler(for: item)
             self.updateHoverHUDSuppression()
         }
+        .menuBarExtraStyle(.menu)
         .onChange(of: self.state.isPaused) { _, paused in
             self.applyStatusItemAppearance(paused: paused, sleeping: self.isGatewaySleeping)
             if self.state.connectionMode == .local {
@@ -98,15 +98,9 @@ struct OpenClawApp: App {
     private static func applyAttachOnlyOverrideIfNeeded() {
         let args = CommandLine.arguments
         guard args.contains("--attach-only") || args.contains("--no-launchd") else { return }
-        if let error = GatewayLaunchAgentManager.setLaunchAgentWriteDisabled(true) {
+        if let error = GatewayLaunchAgentManager.applyAttachOnlyRuntimeOverride() {
             Self.logger.error("attach-only flag failed: \(error, privacy: .public)")
             return
-        }
-        Task {
-            _ = await GatewayLaunchAgentManager.set(
-                enabled: false,
-                bundlePath: Bundle.main.bundlePath,
-                port: GatewayEnvironment.gatewayPort())
         }
         Self.logger.info("attach-only flag enabled")
     }

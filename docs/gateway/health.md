@@ -3,10 +3,8 @@ summary: "Health check commands and gateway health monitoring"
 read_when:
   - Diagnosing channel connectivity or gateway health
   - Understanding health check CLI commands and options
-title: "Health Checks"
+title: "Health checks"
 ---
-
-# Health Checks (CLI)
 
 Short guide to verify channel connectivity without guessing.
 
@@ -21,11 +19,19 @@ Short guide to verify channel connectivity without guessing.
 - Send `/status` as a standalone message in WhatsApp/WebChat to get a status reply without invoking the agent.
 - Logs: tail `/tmp/openclaw/openclaw-*.log` and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
 
+For Discord and other chat providers, session rows are not socket liveness.
+`openclaw sessions`, Gateway `sessions.list`, and the agent `sessions_list` tool
+read stored conversation state. A provider can reconnect and show healthy channel
+status before any new session row is materialized. Use the channel status and
+health commands above for live connectivity checks.
+
 ## Deep diagnostics
 
 - Creds on disk: `ls -l ~/.openclaw/credentials/whatsapp/<accountId>/creds.json` (mtime should be recent).
 - Session store: `ls -l ~/.openclaw/agents/<agentId>/sessions/sessions.json` (path can be overridden in config). Count and recent recipients are surfaced via `status`.
 - Relink flow: `openclaw channels logout && openclaw channels login --verbose` when status codes 409–515 or `loggedOut` appear in logs. (Note: the QR login flow auto-restarts once for status 515 after pairing.)
+- Diagnostics are enabled by default. The gateway records operational facts unless `diagnostics.enabled: false` is set. Memory events record RSS/heap byte counts, threshold pressure, and growth pressure. Liveness warnings record event-loop delay, event-loop utilization, CPU-core ratio, and active/waiting/queued session counts when the process is running but saturated. Oversized-payload events record what was rejected, truncated, or chunked, plus sizes and limits when available. They do not record the message text, attachment contents, webhook body, raw request or response body, tokens, cookies, or secret values. The same heartbeat starts the bounded stability recorder, which is available through `openclaw gateway stability` or the `diagnostics.stability` Gateway RPC. Fatal Gateway exits, shutdown timeouts, and restart startup failures persist the latest recorder snapshot under `~/.openclaw/logs/stability/` when events exist; inspect the newest saved bundle with `openclaw gateway stability --bundle latest`.
+- For bug reports, run `openclaw gateway diagnostics export` and attach the generated zip. The export combines a Markdown summary, the newest stability bundle, sanitized log metadata, sanitized Gateway status/health snapshots, and config shape. It is meant to be shared: chat text, webhook bodies, tool outputs, credentials, cookies, account/message identifiers, and secret values are omitted or redacted. See [Diagnostics Export](/gateway/diagnostics).
 
 ## Health monitor config
 
@@ -59,3 +65,9 @@ Options:
 - `--debug`: alias for `--verbose`
 
 The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, and session-store summary.
+
+## Related
+
+- [Gateway runbook](/gateway)
+- [Diagnostics export](/gateway/diagnostics)
+- [Gateway troubleshooting](/gateway/troubleshooting)

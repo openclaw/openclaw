@@ -62,6 +62,7 @@ function resolveModelCost(
     cacheRead: typeof raw?.cacheRead === "number" ? raw.cacheRead : DEFAULT_MODEL_COST.cacheRead,
     cacheWrite:
       typeof raw?.cacheWrite === "number" ? raw.cacheWrite : DEFAULT_MODEL_COST.cacheWrite,
+    ...(raw?.tieredPricing ? { tieredPricing: raw.tieredPricing } : {}),
   };
 }
 
@@ -83,7 +84,7 @@ export function resolveNormalizedProviderModelMaxTokens(params: {
   return Math.min(safeMaxTokens, params.contextWindow);
 }
 
-export type SessionDefaultsOptions = {
+type SessionDefaultsOptions = {
   warn?: (message: string) => void;
   warnState?: WarnState;
 };
@@ -403,8 +404,4 @@ export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
       },
     },
   };
-}
-
-export function resetSessionDefaultsWarningForTests() {
-  defaultWarnState = { warned: false };
 }

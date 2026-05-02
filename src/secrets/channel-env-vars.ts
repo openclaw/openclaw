@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+export { isSafeChannelEnvVarTriggerName } from "./channel-env-var-names.js";
 
 type ChannelEnvVarLookupParams = {
   config?: OpenClawConfig;
@@ -31,13 +32,13 @@ function appendUniqueEnvVarCandidates(
 export function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,
 ): Record<string, readonly string[]> {
-  const registry = loadPluginManifestRegistry({
-    config: params?.config,
+  const snapshot = loadPluginMetadataSnapshot({
+    config: params?.config ?? {},
     workspaceDir: params?.workspaceDir,
-    env: params?.env,
+    env: params?.env ?? process.env,
   });
   const candidates: Record<string, string[]> = {};
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (!plugin.channelEnvVars) {
       continue;
     }

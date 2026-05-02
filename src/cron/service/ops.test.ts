@@ -1,12 +1,13 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
+import { loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
 import { run, start, stop, update } from "./ops.js";
 import { createCronServiceState } from "./state.js";
+import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
@@ -34,7 +35,7 @@ function createTimedOutIsolatedCronState(params: { storePath: string; now: numbe
     log: logger,
     nowMs: () => params.now,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => {
       throw new Error("cron: job execution timed out");
     }),
@@ -48,7 +49,7 @@ function createOkIsolatedCronState(params: { storePath: string; now: number; sum
     log: logger,
     nowMs: () => params.now,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
       ...(params.summary === undefined ? {} : { summary: params.summary }),
@@ -102,7 +103,7 @@ async function expectDueIsolatedManualRunProgresses(storePath: string, now: numb
 
   await expect(run(state, "isolated-timeout")).resolves.toEqual({ ok: true, ran: true });
 
-  const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+  const persisted = (await loadCronStore(storePath)) as {
     jobs: CronJob[];
   };
   expect(persisted.jobs[0]?.state.runningAtMs).toBeUndefined();
@@ -128,11 +129,11 @@ function createMissedIsolatedJob(now: number): CronJob {
 }
 
 describe("cron service ops seam coverage", () => {
-  it("start clears stale running markers, replays interrupted recurring jobs, persists, and arms the timer (#60495)", async () => {
+  it("start marks interrupted running jobs failed, persists, and arms the timer", async () => {
     const { storePath } = await makeStorePath();
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeatNow = vi.fn();
+    const requestHeartbeat = vi.fn();
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
     await writeCronStoreSnapshot({
@@ -146,7 +147,7 @@ describe("cron service ops seam coverage", () => {
       log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
-      requestHeartbeatNow,
+      requestHeartbeat,
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -154,20 +155,22 @@ describe("cron service ops seam coverage", () => {
 
     expect(logger.warn).toHaveBeenCalledWith(
       expect.objectContaining({ jobId: "startup-interrupted" }),
-      "cron: clearing stale running marker on startup",
+      "cron: marking interrupted running job failed on startup",
     );
-    // Interrupted recurring jobs are now replayed on first restart (#60495)
-    expect(enqueueSystemEvent).toHaveBeenCalled();
-    expect(requestHeartbeatNow).toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(state.timer).not.toBeNull();
 
-    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+    const persisted = (await loadCronStore(storePath)) as {
       jobs: CronJob[];
     };
     const job = persisted.jobs[0];
     expect(job).toBeDefined();
     expect(job?.state.runningAtMs).toBeUndefined();
-    expect(job?.state.lastStatus).toBe("ok");
+    expect(job?.state.lastStatus).toBe("error");
+    expect(job?.state.lastRunStatus).toBe("error");
+    expect(job?.state.lastRunAtMs).toBe(now - 30 * 60_000);
+    expect(job?.state.lastError).toBe("cron: job interrupted by gateway restart");
     expect((job?.state.nextRunAtMs ?? 0) > now).toBe(true);
 
     const delays = timeoutSpy.mock.calls
@@ -324,25 +327,26 @@ describe("cron service ops seam coverage", () => {
     const now = Date.parse("2026-03-23T12:00:00.000Z");
     const restoreStateDir = withStateDirForStorePath(storePath);
 
-    await writeCronStoreSnapshot({
-      storePath,
-      jobs: [createMissedIsolatedJob(now)],
-    });
+    try {
+      await writeCronStoreSnapshot({
+        storePath,
+        jobs: [createMissedIsolatedJob(now)],
+      });
 
-    const state = createTimedOutIsolatedCronState({
-      storePath,
-      now,
-    });
+      const state = createTimedOutIsolatedCronState({
+        storePath,
+        now,
+      });
 
-    await start(state);
+      await runMissedJobs(state);
 
-    expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
-      runtime: "cron",
-      status: "timed_out",
-      sourceId: "startup-timeout",
-    });
-
-    restoreStateDir();
-    stop(state);
+      expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toMatchObject({
+        runtime: "cron",
+        status: "timed_out",
+        sourceId: "startup-timeout",
+      });
+    } finally {
+      restoreStateDir();
+    }
   });
 });

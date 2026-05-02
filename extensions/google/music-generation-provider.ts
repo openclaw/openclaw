@@ -1,4 +1,3 @@
-import { GoogleGenAI } from "@google/genai";
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import type {
   GeneratedMusicAsset,
@@ -7,13 +6,14 @@ import type {
 } from "openclaw/plugin-sdk/music-generation";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import { normalizeGoogleApiBaseUrl } from "./api.js";
+import { resolveGoogleGenerativeAiApiOrigin } from "./api.js";
 import {
   createGoogleMusicGenerationProviderMetadata,
   DEFAULT_GOOGLE_MUSIC_MODEL,
   GOOGLE_MAX_INPUT_IMAGES,
   GOOGLE_PRO_MUSIC_MODEL,
 } from "./generation-provider-metadata.js";
+import { createGoogleGenAI } from "./google-genai-runtime.js";
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
@@ -37,7 +37,7 @@ type GoogleGenerateMusicResponse = {
 
 function resolveConfiguredGoogleMusicBaseUrl(req: MusicGenerationRequest): string | undefined {
   const configured = normalizeOptionalString(req.cfg?.models?.providers?.google?.baseUrl);
-  return configured ? normalizeGoogleApiBaseUrl(configured) : undefined;
+  return configured ? resolveGoogleGenerativeAiApiOrigin(configured) : undefined;
 }
 
 function buildMusicPrompt(req: MusicGenerationRequest): string {
@@ -128,7 +128,7 @@ export function buildGoogleMusicGenerationProvider(): MusicGenerationProvider {
         }
       }
 
-      const client = new GoogleGenAI({
+      const client = createGoogleGenAI({
         apiKey: auth.apiKey,
         httpOptions: {
           ...(resolveConfiguredGoogleMusicBaseUrl(req)

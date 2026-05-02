@@ -1,5 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
   createActionGate,
@@ -25,6 +26,19 @@ const messagingActions = new Set([
 
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
+
+function sameSlackChannelTarget(targetChannel: string, currentChannelId: string): boolean {
+  const parsedTarget = parseSlackTarget(targetChannel, {
+    defaultKind: "channel",
+  });
+  if (!parsedTarget || parsedTarget.kind !== "channel") {
+    return false;
+  }
+  return (
+    normalizeLowercaseStringOrEmpty(parsedTarget.id) ===
+    normalizeLowercaseStringOrEmpty(currentChannelId)
+  );
+}
 
 type SlackActionsRuntimeModule = typeof import("./actions.runtime.js");
 type SlackAccountsRuntimeModule = typeof import("./accounts.runtime.js");
@@ -105,16 +119,8 @@ function resolveThreadTsFromContext(
     return undefined;
   }
 
-  const parsedTarget = parseSlackTarget(targetChannel, {
-    defaultKind: "channel",
-  });
-  if (!parsedTarget || parsedTarget.kind !== "channel") {
-    return undefined;
-  }
-  const normalizedTarget = parsedTarget.id;
-
   // Different channel - don't inject
-  if (normalizedTarget !== context.currentChannelId) {
+  if (!sameSlackChannelTarget(targetChannel, context.currentChannelId)) {
     return undefined;
   }
 
@@ -135,6 +141,10 @@ function resolveThreadTsFromContext(
 
 function readSlackBlocksParam(params: Record<string, unknown>) {
   return slackActionRuntime.parseSlackBlocksInput(params.blocks);
+}
+
+function isImageContentType(value: string | undefined): boolean {
+  return value?.trim().toLowerCase().startsWith("image/") === true;
 }
 
 export async function handleSlackAction(
@@ -172,10 +182,8 @@ export async function handleSlackAction(
   const buildActionOpts = (operation: "read" | "write") => {
     const token = getTokenForOperation(operation);
     const tokenOverride = token && token !== botToken ? token : undefined;
-    if (!accountId && !tokenOverride) {
-      return undefined;
-    }
     return {
+      cfg,
       ...(accountId ? { accountId } : {}),
       ...(tokenOverride ? { token: tokenOverride } : {}),
     };
@@ -236,22 +244,34 @@ export async function handleSlackAction(
         if (!content && !mediaUrl && !blocks) {
           throw new Error("Slack sendMessage requires content, blocks, or mediaUrl.");
         }
-        if (mediaUrl && blocks) {
-          throw new Error("Slack sendMessage does not support blocks with mediaUrl.");
-        }
         const threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
         );
-        const result = await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+        const sendOpts = {
           ...writeOpts,
-          mediaUrl: mediaUrl ?? undefined,
           mediaLocalRoots: context?.mediaLocalRoots,
           mediaReadFile: context?.mediaReadFile,
           threadTs: threadTs ?? undefined,
-          blocks,
-        });
+        };
+        const result =
+          mediaUrl && blocks
+            ? await (async () => {
+                await slackActionRuntime.sendSlackMessage(to, "", {
+                  ...sendOpts,
+                  mediaUrl,
+                });
+                return await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                  ...sendOpts,
+                  blocks,
+                });
+              })()
+            : await slackActionRuntime.sendSlackMessage(to, content ?? "", {
+                ...sendOpts,
+                mediaUrl: mediaUrl ?? undefined,
+                blocks,
+              });
 
         if (threadTs && result.channelId && account.accountId) {
           slackActionRuntime.recordSlackThreadParticipation(
@@ -265,8 +285,7 @@ export async function handleSlackAction(
         // threadTs: once we send a message to the current channel, consider the
         // first reply "used" so later tool calls don't auto-thread again.
         if (context?.hasRepliedRef && context.currentChannelId) {
-          const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
-          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+          if (sameSlackChannelTarget(to, context.currentChannelId)) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -308,8 +327,7 @@ export async function handleSlackAction(
         }
 
         if (context?.hasRepliedRef && context.currentChannelId) {
-          const parsedTarget = parseSlackTarget(to, { defaultKind: "channel" });
-          if (parsedTarget?.kind === "channel" && parsedTarget.id === context.currentChannelId) {
+          if (sameSlackChannelTarget(to, context.currentChannelId)) {
             context.hasRepliedRef.value = true;
           }
         }
@@ -360,12 +378,14 @@ export async function handleSlackAction(
         const before = readStringParam(params, "before");
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
+        const messageId = readStringParam(params, "messageId");
         const result = await slackActionRuntime.readSlackMessages(channelId, {
           ...readOpts,
           limit,
           before: before ?? undefined,
           after: after ?? undefined,
           threadId: threadId ?? undefined,
+          messageId: messageId ?? undefined,
         });
         const messages = result.messages.map((message) =>
           withNormalizedTimestamp(
@@ -397,11 +417,28 @@ export async function handleSlackAction(
             error: "File could not be downloaded (not found, too large, or inaccessible).",
           });
         }
+        if (!isImageContentType(downloaded.contentType)) {
+          return jsonResult({
+            ok: true,
+            fileId,
+            path: downloaded.path,
+            contentType: downloaded.contentType,
+            placeholder: downloaded.placeholder,
+            media: {
+              mediaUrl: downloaded.path,
+              ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+            },
+          });
+        }
         return await imageResultFromFile({
           label: "slack-file",
           path: downloaded.path,
           extraText: downloaded.placeholder,
-          details: { fileId, path: downloaded.path },
+          details: {
+            fileId,
+            path: downloaded.path,
+            ...(downloaded.contentType ? { contentType: downloaded.contentType } : {}),
+          },
         });
       }
       default:

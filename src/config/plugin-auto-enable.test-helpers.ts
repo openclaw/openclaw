@@ -1,22 +1,14 @@
-import fs from "node:fs";
 import path from "node:path";
-import { clearPluginDiscoveryCache } from "../plugins/discovery.js";
-import {
-  clearPluginManifestRegistryCache,
-  type PluginManifestRegistry,
-} from "../plugins/manifest-registry.js";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { type PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { type PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
-import {
-  cleanupTrackedTempDirs,
-  makeTrackedTempDir,
-  mkdirSafeDir,
-} from "../plugins/test-helpers/fs-fixtures.js";
+import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 
 export function resetPluginAutoEnableTestState(): void {
-  clearPluginDiscoveryCache();
-  clearPluginManifestRegistryCache();
+  clearCurrentPluginMetadataSnapshot();
   clearPluginSetupRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 }
@@ -29,30 +21,11 @@ export function makeIsolatedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.Proce
   const rootDir = makeTempDir();
   return {
     OPENCLAW_STATE_DIR: path.join(rootDir, "state"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    VITEST: "true",
     ...overrides,
   };
-}
-
-export function writePluginManifestFixture(params: {
-  rootDir: string;
-  id: string;
-  channels: string[];
-}): void {
-  mkdirSafeDir(params.rootDir);
-  fs.writeFileSync(
-    path.join(params.rootDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        channels: params.channels,
-        configSchema: { type: "object" },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(path.join(params.rootDir, "index.ts"), "export default {}", "utf-8");
 }
 
 export function makeRegistry(
@@ -64,8 +37,13 @@ export function makeRegistry(
     modelSupport?: { modelPrefixes?: string[]; modelPatterns?: string[] };
     contracts?: { webSearchProviders?: string[]; webFetchProviders?: string[]; tools?: string[] };
     providers?: string[];
+    cliBackends?: string[];
+    origin?: PluginOrigin;
     configSchema?: Record<string, unknown>;
-    channelConfigs?: Record<string, { schema: Record<string, unknown>; preferOver?: string[] }>;
+    channelConfigs?: Record<
+      string,
+      { schema: Record<string, unknown>; label?: string; preferOver?: string[] }
+    >;
   }>,
 ): PluginManifestRegistry {
   return {
@@ -79,10 +57,10 @@ export function makeRegistry(
       configSchema: plugin.configSchema,
       channelConfigs: plugin.channelConfigs,
       providers: plugin.providers ?? [],
-      cliBackends: [],
+      cliBackends: plugin.cliBackends ?? [],
       skills: [],
       hooks: [],
-      origin: "config" as const,
+      origin: plugin.origin ?? "config",
       rootDir: `/fake/${plugin.id}`,
       source: `/fake/${plugin.id}/index.js`,
       manifestPath: `/fake/${plugin.id}/openclaw.plugin.json`,
