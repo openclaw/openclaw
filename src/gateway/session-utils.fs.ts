@@ -573,7 +573,7 @@ export async function visitSessionMessagesAsync(
   visit: (message: unknown, seq: number) => void,
   _opts: { mode: "full"; reason: string },
 ): Promise<number> {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  const filePath = await findActiveOrLatestResetArchiveAsync(sessionId, storePath, sessionFile);
   if (!filePath) {
     return 0;
   }
@@ -595,7 +595,7 @@ export async function readSessionMessageCountAsync(
   storePath: string | undefined,
   sessionFile?: string,
 ): Promise<number> {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  const filePath = await findActiveOrLatestResetArchiveAsync(sessionId, storePath, sessionFile);
   if (!filePath) {
     return 0;
   }
