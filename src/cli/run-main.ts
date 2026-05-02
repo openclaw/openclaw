@@ -147,6 +147,7 @@ async function tryRunGatewayRunFastPath(
     { VERSION },
     { emitCliBanner },
     { resolveCliStartupPolicy },
+    { enableConsoleCapture },
   ] = await startupTrace.measure("gateway-run-imports", () =>
     Promise.all([
       import("commander"),
@@ -154,6 +155,7 @@ async function tryRunGatewayRunFastPath(
       import("../version.js"),
       import("./banner.js"),
       import("./command-startup-policy.js"),
+      import("../logging.js"),
     ]),
   );
   const invocation = resolveCliArgvInvocation(argv);
@@ -179,6 +181,7 @@ async function tryRunGatewayRunFastPath(
   addGatewayRunCommand(
     gateway.command("run").description("Run the WebSocket Gateway (foreground)"),
   );
+  enableConsoleCapture();
   try {
     await startupTrace.measure("gateway-run-parse", () => program.parseAsync(argv));
   } catch (error) {
