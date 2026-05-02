@@ -155,6 +155,46 @@ describe("web search runtime", () => {
     });
   });
 
+  it("auto-detects a provider from a configured credential fallback", async () => {
+    const provider = createCustomSearchProvider({
+      getConfiguredCredentialFallback: (config) => {
+        const modelProvider = config?.models?.providers?.["custom-search"];
+        return modelProvider && typeof modelProvider === "object" && "apiKey" in modelProvider
+          ? {
+              path: "models.providers.custom-search.apiKey",
+              value: (modelProvider as { apiKey?: unknown }).apiKey,
+            }
+          : undefined;
+      },
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      provider,
+      createDuckDuckGoSearchProvider(),
+    ]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([
+      provider,
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          models: {
+            providers: {
+              "custom-search": {
+                apiKey: "custom-provider-key",
+              },
+            },
+          },
+        },
+        args: { query: "fallback" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: { query: "fallback", ok: true },
+    });
+  });
+
   it("uses the active resolved runtime config for matching source config callers", async () => {
     const provider = createCustomSearchProvider({
       createTool: ({ config }) => ({

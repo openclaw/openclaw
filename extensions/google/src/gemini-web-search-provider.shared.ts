@@ -6,6 +6,8 @@ export type GeminiConfig = {
   apiKey?: unknown;
   baseUrl?: unknown;
   model?: unknown;
+  providerApiKey?: unknown;
+  providerBaseUrl?: unknown;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -25,7 +27,11 @@ export function resolveGeminiApiKey(
   gemini?: GeminiConfig,
   env: Record<string, string | undefined> = process.env,
 ): string | undefined {
-  return trimToUndefined(gemini?.apiKey) ?? trimToUndefined(env.GEMINI_API_KEY);
+  return (
+    trimToUndefined(gemini?.apiKey) ??
+    trimToUndefined(env.GEMINI_API_KEY) ??
+    trimToUndefined(gemini?.providerApiKey)
+  );
 }
 
 export function resolveGeminiModel(gemini?: GeminiConfig): string {
@@ -33,5 +39,7 @@ export function resolveGeminiModel(gemini?: GeminiConfig): string {
 }
 
 export function resolveGeminiBaseUrl(gemini?: GeminiConfig): string {
-  return normalizeGoogleApiBaseUrl(trimToUndefined(gemini?.baseUrl));
+  return normalizeGoogleApiBaseUrl(
+    trimToUndefined(gemini?.baseUrl) ?? trimToUndefined(gemini?.providerBaseUrl),
+  );
 }

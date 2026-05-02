@@ -59,6 +59,14 @@ describe("google web search provider", () => {
     });
   });
 
+  it("uses provider api keys only after env fallbacks", () => {
+    withEnv({ GEMINI_API_KEY: "AIza-env-test" }, () => {
+      expect(__testing.resolveGeminiApiKey({ providerApiKey: "AIza-provider-test" })).toBe(
+        "AIza-env-test",
+      );
+    });
+  });
+
   it("stores configured credentials at the canonical plugin config path", () => {
     const provider = createGeminiWebSearchProvider();
     const config = {} as OpenClawConfig;
@@ -99,6 +107,126 @@ describe("google web search provider", () => {
 
     expect(String(mockFetch.mock.calls[0]?.[0])).toBe(
       "https://generativelanguage.googleapis.com/proxy/v1beta/models/gemini-2.5-flash:generateContent",
+    );
+  });
+
+  it("reuses the Google model provider key when no web search key or env key is set", async () => {
+    await withEnvAsync({ GEMINI_API_KEY: undefined }, async () => {
+      const mockFetch = installGeminiFetch();
+      const provider = createGeminiWebSearchProvider();
+      const tool = provider.createTool({
+        config: {
+          models: {
+            providers: {
+              google: {
+                apiKey: "AIza-provider-test",
+              },
+            },
+          },
+        },
+        searchConfig: { provider: "gemini" },
+      });
+
+      await tool?.execute({ query: "OpenClaw provider key fallback" });
+
+      expect(
+        (mockFetch.mock.calls[0]?.[1]?.headers as Record<string, string>)["x-goog-api-key"],
+      ).toBe("AIza-provider-test");
+    });
+  });
+
+  it("keeps plugin web search keys ahead of env and provider keys", async () => {
+    await withEnvAsync({ GEMINI_API_KEY: "AIza-env-test" }, async () => {
+      const mockFetch = installGeminiFetch();
+      const provider = createGeminiWebSearchProvider();
+      const tool = provider.createTool({
+        config: {
+          plugins: {
+            entries: {
+              google: {
+                config: {
+                  webSearch: {
+                    apiKey: "AIza-plugin-test",
+                  },
+                },
+              },
+            },
+          },
+          models: {
+            providers: {
+              google: {
+                apiKey: "AIza-provider-test",
+              },
+            },
+          },
+        },
+        searchConfig: { provider: "gemini" },
+      });
+
+      await tool?.execute({ query: "OpenClaw plugin key precedence" });
+
+      expect(
+        (mockFetch.mock.calls[0]?.[1]?.headers as Record<string, string>)["x-goog-api-key"],
+      ).toBe("AIza-plugin-test");
+    });
+  });
+
+  it("routes Gemini web search through provider-level google.baseUrl as a fallback", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        models: {
+          providers: {
+            google: {
+              apiKey: "AIza-provider-test",
+              baseUrl: "https://generativelanguage.googleapis.com/provider/v1beta/",
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({ query: "OpenClaw provider baseUrl fallback" });
+
+    expect(String(mockFetch.mock.calls[0]?.[0])).toBe(
+      "https://generativelanguage.googleapis.com/provider/v1beta/models/gemini-2.5-flash:generateContent",
+    );
+  });
+
+  it("keeps plugin webSearch.baseUrl ahead of provider-level google.baseUrl", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                  baseUrl: "https://generativelanguage.googleapis.com/plugin/v1beta/",
+                },
+              },
+            },
+          },
+        },
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://generativelanguage.googleapis.com/provider/v1beta/",
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({ query: "OpenClaw plugin baseUrl precedence" });
+
+    expect(String(mockFetch.mock.calls[0]?.[0])).toBe(
+      "https://generativelanguage.googleapis.com/plugin/v1beta/models/gemini-2.5-flash:generateContent",
     );
   });
 

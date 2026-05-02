@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   createWebSearchProviderContractFields,
   mergeScopedSearchConfig,
@@ -12,6 +13,7 @@ import {
 } from "./gemini-web-search-provider.shared.js";
 
 const GEMINI_CREDENTIAL_PATH = "plugins.entries.google.config.webSearch.apiKey";
+const GOOGLE_PROVIDER_CREDENTIAL_PATH = "models.providers.google.apiKey";
 
 type GeminiWebSearchRuntime = typeof import("./gemini-web-search-provider.runtime.js");
 
@@ -64,7 +66,54 @@ function createGeminiToolDefinition(
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function resolveGoogleModelProviderConfig(
+  config?: OpenClawConfig,
+): Record<string, unknown> | undefined {
+  const provider = config?.models?.providers?.google;
+  return isRecord(provider) ? provider : undefined;
+}
+
+function getGoogleModelProviderCredentialFallback(
+  config?: OpenClawConfig,
+): { path: string; value: unknown } | undefined {
+  const provider = resolveGoogleModelProviderConfig(config);
+  return provider && provider.apiKey !== undefined
+    ? { path: GOOGLE_PROVIDER_CREDENTIAL_PATH, value: provider.apiKey }
+    : undefined;
+}
+
+function withGoogleModelProviderFallbacks(
+  searchConfig: Record<string, unknown> | undefined,
+  config?: OpenClawConfig,
+): Record<string, unknown> | undefined {
+  const provider = resolveGoogleModelProviderConfig(config);
+  if (!provider || (provider.apiKey === undefined && provider.baseUrl === undefined)) {
+    return searchConfig;
+  }
+  const gemini = isRecord(searchConfig?.gemini) ? { ...searchConfig.gemini } : {};
+  if (provider.apiKey !== undefined) {
+    gemini.providerApiKey = provider.apiKey;
+  }
+  if (provider.baseUrl !== undefined) {
+    gemini.providerBaseUrl = provider.baseUrl;
+  }
+  return {
+    ...(searchConfig ?? {}),
+    gemini,
+  };
+}
+
 export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
+  const contractFields = createWebSearchProviderContractFields({
+    credentialPath: GEMINI_CREDENTIAL_PATH,
+    searchCredential: { type: "scoped", scopeId: "gemini" },
+    configuredCredential: { pluginId: "google" },
+  });
+
   return {
     id: "gemini",
     label: "Gemini (Google Search)",
@@ -77,17 +126,17 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
     docsUrl: "https://docs.openclaw.ai/tools/web",
     autoDetectOrder: 20,
     credentialPath: GEMINI_CREDENTIAL_PATH,
-    ...createWebSearchProviderContractFields({
-      credentialPath: GEMINI_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "gemini" },
-      configuredCredential: { pluginId: "google" },
-    }),
+    ...contractFields,
+    getConfiguredCredentialFallback: getGoogleModelProviderCredentialFallback,
     createTool: (ctx) =>
       createGeminiToolDefinition(
-        mergeScopedSearchConfig(
-          ctx.searchConfig,
-          "gemini",
-          resolveProviderWebSearchPluginConfig(ctx.config, "google"),
+        withGoogleModelProviderFallbacks(
+          mergeScopedSearchConfig(
+            ctx.searchConfig,
+            "gemini",
+            resolveProviderWebSearchPluginConfig(ctx.config, "google"),
+          ),
+          ctx.config,
         ),
       ),
   };

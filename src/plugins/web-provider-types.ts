@@ -37,6 +37,11 @@ export type WebFetchProviderContext = {
 
 export type WebSearchCredentialResolutionSource = "config" | "secretRef" | "env" | "missing";
 
+export type WebSearchProviderConfiguredCredentialFallback = {
+  path: string;
+  value: unknown;
+};
+
 export type WebSearchRuntimeMetadataContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
@@ -87,6 +92,9 @@ export type WebSearchProviderPlugin = {
   setCredentialValue: (searchConfigTarget: Record<string, unknown>, value: unknown) => void;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  getConfiguredCredentialFallback?: (
+    config?: OpenClawConfig,
+  ) => WebSearchProviderConfiguredCredentialFallback | undefined;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
   runSetup?: (ctx: WebSearchProviderSetupContext) => OpenClawConfig | Promise<OpenClawConfig>;
   resolveRuntimeMetadata?: (

@@ -55,6 +55,7 @@ Docs: https://docs.openclaw.ai
 - Slack/message tool: let `read` fetch an exact Slack message timestamp, including a specific thread reply when paired with `threadId`, instead of returning only the parent thread or recent channel history. Fixes #53943. Thanks @zomars.
 - Web search: point missing-key errors to `web_fetch` for known URLs and the browser tool for interactive pages. Thanks @zhaoyang97.
 - Web search: late-bind managed agent `web_search` calls to the current runtime config snapshot, so existing sessions do not keep stale unresolved SecretRefs after secrets reload. Fixes #75420. Thanks @richardmqq.
+- Web search/Gemini: reuse `models.providers.google.apiKey` and `models.providers.google.baseUrl` as lower-priority fallbacks for Gemini web search after dedicated search config and `GEMINI_API_KEY`. Supersedes #57496. Thanks @Aoiujz.
 - Web search/Gemini: pass `freshness` and `date_after`/`date_before` filters through Google Search grounding time ranges. Fixes #66498. Thanks @ismael-81.
 - Web search/DuckDuckGo: include the keyless DuckDuckGo provider in the web search setup wizard. Fixes #65862 and supersedes #65940. Thanks @Jah-yee.
 - Web search: honor `baseUrl` overrides for Gemini, Grok, and x_search provider-owned config, so proxy-backed search tools no longer dial hardcoded public endpoints. Supersedes #61972. Thanks @Lanfei.

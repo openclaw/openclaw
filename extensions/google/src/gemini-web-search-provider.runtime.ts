@@ -155,7 +155,8 @@ function resolveGeminiTimeRangeFilter(
 export function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
   return (
     readConfiguredSecretString(gemini?.apiKey, "tools.web.search.gemini.apiKey") ??
-    readProviderEnvValue(["GEMINI_API_KEY"])
+    readProviderEnvValue(["GEMINI_API_KEY"]) ??
+    readConfiguredSecretString(gemini?.providerApiKey, "models.providers.google.apiKey")
   );
 }
 
@@ -267,7 +268,7 @@ export async function executeGeminiSearch(
     return {
       error: "missing_gemini_api_key",
       message:
-        "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, or configure tools.web.search.gemini.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+        "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure plugins.entries.google.config.webSearch.apiKey, or reuse models.providers.google.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }

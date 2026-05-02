@@ -165,7 +165,7 @@ API-backed providers first:
 
 1. **Brave** -- `BRAVE_API_KEY` or `plugins.entries.brave.config.webSearch.apiKey` (order 10)
 2. **MiniMax Search** -- `MINIMAX_CODE_PLAN_KEY` / `MINIMAX_CODING_API_KEY` or `plugins.entries.minimax.config.webSearch.apiKey` (order 15)
-3. **Gemini** -- `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey` (order 20)
+3. **Gemini** -- `plugins.entries.google.config.webSearch.apiKey`, `GEMINI_API_KEY`, or `models.providers.google.apiKey` (order 20)
 4. **Grok** -- `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey` (order 30)
 5. **Kimi** -- `KIMI_API_KEY` / `MOONSHOT_API_KEY` or `plugins.entries.moonshot.config.webSearch.apiKey` (order 40)
 6. **Perplexity** -- `PERPLEXITY_API_KEY` / `OPENROUTER_API_KEY` or `plugins.entries.perplexity.config.webSearch.apiKey` (order 50)
@@ -213,8 +213,10 @@ error prompting you to configure one).
 ```
 
 Provider-specific config (API keys, base URLs, modes) lives under
-`plugins.entries.<plugin>.config.webSearch.*`. See the provider pages for
-examples.
+`plugins.entries.<plugin>.config.webSearch.*`. Gemini can also reuse
+`models.providers.google.apiKey` and `models.providers.google.baseUrl` as lower-priority
+fallbacks after its dedicated web-search config and `GEMINI_API_KEY`. See the
+provider pages for examples.
 
 `web_fetch` fallback provider selection is separate:
 
