@@ -194,9 +194,9 @@ Choose your preferred auth method and follow the setup steps.
       </Step>
       <Step title="Use the native Codex runtime">
         ```bash
-        openclaw config set plugins.entries.codex '{ enabled: true }' --strict-json --merge
+        openclaw config set plugins.entries.codex '{"enabled":true}' --strict-json --merge
         openclaw config set agents.defaults.model.primary openai/gpt-5.5
-        openclaw config set agents.defaults.agentRuntime '{ id: "codex", fallback: "none" }' --strict-json
+        openclaw config set agents.defaults.agentRuntime '{"id":"codex","fallback":"none"}' --strict-json
         ```
       </Step>
       <Step title="Verify Codex auth is available">
