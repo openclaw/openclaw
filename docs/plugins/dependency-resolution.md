@@ -99,6 +99,12 @@ workspace dependencies are available and edits are picked up directly. Source
 checkout development is pnpm-only; plain `npm install` at the repository root is
 not a supported way to prepare bundled plugin dependencies.
 
+| Install shape                    | Bundled plugin location               | Dependency owner                                                     |
+| -------------------------------- | ------------------------------------- | -------------------------------------------------------------------- |
+| `npm install -g openclaw`        | Built runtime tree inside the package | OpenClaw package and explicit plugin install/update/doctor flows     |
+| Git checkout plus `pnpm install` | `extensions/<id>` workspace packages  | The pnpm workspace, including each plugin package's own dependencies |
+| `openclaw plugins install ...`   | Managed npm/git/ClawHub plugin root   | The plugin install/update flow                                       |
+
 ## Legacy cleanup
 
 Older OpenClaw versions generated bundled-plugin dependency roots at startup or

@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import {
+  resolveBundledPluginsDir,
+  resolveSourceCheckoutDependencyDiagnostic,
+} from "./bundled-dir.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -309,6 +312,31 @@ describe("resolveBundledPluginsDir", () => {
       repoRoot,
       expectedRelativeDir: path.join("dist-runtime", "extensions"),
     });
+  });
+
+  it("reports missing pnpm workspace deps for source checkouts", () => {
+    const repoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-source-deps-",
+      hasExtensions: true,
+      hasSrc: true,
+      hasGitCheckout: true,
+      hasPnpmWorkspace: true,
+    });
+    seedBundledPluginTree(repoRoot, "extensions", "twitch");
+    vi.spyOn(process, "cwd").mockReturnValue(repoRoot);
+    process.argv[1] = path.join(repoRoot, "openclaw.mjs");
+
+    expect(resolveSourceCheckoutDependencyDiagnostic()).toEqual({
+      source: repoRoot,
+      message: expect.stringContaining("run `pnpm install`"),
+    });
+
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    expect(resolveSourceCheckoutDependencyDiagnostic()).toBeNull();
+
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    fs.mkdirSync(path.join(repoRoot, "node_modules", ".pnpm"), { recursive: true });
+    expect(resolveSourceCheckoutDependencyDiagnostic()).toBeNull();
   });
 
   it("returns a stable empty bundled plugin directory when bundled plugins are disabled", () => {

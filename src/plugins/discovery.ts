@@ -8,6 +8,7 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
+import { resolveSourceCheckoutDependencyDiagnostic } from "./bundled-dir.js";
 import { resolvePackagedBundledLoadPathAlias } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
@@ -969,6 +970,14 @@ export function discoverOpenClawPlugins(params: {
           source: sourceOverlayDir,
           message:
             "using bind-mounted bundled plugin source overlay; this source overrides the packaged dist bundle for the same plugin id",
+        });
+      }
+      const sourceCheckoutDependencyDiagnostic = resolveSourceCheckoutDependencyDiagnostic(env);
+      if (sourceCheckoutDependencyDiagnostic) {
+        result.diagnostics.push({
+          level: "warn",
+          source: sourceCheckoutDependencyDiagnostic.source,
+          message: sourceCheckoutDependencyDiagnostic.message,
         });
       }
       if (roots.stock) {

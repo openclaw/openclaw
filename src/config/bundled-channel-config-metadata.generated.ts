@@ -15103,191 +15103,174 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       $schema: "http://json-schema.org/draft-07/schema#",
       anyOf: [
         {
-          allOf: [
-            {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+            },
+            enabled: {
+              type: "boolean",
+            },
+            markdown: {
               type: "object",
               properties: {
-                name: {
+                tables: {
                   type: "string",
-                },
-                enabled: {
-                  type: "boolean",
-                },
-                markdown: {
-                  type: "object",
-                  properties: {
-                    tables: {
-                      type: "string",
-                      enum: ["off", "bullets", "code", "block"],
-                    },
-                  },
-                  additionalProperties: false,
+                  enum: ["off", "bullets", "code", "block"],
                 },
               },
               additionalProperties: false,
             },
-            {
-              type: "object",
-              properties: {
-                username: {
-                  type: "string",
-                },
-                accessToken: {
-                  type: "string",
-                },
-                clientId: {
-                  type: "string",
-                },
-                channel: {
-                  type: "string",
-                  minLength: 1,
-                },
-                enabled: {
-                  type: "boolean",
-                },
-                allowFrom: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                  },
-                },
-                allowedRoles: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                    enum: ["moderator", "owner", "vip", "subscriber", "all"],
-                  },
-                },
-                requireMention: {
-                  type: "boolean",
-                },
-                responsePrefix: {
-                  type: "string",
-                },
-                clientSecret: {
-                  type: "string",
-                },
-                refreshToken: {
-                  type: "string",
-                },
-                expiresIn: {
-                  anyOf: [
-                    {
-                      type: "number",
-                    },
-                    {
-                      type: "null",
-                    },
-                  ],
-                },
-                obtainmentTimestamp: {
+            defaultAccount: {
+              type: "string",
+            },
+            username: {
+              type: "string",
+            },
+            accessToken: {
+              type: "string",
+            },
+            clientId: {
+              type: "string",
+            },
+            channel: {
+              type: "string",
+              minLength: 1,
+            },
+            allowFrom: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+            allowedRoles: {
+              type: "array",
+              items: {
+                type: "string",
+                enum: ["moderator", "owner", "vip", "subscriber", "all"],
+              },
+            },
+            requireMention: {
+              type: "boolean",
+            },
+            responsePrefix: {
+              type: "string",
+            },
+            clientSecret: {
+              type: "string",
+            },
+            refreshToken: {
+              type: "string",
+            },
+            expiresIn: {
+              anyOf: [
+                {
                   type: "number",
                 },
-              },
-              required: ["username", "accessToken", "channel"],
-              additionalProperties: false,
+                {
+                  type: "null",
+                },
+              ],
             },
-          ],
+            obtainmentTimestamp: {
+              type: "number",
+            },
+          },
+          required: ["username", "accessToken", "channel"],
+          additionalProperties: false,
         },
         {
-          allOf: [
-            {
+          type: "object",
+          properties: {
+            name: {
+              type: "string",
+            },
+            enabled: {
+              type: "boolean",
+            },
+            markdown: {
               type: "object",
               properties: {
-                name: {
+                tables: {
                   type: "string",
-                },
-                enabled: {
-                  type: "boolean",
-                },
-                markdown: {
-                  type: "object",
-                  properties: {
-                    tables: {
-                      type: "string",
-                      enum: ["off", "bullets", "code", "block"],
-                    },
-                  },
-                  additionalProperties: false,
+                  enum: ["off", "bullets", "code", "block"],
                 },
               },
               additionalProperties: false,
             },
-            {
+            defaultAccount: {
+              type: "string",
+            },
+            accounts: {
               type: "object",
-              properties: {
-                accounts: {
-                  type: "object",
-                  propertyNames: {
+              propertyNames: {
+                type: "string",
+              },
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  username: {
                     type: "string",
                   },
-                  additionalProperties: {
-                    type: "object",
-                    properties: {
-                      username: {
-                        type: "string",
-                      },
-                      accessToken: {
-                        type: "string",
-                      },
-                      clientId: {
-                        type: "string",
-                      },
-                      channel: {
-                        type: "string",
-                        minLength: 1,
-                      },
-                      enabled: {
-                        type: "boolean",
-                      },
-                      allowFrom: {
-                        type: "array",
-                        items: {
-                          type: "string",
-                        },
-                      },
-                      allowedRoles: {
-                        type: "array",
-                        items: {
-                          type: "string",
-                          enum: ["moderator", "owner", "vip", "subscriber", "all"],
-                        },
-                      },
-                      requireMention: {
-                        type: "boolean",
-                      },
-                      responsePrefix: {
-                        type: "string",
-                      },
-                      clientSecret: {
-                        type: "string",
-                      },
-                      refreshToken: {
-                        type: "string",
-                      },
-                      expiresIn: {
-                        anyOf: [
-                          {
-                            type: "number",
-                          },
-                          {
-                            type: "null",
-                          },
-                        ],
-                      },
-                      obtainmentTimestamp: {
+                  accessToken: {
+                    type: "string",
+                  },
+                  clientId: {
+                    type: "string",
+                  },
+                  channel: {
+                    type: "string",
+                    minLength: 1,
+                  },
+                  enabled: {
+                    type: "boolean",
+                  },
+                  allowFrom: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                  allowedRoles: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                      enum: ["moderator", "owner", "vip", "subscriber", "all"],
+                    },
+                  },
+                  requireMention: {
+                    type: "boolean",
+                  },
+                  responsePrefix: {
+                    type: "string",
+                  },
+                  clientSecret: {
+                    type: "string",
+                  },
+                  refreshToken: {
+                    type: "string",
+                  },
+                  expiresIn: {
+                    anyOf: [
+                      {
                         type: "number",
                       },
-                    },
-                    required: ["username", "accessToken", "channel"],
-                    additionalProperties: false,
+                      {
+                        type: "null",
+                      },
+                    ],
+                  },
+                  obtainmentTimestamp: {
+                    type: "number",
                   },
                 },
+                required: ["username", "accessToken", "channel"],
+                additionalProperties: false,
               },
-              required: ["accounts"],
-              additionalProperties: false,
             },
-          ],
+          },
+          required: ["accounts"],
+          additionalProperties: false,
         },
       ],
     },

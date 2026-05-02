@@ -488,6 +488,34 @@ describe("discoverOpenClawPlugins", () => {
     });
   });
 
+  it("does not warn about source checkout deps when bundled plugins are disabled", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = makeTempDir();
+    mkdirSafe(path.join(packageRoot, "src"));
+    const extensionDir = path.join(packageRoot, "extensions", "twitch");
+    mkdirSafe(extensionDir);
+    fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/fake.git\n", "utf-8");
+    fs.writeFileSync(
+      path.join(packageRoot, "pnpm-workspace.yaml"),
+      "packages:\n  - .\n  - extensions/*\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(extensionDir, "package.json"),
+      '{"name":"@openclaw/twitch"}\n',
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(extensionDir, "openclaw.plugin.json"), '{"id":"twitch"}\n', "utf-8");
+
+    const result = withOpenClawPackageArgv(packageRoot, () =>
+      discoverOpenClawPlugins({ env: buildDiscoveryEnv(stateDir) }),
+    );
+
+    expect(result.diagnostics.map((entry) => entry.message)).not.toContainEqual(
+      expect.stringContaining("pnpm install"),
+    );
+  });
+
   it("does not treat repo-level live or test files as plugin entrypoints", () => {
     const stateDir = makeTempDir();
     const packageRoot = path.join(stateDir, "node_modules", "openclaw");
