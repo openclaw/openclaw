@@ -30,7 +30,7 @@
     "install": {
       "clawhubSpec": "clawhub:@openclaw/diagnostics-otel",
       "npmSpec": "@openclaw/diagnostics-otel",
-      "defaultChoice": "clawhub",
+      "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {

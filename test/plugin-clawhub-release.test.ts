@@ -104,8 +104,8 @@ describe("collectClawHubPublishablePluginPackages", () => {
   });
 });
 
-describe("OpenClaw ClawHub-preferred plugin metadata", () => {
-  const clawHubPreferredPlugins = [
+describe("OpenClaw dual-published plugin metadata", () => {
+  const dualPublishedPlugins = [
     {
       extensionId: "diagnostics-otel",
       packageName: "@openclaw/diagnostics-otel",
@@ -117,7 +117,7 @@ describe("OpenClaw ClawHub-preferred plugin metadata", () => {
   ] as const;
 
   it("keeps diagnostics plugins selectable through both ClawHub and npm release paths", () => {
-    const packageNames = clawHubPreferredPlugins.map((plugin) => plugin.packageName);
+    const packageNames = dualPublishedPlugins.map((plugin) => plugin.packageName);
     const clawHubPublishable = collectClawHubPublishablePluginPackages(undefined, {
       packageNames,
     });
@@ -128,7 +128,7 @@ describe("OpenClaw ClawHub-preferred plugin metadata", () => {
     expect(clawHubPublishable.map((plugin) => plugin.packageName)).toEqual(packageNames);
     expect(npmPublishable.map((plugin) => plugin.packageName)).toEqual(packageNames);
 
-    for (const plugin of clawHubPreferredPlugins) {
+    for (const plugin of dualPublishedPlugins) {
       const packageJson = JSON.parse(
         readFileSync(`extensions/${plugin.extensionId}/package.json`, "utf8"),
       ) as {
@@ -147,7 +147,7 @@ describe("OpenClaw ClawHub-preferred plugin metadata", () => {
 
       expect(packageJson.openclaw?.install).toMatchObject({
         clawhubSpec: `clawhub:${plugin.packageName}`,
-        defaultChoice: "clawhub",
+        defaultChoice: "npm",
         npmSpec: plugin.packageName,
       });
       expect(packageJson.openclaw?.release).toMatchObject({
