@@ -162,10 +162,15 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it("keeps cross-OS live smoke agent turns on GPT-5.5-safe timeouts and minimal thinking", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const providerModelsSeed = "models.providers.${params.providerConfig.extensionId}.models";
+    const providerBaseUrl = "models.providers.${params.providerConfig.extensionId}.baseUrl";
 
     expect(source).toContain('"--thinking",\n    "minimal"');
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
-    expect(source).toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
+    expect(source.indexOf(providerModelsSeed)).toBeGreaterThan(-1);
+    expect(source.indexOf(providerModelsSeed)).toBeLessThan(source.indexOf(providerBaseUrl));
+    expect(source).toContain('"--merge"');
+    expect(source).toContain(providerBaseUrl);
     expect(source).toContain(
       "models.providers.${params.providerConfig.extensionId}.timeoutSeconds",
     );
