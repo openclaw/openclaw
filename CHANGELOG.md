@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 - Providers/OpenAI: resolve `keychain:<service>:<account>` `OPENAI_API_KEY` refs before creating OpenAI Realtime browser sessions or voice bridges, with a bounded cached Keychain lookup. Fixes #72120. Thanks @ctbritt.
 - Discord/gateway: reconnect when the gateway socket closes while waiting for the shared IDENTIFY concurrency window, instead of silently skipping IDENTIFY and leaving the bot online but unresponsive. Fixes #74617. Thanks @zeeskdr-ai.
+- Voice Call: add `sessionScope: "per-call"` for fresh per-call agent memory while preserving the default per-phone caller history. Fixes #45280. Thanks @pondcountry.
 - Telegram/startup: use the existing `getMe` request guard for the gateway bot probe instead of a fixed 2.5-second budget, and honor higher `timeoutSeconds` configs for slow Telegram API paths. Fixes #75783. Thanks @tankotan.
 - Telegram/models: make model picker confirmations say selections are session-scoped and do not change the agent's persistent default. Fixes #75965. Thanks @sd1114820.
 - Control UI/slash commands: keep fallback command metadata on a browser-safe registry path, so provider thinking runtime imports cannot blank the Web UI with `process is not defined`. Fixes #75987. Thanks @novkien.

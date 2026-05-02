@@ -173,6 +173,9 @@ export type WebhookSecurityConfig = z.infer<typeof VoiceCallWebhookSecurityConfi
 const CallModeSchema = z.enum(["notify", "conversation"]);
 export type CallMode = z.infer<typeof CallModeSchema>;
 
+const VoiceCallSessionScopeSchema = z.enum(["per-phone", "per-call"]);
+export type VoiceCallSessionScope = z.infer<typeof VoiceCallSessionScopeSchema>;
+
 const OutboundConfigSchema = z
   .object({
     /** Default call mode for outbound calls */
@@ -393,6 +396,9 @@ export const VoiceCallConfigSchema = z
     /** Realtime voice-to-voice configuration */
     realtime: VoiceCallRealtimeConfigSchema,
 
+    /** Session memory scope for voice conversations. */
+    sessionScope: VoiceCallSessionScopeSchema.default("per-phone"),
+
     /** Public webhook URL override (if set, bypasses tunnel auto-detection) */
     publicUrl: z.string().url().optional(),
 
@@ -547,6 +553,23 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
     },
     tts: normalizeVoiceCallTtsConfig(defaults.tts, config.tts),
   };
+}
+
+export function resolveVoiceCallSessionKey(params: {
+  config: Pick<VoiceCallConfig, "sessionScope">;
+  callId: string;
+  phone?: string;
+  explicitSessionKey?: string;
+}): string {
+  const explicit = params.explicitSessionKey?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  if (params.config.sessionScope === "per-call") {
+    return `voice:call:${params.callId}`;
+  }
+  const normalizedPhone = params.phone?.replace(/\D/g, "");
+  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
 }
 
 /**
