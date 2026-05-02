@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/ClawHub: explain unavailable explicit ClawHub ClawPack artifact downloads with a temporary npm install hint while ClawHub artifact routing rolls out. Thanks @vincentkoc.
 - Onboarding/search: install official external web-search plugins such as Brave before saving provider config, and make doctor repair reconcile selected external search providers whose npm payload is missing. Thanks @vincentkoc.
 - Plugins/externalization: add official npm-first catalogs for externalized channel, provider, and generic plugins, keep unpublished ACPX/Google Chat/LINE bundled, and make missing-plugin repair honor npm-first metadata while ClawHub pack files roll out. Thanks @vincentkoc.
 - Plugins/update: detect tracked plugin install records whose package directories disappeared during `openclaw update`, reinstall them before normal plugin updates, and fail the update if any install record still points at missing disk payloads.
