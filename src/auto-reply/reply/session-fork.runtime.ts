@@ -6,7 +6,7 @@ import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveSessionFilePath } from "../../config/sessions/paths.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions/types.js";
-import { readSessionMessages } from "../../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -14,21 +14,21 @@ function resolvePositiveTokenCount(value: number | undefined): number | undefine
     : undefined;
 }
 
-export function resolveParentForkTokenCountRuntime(params: {
+export async function resolveParentForkTokenCountRuntime(params: {
   parentEntry: SessionEntry;
   storePath: string;
-}): number | undefined {
+}): Promise<number | undefined> {
   const freshPersistedTokens = resolveFreshSessionTotalTokens(params.parentEntry);
   if (typeof freshPersistedTokens === "number") {
     return freshPersistedTokens;
   }
 
   try {
-    const transcriptMessages = readSessionMessages(
+    const transcriptMessages = (await readSessionMessagesAsync(
       params.parentEntry.sessionId,
       params.storePath,
       params.parentEntry.sessionFile,
-    ) as AgentMessage[];
+    )) as AgentMessage[];
     if (transcriptMessages.length > 0) {
       const estimatedTokens = estimateMessagesTokens(transcriptMessages);
       const transcriptTokens = resolvePositiveTokenCount(

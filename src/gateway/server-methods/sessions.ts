@@ -77,9 +77,9 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readRecentSessionMessagesWithStats,
+  readRecentSessionMessagesWithStatsAsync,
   readRecentSessionTranscriptLines,
-  readSessionMessageCount,
+  readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
@@ -571,7 +571,8 @@ async function handleSessionSend(params: {
     interruptedActiveRun = interruptResult.interrupted;
   }
 
-  const messageSeq = readSessionMessageCount(entry.sessionId, storePath, entry.sessionFile) + 1;
+  const messageSeq =
+    (await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -985,11 +986,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? readSessionMessageCount(
+      ? (await readSessionMessageCountAsync(
           createdEntry.sessionId,
           target.storePath,
           createdEntry.sessionFile,
-        ) + 1
+        )) + 1
       : undefined;
 
     if (initialMessage) {
@@ -1674,7 +1675,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
   },
-  "sessions.get": ({ params, respond, context }) => {
+  "sessions.get": async ({ params, respond, context }) => {
     const p = params;
     const key = requireSessionKey(p.key ?? p.sessionKey, respond);
     if (!key) {
@@ -1695,7 +1696,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { messages: [] }, undefined);
       return;
     }
-    const { messages } = readRecentSessionMessagesWithStats(
+    const { messages } = await readRecentSessionMessagesWithStatsAsync(
       entry.sessionId,
       storePath,
       entry.sessionFile,

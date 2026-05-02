@@ -6,8 +6,10 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.
 - Plugins/ClawHub: prefer versioned ClawPack artifacts when ClawHub publishes digest metadata, verifying the ClawPack response header and downloaded bytes before installing. Thanks @vincentkoc.
 - Plugins/ClawHub: persist ClawPack digest metadata on ClawHub plugin install and update records so registry refreshes and download verification can reuse stored artifact facts. Thanks @vincentkoc.
+- Plugins/ClawHub: allow official bundled-plugin cutovers to prefer ClawHub installs with npm fallback only when the ClawHub package or version is absent. Thanks @vincentkoc.
 - Providers/OpenAI: add `extraBody`/`extra_body` passthrough for OpenAI-compatible TTS endpoints, so custom speech servers can receive fields such as `lang` in `/audio/speech` requests. Fixes #39900. Thanks @R3NK0R.
 - Dependencies: refresh workspace dependency pins, including TypeBox 1.1.37, AWS SDK 3.1041.0, Microsoft Teams 2.0.9, and Marked 18.0.3. Thanks @mariozechner, @aws, and @microsoft.
 - Discord/channels: add reusable message-channel access groups plus Discord channel-audience DM authorization, so allowlists can reference `accessGroup:<name>` across channel auth paths. (#75813)
@@ -15,6 +17,9 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Discord: allow explicitly configured ack reactions in tool-only guild channels while keeping automatic lifecycle/status reactions suppressed. Fixes #74922. Thanks @samvilian.
+- Gateway/sessions: move hot transcript reads and mirror appends onto async bounded IO with serialized parent-linked writes, keeping large session histories from stalling Gateway requests and channel replies. Fixes #75656. Thanks @DerFlash.
+- Cron/TTS: run cron announce payloads through the normal TTS directive transform before outbound delivery, so scheduled `[[tts]]` replies generate voice payloads instead of leaking raw tags. Fixes #52125. Thanks @kenchen3000.
+- WhatsApp: save downloadable quoted image media from reply context as inbound media, so agents can inspect an image that a user replied to instead of only seeing `<media:image>`. Fixes #59174. Thanks @gaffner.
 - Doctor/WhatsApp: warn when Linux crontabs still run the legacy `ensure-whatsapp.sh` health check, which can misreport `Gateway inactive` when cron lacks the systemd user-bus environment. Fixes #60204. Thanks @mySebbe.
 - Slack/setup: print the generated app manifest as plain JSON instead of embedding it inside the framed setup note, so it can be copied into Slack without deleting border characters. Fixes #65751. Thanks @theDanielJLewis.
 - Channels/WhatsApp: route CLI logout through the live Gateway and stop runtime-backed listeners before channel removal, so removing a WhatsApp account does not leave the old socket replying until restart. Fixes #67746. Thanks @123Mismail.
@@ -28,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/CLI: redact authenticated git URLs from git install command failure details, so failed clone or checkout output cannot leak credentials during plugin installs. Thanks @vincentkoc.
 - Channels/status reactions: remove stale non-terminal lifecycle reactions when a run reaches done or error, so Discord does not leave a permanent thinking emoji after completion. Fixes #75458. Thanks @davelutztx.
 - Discord/doctor: migrate unsupported per-channel `agentId` entries under guild channel config into top-level `bindings[]` routes, so `openclaw doctor --fix` preserves the intended agent route instead of stripping it as an unknown key. Fixes #62455. Thanks @lobster-biscuit.
+- Discord/DMs: set inbound direct-message `ctx.To` to the semantic `user:<id>` target while keeping delivery routed through the DM channel, so mirror and recovery paths do not treat DMs as channel conversations. Fixes #68126. Thanks @illuminate0623.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
   pruneOpenClawCompileCache,
   pruneInstalledPackageDist,
@@ -134,6 +135,23 @@ describe("bundled plugin postinstall", () => {
     expect(warn).toHaveBeenCalledWith(
       "[postinstall] could not prune OpenClaw compile cache: Error: locked",
     );
+  });
+
+  it("does not classify published packages with source files as source checkouts", () => {
+    const packageRoot = "/pkg";
+    const existingPaths = new Set([
+      path.join(packageRoot, "pnpm-workspace.yaml"),
+      path.join(packageRoot, "src"),
+      path.join(packageRoot, "extensions"),
+      path.join(packageRoot, "dist", "postinstall-inventory.json"),
+    ]);
+
+    expect(
+      isSourceCheckoutRoot({
+        packageRoot,
+        existsSync: (value: string) => existingPaths.has(value),
+      }),
+    ).toBe(false);
   });
 
   it("prunes source-checkout bundled plugin node_modules", async () => {
