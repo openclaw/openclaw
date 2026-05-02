@@ -25,6 +25,7 @@ import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import type { DiscordTransport } from "./fetch.js";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
 import { readDiscordMessage, readRetryAfter } from "./internal/rest-errors.js";
 
@@ -296,6 +297,7 @@ async function requestVoiceUploadUrl(params: {
   botToken: string;
   filename: string;
   fileSize: number;
+  transport?: Pick<DiscordTransport, "fetch">;
 }): Promise<UploadUrlResponse> {
   const url = `${params.rest.options?.baseUrl ?? "https://discord.com/api"}/channels/${params.channelId}/attachments`;
   const uploadUrlInit: RequestInit = {
@@ -308,27 +310,36 @@ async function requestVoiceUploadUrl(params: {
       files: [{ filename: params.filename, file_size: params.fileSize, id: "0" }],
     }),
   };
-  const { response: res, release } = await fetchWithSsrFGuard({
-    url,
-    init: uploadUrlInit,
-    auditContext: "discord.voice.upload-url",
-  });
+  let release: (() => Promise<void>) | undefined;
+  const res = params.transport?.fetch
+    ? await params.transport.fetch(url, uploadUrlInit)
+    : await fetchWithSsrFGuard({
+        url,
+        init: uploadUrlInit,
+        auditContext: "discord.voice.upload-url",
+      }).then((result) => {
+        release = result.release;
+        return result.response;
+      });
   try {
     if (!res.ok) {
       throw await createVoiceRequestError(res, "Upload URL request failed");
     }
     return (await res.json()) as UploadUrlResponse;
   } finally {
-    await release();
+    await release?.();
   }
 }
 
 async function uploadVoiceAttachment(params: {
   uploadUrl: string;
   audioBuffer: Buffer;
+  transport?: Pick<DiscordTransport, "sourceFetch" | "dispatcherPolicy">;
 }): Promise<void> {
+  const dispatcherPolicy = params.transport?.dispatcherPolicy;
   const { response: uploadResponse, release } = await fetchWithSsrFGuard({
     url: params.uploadUrl,
+    fetchImpl: params.transport?.sourceFetch,
     init: {
       method: "PUT",
       headers: {
@@ -336,6 +347,8 @@ async function uploadVoiceAttachment(params: {
       },
       body: new Uint8Array(params.audioBuffer),
     },
+    ...(dispatcherPolicy ? { dispatcherPolicy } : {}),
+    ...(dispatcherPolicy?.mode === "explicit-proxy" ? { mode: "trusted_explicit_proxy" } : {}),
     auditContext: "discord.voice.attachment-upload",
   });
 
@@ -365,6 +378,7 @@ export async function sendDiscordVoiceMessage(
   request: RetryRunner,
   silent?: boolean,
   token?: string,
+  transport?: Pick<DiscordTransport, "fetch" | "sourceFetch" | "dispatcherPolicy">,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
@@ -383,6 +397,7 @@ export async function sendDiscordVoiceMessage(
       botToken,
       filename,
       fileSize,
+      transport,
     });
 
     if (!uploadUrlResponse.attachments?.[0]) {
@@ -393,6 +408,7 @@ export async function sendDiscordVoiceMessage(
     await uploadVoiceAttachment({
       uploadUrl: attachment.upload_url,
       audioBuffer,
+      transport,
     });
     return attachment;
   }, "voice-upload");

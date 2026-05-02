@@ -497,6 +497,68 @@ describe("createDiscordGatewayPlugin", () => {
     expect(wsProxyAgentSpy).not.toHaveBeenCalledWith("http://openclaw-proxy.test:8080");
   });
 
+  it("honors NO_PROXY for gateway WebSocket env proxy", async () => {
+    vi.stubEnv("https_proxy", "http://env-proxy.test:7890");
+    vi.stubEnv("NO_PROXY", "gateway.discord.gg");
+    const runtime = createRuntime();
+
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+      __testing: createProxyTestingOverrides(),
+    });
+
+    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
+      .createWebSocket;
+    createWebSocket("wss://gateway.discord.gg");
+
+    expect(wsProxyAgentSpy).not.toHaveBeenCalled();
+    expect(webSocketSpy).toHaveBeenCalledWith("wss://gateway.discord.gg", {
+      handshakeTimeout: 30_000,
+    });
+  });
+
+  it("keeps explicit gateway WebSocket proxy despite NO_PROXY", async () => {
+    vi.stubEnv("NO_PROXY", "gateway.discord.gg");
+    const runtime = createRuntime();
+
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: { proxy: "http://proxy.test:8080" },
+      runtime,
+      __testing: createProxyTestingOverrides(),
+    });
+
+    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
+      .createWebSocket;
+    createWebSocket("wss://gateway.discord.gg");
+
+    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(webSocketSpy).toHaveBeenCalledWith(
+      "wss://gateway.discord.gg",
+      expect.objectContaining({ agent: getLastAgent(), handshakeTimeout: 30_000 }),
+    );
+  });
+
+  it("falls back to OPENCLAW_PROXY_URL when NO_PROXY bypasses standard env proxy", async () => {
+    vi.stubEnv("OPENCLAW_PROXY_URL", "http://openclaw-proxy.test:8080");
+    vi.stubEnv("https_proxy", "http://env-proxy.test:7890");
+    vi.stubEnv("NO_PROXY", "gateway.discord.gg");
+    const runtime = createRuntime();
+
+    const plugin = createDiscordGatewayPlugin({
+      discordConfig: {},
+      runtime,
+      __testing: createProxyTestingOverrides(),
+    });
+
+    const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })
+      .createWebSocket;
+    createWebSocket("wss://gateway.discord.gg");
+
+    expect(wsProxyAgentSpy).toHaveBeenCalledWith("http://openclaw-proxy.test:8080");
+    expect(wsProxyAgentSpy).not.toHaveBeenCalledWith("http://env-proxy.test:7890");
+  });
+
   it("falls back to the default gateway plugin when proxy is invalid", async () => {
     const runtime = createRuntime();
 

@@ -101,7 +101,9 @@ function createGatewayPlugin(params: {
   gatewayInfoTimeoutMs: number;
   fetchImpl: DiscordGatewayFetch;
   fetchInit?: DiscordGatewayFetchInit;
-  wsAgent?: InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>>;
+  resolveWsAgent?: (
+    url: string,
+  ) => InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>> | undefined;
   runtime?: RuntimeEnv;
   testing?: GatewayPluginTestingOptions;
 }): discordGateway.GatewayPlugin {
@@ -162,9 +164,10 @@ function createGatewayPlugin(params: {
       // close-path crashes during Discord gateway teardown; the ws transport is
       // already our proxy path and behaves predictably for lifecycle cleanup.
       const WebSocketCtor = params.testing?.webSocketCtor ?? ws.default;
+      const wsAgent = params.resolveWsAgent?.(url);
       const socket = new WebSocketCtor(url, {
         handshakeTimeout: DISCORD_GATEWAY_HANDSHAKE_TIMEOUT_MS,
-        ...(params.wsAgent ? { agent: params.wsAgent } : {}),
+        ...(wsAgent ? { agent: wsAgent } : {}),
       });
       const emitTransportActivity = () => {
         if ((this as unknown as { ws?: unknown }).ws !== socket) {
@@ -258,27 +261,45 @@ export function createDiscordGatewayPlugin(params: {
     voiceEnabled: resolveDiscordVoiceEnabled(params.discordConfig?.voice),
   });
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
-  const managedProxy = proxy ? undefined : resolveDiscordManagedProxyUrlForWebSocket();
-  const effectiveProxy = proxy || managedProxy;
   const debugProxySettings = resolveDebugProxySettings();
   const gatewayInfoTimeoutMs = resolveDiscordGatewayInfoTimeoutMs({
     configuredTimeoutMs: params.discordConfig?.gatewayInfoTimeoutMs,
     env: process.env,
   });
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
-  let wsAgent: InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>> | undefined;
-
-  if (effectiveProxy) {
-    try {
-      validateDiscordProxyUrl(effectiveProxy);
-      const HttpsProxyAgentCtor =
-        params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
-      wsAgent = new HttpsProxyAgentCtor<string>(effectiveProxy);
-      params.runtime.log?.("discord: gateway proxy enabled");
-    } catch (err) {
-      params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
-      fetchImpl = (input, init) => fetchDiscordGatewayMetadataDirect(input, init, false);
+  const HttpsProxyAgentCtor =
+    params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
+  const wsAgentsByProxy = new Map<
+    string,
+    InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>>
+  >();
+  const invalidWsProxies = new Set<string>();
+  const getWsAgentForProxy = (proxyUrl: string) => {
+    const cached = wsAgentsByProxy.get(proxyUrl);
+    if (cached) {
+      return cached;
     }
+    try {
+      validateDiscordProxyUrl(proxyUrl);
+      const agent = new HttpsProxyAgentCtor<string>(proxyUrl);
+      wsAgentsByProxy.set(proxyUrl, agent);
+      params.runtime.log?.("discord: gateway proxy enabled");
+      return agent;
+    } catch (err) {
+      if (!invalidWsProxies.has(proxyUrl)) {
+        invalidWsProxies.add(proxyUrl);
+        params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));
+      }
+      return undefined;
+    }
+  };
+  const resolveWsAgent = (url: string) => {
+    const effectiveProxy = proxy || resolveDiscordManagedProxyUrlForWebSocket(url);
+    return effectiveProxy ? getWsAgentForProxy(effectiveProxy) : undefined;
+  };
+
+  if (proxy && !getWsAgentForProxy(proxy)) {
+    fetchImpl = (input, init) => fetchDiscordGatewayMetadataDirect(input, init, false);
   }
 
   return createGatewayPlugin({
@@ -290,8 +311,8 @@ export function createDiscordGatewayPlugin(params: {
     },
     gatewayInfoTimeoutMs,
     fetchImpl,
+    resolveWsAgent,
     runtime: params.runtime,
     testing: params.__testing,
-    ...(wsAgent ? { wsAgent } : {}),
   });
 }

@@ -4,6 +4,12 @@ import type { VoiceMessageMetadata } from "./voice-message.js";
 
 const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
 const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(async (params: { url: string; init?: RequestInit; fetchImpl?: typeof fetch }) => ({
+    response: await (params.fetchImpl ?? globalThis.fetch)(params.url, params.init),
+    release: async () => {},
+  })),
+);
 
 vi.mock("openclaw/plugin-sdk/temp-path", async () => {
   return {
@@ -29,10 +35,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   return {
-    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      release: async () => {},
-    }),
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
 
@@ -106,6 +109,7 @@ describe("sendDiscordVoiceMessage", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    fetchWithSsrFGuardMock.mockClear();
   });
 
   function createRest(post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }))) {
@@ -188,6 +192,82 @@ describe("sendDiscordVoiceMessage", () => {
         ],
       }),
     });
+  });
+
+  it("routes voice upload URL and CDN upload through the Discord proxy transport", async () => {
+    const post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }));
+    const rest = createRest(post);
+    const proxyFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      if (method === "POST" && url.endsWith("/channels/channel-1/attachments")) {
+        return new Response(
+          JSON.stringify({
+            attachments: [
+              {
+                id: 0,
+                upload_url: "https://cdn.test/upload",
+                upload_filename: "uploaded.ogg",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      }
+      throw new Error(`unexpected proxy fetch ${method} ${url}`);
+    });
+    const sourceFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input instanceof Request ? input.url : String(input);
+      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
+      if (method === "PUT" && url === "https://cdn.test/upload") {
+        return new Response(null, { status: 200 });
+      }
+      throw new Error(`unexpected source fetch ${method} ${url}`);
+    });
+
+    await expect(
+      sendDiscordVoiceMessage(
+        rest,
+        "channel-1",
+        Buffer.from("ogg"),
+        metadata,
+        undefined,
+        async (fn) => await fn(),
+        false,
+        "bot-token",
+        {
+          fetch: proxyFetch as unknown as typeof fetch,
+          sourceFetch: sourceFetch as unknown as typeof fetch,
+          dispatcherPolicy: {
+            mode: "explicit-proxy",
+            proxyUrl: "http://proxy.test:8080",
+            allowPrivateProxy: true,
+          },
+        },
+      ),
+    ).resolves.toEqual({ id: "msg-1", channel_id: "channel-1" });
+
+    expect(proxyFetch).toHaveBeenCalledWith(
+      "https://discord.test/api/v10/channels/channel-1/attachments",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://cdn.test/upload",
+        fetchImpl: sourceFetch,
+        dispatcherPolicy: expect.objectContaining({
+          mode: "explicit-proxy",
+          proxyUrl: "http://proxy.test:8080",
+        }),
+        mode: "trusted_explicit_proxy",
+        auditContext: "discord.voice.attachment-upload",
+      }),
+    );
+    expect(sourceFetch).toHaveBeenCalledWith(
+      "https://cdn.test/upload",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    expect(post).toHaveBeenCalledWith("/channels/channel-1/messages", expect.any(Object));
   });
 
   it("throws typed CDN upload failures", async () => {

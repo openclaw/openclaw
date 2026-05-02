@@ -8,6 +8,7 @@ export {
   resolveEnvHttpProxyAgentOptions,
   resolveEnvHttpProxyUrl,
   shouldUseEnvHttpProxyForUrl,
+  matchesNoProxy,
 } from "../infra/net/proxy-env.js";
 export { getProxyUrlFromFetch, makeProxyFetch } from "../infra/net/proxy-fetch.js";
 export { createPinnedLookup } from "../infra/net/ssrf.js";

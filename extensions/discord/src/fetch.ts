@@ -6,6 +6,7 @@ import {
   resolveEnvHttpProxyAgentOptions,
   resolveEnvHttpProxyUrl,
   resolveFetch,
+  matchesNoProxy,
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import {
@@ -69,14 +70,44 @@ export function hasDiscordManagedProxyConfig(env: NodeJS.ProcessEnv = process.en
   );
 }
 
+function normalizeWebSocketProxyTargetUrl(targetUrl: string): {
+  protocol: "http" | "https";
+  url: string;
+} | null {
+  try {
+    const parsed = new URL(targetUrl);
+    if (parsed.protocol === "wss:") {
+      parsed.protocol = "https:";
+      return { protocol: "https", url: parsed.toString() };
+    }
+    if (parsed.protocol === "ws:") {
+      parsed.protocol = "http:";
+      return { protocol: "http", url: parsed.toString() };
+    }
+    if (parsed.protocol === "https:" || parsed.protocol === "http:") {
+      return {
+        protocol: parsed.protocol === "https:" ? "https" : "http",
+        url: parsed.toString(),
+      };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
 export function resolveDiscordManagedProxyUrlForWebSocket(
+  targetUrl: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string | undefined {
-  return (
-    resolveEnvHttpProxyAgentOptions(env)?.httpsProxy ??
-    resolveEnvHttpProxyUrl("https", env) ??
-    resolveOpenClawProxyUrlForDiscord(env)
-  );
+  const target = normalizeWebSocketProxyTargetUrl(targetUrl);
+  const envProxy =
+    target && !matchesNoProxy(target.url, env)
+      ? target.protocol === "https"
+        ? (resolveEnvHttpProxyAgentOptions(env)?.httpsProxy ?? resolveEnvHttpProxyUrl("https", env))
+        : (resolveEnvHttpProxyAgentOptions(env)?.httpProxy ?? resolveEnvHttpProxyUrl("http", env))
+      : undefined;
+  return envProxy ?? resolveOpenClawProxyUrlForDiscord(env);
 }
 
 function resolveDiscordDispatcherPolicy(params: { useEnvProxy: boolean; proxyUrl?: string }): {
