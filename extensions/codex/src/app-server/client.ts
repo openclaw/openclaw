@@ -48,6 +48,16 @@ export class CodexAppServerRpcError extends Error {
   }
 }
 
+export function isCodexAppServerConnectionClosedError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  return (
+    error.message === "codex app-server client is closed" ||
+    error.message.startsWith("codex app-server exited:")
+  );
+}
+
 type CodexServerRequestHandler = (
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
 ) => Promise<JsonValue | undefined> | JsonValue | undefined;

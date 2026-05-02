@@ -42,7 +42,11 @@ import {
   createCodexAppServerClientFactoryTestHooks,
   defaultCodexAppServerClientFactory,
 } from "./client-factory.js";
-import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
+import {
+  isCodexAppServerApprovalRequest,
+  isCodexAppServerConnectionClosedError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
   readCodexPluginConfig,
@@ -512,23 +516,42 @@ export async function runCodexAppServerAttempt(
       timeoutFloorMs: options.startupTimeoutFloorMs,
       signal: runAbortController.signal,
       operation: async () => {
-        const startupClient = await clientFactory(appServer.start, startupAuthProfileId, agentDir);
-        await ensureCodexComputerUse({
-          client: startupClient,
-          pluginConfig: options.pluginConfig,
-          timeoutMs: appServer.requestTimeoutMs,
-          signal: runAbortController.signal,
-        });
-        const startupThread = await startOrResumeThread({
-          client: startupClient,
-          params,
-          cwd: effectiveWorkspace,
-          dynamicTools: toolBridge.specs,
-          appServer,
-          developerInstructions: promptBuild.developerInstructions,
-          config: nativeHookRelayConfig,
-        });
-        return { client: startupClient, thread: startupThread };
+        const startupAttempt = async () => {
+          const startupClient = await clientFactory(
+            appServer.start,
+            startupAuthProfileId,
+            agentDir,
+          );
+          await ensureCodexComputerUse({
+            client: startupClient,
+            pluginConfig: options.pluginConfig,
+            timeoutMs: appServer.requestTimeoutMs,
+            signal: runAbortController.signal,
+          });
+          const startupThread = await startOrResumeThread({
+            client: startupClient,
+            params,
+            cwd: effectiveWorkspace,
+            dynamicTools: toolBridge.specs,
+            appServer,
+            developerInstructions: promptBuild.developerInstructions,
+            config: nativeHookRelayConfig,
+          });
+          return { client: startupClient, thread: startupThread };
+        };
+        try {
+          return await startupAttempt();
+        } catch (error) {
+          if (runAbortController.signal.aborted || !isCodexAppServerConnectionClosedError(error)) {
+            throw error;
+          }
+          embeddedAgentLog.warn(
+            "codex app-server connection closed during startup; restarting app-server and retrying",
+            { error },
+          );
+          clearSharedCodexAppServerClient();
+          return await startupAttempt();
+        }
       },
     }));
     emitCodexAppServerEvent(params, {
