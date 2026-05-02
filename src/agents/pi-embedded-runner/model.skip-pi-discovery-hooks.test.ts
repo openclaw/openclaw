@@ -56,6 +56,50 @@ beforeEach(async () => {
 });
 
 describe("resolveModelAsync skipPiDiscovery runtime hooks", () => {
+  it("resolves explicitly configured provider models without dynamic preparation", async () => {
+    const result = await resolveModelAsync(
+      "deepseek",
+      "deepseek-chat",
+      "/tmp/agent",
+      {
+        models: {
+          providers: {
+            deepseek: {
+              api: "openai-completions",
+              baseUrl: "https://api.deepseek.com",
+              models: [
+                {
+                  id: "deepseek-chat",
+                  name: "DeepSeek Chat",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 64_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      },
+      {
+        skipPiDiscovery: true,
+      },
+    );
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "deepseek",
+      id: "deepseek-chat",
+      api: "openai-completions",
+      baseUrl: "https://api.deepseek.com",
+    });
+    expect(mocks.discoverAuthStorage).not.toHaveBeenCalled();
+    expect(mocks.discoverModels).not.toHaveBeenCalled();
+    expect(mocks.prepareProviderDynamicModel).not.toHaveBeenCalled();
+    expect(mocks.runProviderDynamicModel).not.toHaveBeenCalled();
+  });
+
   it("uses only target-provider dynamic hooks", async () => {
     const result = await resolveModelAsync("ollama", "llama3.2:latest", "/tmp/agent", undefined, {
       skipPiDiscovery: true,
