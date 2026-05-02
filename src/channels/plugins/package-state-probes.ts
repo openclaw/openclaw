@@ -85,7 +85,7 @@ function resolveChannelPackageStateChecker(params: {
       const allOf = metadata.env?.allOf ?? [];
       const anyOf = metadata.env?.anyOf ?? [];
       return (
-        (allOf.length === 0 || allOf.every((key) => hasNonEmptyEnvValue(env, key))) &&
+        allOf.every((key) => hasNonEmptyEnvValue(env, key)) &&
         (anyOf.length === 0 || anyOf.some((key) => hasNonEmptyEnvValue(env, key)))
       );
     };
