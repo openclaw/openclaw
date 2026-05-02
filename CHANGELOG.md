@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/Azure Speech: add a realtime transcription provider for Voice Call, exposing PCM/µ-law/A-law push-stream STT through the Azure Cognitive Services Speech SDK with subscription or endpoint auth, configurable silence timeouts, and optional auto-detect candidate languages. Thanks @ottodeng.
 - Docs/Codex: clarify that ChatGPT/Codex subscription setups should use `openai/gpt-*` with `agentRuntime.id: "codex"` for native Codex runtime, while `openai-codex/*` remains the PI OAuth route. Thanks @pashpashpash.
 - Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.
 - Plugins/beta: prepare Brave, Codex, Feishu, Synology Chat, Tlon, and Twitch for `2026.5.1-beta.1` npm and ClawHub publishing. Thanks @vincentkoc.
