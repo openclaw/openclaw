@@ -21366,6 +21366,21 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Explicit session key override for mapping-delivered messages to control thread continuity. Use stable scoped keys so repeated events correlate without leaking into unrelated conversations.",
                 },
+                sessionMode: {
+                  anyOf: [
+                    {
+                      type: "string",
+                      const: "isolated",
+                    },
+                    {
+                      type: "string",
+                      const: "persistent",
+                    },
+                  ],
+                  title: "Hook Mapping Session Mode",
+                  description:
+                    'Hook-agent session lifecycle for this mapping: "isolated" keeps the default fresh session per dispatch, while "persistent" reuses a fresh existing session for the resolved sessionKey. Use persistent mode only for trusted integrations with scoped keys.',
+                },
                 messageTemplate: {
                   type: "string",
                   title: "Hook Mapping Message Template",
@@ -28110,6 +28125,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       help: "Explicit session key override for mapping-delivered messages to control thread continuity. Use stable scoped keys so repeated events correlate without leaking into unrelated conversations.",
       tags: ["security", "storage"],
       sensitive: true,
+    },
+    "hooks.mappings[].sessionMode": {
+      label: "Hook Mapping Session Mode",
+      help: 'Hook-agent session lifecycle for this mapping: "isolated" keeps the default fresh session per dispatch, while "persistent" reuses a fresh existing session for the resolved sessionKey. Use persistent mode only for trusted integrations with scoped keys.',
+      tags: ["storage"],
     },
     "hooks.mappings[].messageTemplate": {
       label: "Hook Mapping Message Template",

@@ -520,6 +520,55 @@ describe("gateway server hooks", () => {
     });
   });
 
+  test("forwards hook sessionMode to isolated runner for direct and mapped agent hooks", async () => {
+    testState.hooksConfig = {
+      enabled: true,
+      token: HOOK_TOKEN,
+      allowRequestSessionKey: true,
+      allowedSessionKeyPrefixes: ["hook:"],
+      mappings: [
+        {
+          match: { path: "mapped-persistent" },
+          action: "agent",
+          messageTemplate: "Mapped: {{payload.subject}}",
+          sessionKey: "hook:mapped:{{payload.id}}",
+          sessionMode: "persistent",
+        },
+      ],
+    };
+
+    await withGatewayServer(async ({ port }) => {
+      mockIsolatedRunOkOnce();
+      const direct = await postHook(port, "/hooks/agent", {
+        message: "Remember this",
+        sessionKey: "hook:direct:42",
+        sessionMode: "persistent",
+      });
+      expect(direct.status).toBe(200);
+      await waitForSystemEvent();
+      const directCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; sessionMode?: string }
+        | undefined;
+      expect(directCall?.sessionKey).toBe("hook:direct:42");
+      expect(directCall?.sessionMode).toBe("persistent");
+      drainSystemEvents(resolveMainKey());
+
+      mockIsolatedRunOkOnce();
+      const mapped = await postHook(port, "/hooks/mapped-persistent", {
+        subject: "hello",
+        id: "99",
+      });
+      expect(mapped.status).toBe(200);
+      await waitForSystemEvent();
+      const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string; sessionMode?: string }
+        | undefined;
+      expect(mappedCall?.sessionKey).toBe("hook:mapped:99");
+      expect(mappedCall?.sessionMode).toBe("persistent");
+      drainSystemEvents(resolveMainKey());
+    });
+  });
+
   test("enforces templated vs static mapping session keys on /hooks/<mapping>", async () => {
     testState.hooksConfig = {
       enabled: true,

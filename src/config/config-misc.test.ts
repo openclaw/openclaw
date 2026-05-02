@@ -296,6 +296,47 @@ describe("gateway.controlUi.allowExternalEmbedUrls", () => {
   });
 });
 
+describe("hook sessionMode schema", () => {
+  it.each(["isolated", "persistent"] as const)("accepts %s on hook mappings", (sessionMode) => {
+    const result = OpenClawSchema.safeParse({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            match: { path: "fizzy" },
+            action: "agent",
+            messageTemplate: "card update",
+            sessionKey: "hook:fizzy:card-1",
+            sessionMode,
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects invalid hook mapping sessionMode values", () => {
+    const result = OpenClawSchema.safeParse({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        mappings: [
+          {
+            match: { path: "fizzy" },
+            action: "agent",
+            messageTemplate: "card update",
+            sessionMode: "shared",
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe("plugins.entries.*.hooks", () => {
   it.each([true, false])("accepts allowConversationAccess=%s", (allowConversationAccess) => {
     const result = OpenClawSchema.safeParse({

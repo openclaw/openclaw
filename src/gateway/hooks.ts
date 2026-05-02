@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import type { HookSessionMode } from "../config/types.hooks.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -217,6 +218,7 @@ type HookAgentPayload = {
   idempotencyKey?: string;
   wakeMode: "now" | "next-heartbeat";
   sessionKey?: string;
+  sessionMode?: HookSessionMode;
   deliver: boolean;
   channel: HookMessageChannel;
   to?: string;
@@ -397,6 +399,18 @@ export function normalizeHookDispatchSessionKey(params: {
   return `agent:${targetAgentId}:${parsed.rest}`;
 }
 
+function normalizeHookSessionMode(
+  raw: unknown,
+): { ok: true; value: HookSessionMode | undefined } | { ok: false; error: string } {
+  if (raw === undefined) {
+    return { ok: true, value: undefined };
+  }
+  if (raw === "isolated" || raw === "persistent") {
+    return { ok: true, value: raw };
+  }
+  return { ok: false, error: "sessionMode must be isolated|persistent" };
+}
+
 export function normalizeAgentPayload(payload: Record<string, unknown>):
   | {
       ok: true;
@@ -426,6 +440,10 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
+  const sessionMode = normalizeHookSessionMode(payload.sessionMode);
+  if (!sessionMode.ok) {
+    return { ok: false, error: sessionMode.error };
+  }
   const deliver = resolveHookDeliver(payload.deliver);
   const thinkingRaw = payload.thinking;
   const thinking = normalizeOptionalString(thinkingRaw);
@@ -443,6 +461,7 @@ export function normalizeAgentPayload(payload: Record<string, unknown>):
       idempotencyKey,
       wakeMode,
       sessionKey,
+      sessionMode: sessionMode.value,
       deliver,
       channel,
       to,
