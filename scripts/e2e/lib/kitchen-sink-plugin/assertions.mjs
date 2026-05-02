@@ -87,20 +87,11 @@ function readConfig() {
 
 function configureRuntime() {
   const pluginId = process.env.KITCHEN_SINK_ID;
-  const personality = process.env.KITCHEN_SINK_PERSONALITY;
   const { configPath, config } = readConfig();
   config.plugins = config.plugins || {};
   config.plugins.entries = config.plugins.entries || {};
   config.plugins.entries[pluginId] = {
     ...config.plugins.entries[pluginId],
-    ...(personality
-      ? {
-          config: {
-            ...config.plugins.entries[pluginId]?.config,
-            personality,
-          },
-        }
-      : {}),
     hooks: {
       ...config.plugins.entries[pluginId]?.hooks,
       allowConversationAccess: true,
