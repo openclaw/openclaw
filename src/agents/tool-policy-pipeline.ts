@@ -179,7 +179,7 @@ function describeUnknownAllowlistSuffix(params: {
       ? "Some entries are shipped core tools but unavailable in the current runtime/provider/model/config; other entries won't match any tool unless the plugin is enabled."
       : params.hasGatedCoreEntries
         ? "These entries are shipped core tools but unavailable in the current runtime/provider/model/config."
-        : "These entries won't match any tool unless the plugin is enabled.";
+        : "These entries won't match any tool unless the plugin or MCP server is enabled and connected.";
   return preface ? `${preface} ${detail}` : detail;
 }
 
