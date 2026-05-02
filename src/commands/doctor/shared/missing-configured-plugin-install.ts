@@ -68,10 +68,14 @@ function collectDownloadableInstallCandidates(params: {
     ) {
       continue;
     }
+    const npmSpec = entry.install.npmSpec?.trim();
+    if (!npmSpec) {
+      continue;
+    }
     candidates.set(pluginId, {
       pluginId,
       label: entry.meta.label,
-      npmSpec: entry.install.npmSpec,
+      npmSpec,
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),

@@ -234,9 +234,7 @@ function resolveInstallInfo(params: {
             : localPath
               ? "local"
               : "npm";
-  return {
-    ...(clawhubSpec ? { clawhubSpec } : {}),
-    ...(npmSpec ? { npmSpec } : {}),
+  const install = {
     ...(localPath ? { localPath } : {}),
     defaultChoice,
     ...(params.install?.minHostVersion ? { minHostVersion: params.install.minHostVersion } : {}),
@@ -246,6 +244,20 @@ function resolveInstallInfo(params: {
     ...(params.install?.allowInvalidConfigRecovery === true
       ? { allowInvalidConfigRecovery: true }
       : {}),
+  };
+  if (clawhubSpec) {
+    return {
+      clawhubSpec,
+      ...(npmSpec ? { npmSpec } : {}),
+      ...install,
+    };
+  }
+  if (!npmSpec) {
+    return null;
+  }
+  return {
+    npmSpec,
+    ...install,
   };
 }
 
