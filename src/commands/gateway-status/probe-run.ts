@@ -161,6 +161,7 @@ export async function runGatewayStatusProbePass(params: {
               mode: "backend",
               clientName: "gateway-client",
               deviceIdentity: null,
+              allowUnauthenticatedLoopbackUrlOverride: true,
             }),
         });
         const probe = fallbackProbe ?? initialProbe;

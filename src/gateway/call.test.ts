@@ -1248,6 +1248,65 @@ describe("callGateway url override auth requirements", () => {
 
     await expect(callGateway({ method: "health" })).rejects.toThrow("explicit credentials");
   });
+
+  it("allows an internal unauthenticated loopback override when device identity is disabled", async () => {
+    getRuntimeConfig.mockReturnValue({ gateway: { mode: "local" } });
+
+    await expect(
+      callGateway({
+        method: "status",
+        url: "ws://127.0.0.1:18789",
+        mode: "backend",
+        clientName: "gateway-client",
+        deviceIdentity: null,
+        allowUnauthenticatedLoopbackUrlOverride: true,
+      }),
+    ).resolves.toEqual({ ok: true });
+
+    expect(lastClientOptions).toMatchObject({
+      url: "ws://127.0.0.1:18789",
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+    });
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("does not reuse implicit credentials for the internal loopback override", async () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        auth: { mode: "token", token: "local-token" },
+      },
+    });
+
+    await callGateway({
+      method: "status",
+      url: "ws://127.0.0.1:18789",
+      mode: "backend",
+      clientName: "gateway-client",
+      deviceIdentity: null,
+      allowUnauthenticatedLoopbackUrlOverride: true,
+    });
+
+    expect(lastClientOptions?.token).toBeUndefined();
+    expect(lastClientOptions?.password).toBeUndefined();
+  });
+
+  it("rejects the internal loopback override when device identity is not disabled", async () => {
+    getRuntimeConfig.mockReturnValue({ gateway: { mode: "local" } });
+
+    await expect(
+      callGateway({
+        method: "status",
+        url: "ws://127.0.0.1:18789",
+        mode: "backend",
+        clientName: "gateway-client",
+        allowUnauthenticatedLoopbackUrlOverride: true,
+      }),
+    ).rejects.toThrow("explicit credentials");
+  });
 });
 
 describe("callGateway password resolution", () => {

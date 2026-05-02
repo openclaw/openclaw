@@ -94,6 +94,7 @@ export async function probeGatewayStatus(opts: {
               mode: "backend",
               clientName: "gateway-client",
               deviceIdentity: null,
+              allowUnauthenticatedLoopbackUrlOverride: true,
               ...(opts.configPath ? { configPath: opts.configPath } : {}),
             });
           },

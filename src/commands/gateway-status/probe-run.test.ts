@@ -74,6 +74,7 @@ describe("runGatewayStatusProbePass", () => {
         mode: "backend",
         clientName: "gateway-client",
         deviceIdentity: null,
+        allowUnauthenticatedLoopbackUrlOverride: true,
       }),
     );
     expect(result.probed[0]?.probe).toMatchObject({

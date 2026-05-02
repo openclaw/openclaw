@@ -65,6 +65,12 @@ type CallGatewayBaseOptions = {
   maxProtocol?: number;
   requiredMethods?: string[];
   /**
+   * Internal status/probe escape hatch for local loopback URLs only.
+   * Requires no resolved credentials and deviceIdentity: null, so URL overrides
+   * cannot inherit shared credentials or device-token auth.
+   */
+  allowUnauthenticatedLoopbackUrlOverride?: boolean;
+  /**
    * Overrides the config path shown in connection error details.
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
@@ -310,6 +316,7 @@ export function ensureExplicitGatewayAuth(params: {
   urlOverrideSource?: "cli" | "env";
   explicitAuth?: ExplicitGatewayAuth;
   resolvedAuth?: ExplicitGatewayAuth;
+  allowUnauthenticatedLoopbackUrlOverride?: boolean;
   errorHint: string;
   configPath?: string;
 }): void {
@@ -328,6 +335,14 @@ export function ensureExplicitGatewayAuth(params: {
     params.resolvedAuth?.password ||
     explicitToken ||
     explicitPassword;
+  if (
+    params.allowUnauthenticatedLoopbackUrlOverride === true &&
+    params.urlOverrideSource === "cli" &&
+    !hasResolvedAuth &&
+    isLoopbackGatewayUrl(params.urlOverride)
+  ) {
+    return;
+  }
   // Env overrides are supported for deployment ergonomics, but only when explicit auth is available.
   // This avoids implicit device-token fallback against attacker-controlled WSS endpoints.
   if (params.urlOverrideSource === "env" && hasResolvedAuth) {
@@ -740,6 +755,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     urlOverrideSource: context.urlOverrideSource,
     explicitAuth: context.explicitAuth,
     resolvedAuth: resolvedCredentials,
+    allowUnauthenticatedLoopbackUrlOverride:
+      opts.allowUnauthenticatedLoopbackUrlOverride === true && opts.deviceIdentity === null,
     errorHint: "Fix: pass --token or --password (or gatewayToken in tools).",
     configPath: context.configPath,
   });

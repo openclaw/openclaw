@@ -128,6 +128,7 @@ describe("probeGatewayStatus", () => {
       mode: "backend",
       clientName: "gateway-client",
       deviceIdentity: null,
+      allowUnauthenticatedLoopbackUrlOverride: true,
       configPath: "/tmp/openclaw-daemon/openclaw.json",
     });
   });
