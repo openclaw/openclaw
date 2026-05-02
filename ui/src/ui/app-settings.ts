@@ -843,10 +843,7 @@ export async function loadCron(host: SettingsHost) {
     host.controlUiCronRefreshSeq === cronSeq && host.tab === "cron";
   const runsStartedAtMs = controlUiNowMs();
   const runsRefresh = loadCronRuns(app, activeCronJobId)
-    .then(
-      () => "ok" as const,
-      () => "error" as const,
-    )
+    .catch(() => "error" as const)
     .then((status) => {
       if (!isCurrentCronRefresh()) {
         return;

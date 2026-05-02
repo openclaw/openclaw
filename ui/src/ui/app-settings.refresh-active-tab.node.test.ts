@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+type CronRunsLoadStatus = "ok" | "error" | "skipped";
+
 const mocks = vi.hoisted(() => ({
   refreshChatMock: vi.fn(async () => {}),
   scheduleChatScrollMock: vi.fn(),
@@ -15,7 +17,7 @@ const mocks = vi.hoisted(() => ({
   loadConfigSchemaMock: vi.fn(async () => {}),
   loadCronStatusMock: vi.fn(async () => {}),
   loadCronJobsPageMock: vi.fn(async () => {}),
-  loadCronRunsMock: vi.fn(async () => {}),
+  loadCronRunsMock: vi.fn<() => Promise<CronRunsLoadStatus>>(async () => "ok"),
   loadDebugMock: vi.fn(async () => {}),
   loadDevicesMock: vi.fn(async () => {}),
   loadExecApprovalsMock: vi.fn(async () => {}),
@@ -272,7 +274,7 @@ describe("refreshActiveTab", () => {
   it("does not wait for cron runs before resolving the cron tab refresh", async () => {
     const host = createHost();
     host.tab = "cron";
-    mocks.loadCronRunsMock.mockReturnValueOnce(new Promise<void>(() => undefined));
+    mocks.loadCronRunsMock.mockReturnValueOnce(new Promise<"ok">(() => undefined));
 
     const refresh = refreshActiveTab(host as never);
     const outcome = await Promise.race([
@@ -285,6 +287,28 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
     expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
     expect(mocks.loadCronRunsMock).toHaveBeenCalledOnce();
+  });
+
+  it("records failed cron runs status from the controller outcome", async () => {
+    const host = createHost();
+    host.tab = "cron";
+    mocks.loadCronRunsMock.mockResolvedValueOnce("error" as const);
+
+    await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
+    await Promise.resolve();
+
+    expect(host.eventLogBuffer).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "control-ui.cron.runs",
+          payload: expect.objectContaining({
+            phase: "end",
+            status: "error",
+            durationMs: expect.any(Number),
+          }),
+        }),
+      ]),
+    );
   });
 
   it("contains rejected cron runs refreshes without failing the primary cron tab refresh", async () => {
@@ -314,8 +338,8 @@ describe("refreshActiveTab", () => {
     host.tab = "cron";
     let resolveRuns!: () => void;
     mocks.loadCronRunsMock.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveRuns = resolve;
+      new Promise<"ok">((resolve) => {
+        resolveRuns = () => resolve("ok");
       }),
     );
 
