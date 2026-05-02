@@ -10,6 +10,7 @@ export {
   ANNOUNCE_SKIP_TOKEN,
   REPLY_SKIP_TOKEN,
   isAnnounceSkip,
+  isNonDeliverableSessionsReply,
   isReplySkip,
 } from "./sessions-send-tokens.js";
 

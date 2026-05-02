@@ -158,6 +158,10 @@ describe("sessions tools", () => {
     callGatewayMock.mockClear();
     installMessagingTestRegistry();
     agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => ({
+        payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
+        meta: { durationMs: 1 },
+      }),
       callGateway: (opts: unknown) => callGatewayMock(opts),
     });
     sessionsResolutionTesting.setDepsForTest({
@@ -860,9 +864,9 @@ describe("sessions tools", () => {
       runId: "run-1",
       delivery: { status: "pending", mode: "announce" },
     });
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 4);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 4);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 3);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 3);
+    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 3);
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -876,14 +880,14 @@ describe("sessions tools", () => {
       delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 8);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 8);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 6);
+    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 6);
+    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 7);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
     const historyOnlyCalls = calls.filter((call) => call.method === "chat.history");
-    expect(agentCalls).toHaveLength(8);
+    expect(agentCalls).toHaveLength(6);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         message: expect.stringContaining("[Inter-session message"),
@@ -911,17 +915,8 @@ describe("sessions tools", () => {
           ),
       ),
     ).toBe(true);
-    expect(
-      agentCalls.some(
-        (call) =>
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-            "Agent-to-agent announce step",
-          ),
-      ),
-    ).toBe(true);
-    expect(waitCalls).toHaveLength(8);
-    expect(historyOnlyCalls).toHaveLength(9);
+    expect(waitCalls).toHaveLength(6);
+    expect(historyOnlyCalls).toHaveLength(7);
     expect(sendCallCount).toBe(0);
   });
 
@@ -1038,6 +1033,13 @@ describe("sessions tools", () => {
       }
       return {};
     });
+    agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => ({
+        payloads: [{ text: "announce now", mediaUrl: null }],
+        meta: { durationMs: 1 },
+      }),
+      callGateway: (opts: unknown) => callGatewayMock(opts),
+    });
 
     const tool = createOpenClawTools({
       agentSessionKey: requesterKey,
@@ -1059,13 +1061,13 @@ describe("sessions tools", () => {
     });
     await vi.waitFor(
       () => {
-        expect(calls.filter((call) => call.method === "agent")).toHaveLength(4);
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(3);
       },
       { timeout: 2_000, interval: 5 },
     );
 
     const agentCalls = calls.filter((call) => call.method === "agent");
-    expect(agentCalls).toHaveLength(4);
+    expect(agentCalls).toHaveLength(3);
     for (const call of agentCalls) {
       expect(call.params).toMatchObject({
         lane: expect.stringMatching(/^nested(?::|$)/),
@@ -1183,6 +1185,13 @@ describe("sessions tools", () => {
         return { messageId: "m-threaded-announce" };
       }
       return {};
+    });
+    agentStepTesting.setDepsForTest({
+      agentCommandFromIngress: async () => ({
+        payloads: [{ text: "announce now", mediaUrl: null }],
+        meta: { durationMs: 1 },
+      }),
+      callGateway: (opts: unknown) => callGatewayMock(opts),
     });
 
     const tool = createOpenClawTools({
