@@ -93,9 +93,6 @@ import {
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
-  getMemoryFlushPlanResolver,
-  getMemoryPromptSectionBuilder,
-  getMemoryRuntime,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
   restoreMemoryPluginState,
@@ -245,10 +242,7 @@ type CachedPluginState = {
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
-  memoryFlushPlanResolver: ReturnType<typeof getMemoryFlushPlanResolver>;
-  memoryPromptBuilder: ReturnType<typeof getMemoryPromptSectionBuilder>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
-  memoryRuntime: ReturnType<typeof getMemoryRuntime>;
 };
 
 const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
@@ -1487,10 +1481,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreMemoryPluginState({
           capability: cached.state.memoryCapability,
           corpusSupplements: cached.state.memoryCorpusSupplements,
-          promptBuilder: cached.state.memoryPromptBuilder,
           promptSupplements: cached.state.memoryPromptSupplements,
-          flushPlanResolver: cached.state.memoryFlushPlanResolver,
-          runtime: cached.state.memoryRuntime,
         });
         activatePluginRegistry(
           cached.state.registry,
@@ -2303,11 +2294,8 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
       const previousMemoryCapability = getMemoryCapabilityRegistration();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
-      const previousMemoryFlushPlanResolver = getMemoryFlushPlanResolver();
-      const previousMemoryPromptBuilder = getMemoryPromptSectionBuilder();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
-      const previousMemoryRuntime = getMemoryRuntime();
 
       try {
         withProfile(
@@ -2324,10 +2312,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreMemoryPluginState({
             capability: previousMemoryCapability,
             corpusSupplements: previousMemoryCorpusSupplements,
-            promptBuilder: previousMemoryPromptBuilder,
             promptSupplements: previousMemoryPromptSupplements,
-            flushPlanResolver: previousMemoryFlushPlanResolver,
-            runtime: previousMemoryRuntime,
           });
         }
         registry.plugins.push(record);
@@ -2342,10 +2327,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreMemoryPluginState({
           capability: previousMemoryCapability,
           corpusSupplements: previousMemoryCorpusSupplements,
-          promptBuilder: previousMemoryPromptBuilder,
           promptSupplements: previousMemoryPromptSupplements,
-          flushPlanResolver: previousMemoryFlushPlanResolver,
-          runtime: previousMemoryRuntime,
         });
         recordPluginError({
           logger,
@@ -2413,10 +2395,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           agentHarnesses: listRegisteredAgentHarnesses(),
           compactionProviders: listRegisteredCompactionProviders(),
           memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
-          memoryFlushPlanResolver: getMemoryFlushPlanResolver(),
-          memoryPromptBuilder: getMemoryPromptSectionBuilder(),
           memoryPromptSupplements: listMemoryPromptSupplements(),
-          memoryRuntime: getMemoryRuntime(),
         },
         onlyPluginIds,
       );

@@ -92,10 +92,10 @@ import {
 import {
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
+  registerMemoryFlushPlanResolverForPlugin,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
+  registerMemoryPromptSectionForPlugin,
+  registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -2380,7 +2380,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryPromptSection(builder);
+                registerMemoryPromptSectionForPlugin(record.id, builder);
               },
               registerMemoryPromptSupplement: (builder) => {
                 if (typeof builder !== "function") {
@@ -2415,7 +2415,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryFlushPlanResolver(resolver);
+                registerMemoryFlushPlanResolverForPlugin(record.id, resolver);
               },
               registerMemoryRuntime: (runtime) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -2435,7 +2435,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryRuntime(runtime);
+                registerMemoryRuntimeForPlugin(record.id, runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
                 if (hasKind(record.kind, "memory")) {

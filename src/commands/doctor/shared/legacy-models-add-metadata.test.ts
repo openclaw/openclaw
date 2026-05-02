@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { isLegacyModelsAddCodexMetadataModel } from "./openai-codex-models-add-legacy.js";
+import type { ModelDefinitionConfig } from "../../../config/types.models.js";
+import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 
 function buildLegacyModel(id: string): Partial<ModelDefinitionConfig> {
   return {

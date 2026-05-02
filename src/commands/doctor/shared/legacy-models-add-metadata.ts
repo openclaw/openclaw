@@ -1,5 +1,5 @@
-import type { ModelDefinitionConfig } from "../config/types.models.js";
-import { normalizeProviderId } from "./provider-id.js";
+import { normalizeProviderId } from "../../../agents/provider-id.js";
+import type { ModelDefinitionConfig } from "../../../config/types.models.js";
 
 const LEGACY_MODELS_ADD_CODEX_MODEL_IDS = new Set(["gpt-5.5", "gpt-5.5-pro"]);
 

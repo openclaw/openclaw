@@ -73,11 +73,9 @@ import {
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
@@ -2388,16 +2386,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       search: async () => [],
       get: async () => null,
     });
-    registerMemoryPromptSection(() => ["active memory section"]);
     registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "active",
-      systemPrompt: "active",
-      relativePath: "memory/active.md",
-    }));
     const activeRuntime = {
       async getMemorySearchManager() {
         return { manager: null, error: "active" };
@@ -2406,7 +2395,18 @@ module.exports = { id: "throws-after-import", register() {} };`,
         return { backend: "builtin" as const };
       },
     };
-    registerMemoryRuntime(activeRuntime);
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["active memory section"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "active",
+        systemPrompt: "active",
+        relativePath: "memory/active.md",
+      }),
+      runtime: activeRuntime,
+    });
     const plugin = writePlugin({
       id: "snapshot-memory",
       filename: "snapshot-memory.cjs",
