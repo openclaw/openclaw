@@ -233,6 +233,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Allow Bot Messages",
     help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
   },
+  mentionAliases: {
+    label: "Discord Mention Aliases",
+    help: "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases.",
+  },
   token: {
     label: "Discord Bot Token",
     help: "Discord bot token used for gateway and REST API authentication for this provider account. Keep this secret out of committed config and rotate immediately after any leak.",

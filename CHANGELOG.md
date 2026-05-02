@@ -66,6 +66,7 @@ Docs: https://docs.openclaw.ai
 - Discord: include Components v2 Text Display content from referenced replies and forwarded snapshots, so component-only messages still appear in reply context. Fixes #56228. Thanks @HollandDrive.
 - Discord: add configurable gateway READY timeouts for startup and runtime reconnects, so staggered multi-account setups can avoid false restart loops. Fixes #72273. Thanks @sergionsantos.
 - Discord: preserve native slash-command description localizations through command reconcile, so localized Discord descriptions no longer get overwritten by English defaults. Fixes #56580. Thanks @mhseo93.
+- Discord: add configured outbound mention aliases so known `@Name` references can be rewritten to real Discord user mentions instead of relying only on the transient directory cache. Fixes #67587. Thanks @McoreD.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
 

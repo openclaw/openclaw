@@ -170,6 +170,34 @@ describe("sendMessageDiscord", () => {
     );
   });
 
+  it("rewrites configured @username aliases to id-based mentions", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({ type: ChannelType.GuildText });
+    postMock.mockResolvedValue({
+      id: "msg1",
+      channel_id: "789",
+    });
+    await sendMessageDiscord("channel:789", "ping @OpsLead", {
+      rest,
+      token: "t",
+      cfg: {
+        channels: {
+          discord: {
+            token: "t",
+            mentionAliases: {
+              opslead: "123456789012345678",
+            },
+          },
+        },
+      } as never,
+      accountId: "default",
+    });
+    expect(postMock).toHaveBeenCalledWith(
+      Routes.channelMessages("789"),
+      expect.objectContaining({ body: { content: "ping <@123456789012345678>" } }),
+    );
+  });
+
   it("uses configured defaultAccount for cached mention rewriting when accountId is omitted", async () => {
     rememberDiscordDirectoryUser({
       accountId: "work",

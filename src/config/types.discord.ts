@@ -23,6 +23,8 @@ export type DiscordPluralKitConfig = {
   token?: string;
 };
 
+export type DiscordMentionAliasesConfig = Record<string, string>;
+
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
   enabled?: boolean;
@@ -262,6 +264,11 @@ export type DiscordAccountConfig = {
    * Default behavior is ID-only matching.
    */
   dangerouslyAllowNameMatching?: boolean;
+  /**
+   * Deterministic outbound @handle rewrites for known Discord users.
+   * Keys are handles without the leading @; values are Discord user IDs.
+   */
+  mentionAliases?: DiscordMentionAliasesConfig;
   /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies
