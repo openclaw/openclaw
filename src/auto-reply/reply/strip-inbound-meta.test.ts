@@ -173,13 +173,13 @@ Hello from user`;
 });
 
 describe("timestamp prefix stripping", () => {
-  it("does not strip timestamp when no metadata sentinel is present", () => {
-    expect(stripInboundMetadata("[Wed 2026-03-11 23:51 PDT] hello")).toBe("[Wed 2026-03-11 23:51 PDT] hello");
+  it("strips a leading injected timestamp prefix", () => {
+    expect(stripInboundMetadata("[Wed 2026-03-11 23:51 PDT] hello")).toBe("hello");
   });
 
-  it("does not strip timestamp-only text with UTC timezone", () => {
+  it("strips timestamp prefix with UTC timezone", () => {
     expect(stripInboundMetadata("[Thu 2026-03-12 07:00 UTC] what time is it?")).toBe(
-      "[Thu 2026-03-12 07:00 UTC] what time is it?",
+      "what time is it?",
     );
   });
 

@@ -185,12 +185,10 @@ export function stripInboundMetadata(text: string): string {
     return text;
   }
 
-  // Fast path: no metadata sentinels → return original text unchanged (zero allocation).
-  if (!SENTINEL_FAST_RE.test(text)) {
-    return text;
-  }
-
   const withoutTimestamp = text.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+  if (!SENTINEL_FAST_RE.test(withoutTimestamp)) {
+    return withoutTimestamp;
+  }
 
   const lines = withoutTimestamp.split("\n");
   const strippedLeadingPrefixLines = stripActiveMemoryPromptPrefixBlocks(lines);
