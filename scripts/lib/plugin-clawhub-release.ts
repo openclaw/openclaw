@@ -73,6 +73,11 @@ export type PluginReleasePlan = {
   skippedPublished: PluginReleasePlanItem[];
 };
 
+export type ClawHubPublishablePluginPackageFilters = {
+  extensionIds?: readonly string[];
+  packageNames?: readonly string[];
+};
+
 const CLAWHUB_DEFAULT_REGISTRY = "https://clawhub.ai";
 const SAFE_EXTENSION_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
 const CLAWHUB_SHARED_RELEASE_INPUT_PATHS = [
@@ -101,12 +106,24 @@ function getRegistryBaseUrl(explicit?: string) {
 
 export function collectClawHubPublishablePluginPackages(
   rootDir = resolve("."),
+  filters: ClawHubPublishablePluginPackageFilters = {},
 ): PublishablePluginPackage[] {
   const publishable: PublishablePluginPackage[] = [];
   const validationErrors: string[] = [];
+  const selectedExtensionIds = new Set(filters.extensionIds ?? []);
+  const selectedPackageNames = new Set(filters.packageNames ?? []);
+  const hasSelectedExtensionIds = Array.isArray(filters.extensionIds);
+  const hasSelectedPackageNames = Array.isArray(filters.packageNames);
 
   for (const candidate of collectExtensionPackageJsonCandidates(rootDir)) {
     const { extensionId, packageDir, packageJson } = candidate;
+    if (hasSelectedExtensionIds && !selectedExtensionIds.has(extensionId)) {
+      continue;
+    }
+    const packageName = packageJson.name?.trim() ?? "";
+    if (hasSelectedPackageNames && !selectedPackageNames.has(packageName)) {
+      continue;
+    }
     if (packageJson.openclaw?.release?.publishToClawHub !== true) {
       continue;
     }
@@ -147,7 +164,7 @@ export function collectClawHubPublishablePluginPackages(
     publishable.push({
       extensionId,
       packageDir,
-      packageName: packageJson.name!.trim(),
+      packageName,
       version,
       channel: parsedVersion.channel,
       publishTag: parsedVersion.channel === "beta" ? "beta" : "latest",
@@ -342,13 +359,29 @@ export async function collectPluginClawHubReleasePlan(params?: {
   registryBaseUrl?: string;
   fetchImpl?: typeof fetch;
 }): Promise<PluginReleasePlan> {
-  const allPublishable = collectClawHubPublishablePluginPackages(params?.rootDir);
+  const rootDir = params?.rootDir;
+  const selection = params?.selection ?? [];
+  const changedPaths = params?.gitRange
+    ? collectPluginClawHubRelevantPathsFromGitRange({
+        rootDir,
+        gitRange: params.gitRange,
+      })
+    : [];
+  const sharedInputChanged = hasSharedClawHubReleaseInputChanges(changedPaths);
+  const extensionIds =
+    params?.selectionMode === "all-publishable" || !params?.gitRange || sharedInputChanged
+      ? undefined
+      : collectChangedExtensionIdsFromPaths(changedPaths);
+  const allPublishable = collectClawHubPublishablePluginPackages(rootDir, {
+    extensionIds,
+    packageNames: selection.length > 0 ? selection : undefined,
+  });
   const selectedPublishable = resolveSelectedClawHubPublishablePluginPackages({
     plugins: allPublishable,
-    selection: params?.selection,
+    selection,
     selectionMode: params?.selectionMode,
     gitRange: params?.gitRange,
-    rootDir: params?.rootDir,
+    rootDir,
   });
 
   const all = await Promise.all(
