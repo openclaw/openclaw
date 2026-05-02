@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Plugins/externalization: repair missing configured plugin installs from npm by default, reserve ClawHub downloads for explicit `clawhubSpec` metadata, and cover agent-runtime/env-selected plugin repair. Thanks @vincentkoc.
 - Plugins/externalization: keep ACPX, Google Chat, and LINE publishable plugin dist trees out of the core npm package file list.
 - Plugins/ClawHub: fall back to version metadata when the artifact resolver route is missing and keep the Docker ClawHub fixture aligned with npm-pack artifact resolution, avoiding false version-not-found failures during plugin install validation. Thanks @vincentkoc.
 - Status/channels: show configured channels in `openclaw status` and config-only `openclaw channels status` output even when the Gateway is unreachable, avoiding empty Channels tables on WSL and other no-Gateway paths. Thanks @vincentkoc.

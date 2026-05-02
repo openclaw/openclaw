@@ -1,7 +1,10 @@
+import {
+  listExplicitlyDisabledChannelIdsForConfig,
+  listPotentialConfiguredChannelIds,
+} from "../../../channels/config-presence.js";
 import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
-import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
 import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../../../plugins/install-paths.js";
@@ -41,17 +44,9 @@ const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[]
   {
     pluginId: "codex",
     label: "Codex",
-    npmSpec: "@openclaw/codex@beta",
+    npmSpec: "@openclaw/codex",
   },
 ];
-
-function buildOpenClawClawHubSpec(npmSpec: string): string | undefined {
-  const parsed = parseRegistryNpmSpec(npmSpec);
-  if (!parsed?.name.startsWith("@openclaw/")) {
-    return undefined;
-  }
-  return `clawhub:${parsed.name}${parsed.selector ? `@${parsed.selector}` : ""}`;
-}
 
 function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
   return (
@@ -60,41 +55,58 @@ function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boole
   );
 }
 
-function normalizeInstallDefaultChoice(
-  value: PluginPackageInstall["defaultChoice"] | undefined,
-): PluginPackageInstall["defaultChoice"] | undefined {
-  return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
-}
-
 function resolveCandidateClawHubSpec(install: PluginPackageInstall): string | undefined {
   const explicit = install.clawhubSpec?.trim();
   if (explicit) {
     return explicit;
   }
-  const npmSpec = install.npmSpec?.trim();
-  if (!npmSpec || normalizeInstallDefaultChoice(install.defaultChoice) === "npm") {
-    return undefined;
-  }
-  return buildOpenClawClawHubSpec(npmSpec);
+  return undefined;
 }
 
-function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
+function addConfiguredPluginId(ids: Set<string>, value: unknown): void {
+  if (typeof value !== "string") {
+    return;
+  }
+  const pluginId = value.trim();
+  if (pluginId) {
+    ids.add(pluginId);
+  }
+}
+
+function addConfiguredAgentRuntimePluginIds(
+  ids: Set<string>,
+  cfg: OpenClawConfig,
+  env?: NodeJS.ProcessEnv,
+): void {
+  addConfiguredPluginId(ids, env?.OPENCLAW_AGENT_RUNTIME);
+  const agents = asObjectRecord(cfg.agents);
+  const defaults = asObjectRecord(agents?.defaults);
+  addConfiguredPluginId(ids, asObjectRecord(defaults?.agentRuntime)?.id);
+  const list = Array.isArray(agents?.list) ? agents.list : [];
+  for (const entry of list) {
+    addConfiguredPluginId(ids, asObjectRecord(asObjectRecord(entry)?.agentRuntime)?.id);
+  }
+}
+
+function collectConfiguredPluginIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): Set<string> {
   const ids = new Set<string>();
   const plugins = asObjectRecord(cfg.plugins);
+  if (plugins?.enabled === false) {
+    return ids;
+  }
   const allow = Array.isArray(plugins?.allow) ? plugins.allow : [];
   for (const value of allow) {
-    if (typeof value === "string" && value.trim()) {
-      ids.add(value.trim());
-    }
+    addConfiguredPluginId(ids, value);
   }
   const entries = asObjectRecord(plugins?.entries);
-  for (const pluginId of Object.keys(entries ?? {})) {
-    if (pluginId.trim()) {
-      ids.add(pluginId.trim());
+  for (const [pluginId, entry] of Object.entries(entries ?? {})) {
+    if (asObjectRecord(entry)?.enabled === false) {
+      continue;
     }
+    addConfiguredPluginId(ids, pluginId);
   }
   const searchProvider = cfg.tools?.web?.search?.provider;
-  if (typeof searchProvider === "string") {
+  if (cfg.tools?.web?.search?.enabled !== false && typeof searchProvider === "string") {
     const installEntry = resolveWebSearchInstallCatalogEntry({ providerId: searchProvider });
     if (installEntry?.pluginId) {
       ids.add(installEntry.pluginId);
@@ -110,15 +122,27 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
   ) {
     ids.add("acpx");
   }
+  addConfiguredAgentRuntimePluginIds(ids, cfg, env);
   return ids;
 }
 
-function collectConfiguredChannelIds(cfg: OpenClawConfig): Set<string> {
+function collectConfiguredChannelIds(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): Set<string> {
   const ids = new Set<string>();
-  const channels = asObjectRecord(cfg.channels);
-  for (const channelId of Object.keys(channels ?? {})) {
-    if (channelId !== "defaults" && channelId.trim()) {
-      ids.add(channelId.trim());
+  if (asObjectRecord(cfg.plugins)?.enabled === false) {
+    return ids;
+  }
+  const disabled = new Set(listExplicitlyDisabledChannelIdsForConfig(cfg));
+  const candidateChannelIds = listChannelPluginCatalogEntries({
+    env,
+    excludeWorkspace: true,
+  }).map((entry) => entry.id);
+  for (const channelId of listPotentialConfiguredChannelIds(cfg, env, {
+    channelIds: candidateChannelIds,
+    includePersistedAuthState: false,
+  })) {
+    const normalized = channelId.trim();
+    if (normalized && !disabled.has(normalized.toLowerCase())) {
+      ids.add(normalized);
     }
   }
   return ids;
@@ -132,9 +156,10 @@ function collectDownloadableInstallCandidates(params: {
   configuredChannelIds?: ReadonlySet<string>;
   blockedPluginIds?: ReadonlySet<string>;
 }): DownloadableInstallCandidate[] {
-  const configuredPluginIds = params.configuredPluginIds ?? collectConfiguredPluginIds(params.cfg);
+  const configuredPluginIds =
+    params.configuredPluginIds ?? collectConfiguredPluginIds(params.cfg, params.env);
   const configuredChannelIds =
-    params.configuredChannelIds ?? collectConfiguredChannelIds(params.cfg);
+    params.configuredChannelIds ?? collectConfiguredChannelIds(params.cfg, params.env);
   const candidates = new Map<string, DownloadableInstallCandidate>();
 
   for (const entry of listChannelPluginCatalogEntries({
@@ -341,8 +366,8 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
     env: params.env,
-    pluginIds: collectConfiguredPluginIds(params.cfg),
-    channelIds: collectConfiguredChannelIds(params.cfg),
+    pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
+    channelIds: collectConfiguredChannelIds(params.cfg, params.env),
   });
 }
 
@@ -451,5 +476,4 @@ export const __testing = {
   collectConfiguredChannelIds,
   collectConfiguredPluginIds,
   collectDownloadableInstallCandidates,
-  buildOpenClawClawHubSpec,
 };
