@@ -965,8 +965,11 @@ export async function sendMessageTelegram(
   // Both markdown and html modes now use chunked text to handle messages > 4096 chars.
   // Previously only html mode chunked, causing markdown payloads to fail with "message is too long".
   // Fix for #75868 - regression of #67396 where markdown branch was never chunked.
+  // For markdown mode, render to Telegram HTML before chunking to preserve formatting.
+  // The plainText fallback uses opts.plainText (original text) if provided.
   let textResult: { messageId: string; chatId: string };
-  textResult = await sendChunkedText(text, "text send");
+  const renderedHtml = renderHtmlText(text);
+  textResult = await sendChunkedText(renderedHtml, "text send");
   recordChannelActivity({
     channel: "telegram",
     accountId: account.accountId,
