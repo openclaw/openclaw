@@ -183,6 +183,9 @@ export default definePluginEntry({
 `,
     manifest: {
       id: pluginId,
+      contracts: {
+        tools: ["kitchen-sink-tool", "kitchen_sink_tool"],
+      },
       configSchema: {
         type: "object",
         properties: {},

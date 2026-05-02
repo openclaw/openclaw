@@ -188,14 +188,16 @@ export function resolvePluginWebProviders<TEntry>(
   }
   const activeRegistry = getActivePluginRegistry();
   if (activeRegistry) {
-    return deps.mapRegistryProviders({
+    const activeProviders = deps.mapRegistryProviders({
       registry: activeRegistry,
       onlyPluginIds: context.onlyPluginIds,
     });
+    if (activeProviders.length > 0) {
+      return activeProviders;
+    }
   }
   return deps.mapRegistryProviders({
     registry: loadOpenClawPlugins(loadOptions),
-    onlyPluginIds: context.onlyPluginIds,
   });
 }
 

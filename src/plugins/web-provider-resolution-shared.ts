@@ -160,9 +160,9 @@ export function resolveBundledWebProviderResolutionConfig(params: {
     workspaceDir: params.workspaceDir,
     applyAutoEnable: true,
     compatMode: {
-      allowlist: params.bundledAllowlistCompat,
+      allowlist: params.config === undefined ? false : params.bundledAllowlistCompat,
       enablement: "always",
-      vitest: true,
+      vitest: params.config !== undefined,
     },
     resolveCompatPluginIds: (compatParams) =>
       resolveBundledWebProviderCompatPluginIds({
