@@ -20,22 +20,21 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
 
-type ReplyOptionsWithoutModelSelected = Omit<
-  Omit<GetReplyOptions, "onBlockReply">,
-  "onModelSelected"
->;
+// Renamed and updated to ALLOW callbacks that we need to compose[cite: 1]
+type ReplyOptionsForDispatch = Omit<GetReplyOptions, "onBlockReply">;
+
 type RecordInboundSessionFn = typeof import("../channels/session.js").recordInboundSession;
 
 type ReplyDispatchFromConfigOptions = Omit<GetReplyOptions, "onBlockReply">;
 
-/** Run an already assembled channel turn through shared session-record + dispatch ordering. */
+/** Run an already assembled channel turn through shared session-record + dispatch ordering.[cite: 1] */
 export async function runPreparedInboundReplyTurn<TDispatchResult>(
   params: PreparedChannelTurn<TDispatchResult>,
 ) {
   return await runPreparedChannelTurn(params);
 }
 
-/** Run a channel turn through shared ingest, record, dispatch, and finalize ordering. */
+/** Run a channel turn through shared ingest, record, dispatch, and finalize ordering.[cite: 1] */
 export async function runInboundReplyTurn<TRaw, TDispatchResult = DispatchFromConfigResult>(
   params: RunChannelTurnParams<TRaw, TDispatchResult>,
 ) {
@@ -48,7 +47,7 @@ export {
   resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };
 
-/** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback. */
+/** Run `dispatchReplyFromConfig` with a dispatcher that always gets its settled callback.[cite: 1] */
 export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
   cfg: OpenClawConfig;
   ctxPayload: FinalizedMsgContext;
@@ -71,7 +70,7 @@ export async function dispatchReplyFromConfigWithSettledDispatcher(params: {
   });
 }
 
-/** Assemble the common inbound reply dispatch dependencies for a resolved route. */
+/** Assemble the common inbound reply dispatch dependencies for a resolved route.[cite: 1] */
 export function buildInboundReplyDispatchBase(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -112,7 +111,7 @@ type RecordInboundSessionAndDispatchReplyParams = Parameters<
   typeof recordInboundSessionAndDispatchReply
 >[0];
 
-/** Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn. */
+/** Resolve the shared dispatch base and immediately record + dispatch one inbound reply turn.[cite: 1] */
 export async function dispatchInboundReplyWithBase(
   params: BuildInboundReplyDispatchBaseParams &
     Pick<
@@ -130,7 +129,7 @@ export async function dispatchInboundReplyWithBase(
   });
 }
 
-/** Record the inbound session first, then dispatch the reply using normalized outbound delivery. */
+/** Record the inbound session first, then dispatch the reply using normalized outbound delivery.[cite: 1] */
 export async function recordInboundSessionAndDispatchReply(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -144,16 +143,56 @@ export async function recordInboundSessionAndDispatchReply(params: {
   deliver: (payload: OutboundReplyPayload) => Promise<void>;
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
-  replyOptions?: ReplyOptionsWithoutModelSelected;
+  replyOptions?: ReplyOptionsForDispatch;
 }): Promise<void> {
-  const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: params.channel,
-    accountId: params.accountId,
-  });
+  // 1. Initialize the internal channel pipeline[cite: 1]
+  const { onModelSelected, onResponseTemplateContextResolved, ...replyPipeline } =
+    createChannelReplyPipeline({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      channel: params.channel,
+      accountId: params.accountId,
+    });
+
   const deliver = createNormalizedOutboundDeliverer(params.deliver);
 
+  // 2. Extract caller-provided hooks to avoid overwriting them[cite: 1]
+  const callerReplyOptions = params.replyOptions ?? {};
+  const callerOnModelSelected = callerReplyOptions.onModelSelected;
+  const callerOnResponseTemplateContextResolved =
+    callerReplyOptions.onResponseTemplateContextResolved;
+
+  type AsyncCallback<TArgs extends unknown[]> = (...args: TArgs) => void | Promise<void>;
+
+  /**
+   * Compose two optional async/sync callbacks into one callback that runs both
+   * in order.
+   */
+  function composeAsyncTwo<TArgs extends unknown[]>(
+    primary?: AsyncCallback<TArgs>,
+    secondary?: AsyncCallback<TArgs>,
+  ): AsyncCallback<TArgs> | undefined {
+    if (!primary && !secondary) {
+      return undefined;
+    }
+    return async (...args: TArgs) => {
+      if (primary) {
+        await primary(...args);
+      }
+      if (secondary) {
+        await secondary(...args);
+      }
+    };
+  }
+
+  // 3. Compose the internal pipeline hooks with the caller's hooks[cite: 1]
+  const composedOnModelSelected = composeAsyncTwo(onModelSelected, callerOnModelSelected);
+  const composedOnResponseTemplateContextResolved = composeAsyncTwo(
+    onResponseTemplateContextResolved,
+    callerOnResponseTemplateContextResolved,
+  );
+
+  // 4. Run the prepared channel turn with the composed callbacks[cite: 1]
   await runPreparedChannelTurn({
     channel: params.channel,
     accountId: params.accountId,
@@ -174,8 +213,9 @@ export async function recordInboundSessionAndDispatchReply(params: {
           onError: params.onDispatchError,
         },
         replyOptions: {
-          ...params.replyOptions,
-          onModelSelected,
+          ...callerReplyOptions,
+          onModelSelected: composedOnModelSelected,
+          onResponseTemplateContextResolved: composedOnResponseTemplateContextResolved,
         },
       }),
   });

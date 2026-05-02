@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { hasConfiguredModelFallbacks, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded-runner/runs.js";
@@ -10,6 +11,7 @@ import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  resolveFreshSessionTotalTokens,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
@@ -57,7 +59,12 @@ import {
   hasUnbackedReminderCommitment,
 } from "./agent-runner-reminder-guard.js";
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
-import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
+import {
+  appendFooterBlock,
+  composeFooterBlock,
+  formatResponseFooterBlock,
+  formatResponseUsageLine,
+} from "./agent-runner-usage-line.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
@@ -81,6 +88,11 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
+import {
+  extractShortModelName,
+  hasUsageTemplateVariables,
+  type ResponseTemplateContext,
+} from "./response-prefix-template.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -1058,7 +1070,8 @@ export async function runReplyAgent(params: {
     return undefined;
   }
 
-  followupRun.run.config = await resolveQueuedReplyExecutionConfig(followupRun.run.config, {
+  const queuedRunConfig = followupRun.run.config;
+  followupRun.run.config = await resolveQueuedReplyExecutionConfig(queuedRunConfig, {
     originatingChannel: sessionCtx.OriginatingChannel,
     messageProvider: followupRun.run.messageProvider,
     originatingAccountId: followupRun.originatingAccountId,
@@ -1428,8 +1441,13 @@ export async function runReplyAgent(params: {
     });
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
+    const blockStreamingSuppressedFinalPayloads =
+      replyPayloads.length === 0 &&
+      blockStreamingEnabled &&
+      Boolean(blockReplyPipeline?.didStream()) &&
+      !blockReplyPipeline?.isAborted();
 
-    if (replyPayloads.length === 0) {
+    if (replyPayloads.length === 0 && !blockStreamingSuppressedFinalPayloads) {
       return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
@@ -1519,27 +1537,23 @@ export async function runReplyAgent(params: {
       });
     }
 
+    const responseUsageDefaultRaw = cfg.agents?.defaults?.responseUsage;
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??
       (sessionKey ? activeSessionStore?.[sessionKey]?.responseUsage : undefined);
-    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw);
+    const responseUsageMode = resolveResponseUsageMode(responseUsageRaw, responseUsageDefaultRaw);
+
+    // Main's formatting logic
     if (responseUsageMode !== "off" && hasNonzeroUsage(usage)) {
       const authMode = resolveModelAuthMode(providerUsed, cfg, undefined, {
         workspaceDir: followupRun.run.workspaceDir,
       });
       const showCost = authMode === "api-key";
       const costConfig = showCost
-        ? resolveModelCostConfig({
-            provider: providerUsed,
-            model: modelUsed,
-            config: cfg,
-          })
+        ? resolveModelCostConfig({ provider: providerUsed, model: modelUsed, config: cfg })
         : undefined;
-      let formatted = formatResponseUsageLine({
-        usage,
-        showCost,
-        costConfig,
-      });
+
+      let formatted = formatResponseUsageLine({ usage, showCost, costConfig });
       if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;
       }
@@ -1548,7 +1562,15 @@ export async function runReplyAgent(params: {
       }
     }
 
-    if (verboseEnabled) {
+    // Feat's template logic
+    const responseFooterTemplate = normalizeOptionalString(cfg.messages?.responseFooter);
+    const shouldResolveFooter = responseFooterTemplate !== undefined;
+    const shouldResolveLateTemplateContext =
+      shouldResolveFooter ||
+      responseUsageMode !== "off" ||
+      Boolean(opts?.onResponseTemplateContextResolved);
+
+    if (verboseEnabled || responseUsageMode === "full" || shouldResolveLateTemplateContext) {
       activeSessionEntry = refreshSessionEntryFromStore({
         storePath,
         sessionKey,
@@ -1767,6 +1789,117 @@ export async function runReplyAgent(params: {
       traceAuthorized &&
       (activeSessionEntry?.traceLevel === "on" || activeSessionEntry?.traceLevel === "raw");
     const shouldAppendTracePayload = verboseEnabled || traceEnabledForSender;
+    const identityName = normalizeOptionalString(
+      resolveAgentIdentity(cfg, followupRun.run.agentId)?.name,
+    );
+    let footerBlockToAppend: string | undefined;
+    if (shouldResolveLateTemplateContext) {
+      const inputTokens = typeof usage?.input === "number" ? usage.input : undefined;
+      const outputTokens = typeof usage?.output === "number" ? usage.output : undefined;
+      const cacheReadTokens = typeof usage?.cacheRead === "number" ? usage.cacheRead : undefined;
+      const cacheWriteTokens = typeof usage?.cacheWrite === "number" ? usage.cacheWrite : undefined;
+      const totalTokens =
+        typeof usage?.total === "number"
+          ? usage.total
+          : [inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens].some(
+                (value) => typeof value === "number",
+              )
+            ? (inputTokens ?? 0) +
+              (outputTokens ?? 0) +
+              (cacheReadTokens ?? 0) +
+              (cacheWriteTokens ?? 0)
+            : undefined;
+      const contextUsedTokens =
+        resolveFreshSessionTotalTokens(activeSessionEntry) ??
+        (typeof promptTokens === "number" && Number.isFinite(promptTokens) && promptTokens > 0
+          ? promptTokens
+          : undefined);
+      const contextMaxTokens =
+        typeof activeSessionEntry?.contextTokens === "number" &&
+        activeSessionEntry.contextTokens > 0
+          ? activeSessionEntry.contextTokens
+          : contextTokensUsed;
+      const contextPercent =
+        typeof contextUsedTokens === "number" &&
+        typeof contextMaxTokens === "number" &&
+        contextMaxTokens > 0
+          ? Math.round((contextUsedTokens / contextMaxTokens) * 100)
+          : undefined;
+      const modelFull =
+        typeof modelUsed === "string" && modelUsed.includes("/")
+          ? modelUsed
+          : providerUsed && modelUsed
+            ? `${providerUsed}/${modelUsed}`
+            : modelUsed;
+      const modelLabel = modelFull ? extractShortModelName(modelFull) : undefined;
+      const authMode = resolveModelAuthMode(providerUsed, cfg);
+      const showCost = authMode === "api-key" || authMode === "mixed";
+      const costConfig = showCost
+        ? resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfg,
+          })
+        : undefined;
+      const estimatedCostUsd =
+        showCost && hasNonzeroUsage(usage)
+          ? estimateUsageCost({
+              usage,
+              cost: costConfig,
+            })
+          : undefined;
+      const templateUsageLine = hasNonzeroUsage(usage)
+        ? (formatResponseUsageLine({
+            usage,
+            showCost,
+            costConfig,
+            mode: responseUsageMode === "full" ? "full" : "tokens",
+            modelLabel,
+            contextUsedTokens,
+            contextMaxTokens,
+            contextPercent,
+            sessionKey,
+          }) ?? undefined)
+        : undefined;
+      responseUsageLine =
+        responseUsageMode !== "off" && hasNonzeroUsage(usage) ? templateUsageLine : undefined;
+      const responseTemplateContext: ResponseTemplateContext = {
+        model: modelLabel,
+        modelFull,
+        provider: providerUsed,
+        thinkingLevel: requestShaping.thinking,
+        identityName,
+        effort: requestShaping.thinking,
+        inputTokens,
+        outputTokens,
+        totalTokens,
+        cacheReadTokens,
+        cacheWriteTokens,
+        contextUsedTokens,
+        contextMaxTokens,
+        contextPercent,
+        sessionKey,
+        estimatedCostUsd,
+        usageLine: templateUsageLine,
+      };
+      if (opts?.onResponseTemplateContextResolved) {
+        opts.onResponseTemplateContextResolved(responseTemplateContext);
+      }
+
+      const responseFooterBlock = shouldResolveFooter
+        ? (formatResponseFooterBlock({
+            template: responseFooterTemplate,
+            context: responseTemplateContext,
+          }) ?? undefined)
+        : undefined;
+
+      footerBlockToAppend =
+        composeFooterBlock({
+          usageLine: responseUsageMode !== "off" ? responseUsageLine : undefined,
+          footerBlock: responseFooterBlock,
+          footerConsumesUsage: hasUsageTemplateVariables(responseFooterTemplate),
+        }) ?? undefined;
+    }
     let trailingPluginStatusPayload: ReplyPayload | undefined;
     if (shouldAppendTracePayload) {
       const pluginStatusPayload = buildInlinePluginStatusPayload({
@@ -1799,14 +1932,17 @@ export async function runReplyAgent(params: {
           ? { text: `${pluginStatusPayload.text}\n\n${rawTracePayload.text}` }
           : (pluginStatusPayload ?? rawTracePayload);
     }
-    if (prefixPayloads.length > 0) {
+    if (footerBlockToAppend) {
+      finalPayloads = appendFooterBlock(finalPayloads, footerBlockToAppend);
+    }
+    if (prefixPayloads.length > 0 && !blockStreamingSuppressedFinalPayloads) {
       finalPayloads = [...prefixPayloads, ...finalPayloads];
     }
     if (trailingPluginStatusPayload) {
       finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
     }
-    if (responseUsageLine) {
-      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    if (finalPayloads.length === 0) {
+      return finalizeWithFollowup(undefined, queueKey, runFollowupTurn);
     }
 
     return finalizeWithFollowup(

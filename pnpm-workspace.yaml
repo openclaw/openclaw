@@ -31,6 +31,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "tokenjuice@0.6.1"
 
 onlyBuiltDependencies:
   - "@discordjs/opus"

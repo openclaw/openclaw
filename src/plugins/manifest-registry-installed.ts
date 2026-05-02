@@ -172,12 +172,15 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
       }
       const env = params.env ?? process.env;
       const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
+      const indexDiagnostics = Array.isArray(params.index.diagnostics)
+        ? params.index.diagnostics
+        : [];
       const diagnostics = pluginIdSet
-        ? params.index.diagnostics.filter((diagnostic) => {
+        ? indexDiagnostics.filter((diagnostic) => {
             const pluginId = diagnostic.pluginId;
             return !pluginId || pluginIdSet.has(pluginId);
           })
-        : params.index.diagnostics;
+        : indexDiagnostics;
       const candidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))

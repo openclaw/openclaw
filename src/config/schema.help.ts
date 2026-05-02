@@ -216,6 +216,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Default max characters kept for a single live tool result before truncation. This affects both persisted live tool-result writes and overflow-recovery truncation heuristics.",
   "agents.defaults.contextLimits.postCompactionMaxChars":
     "Default max characters retained from AGENTS.md during post-compaction context refresh injection. Lower this to make compaction recovery cheaper, or raise it for agents that depend on longer startup guidance.",
+  "agents.defaults.responseUsage":
+    'Default response-usage footer mode inherited by sessions that do not set responseUsage explicitly: "off", "tokens", or "full". Use this to enable fleet-wide inline usage/context summaries while still allowing sessions to override or explicitly suppress them.',
   "agents.list":
     "Explicit list of configured agents with IDs and optional overrides for model, tools, identity, and workspace. Keep IDs stable over time so bindings, approvals, and session routing remain deterministic.",
   "agents.list[].skillsLimits":
@@ -1635,7 +1637,9 @@ export const FIELD_HELP: Record<string, string> = {
   "messages.visibleReplies":
     'Controls visible source replies across direct, group, and channel conversations. "message_tool" keeps normal final replies private and requires message(action=send) for visible output; "automatic" posts normal replies as before.',
   "messages.responsePrefix":
-    "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
+    "Prefix text prepended to outbound assistant replies before sending to channels. Supports the same template placeholders as messages.responseFooter, including late-bound model, usage, context, and cost values when they are available by final-send time; keep it short so streaming replies still read naturally.",
+  "messages.responseFooter":
+    "Footer text appended to outbound assistant replies after the main body. Use it for lightweight signatures, inline usage/context summaries, or compliance notes, and keep it short so it does not overwhelm the reply; when the footer already references usage-style placeholders, OpenClaw suppresses the separate built-in usage line to avoid duplicate footers.",
   "messages.groupChat":
     "Group-message handling controls including mention triggers and history window sizing. Keep mention patterns narrow so group channels do not trigger on every message.",
   "messages.groupChat.mentionPatterns":

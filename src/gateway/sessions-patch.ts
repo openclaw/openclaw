@@ -324,11 +324,7 @@ export async function applySessionsPatchToStore(params: {
       if (!normalized) {
         return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
       }
-      if (normalized === "off") {
-        delete next.responseUsage;
-      } else {
-        next.responseUsage = normalized;
-      }
+      next.responseUsage = normalized;
     }
   }
 

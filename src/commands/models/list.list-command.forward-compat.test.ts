@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 
 const OPENAI_CODEX_MODEL = {
   provider: "openai-codex",
@@ -16,6 +17,18 @@ const OPENAI_CODEX_53_MODEL = {
   ...OPENAI_CODEX_MODEL,
   id: "gpt-5.4",
   name: "GPT-5.3 Codex",
+};
+
+const EMPTY_PLUGIN_INDEX: InstalledPluginIndex = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "test",
+  generatedAtMs: 0,
+  installRecords: {},
+  plugins: [],
+  diagnostics: [],
 };
 
 const mocks = vi.hoisted(() => {
@@ -57,7 +70,11 @@ const mocks = vi.hoisted(() => {
     printModelTable: vi.fn(),
     resolveModelWithRegistry: vi.fn(),
     readPersistedInstalledPluginIndexSync: vi.fn(),
-    loadPluginRegistrySnapshotWithMetadata: vi.fn(),
+    loadPluginRegistrySnapshotWithMetadata: vi.fn(() => ({
+      source: "persisted",
+      snapshot: EMPTY_PLUGIN_INDEX,
+      diagnostics: [],
+    })),
   };
 });
 
@@ -98,7 +115,7 @@ function resetMocks() {
   mocks.readPersistedInstalledPluginIndexSync.mockReturnValue(null);
   mocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
     source: "persisted",
-    snapshot: { plugins: [] },
+    snapshot: EMPTY_PLUGIN_INDEX,
     diagnostics: [],
   });
 }
@@ -524,7 +541,25 @@ describe("modelsListCommand forward-compat", () => {
       mocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValueOnce({
         source: "persisted",
         snapshot: {
-          plugins: [{ enabled: true, syntheticAuthRefs: ["codex"] }],
+          ...EMPTY_PLUGIN_INDEX,
+          plugins: [
+            {
+              pluginId: "codex-auth",
+              manifestPath: "/tmp/codex-auth/plugin.json",
+              manifestHash: "hash-codex-auth",
+              rootDir: "/tmp/codex-auth",
+              origin: "global",
+              enabled: true,
+              startup: {
+                sidecar: false,
+                memory: false,
+                deferConfiguredChannelFullLoadUntilAfterListen: false,
+                agentHarnesses: [],
+              },
+              compat: [],
+              syntheticAuthRefs: ["codex"],
+            },
+          ],
         },
         diagnostics: [],
       });

@@ -64,6 +64,12 @@ describe("agent defaults schema", () => {
     expect(result.experimental?.localModelLean).toBe(true);
   });
 
+  it("accepts responseUsage defaults", () => {
+    const result = AgentDefaultsSchema.parse({ responseUsage: "full" })!;
+    expect(result.responseUsage).toBe("full");
+  });
+
+
   it("accepts contextInjection: always", () => {
     const result = AgentDefaultsSchema.parse({ contextInjection: "always" })!;
     expect(result.contextInjection).toBe("always");

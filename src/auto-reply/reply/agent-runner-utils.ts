@@ -43,6 +43,9 @@ export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenCla
     typeof getRuntimeConfigSnapshot === "function" ? getRuntimeConfigSnapshot() : null;
   const runtimeSourceConfig =
     typeof getRuntimeConfigSourceSnapshot === "function" ? getRuntimeConfigSourceSnapshot() : null;
+  if (runtimeConfig && !runtimeSourceConfig && runtimeConfig !== config) {
+    return config;
+  }
   return (
     selectApplicableRuntimeConfig({
       inputConfig: config,

@@ -45,6 +45,7 @@ describe("createChannelReplyPipeline", () => {
     );
 
     expect(typeof pipeline.onModelSelected).toBe("function");
+    expect(pipeline.onResponseTemplateContextResolved).toBeUndefined();
     expect(typeof pipeline.responsePrefixContextProvider).toBe("function");
 
     if (!expectTypingCallbacks) {
@@ -77,6 +78,45 @@ describe("createChannelReplyPipeline", () => {
 
     expect(onReplyStart).toHaveBeenCalledTimes(1);
     expect(onIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes late-bound usage and cost values through the dynamic prefix context provider", () => {
+    const pipeline = createChannelReplyPipeline({
+      cfg: {
+        agents: { list: [{ id: "main", identity: { name: "Jarvis" } }] },
+        messages: { responsePrefix: "*{identityName}:* {cost} {usageLine}" },
+      },
+      agentId: "main",
+      channel: "slack",
+    });
+
+    pipeline.onModelSelected?.({
+      provider: "openai",
+      model: "gpt-5.4",
+      thinkLevel: "high",
+    });
+    pipeline.onResponseTemplateContextResolved?.({
+      model: "gpt-5.4",
+      modelFull: "openai/gpt-5.4",
+      provider: "openai",
+      identityName: "Jarvis",
+      estimatedCostUsd: 0.1234,
+      usageLine: "Usage: 12 in / 3 out",
+      contextPercent: 23,
+      sessionKey: "agent:main:slack:dm:123",
+    });
+
+    expect(pipeline.responsePrefixContextProvider?.()).toMatchObject({
+      identityName: "Jarvis",
+      model: "gpt-5.4",
+      modelFull: "openai/gpt-5.4",
+      provider: "openai",
+      thinkingLevel: "high",
+      estimatedCostUsd: 0.1234,
+      usageLine: "Usage: 12 in / 3 out",
+      contextPercent: 23,
+      sessionKey: "agent:main:slack:dm:123",
+    });
   });
 
   it("uses an explicit reply transform without resolving the channel plugin", () => {

@@ -2,6 +2,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
+import type { ResponseTemplateContext } from "./reply/response-prefix-template.js";
 
 export type BlockReplyContext = {
   abortSignal?: AbortSignal;
@@ -147,10 +148,11 @@ export type GetReplyOptions = {
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;
+  /** Called when late-bound response template fields (usage, cost, context) become available. */
+  onResponseTemplateContextResolved?: (ctx: ResponseTemplateContext) => void;
   /**
    * Controls whether normal assistant replies are automatically delivered to
-   * the source conversation. `message_tool_only` keeps final/block/preview
-   * output private; visible channel output must come from the message tool.
+   * the source conversation.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   disableBlockStreaming?: boolean;

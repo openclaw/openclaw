@@ -184,6 +184,48 @@ describe("handleUsageCommand", () => {
     expect(result?.shouldContinue).toBe(false);
     expect(result?.reply?.text).toBe("⚙️ Usage footer: full.");
   });
+
+  it("cycles from inherited full mode to explicit off", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage";
+    params.cfg = {
+      ...params.cfg,
+      agents: { defaults: { responseUsage: "full" } },
+    } as OpenClawConfig;
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: off.");
+    expect(params.sessionStore?.[params.sessionKey]?.responseUsage).toBe("off");
+  });
+
+  it("persists explicit off instead of deleting it when a global default is enabled", async () => {
+    const params = buildUsageParams();
+    params.command.commandBodyNormalized = "/usage off";
+    params.cfg = {
+      ...params.cfg,
+      agents: { defaults: { responseUsage: "full" } },
+    } as OpenClawConfig;
+    params.sessionStore = {
+      [params.sessionKey]: {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    };
+
+    const result = await handleUsageCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("⚙️ Usage footer: off.");
+    expect(params.sessionStore?.[params.sessionKey]?.responseUsage).toBe("off");
+  });
 });
 
 describe("handleFastCommand", () => {

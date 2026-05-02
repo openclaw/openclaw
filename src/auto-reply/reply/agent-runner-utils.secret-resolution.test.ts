@@ -188,4 +188,15 @@ describe("resolveQueuedReplyExecutionConfig channel scope", () => {
     expect(resolveQueuedReplyRuntimeConfig(structuredClone(sourceConfig))).toBe(staleRuntimeConfig);
     expect(resolveQueuedReplyRuntimeConfig(scopedResolvedConfig)).toBe(scopedResolvedConfig);
   });
+
+  it("keeps queued run config when runtime snapshot has no source snapshot", () => {
+    const queuedRunConfig = {
+      messages: {
+        responseFooter: "— footer",
+      },
+    } as unknown as OpenClawConfig;
+    setRuntimeConfigSnapshot({} as OpenClawConfig);
+
+    expect(resolveQueuedReplyRuntimeConfig(queuedRunConfig)).toBe(queuedRunConfig);
+  });
 });

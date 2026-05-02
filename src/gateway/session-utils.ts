@@ -40,6 +40,7 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import { normalizeUsageDisplay } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -544,20 +545,44 @@ export function resolveDeletedAgentIdFromSessionKey(
 export function loadSessionEntry(sessionKey: string) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: key });
+  const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
+
+  // Initial lookup keeps behavior for the common fast-path cases.
+  let { storePath, store } = resolveGatewaySessionStoreLookup({
+    cfg,
+    key,
+    canonicalKey,
+    agentId,
+  });
+
+  // resolveGatewaySessionStoreTarget may select a different backing store/canonical
+  // key (for deleted-main / legacy agent mappings). Ensure we actually load the
+  // store at the resolved target storePath so callers receive the backing store
+  // that the target resolver chose (prevents reading/patching the wrong store).
   const target = resolveGatewaySessionStoreTarget({
     cfg,
     key,
+    store,
   });
-  const storePath = target.storePath;
-  const store = loadSessionStore(storePath);
+
+  if (target.storePath && target.storePath !== storePath) {
+    // Reload the store from the resolved target path so subsequent lookups use
+    // the correct backing store.
+    store = loadSessionStore(target.storePath);
+    storePath = target.storePath;
+  }
+
+  const resolvedCanonicalKey = target.canonicalKey;
   const freshestMatch = resolveFreshestSessionStoreMatchFromStoreKeys(store, target.storeKeys);
-  const legacyKey = freshestMatch?.key !== target.canonicalKey ? freshestMatch?.key : undefined;
+  const legacyKey = freshestMatch?.key !== resolvedCanonicalKey ? freshestMatch?.key : undefined;
+
   return {
     cfg,
     storePath,
     store,
     entry: freshestMatch?.entry,
-    canonicalKey: target.canonicalKey,
+    canonicalKey: resolvedCanonicalKey,
     legacyKey,
   };
 }
@@ -566,18 +591,19 @@ export function resolveFreshestSessionStoreMatchFromStoreKeys(
   store: Record<string, SessionEntry>,
   storeKeys: string[],
 ): { key: string; entry: SessionEntry } | undefined {
-  let freshest: { key: string; entry: SessionEntry } | undefined;
-  for (const key of storeKeys) {
-    const entry = store[key];
-    if (!entry) {
-      continue;
-    }
-    const match = { key, entry };
-    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = match;
-    }
+  const matches = storeKeys
+    .map((key) => {
+      const entry = store[key];
+      return entry ? { key, entry } : undefined;
+    })
+    .filter((match): match is { key: string; entry: SessionEntry } => match !== undefined);
+  if (matches.length === 0) {
+    return undefined;
   }
-  return freshest;
+  if (matches.length === 1) {
+    return matches[0];
+  }
+  return [...matches].toSorted((a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0))[0];
 }
 
 export function resolveFreshestSessionEntryFromStoreKeys(
@@ -611,13 +637,9 @@ function findFreshestStoreMatch(
   if (matches.size === 0) {
     return undefined;
   }
-  let freshest: { entry: SessionEntry; key: string } | undefined;
-  for (const match of matches.values()) {
-    if (!freshest || (match.entry.updatedAt ?? 0) > (freshest.entry.updatedAt ?? 0)) {
-      freshest = match;
-    }
-  }
-  return freshest;
+  return [...matches.values()].toSorted(
+    (a, b) => (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0),
+  )[0];
 }
 
 /**
@@ -1059,7 +1081,6 @@ export function resolveGatewaySessionStoreTarget(params: {
   if (explicitDeletedMainTarget) {
     return explicitDeletedMainTarget;
   }
-
   const canonicalKey = resolveSessionStoreKey({
     cfg: params.cfg,
     sessionKey: key,
@@ -1617,7 +1638,9 @@ export function buildGatewaySessionRow(params: {
     runtimeMs: subagentRun ? subagentRuntimeMs : entry?.runtimeMs,
     parentSessionKey: subagentOwner || entry?.parentSessionKey,
     childSessions,
-    responseUsage: entry?.responseUsage,
+    responseUsage: normalizeUsageDisplay(
+      entry?.responseUsage ?? cfg.agents?.defaults?.responseUsage,
+    ),
     modelProvider: rowModelProvider,
     model: rowModel,
     agentRuntime,

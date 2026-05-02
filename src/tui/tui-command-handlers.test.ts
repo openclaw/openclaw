@@ -366,6 +366,19 @@ describe("tui command handlers", () => {
     expect(addSystem).toHaveBeenNthCalledWith(2, "reset failed: Error: boom");
   });
 
+  it("persists explicit off for /usage instead of clearing to inherit", async () => {
+    const patchSession = vi.fn().mockResolvedValue({ responseUsage: "off" });
+    const { handleCommand, state } = createHarness({ patchSession });
+    state.sessionInfo = { responseUsage: "full" };
+
+    await handleCommand("/usage");
+
+    expect(patchSession).toHaveBeenCalledWith({
+      key: "agent:main:main",
+      responseUsage: "off",
+    });
+  });
+
   it("reports disconnected status and skips gateway send when offline", async () => {
     const { handleCommand, sendChat, addUser, addSystem, setActivityStatus } = createHarness({
       isConnected: false,

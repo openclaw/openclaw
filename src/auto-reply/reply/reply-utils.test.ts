@@ -8,7 +8,10 @@ import { createReplyReferencePlanner, isSingleUseReplyToMode } from "./reply-ref
 import {
   extractShortModelName,
   hasTemplateVariables,
+  hasUsageTemplateVariables,
+  listTemplateVariables,
   resolveResponsePrefixTemplate,
+  resolveResponseTemplate,
 } from "./response-prefix-template.js";
 import {
   createStreamingDirectiveAccumulator,
@@ -620,6 +623,71 @@ describe("resolveResponsePrefixTemplate", () => {
     expectResolvedTemplateCases(cases);
   });
 });
+
+describe("resolveResponseTemplate footer variables", () => {
+  it("resolves token, context, effort, and session variables", () => {
+    expect(
+      resolveResponseTemplate(
+        "{model} · ↑{input} ↓{output} Σ{total} · {context}/{contextMax} ({contextPercent}%) · {identityName} · {session}",
+        {
+          model: "gpt-5.4",
+          inputTokens: 37_200,
+          outputTokens: 602,
+          totalTokens: 37_802,
+          contextUsedTokens: 45_234,
+          contextMaxTokens: 200_000,
+          contextPercent: 23,
+          identityName: "Jarvis",
+          sessionKey: "agent:main:whatsapp:dm:+1000",
+        },
+      ),
+    ).toBe(
+      "gpt-5.4 · ↑37k ↓602 Σ38k · 45k/200k (23%) · Jarvis · agent:main:whatsapp:dm:+1000",
+    );
+  });
+
+  it("falls back between thinkingLevel and effort aliases", () => {
+    expect(resolveResponseTemplate("{effort}", { thinkingLevel: "medium" })).toBe("medium");
+    expect(resolveResponseTemplate("{think}", { effort: "low" })).toBe("low");
+  });
+
+  it("resolves cost and usageLine placeholders", () => {
+    expect(
+      resolveResponseTemplate("{usageLine} · {cost}", {
+        usageLine: "Usage: 37k in / 602 out",
+        estimatedCostUsd: 0.1234,
+      }),
+    ).toBe("Usage: 37k in / 602 out · $0.12");
+  });
+
+  it("blanks unresolved late-bound placeholders in response prefixes", () => {
+    expect(
+      resolveResponsePrefixTemplate("*{identityName}:* {cost} {usageLine}", {
+        identityName: "Jarvis",
+      }),
+    ).toBe("*Jarvis:*");
+  });
+
+  it("preserves unresolved footer placeholders when usage values are absent", () => {
+    expect(resolveResponseTemplate("↑{input} · {contextPercent}%", {})).toBe(
+      "↑{input} · {contextPercent}%",
+    );
+  });
+});
+
+describe("template variable helpers", () => {
+  it("lists unique normalized template variables", () => {
+    expect(listTemplateVariables("[{MODEL}] {contextPercent}% {model}"))
+      .toEqual(["model", "contextpercent"]);
+  });
+
+  it("detects when a footer already consumes usage placeholders", () => {
+    expect(hasUsageTemplateVariables("[{model}] {contextPercent}%")).toBe(true);
+    expect(hasUsageTemplateVariables("{cost}")).toBe(false);
+    expect(hasUsageTemplateVariables("— footer")).toBe(false);
+  });
+});
+
 
 describe("createTypingSignaler", () => {
   it("gates run-start typing by mode", async () => {

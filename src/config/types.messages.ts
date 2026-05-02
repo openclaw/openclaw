@@ -110,15 +110,55 @@ export type MessagesConfig = {
    * - `{modelFull}` - full model identifier (e.g., `anthropic/claude-opus-4-6`)
    * - `{provider}` - provider name (e.g., `anthropic`, `openai`)
    * - `{thinkingLevel}` or `{think}` - current thinking level (`high`, `low`, `off`)
+   * - `{effort}` - alias for the current thinking level
    * - `{identity.name}` or `{identityName}` - agent identity name
+   * - `{input}` / `{output}` / `{total}` - reply token counts when available late in the run
+   * - `{cacheRead}` / `{cacheWrite}` - cache token counts when available
+   * - `{context}` / `{contextMax}` / `{contextPercent}` - session context usage when available
+   * - `{cost}` - estimated per-reply cost when pricing is available
+   * - `{usageLine}` - the built-in formatted usage line when available
    *
    * Example: `"[{model} | think:{thinkingLevel}]"` → `"[claude-opus-4-6 | think:high]"`
    *
-   * Unresolved variables remain as literal text (e.g., `{model}` if context unavailable).
+   * Unresolved variables remain as literal text (e.g., `{model}` if context unavailable). Late-bound usage/context/cost placeholders in response prefixes are blanked until values are known so streamed replies do not expose raw template tokens.
    *
    * Default: none
    */
   responsePrefix?: string;
+  /**
+   * Footer auto-appended to outbound replies after the main body.
+   *
+   * This complements `messages.responsePrefix` and uses the same case-insensitive
+   * template resolver, with additional usage/context variables for inline footers.
+   *
+   * Supported template variables (case-insensitive):
+   * - `{model}` - short model name (e.g., `claude-opus-4-6`, `gpt-5.4`)
+   * - `{modelFull}` - full model identifier (e.g., `anthropic/claude-opus-4-6`)
+   * - `{provider}` - provider name (e.g., `anthropic`, `openai`)
+   * - `{thinkingLevel}` or `{think}` - current thinking level (`high`, `low`, `off`)
+   * - `{effort}` - alias for the current thinking level
+   * - `{identity.name}` or `{identityName}` - agent identity name
+   * - `{input}` or `{inputTokens}` - reply input tokens
+   * - `{output}` or `{outputTokens}` - reply output tokens
+   * - `{total}` or `{totalTokens}` - reply total tokens
+   * - `{cacheRead}` or `{cacheReadTokens}` - reply cache-read tokens
+   * - `{cacheWrite}` or `{cacheWriteTokens}` - reply cache-write tokens
+   * - `{context}`, `{contextUsed}`, or `{contextUsedTokens}` - fresh persisted session usage
+   * - `{contextMax}`, `{contextMaxTokens}`, or `{contextWindow}` - active context window
+   * - `{contextPercent}` - rounded context utilization percentage
+   * - `{session}` or `{sessionKey}` - session key when available
+   * - `{cost}` / `{estimatedCost}` / `{estimatedCostUsd}` - estimated per-reply cost
+   * - `{usage}` or `{usageLine}` - the built-in formatted usage line
+   *
+   * Example:
+   * `"[{identityName}] {model} · {context}/{contextMax} ({contextPercent}%)"`
+   *
+   * A footer block is separated from the main reply with exactly one blank line.
+   * Unresolved variables remain as literal text in footer templates.
+   *
+   * Default: none
+   */
+  responseFooter?: string;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */

@@ -22,6 +22,25 @@ describe("runtime overrides", () => {
     expect(next.messages?.responsePrefix).toBe("[debug]");
   });
 
+  it("sets and applies response footer overrides", () => {
+    const cfg = {
+      messages: { responseFooter: "[footer]" },
+    } as OpenClawConfig;
+    setConfigOverride("messages.responseFooter", "[{model}] {contextPercent}%");
+    const next = applyConfigOverrides(cfg);
+    expect(next.messages?.responseFooter).toBe("[{model}] {contextPercent}%");
+  });
+
+  it("sets and applies default responseUsage overrides", () => {
+    const cfg = {
+      agents: { defaults: { responseUsage: "tokens" } },
+    } as OpenClawConfig;
+    setConfigOverride("agents.defaults.responseUsage", "full");
+    const next = applyConfigOverrides(cfg);
+    expect(next.agents?.defaults?.responseUsage).toBe("full");
+  });
+
+
   it("merges object overrides without clobbering siblings", () => {
     const cfg = {
       channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+1"] } },
