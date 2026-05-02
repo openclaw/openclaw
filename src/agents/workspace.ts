@@ -107,9 +107,7 @@ async function loadTemplate(
   name: string,
   hookRunner?: TemplateSubstitutionHookRunner,
 ): Promise<string> {
-  const hasSubstitutionHook = hookRunner?.hasHooks("substitute_template") === true;
-  const cacheKey = hasSubstitutionHook ? `${name}\0substitute_template` : name;
-  const cached = workspaceTemplateCache.get(cacheKey);
+  const cached = workspaceTemplateCache.get(name);
   if (cached) {
     return cached;
   }
@@ -120,7 +118,7 @@ async function loadTemplate(
     try {
       let content = await fs.readFile(templatePath, "utf-8");
 
-      if (hasSubstitutionHook) {
+      if (hookRunner?.hasHooks("substitute_template") === true) {
         const hookResult = await hookRunner.runSubstituteTemplate(
           {
             sourcePath: templatePath,
@@ -140,11 +138,11 @@ async function loadTemplate(
     }
   })();
 
-  workspaceTemplateCache.set(cacheKey, pending);
+  workspaceTemplateCache.set(name, pending);
   try {
     return await pending;
   } catch (error) {
-    workspaceTemplateCache.delete(cacheKey);
+    workspaceTemplateCache.delete(name);
     throw error;
   }
 }
@@ -265,10 +263,14 @@ async function hasWorkspaceUserContentEvidence(
 async function workspaceProfileLooksConfigured(params: {
   dir: string;
   includeGitEvidence?: boolean;
+  hookRunner?: TemplateSubstitutionHookRunner;
 }): Promise<boolean> {
   const profileFileDiffs = await Promise.all(
     WORKSPACE_ONBOARDING_PROFILE_FILENAMES.map(async (fileName) =>
-      fileContentDiffersFromTemplate(path.join(params.dir, fileName), await loadTemplate(fileName)),
+      fileContentDiffersFromTemplate(
+        path.join(params.dir, fileName),
+        await loadTemplate(fileName, params.hookRunner),
+      ),
     ),
   );
   return (
@@ -279,7 +281,10 @@ async function workspaceProfileLooksConfigured(params: {
   );
 }
 
-async function workspaceHasBootstrapCompletionEvidence(params: { dir: string }): Promise<boolean> {
+async function workspaceHasBootstrapCompletionEvidence(params: {
+  dir: string;
+  hookRunner?: TemplateSubstitutionHookRunner;
+}): Promise<boolean> {
   return await workspaceProfileLooksConfigured(params);
 }
 
@@ -295,6 +300,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   statePath: string;
   state: WorkspaceSetupState;
   bootstrapExists?: boolean;
+  hookRunner?: TemplateSubstitutionHookRunner;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
   const bootstrapExists = params.bootstrapExists ?? (await fileExists(params.bootstrapPath));
   if (
@@ -317,6 +323,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     !bootstrapExists ||
     !(await workspaceHasBootstrapCompletionEvidence({
       dir: params.dir,
+      hookRunner: params.hookRunner,
     }))
   ) {
     return { repaired: false, bootstrapExists, state: params.state };
@@ -431,6 +438,7 @@ export async function reconcileWorkspaceBootstrapCompletion(
     bootstrapPath,
     statePath,
     state,
+    hookRunner: getGlobalHookRunner(),
   });
 }
 
@@ -550,11 +558,6 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v) && !hasCanonicalRootMemory;
   })();
 
-  const profileConfiguredBeforeSeeding = await workspaceProfileLooksConfigured({
-    dir,
-    includeGitEvidence: true,
-  });
-
   const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME, hookRunner ?? undefined);
   const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME, hookRunner ?? undefined);
   const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME, hookRunner ?? undefined);
@@ -602,6 +605,7 @@ export async function ensureAgentWorkspace(params?: {
       statePath,
       state,
       bootstrapExists,
+      hookRunner: hookRunner ?? undefined,
     });
     if (repair.repaired) {
       state = repair.state;
@@ -614,7 +618,13 @@ export async function ensureAgentWorkspace(params?: {
     // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
     // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
     // already-configured workspaces.
-    if (profileConfiguredBeforeSeeding) {
+    if (
+      await workspaceProfileLooksConfigured({
+        dir,
+        includeGitEvidence: true,
+        hookRunner: hookRunner ?? undefined,
+      })
+    ) {
       markState({ setupCompletedAt: nowIso() });
     } else {
       const bootstrapTemplate = await loadTemplate(

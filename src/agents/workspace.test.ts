@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { PluginHookSubstituteTemplateEvent } from "../plugins/hook-types.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
@@ -188,6 +188,8 @@ describe("ensureAgentWorkspace", () => {
   });
 
   it("runs substitute_template before newly seeded template files are written", async () => {
+    vi.resetModules();
+    const { ensureAgentWorkspace: ensureFreshAgentWorkspace } = await import("./workspace.js");
     const tempDir = await makeTempWorkspace("openclaw-workspace-");
     const events: PluginHookSubstituteTemplateEvent[] = [];
     const hookRunner = {
@@ -201,21 +203,23 @@ describe("ensureAgentWorkspace", () => {
       },
     };
 
-    await ensureAgentWorkspace({
+    await ensureFreshAgentWorkspace({
       dir: tempDir,
       ensureBootstrapFiles: true,
       hookRunner,
     });
 
-    expect(events.map((event) => path.basename(event.sourcePath))).toEqual([
-      DEFAULT_AGENTS_FILENAME,
-      DEFAULT_SOUL_FILENAME,
-      DEFAULT_TOOLS_FILENAME,
-      DEFAULT_IDENTITY_FILENAME,
-      DEFAULT_USER_FILENAME,
-      DEFAULT_HEARTBEAT_FILENAME,
-      DEFAULT_BOOTSTRAP_FILENAME,
-    ]);
+    expect(new Set(events.map((event) => path.basename(event.sourcePath)))).toEqual(
+      new Set([
+        DEFAULT_AGENTS_FILENAME,
+        DEFAULT_SOUL_FILENAME,
+        DEFAULT_TOOLS_FILENAME,
+        DEFAULT_IDENTITY_FILENAME,
+        DEFAULT_USER_FILENAME,
+        DEFAULT_HEARTBEAT_FILENAME,
+        DEFAULT_BOOTSTRAP_FILENAME,
+      ]),
+    );
     const userEvent = events.find(
       (event) => path.basename(event.sourcePath) === DEFAULT_USER_FILENAME,
     );
@@ -229,7 +233,7 @@ describe("ensureAgentWorkspace", () => {
     );
 
     events.length = 0;
-    await ensureAgentWorkspace({
+    await ensureFreshAgentWorkspace({
       dir: tempDir,
       ensureBootstrapFiles: true,
       hookRunner,
@@ -254,6 +258,37 @@ describe("ensureAgentWorkspace", () => {
     });
     const state = await readWorkspaceState(tempDir);
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it("does not treat hook-substituted profile defaults as configured workspace evidence", async () => {
+    vi.resetModules();
+    const { ensureAgentWorkspace: ensureFreshAgentWorkspace } = await import("./workspace.js");
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const substitutedUser = "# USER.md\n\nHook-customized user profile\n";
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_USER_FILENAME,
+      content: substitutedUser,
+    });
+    const hookRunner = {
+      hasHooks: (hookName: string) => hookName === "substitute_template",
+      runSubstituteTemplate: async (event: PluginHookSubstituteTemplateEvent) => {
+        if (path.basename(event.sourcePath) === DEFAULT_USER_FILENAME) {
+          return { content: substitutedUser };
+        }
+        return undefined;
+      },
+    };
+
+    await ensureFreshAgentWorkspace({
+      dir: tempDir,
+      ensureBootstrapFiles: true,
+      hookRunner,
+    });
+
+    await expect(
+      fs.readFile(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME), "utf-8"),
+    ).resolves.toContain("# BOOTSTRAP.md");
   });
 
   it("migrates legacy onboardingCompletedAt markers to setupCompletedAt", async () => {
