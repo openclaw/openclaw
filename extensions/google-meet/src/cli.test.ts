@@ -698,9 +698,9 @@ describe("google-meet CLI", () => {
       session: {
         id: "meet_1",
         url: "https://meet.google.com/abc-defg-hij",
-        state: "active",
-        transport: "chrome-node",
-        mode: "transcribe",
+        state: "active" as const,
+        transport: "chrome-node" as const,
+        mode: "transcribe" as const,
         participantIdentity: "signed-in Google Chrome profile on a paired node",
         createdAt: "2026-04-25T00:00:00.000Z",
         updatedAt: "2026-04-25T00:00:01.000Z",
