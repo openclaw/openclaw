@@ -624,7 +624,7 @@ describe("preflightDiscordMessage", () => {
     expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
   });
 
-  it("drops hydrated bound-thread webhook echoes after fetching an empty payload", async () => {
+  it("drops hydrated bound-thread webhook copies after fetching an empty payload", async () => {
     const threadBinding = createThreadBinding({
       targetKind: "session",
       targetSessionKey: "agent:main:acp:discord-thread-1",
@@ -682,6 +682,38 @@ describe("preflightDiscordMessage", () => {
     });
 
     expect(restGet).toHaveBeenCalledTimes(1);
+    expect(result).toBeNull();
+  });
+
+  it("drops bound-thread webhook copies from other webhook ids", async () => {
+    const threadBinding = createThreadBinding({
+      targetKind: "session",
+      targetSessionKey: "agent:main:acp:discord-thread-1",
+    });
+    const threadId = "thread-webhook-proxy-1";
+    const parentId = "channel-parent-webhook-proxy-1";
+    const message = createDiscordMessage({
+      id: "m-webhook-proxy-1",
+      channelId: threadId,
+      content: "proxied user message",
+      webhook_id: "pluralkit-webhook-1",
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Proxy",
+      },
+    });
+
+    const result = await runThreadBoundPreflight({
+      threadId,
+      parentId,
+      message,
+      threadBinding,
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+    });
+
     expect(result).toBeNull();
   });
 
@@ -1445,24 +1477,35 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     ).toBe(true);
   });
 
-  it("returns false when webhook ids differ", () => {
+  it("returns true when a bound thread receives a different webhook id", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
+        threadId: "thread-1",
         webhookId: "wh-other",
         threadBinding: createThreadBinding(),
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 
-  it("returns false when there is no bound thread webhook", () => {
+  it("returns true when a bound thread receives a webhook without a recorded bound webhook id", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
+        threadId: "thread-1",
         webhookId: "wh-1",
         threadBinding: createThreadBinding({
           metadata: {
             webhookId: undefined,
           },
         }),
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false for differing webhook ids without a known thread id", () => {
+    expect(
+      shouldIgnoreBoundThreadWebhookMessage({
+        webhookId: "wh-other",
+        threadBinding: createThreadBinding(),
       }),
     ).toBe(false);
   });
