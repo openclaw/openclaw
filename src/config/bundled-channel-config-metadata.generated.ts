@@ -830,6 +830,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         dangerouslyAllowNameMatching: {
           type: "boolean",
         },
+        mentionAliases: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "string",
+            pattern: "^\\d+$",
+          },
+        },
         groupPolicy: {
           default: "allowlist",
           type: "string",
@@ -2222,6 +2232,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               dangerouslyAllowNameMatching: {
                 type: "boolean",
+              },
+              mentionAliases: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "string",
+                  pattern: "^\\d+$",
+                },
               },
               groupPolicy: {
                 default: "allowlist",
@@ -3698,6 +3718,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       allowBots: {
         label: "Discord Allow Bot Messages",
         help: 'Allow bot-authored messages to trigger Discord replies (default: false). Set "mentions" to only accept bot messages that mention the bot.',
+      },
+      mentionAliases: {
+        label: "Discord Mention Aliases",
+        help: "Map outbound @handle text to stable Discord user IDs before sending. Set per account via channels.discord.accounts.<id>.mentionAliases.",
       },
       token: {
         label: "Discord Bot Token",
