@@ -81,7 +81,7 @@ vi.mock("./presence.js", () => ({
 }));
 
 import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
-import { createDiscordMonitorClient } from "./provider.startup.js";
+import { createDiscordMonitorClient, fetchDiscordBotIdentity } from "./provider.startup.js";
 
 describe("createDiscordMonitorClient", () => {
   beforeEach(() => {
@@ -293,5 +293,30 @@ describe("createDiscordMonitorClient", () => {
 
     expect(createGatewaySupervisor).not.toHaveBeenCalled();
     expect(createAutoPresenceControllerForTest).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchDiscordBotIdentity", () => {
+  it("derives the bot id from a Discord bot token without calling /users/@me", async () => {
+    const fetchUser = vi.fn(async () => {
+      throw new Error("network should not be used");
+    });
+    const logStartupPhase = vi.fn();
+    const botId = "1477179610322964541";
+
+    await expect(
+      fetchDiscordBotIdentity({
+        client: { fetchUser } as never,
+        token: `${Buffer.from(botId).toString("base64")}.GhIiP9.vU1xEpJ6NjFm`,
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        logStartupPhase,
+      }),
+    ).resolves.toEqual({ botUserId: botId, botUserName: undefined });
+
+    expect(fetchUser).not.toHaveBeenCalled();
+    expect(logStartupPhase).toHaveBeenCalledWith(
+      "fetch-bot-identity:done",
+      `botUserId=${botId} botUserName=<missing> source=token`,
+    );
   });
 });
