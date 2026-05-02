@@ -253,6 +253,9 @@ export const CronJobStateSchema = Type.Object(
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
     lastDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    deferredMaintenanceRuns: Type.Optional(Type.Integer({ minimum: 0 })),
+    firstDeferredMaintenanceAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    lastDeferredMaintenanceAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );

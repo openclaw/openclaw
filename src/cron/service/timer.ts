@@ -5,7 +5,8 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { resolveMaintenanceExecutionDecision } from "../../infra/maintenance-phase.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -78,6 +79,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     job: CronJob;
     taskRunId?: string;
+    fromDeferredMaintenance?: boolean;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     startedAt: number;
@@ -731,6 +733,10 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     return;
   }
 
+  if (result.fromDeferredMaintenance) {
+    decrementDeferredMaintenanceRuns(job);
+  }
+
   const shouldDelete = applyJobResult(state, job, {
     status: result.status,
     error: result.error,
@@ -747,6 +753,107 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   }
 }
 
+function resolveCronJobAgentId(state: CronServiceState, job: CronJob): string {
+  return normalizeAgentId(job.agentId ?? state.deps.defaultAgentId ?? DEFAULT_AGENT_ID);
+}
+
+function isMaintenanceAllowedForJob(state: CronServiceState, job: CronJob, nowMs: number): boolean {
+  const decision = resolveMaintenanceExecutionDecision({
+    cronConfig: state.deps.cronConfig,
+    userTimezone: state.deps.userTimezone,
+    nowMs,
+    agentId: resolveCronJobAgentId(state, job),
+  });
+  return decision.allowed;
+}
+
+function getDeferredMaintenanceRuns(job: CronJob): number {
+  const raw = job.state.deferredMaintenanceRuns;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return 0;
+  }
+  return Math.max(0, Math.floor(raw));
+}
+
+function decrementDeferredMaintenanceRuns(job: CronJob): void {
+  const next = Math.max(0, getDeferredMaintenanceRuns(job) - 1);
+  if (next === 0) {
+    job.state.deferredMaintenanceRuns = undefined;
+    job.state.firstDeferredMaintenanceAtMs = undefined;
+    job.state.lastDeferredMaintenanceAtMs = undefined;
+    return;
+  }
+  job.state.deferredMaintenanceRuns = next;
+}
+
+function recordDeferredMaintenanceRun(state: CronServiceState, job: CronJob, nowMs: number): void {
+  const nextDeferred = getDeferredMaintenanceRuns(job) + 1;
+  job.state.deferredMaintenanceRuns = nextDeferred;
+  if (typeof job.state.firstDeferredMaintenanceAtMs !== "number") {
+    job.state.firstDeferredMaintenanceAtMs = nowMs;
+  }
+  job.state.lastDeferredMaintenanceAtMs = nowMs;
+  job.state.lastError = "deferred by maintenance window";
+
+  if (job.schedule.kind === "at") {
+    // One-shot runs are counted exactly once and replayed when the phase allows.
+    job.state.nextRunAtMs = undefined;
+    return;
+  }
+
+  try {
+    const next = computeJobNextRunAtMs(job, nowMs + 1);
+    if (typeof next === "number" && Number.isFinite(next) && next > nowMs) {
+      job.state.nextRunAtMs = next;
+      return;
+    }
+  } catch (err) {
+    recordScheduleComputeError({ state, job, err });
+    return;
+  }
+  job.state.nextRunAtMs = nowMs + MIN_REFIRE_GAP_MS;
+}
+
+type ScheduledCronRun = {
+  id: string;
+  job: CronJob;
+  fromDeferredMaintenance: boolean;
+};
+
+function collectDeferredMaintenanceRuns(
+  state: CronServiceState,
+  nowMs: number,
+): ScheduledCronRun[] {
+  if (!state.store) {
+    return [];
+  }
+  const deferredJobs = state.store.jobs
+    .filter((job) => job.enabled && typeof job.state.runningAtMs !== "number")
+    .filter((job) => getDeferredMaintenanceRuns(job) > 0)
+    .filter((job) => isMaintenanceAllowedForJob(state, job, nowMs))
+    .toSorted((a, b) => {
+      const aFirst = a.state.firstDeferredMaintenanceAtMs ?? Number.POSITIVE_INFINITY;
+      const bFirst = b.state.firstDeferredMaintenanceAtMs ?? Number.POSITIVE_INFINITY;
+      if (aFirst !== bFirst) {
+        return aFirst - bFirst;
+      }
+      return a.id.localeCompare(b.id);
+    });
+
+  const scheduled: ScheduledCronRun[] = [];
+  for (const job of deferredJobs) {
+    const deferredRuns = getDeferredMaintenanceRuns(job);
+    for (let i = 0; i < deferredRuns; i += 1) {
+      scheduled.push({
+        id: job.id,
+        job,
+        fromDeferredMaintenance: true,
+      });
+    }
+  }
+  return scheduled;
+}
+
 export function armTimer(state: CronServiceState) {
   if (state.timer) {
     clearTimeout(state.timer);
@@ -756,7 +863,20 @@ export function armTimer(state: CronServiceState) {
     state.deps.log.debug({}, "cron: armTimer skipped - scheduler disabled");
     return;
   }
-  const nextAt = nextWakeAtMs(state);
+  const now = state.deps.nowMs();
+  let nextAt = nextWakeAtMs(state);
+  const deferredJobs = (state.store?.jobs ?? []).filter(
+    (job) => getDeferredMaintenanceRuns(job) > 0,
+  );
+  if (deferredJobs.length > 0) {
+    const hasDeferredReplay = deferredJobs.some((job) =>
+      isMaintenanceAllowedForJob(state, job, now),
+    );
+    const deferredNextAt = hasDeferredReplay ? now + MIN_REFIRE_GAP_MS : now + MAX_TIMER_DELAY_MS;
+    if (!nextAt || deferredNextAt < nextAt) {
+      nextAt = deferredNextAt;
+    }
+  }
   if (!nextAt) {
     const jobCount = state.store?.jobs.length ?? 0;
     const enabledCount = state.store?.jobs.filter((j) => j.enabled).length ?? 0;
@@ -777,7 +897,6 @@ export function armTimer(state: CronServiceState) {
     );
     return;
   }
-  const now = state.deps.nowMs();
   const delay = Math.max(nextAt - now, 0);
   // Floor: when the next wake time is in the past (delay === 0), enforce a
   // minimum delay to prevent a tight setTimeout(0) loop.  This can happen
@@ -836,19 +955,39 @@ export async function onTimer(state: CronServiceState) {
   // (for example in a provider call), the scheduler still wakes to re-check.
   armRunningRecheckTimer(state);
   try {
-    const dueJobs = await locked(state, async () => {
+    const scheduledRuns = await locked(state, async () => {
       await ensureLoaded(state, { forceReload: true, skipRecompute: true });
       const dueCheckNow = state.deps.nowMs();
+      const replayRuns = collectDeferredMaintenanceRuns(state, dueCheckNow);
       const due = collectRunnableJobs(state, dueCheckNow);
+      const runnableDue: ScheduledCronRun[] = [];
+      let changed = false;
+      for (const job of due) {
+        if (isMaintenanceAllowedForJob(state, job, dueCheckNow)) {
+          runnableDue.push({
+            id: job.id,
+            job,
+            fromDeferredMaintenance: false,
+          });
+          continue;
+        }
+        recordDeferredMaintenanceRun(state, job, dueCheckNow);
+        changed = true;
+      }
 
-      if (due.length === 0) {
+      const queue = [...replayRuns, ...runnableDue];
+
+      if (queue.length === 0) {
         // Use maintenance-only recompute to avoid advancing past-due nextRunAtMs
         // values without execution. This prevents jobs from being silently skipped
         // when the timer wakes up but findDueJobs returns empty (see #13992).
-        const changed = recomputeNextRunsForMaintenance(state, {
+        const recomputed = recomputeNextRunsForMaintenance(state, {
           recomputeExpired: true,
           nowMs: dueCheckNow,
         });
+        if (recomputed) {
+          changed = true;
+        }
         if (changed) {
           await persist(state);
         }
@@ -856,23 +995,30 @@ export async function onTimer(state: CronServiceState) {
       }
 
       const now = state.deps.nowMs();
-      for (const job of due) {
-        job.state.runningAtMs = now;
-        job.state.lastError = undefined;
+      const reservedJobIds = new Set<string>();
+      for (const run of queue) {
+        if (reservedJobIds.has(run.id)) {
+          continue;
+        }
+        reservedJobIds.add(run.id);
+        run.job.state.runningAtMs = now;
+        run.job.state.lastError = undefined;
       }
       await persist(state);
 
-      return due.map((j) => ({
-        id: j.id,
-        job: j,
+      return queue.map((run) => ({
+        id: run.id,
+        job: run.job,
+        fromDeferredMaintenance: run.fromDeferredMaintenance,
       }));
     });
 
     const runDueJob = async (params: {
       id: string;
       job: CronJob;
+      fromDeferredMaintenance: boolean;
     }): Promise<TimedCronRunOutcome> => {
-      const { id, job } = params;
+      const { id, job, fromDeferredMaintenance } = params;
       const startedAt = state.deps.nowMs();
       job.state.runningAtMs = startedAt;
       markCronJobActive(job.id);
@@ -886,6 +1032,7 @@ export async function onTimer(state: CronServiceState) {
           jobId: id,
           job,
           taskRunId,
+          fromDeferredMaintenance,
           ...result,
           startedAt,
           endedAt: state.deps.nowMs(),
@@ -900,6 +1047,7 @@ export async function onTimer(state: CronServiceState) {
           jobId: id,
           job,
           taskRunId,
+          fromDeferredMaintenance,
           status: "error",
           error: errorText,
           startedAt,
@@ -908,16 +1056,21 @@ export async function onTimer(state: CronServiceState) {
       }
     };
 
-    const concurrency = Math.min(resolveRunConcurrency(state), Math.max(1, dueJobs.length));
-    const results: (TimedCronRunOutcome | undefined)[] = Array.from({ length: dueJobs.length });
+    const hasDeferredMaintenanceRuns = scheduledRuns.some((run) => run.fromDeferredMaintenance);
+    const concurrency = hasDeferredMaintenanceRuns
+      ? 1
+      : Math.min(resolveRunConcurrency(state), Math.max(1, scheduledRuns.length));
+    const results: (TimedCronRunOutcome | undefined)[] = Array.from({
+      length: scheduledRuns.length,
+    });
     let cursor = 0;
     const workers = Array.from({ length: concurrency }, async () => {
       for (;;) {
         const index = cursor++;
-        if (index >= dueJobs.length) {
+        if (index >= scheduledRuns.length) {
           return;
         }
-        const due = dueJobs[index];
+        const due = scheduledRuns[index];
         if (!due) {
           return;
         }
@@ -1132,12 +1285,22 @@ async function planStartupCatchup(
     const sorted = missed.toSorted(
       (a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0),
     );
+    const maintenanceEligible: CronJob[] = [];
+    let changed = false;
+    for (const job of sorted) {
+      if (!isMaintenanceAllowedForJob(state, job, now)) {
+        recordDeferredMaintenanceRun(state, job, now);
+        changed = true;
+        continue;
+      }
+      maintenanceEligible.push(job);
+    }
     const deferredAgentJobs = opts?.deferAgentTurnJobs
-      ? sorted.filter((job) => job.payload.kind === "agentTurn")
+      ? maintenanceEligible.filter((job) => job.payload.kind === "agentTurn")
       : [];
     const startupEligible = opts?.deferAgentTurnJobs
-      ? sorted.filter((job) => job.payload.kind !== "agentTurn")
-      : sorted;
+      ? maintenanceEligible.filter((job) => job.payload.kind !== "agentTurn")
+      : maintenanceEligible;
     const startupCandidates = startupEligible.slice(0, maxImmediate);
     const deferredOverflow = startupEligible.slice(maxImmediate);
     const deferredAgentDelayMs = Math.max(
@@ -1179,7 +1342,9 @@ async function planStartupCatchup(
       job.state.runningAtMs = now;
       job.state.lastError = undefined;
     }
-    await persist(state);
+    if (changed || startupCandidates.length > 0) {
+      await persist(state);
+    }
 
     return {
       candidates: startupCandidates.map((job) => ({ jobId: job.id, job })),

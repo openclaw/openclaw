@@ -1508,6 +1508,20 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum bytes per cron run-log file before pruning rewrites to the last keepLines entries (for example `2mb`, default `2000000`).",
   "cron.runLog.keepLines":
     "How many trailing run-log lines to retain when a file exceeds maxBytes (default `2000`). Increase for longer forensic history or lower for smaller disks.",
+  "cron.maintenance":
+    "Maintenance-window scheduler controls for role isolation between normal agents and dedicated maintenance agents across cron and heartbeat flows.",
+  "cron.maintenance.enabled":
+    "Enables maintenance-window phase isolation. When enabled, only maintenanceAgents run during the configured window, and those agents are blocked outside it.",
+  "cron.maintenance.window":
+    "Defines the daily maintenance window with start/end 24-hour times and timezone. Use cross-midnight windows such as `23:00` to `02:00` for overnight maintenance.",
+  "cron.maintenance.window.start":
+    "Sets the inclusive maintenance window start time in `HH:MM` 24-hour format. Use values such as `02:00` to begin maintenance gating at a predictable local time.",
+  "cron.maintenance.window.end":
+    "Sets the exclusive maintenance window end time in `HH:MM` 24-hour format. Use `24:00` only for end-of-day windows that should run until midnight.",
+  "cron.maintenance.window.timezone":
+    'Timezone for maintenance window evaluation. Use "user" (default), "local", or an IANA timezone such as `America/Los_Angeles`.',
+  "cron.maintenance.maintenanceAgents":
+    "Use this explicit agent-id allowlist to reserve maintenance-only workers for the maintenance window. Example: [`ops-maint`, `cleanup-bot`]. Listed agents are blocked during normal runtime.",
   hooks:
     "Inbound webhook automation surface for mapping external events into wake or agent actions in OpenClaw. Keep this locked down with explicit token/session/agent controls before exposing it beyond trusted networks.",
   "hooks.enabled":
