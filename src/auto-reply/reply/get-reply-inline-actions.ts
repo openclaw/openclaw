@@ -15,6 +15,7 @@ import { getPluginToolMeta } from "../../plugins/tools.js";
 import { logWarn } from "../../logger.js";
 import { resolveToolProfilePolicy } from "../../agents/tool-policy-shared.js";
 import { mergeAlsoAllowPolicy } from "../../agents/tool-policy.js";
+import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-policy.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -316,6 +317,8 @@ export async function handleInlineActions(params: {
         config: cfg,
         sessionKey,
         agentId,
+        modelProvider: provider,
+        modelId: model,
       });
       const groupPolicy = resolveGroupToolPolicy({
         config: cfg,
@@ -333,6 +336,7 @@ export async function handleInlineActions(params: {
         providerProfileAlsoAllow ?? [],
       );
       const subagentPolicy = resolveSubagentToolPolicyForSession(cfg, sessionKey);
+      const sandboxPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
       const policyFilteredTools = applyToolPolicyPipeline({
         tools: authorizedTools,
@@ -351,6 +355,7 @@ export async function handleInlineActions(params: {
             groupPolicy,
             agentId: resolvedAgentId,
           }),
+          { policy: sandboxPolicy, label: "sandbox tools.allow" },
           { policy: subagentPolicy, label: "subagent tools.allow" },
         ],
       });
