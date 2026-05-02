@@ -7,7 +7,7 @@ import type {
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { Type } from "typebox";
-import { getDomainDefaultConfidence, type ResolvedStructuredMemoryConfig } from "./config";
+import type { ResolvedStructuredMemoryConfig } from "./config";
 import {
   getOrOpenDatabase,
   insertRecord,
@@ -20,6 +20,7 @@ import {
   findRecordById,
 } from "./db";
 import { computeRelevance } from "./decay";
+import { analyzeMessage } from "./perceptor";
 import type { ClassificationResult, ClassificationError, MemoryRecord } from "./types";
 
 const MemoryRecordAddSchema = Type.Object({
@@ -27,6 +28,8 @@ const MemoryRecordAddSchema = Type.Object({
   type: Type.Optional(Type.String()),
   summary: Type.String(),
   confidence: Type.Optional(Type.Number()),
+  critical: Type.Optional(Type.Boolean()),
+  activate_at: Type.Optional(Type.String()),
   expire_at: Type.Optional(Type.String()),
   keywords: Type.Optional(Type.String()),
   attributes: Type.Optional(Type.String()),
@@ -47,6 +50,8 @@ const MemoryRecordArchiveSchema = Type.Object({
   reason: Type.Optional(Type.String()),
 });
 
+const THINKING_MODEL_PATTERNS = /claude-opus|o1|o3|o4|deepseek-r1|thinking/i;
+
 function resolveClassificationModel(params: {
   configModel?: string;
   agentId: string;
@@ -55,11 +60,16 @@ function resolveClassificationModel(params: {
   if (params.configModel && params.configModel.trim()) {
     const parsed = parseModelRef(params.configModel.trim(), "anthropic");
     if (parsed) {
-      return { provider: parsed.provider, model: parsed.model };
+      if (THINKING_MODEL_PATTERNS.test(parsed.model)) {
+        // RFC §6.1.1: thinking/reasoning models are forbidden for classification
+        // fall through to agent primary model instead
+      } else {
+        return { provider: parsed.provider, model: parsed.model };
+      }
     }
   }
   const primaryRef = resolveDefaultModelForAgent({ cfg: params.config, agentId: params.agentId });
-  if (primaryRef) {
+  if (primaryRef && !THINKING_MODEL_PATTERNS.test(primaryRef.model)) {
     return { provider: primaryRef.provider, model: primaryRef.model };
   }
   return {};
@@ -69,12 +79,14 @@ function buildClassificationPrompt(rawText: string): string {
   return `You are a memory classification assistant. Analyze the following text and classify it into a structured memory record.
 
 Classify into ONE of these types:
-- fact: A factual statement or piece of knowledge
+- entity: A person, organization, object, or named thing
 - event: Something that happened at a point in time
-- plan: A future intention, goal, or plan
-- impression: A subjective opinion, feeling, or assessment
-- preference: A stated like, dislike, or preference
+- fact: A factual statement or piece of knowledge
 - rule: A conditional rule or constraint
+- impression: A subjective opinion, feeling, or assessment
+- plan: A future intention, goal, or plan
+- reflex: An automatic behavior, habit, or instinctive response
+- preference: A stated like, dislike, or preference
 
 Assign an importance score (1-10) where:
 10 = Critical, must remember (identity, core goals, safety rules)
@@ -88,7 +100,7 @@ Also refine the summary to be concise (100 chars or fewer) and extract key space
 
 Respond ONLY with a valid JSON object with these fields:
 {
-  "type": "<one of: fact, event, plan, impression, preference, rule>",
+  "type": "<one of: entity, event, fact, rule, impression, plan, reflex, preference>",
   "importance": <integer 1-10>,
   "confidence": <number 0.0-1.0>,
   "summary_refined": "<concise summary, 100 chars max>",
@@ -99,7 +111,7 @@ Text to classify:
 ${rawText}`;
 }
 
-function parseClassificationResponse(raw: string): ClassificationResult | null {
+export function parseClassificationResponse(raw: string): ClassificationResult | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
@@ -120,7 +132,16 @@ function parseClassificationResponse(raw: string): ClassificationResult | null {
       return null;
     }
 
-    const validTypes = ["fact", "event", "plan", "impression", "preference", "rule"];
+    const validTypes = [
+      "entity",
+      "event",
+      "fact",
+      "rule",
+      "impression",
+      "plan",
+      "reflex",
+      "preference",
+    ];
     if (!validTypes.includes(parsed.type)) return null;
 
     return {
@@ -141,6 +162,56 @@ function parseClassificationResponse(raw: string): ClassificationResult | null {
 
 function isAbortError(err: unknown): boolean {
   return err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
+}
+
+// RFC §6.2: pure-rule fallback classifier — no LLM call, <1ms
+export function runRuleBasedClassification(rawText: string): ClassificationResult | null {
+  // Correction / negation patterns (RFC: confidence 0.90)
+  if (/不对|上次说的不对|不是.{1,4}是|说错了|记错了|纠正/.test(rawText)) {
+    return {
+      type: "fact" as ClassificationResult["type"],
+      importance: 7,
+      confidence: 0.9,
+      summary_refined: rawText.slice(0, 100),
+      keywords: rawText
+        .replace(/[^a-z0-9一-鿿]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase(),
+    };
+  }
+
+  // Rule / constraint patterns (RFC: confidence 0.90)
+  if (/必须|禁止|不得|不允许|一定要|决不能|千万别|不准|严禁|务必|只能|不可以/.test(rawText)) {
+    return {
+      type: "rule" as ClassificationResult["type"],
+      importance: 8,
+      confidence: 0.9,
+      summary_refined: rawText.slice(0, 100),
+      keywords: rawText
+        .replace(/[^a-z0-9一-鿿]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase(),
+    };
+  }
+
+  // Preference patterns (RFC: confidence 0.85)
+  if (/不喜欢|更倾向|最好用|更喜欢|更爱|更想|讨厌|受不了|宁愿|倾向|最爱|偏好|宁可/.test(rawText)) {
+    return {
+      type: "preference" as ClassificationResult["type"],
+      importance: 6,
+      confidence: 0.85,
+      summary_refined: rawText.slice(0, 100),
+      keywords: rawText
+        .replace(/[^a-z0-9一-鿿]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .toLowerCase(),
+    };
+  }
+
+  return null;
 }
 
 async function runClassification(params: {
@@ -245,35 +316,56 @@ export function createMemoryRecordAddTool(
           config: configSnapshot,
         });
 
-        const classificationResp = await runClassification({
-          api,
-          config,
-          agentId,
-          sessionKey,
-          rawText: summary,
-          resolvedModel,
-        });
+        // RFC §5: Perceptor high-confidence signal → skip LLM classification
+        const perceptorResult = analyzeMessage(summary);
+        let classification: ClassificationResult;
 
-        if ("error" in classificationResp) {
-          return {
-            content: [
-              {
-                type: "text" as const,
-                text: `Classification failed: [${classificationResp.error.code}] ${classificationResp.error.message}`,
-              },
-            ],
-            details: { ok: false, error: classificationResp.error },
+        if (perceptorResult.signal && perceptorResult.signal.confidence >= 0.8) {
+          const s = perceptorResult.signal;
+          classification = {
+            type: s.type,
+            importance: s.importance,
+            confidence: s.confidence,
+            summary_refined: summary.slice(0, 100),
+            keywords: s.keywords.join(" "),
           };
+        } else {
+          const classificationResp = await runClassification({
+            api,
+            config,
+            agentId,
+            sessionKey,
+            rawText: summary,
+            resolvedModel,
+          });
+
+          if ("error" in classificationResp) {
+            const ruleResult = runRuleBasedClassification(summary);
+            if (ruleResult) {
+              classification = ruleResult;
+            } else {
+              return {
+                content: [
+                  {
+                    type: "text" as const,
+                    text: `Classification failed: [${classificationResp.error.code}] ${classificationResp.error.message}`,
+                  },
+                ],
+                details: { ok: false, error: classificationResp.error },
+              };
+            }
+          } else {
+            classification = classificationResp.result;
+          }
         }
 
-        const classification = classificationResp.result;
         const userType =
           typeof params.type === "string" && params.type.trim()
             ? params.type.trim()
             : classification.type;
         const keywords = String(params.keywords ?? classification.keywords)
           .toLowerCase()
-          .replace(/[^a-z0-9\s]/g, " ")
+          .replace(/[^a-z0-9一-鿿\s]/g, " ")
           .replace(/\s+/g, " ")
           .trim();
 
@@ -297,12 +389,8 @@ export function createMemoryRecordAddTool(
 
         const rawConfidence =
           typeof params.confidence === "number" ? params.confidence : classification.confidence;
-        const domainDefault = getDomainDefaultConfidence(
-	  typeof params.attributes === "string" ? params.attributes : undefined,
-	);
-	const finalConfidence = contradictionFlag && !allowCoexistence
-	  ? Math.min(rawConfidence, domainDefault)
-	  : rawConfidence;
+        const finalConfidence =
+          contradictionFlag && !allowCoexistence ? Math.min(rawConfidence, 0.5) : rawConfidence;
 
         if (isUpdate && providedId) {
           const success = updateRecord(db, providedId, {
@@ -313,6 +401,8 @@ export function createMemoryRecordAddTool(
             content: summary,
             attributes: typeof params.attributes === "string" ? params.attributes : undefined,
             expire_at: typeof params.expire_at === "string" ? params.expire_at : undefined,
+            activate_at: typeof params.activate_at === "string" ? params.activate_at : undefined,
+            critical: params.critical === true ? 1 : 0,
             status: "active",
             allow_coexistence: allowCoexistence,
           });
@@ -325,6 +415,11 @@ export function createMemoryRecordAddTool(
               details: { ok: false },
             };
           }
+
+          // RFC: increment consolidation count on each user-driven update
+          db.prepare(
+            "UPDATE memory_records SET consolidation_count = consolidation_count + 1 WHERE id = ?",
+          ).run(providedId);
 
           const action =
             existingRecord.status === "archived" ? "re-activated and updated" : "updated";
@@ -354,6 +449,8 @@ export function createMemoryRecordAddTool(
           confidence: finalConfidence,
           importance: classification.importance,
           expire_at: typeof params.expire_at === "string" ? params.expire_at : null,
+          activate_at: typeof params.activate_at === "string" ? params.activate_at : null,
+          critical: params.critical === true ? 1 : 0,
           keywords,
           agent_id: agentId,
           allow_coexistence: allowCoexistence,

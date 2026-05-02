@@ -3,7 +3,16 @@ import type {
   MemoryCorpusGetResult,
 } from "openclaw/plugin-sdk/memory-state";
 
-const RECORD_TYPES = ["fact", "event", "plan", "impression", "preference", "rule"] as const;
+const RECORD_TYPES = [
+  "entity",
+  "event",
+  "fact",
+  "rule",
+  "impression",
+  "plan",
+  "reflex",
+  "preference",
+] as const;
 export type RecordType = (typeof RECORD_TYPES)[number];
 
 const RECORD_STATUSES = ["active", "archived"] as const;

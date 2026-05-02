@@ -165,7 +165,7 @@ export function insertRecord(
        consolidation_count, content, keywords, agent_id,
        source_session_id, attributes)
     VALUES
-      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   stmt.run(
     id,
@@ -173,7 +173,7 @@ export function insertRecord(
     record.summary,
     record.confidence ?? 0.3,
     record.importance,
-    record.salience ?? 0.5,
+    record.salience ?? Math.max(0, Math.min(1, record.importance / 10)),
     record.status ?? "active",
     now,
     now,

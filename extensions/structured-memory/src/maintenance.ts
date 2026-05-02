@@ -1,24 +1,14 @@
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import type { ResolvedStructuredMemoryConfig } from "./config";
-import {
-  getOrOpenDatabase,
-  scanExpiredRecords,
-  scanAllActiveRecords,
-  archiveRecord,
-  closeAllDatabases,
-} from "./db";
-import { computeRelevance } from "./decay";
+import { getOrOpenDatabase, scanExpiredRecords, scanAllActiveRecords, archiveRecord } from "./db";
+import { computeRelevance, isProtected } from "./decay";
 import type { MaintenanceResult } from "./types";
 
 const MAX_SESSION_SCAN = 100;
 const MAX_SESSION_ARCHIVE = 10;
-
-function isProtected(record: { critical: 0 | 1; activate_at: string | null }): boolean {
-  if (record.critical === 1) return true;
-  if (record.activate_at && new Date(record.activate_at).getTime() > Date.now()) return true;
-  return false;
-}
+const MAX_FULL_SCAN_PER_AGENT = 500;
+const MAX_FULL_ARCHIVE_PER_AGENT = 50;
 
 export async function runSessionMaintenance(params: {
   agentId: string;
@@ -78,30 +68,36 @@ export async function runFullMaintenanceCycle(params: {
 
       const expired = scanExpiredRecords(db).filter((r) => !isProtected(r));
       let archivedExpired = 0;
-      for (const record of expired) {
+      for (const record of expired.slice(0, MAX_FULL_ARCHIVE_PER_AGENT)) {
         archiveRecord(db, record.id, "expired");
         archivedExpired++;
       }
 
       const active = scanAllActiveRecords(db).filter((r) => !isProtected(r));
+      const toScan = active.slice(0, MAX_FULL_SCAN_PER_AGENT);
       let archivedDecayed = 0;
-      for (const record of active) {
+      for (const record of toScan) {
+        if (archivedDecayed >= MAX_FULL_ARCHIVE_PER_AGENT) break;
         const relevance = computeRelevance(record, { decay: params.config.decay });
         if (relevance.should_archive) {
           archiveRecord(db, record.id, relevance.archive_reason ?? "decayed");
           archivedDecayed++;
         }
-        const salience = (record.importance * relevance.decay_factor * relevance.access_boost) / 10;
-        db.prepare("UPDATE memory_records SET salience = ? WHERE id = ?").run(
-          Math.max(0, Math.min(1, salience)),
-          record.id,
-        );
+        const newSalience =
+          (record.importance * relevance.decay_factor * relevance.access_boost) / 10;
+        const clampedSalience = Math.max(0, Math.min(1, newSalience));
+        if (Math.abs(clampedSalience - record.salience) > 0.01) {
+          db.prepare("UPDATE memory_records SET salience = ? WHERE id = ?").run(
+            clampedSalience,
+            record.id,
+          );
+        }
       }
 
       results.set(agentId, {
         archived_expired: archivedExpired,
         archived_decayed: archivedDecayed,
-        total_scanned: expired.length + active.length,
+        total_scanned: expired.length + toScan.length,
       });
     } catch {
       // silent
