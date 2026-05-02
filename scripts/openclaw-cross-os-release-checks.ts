@@ -184,7 +184,7 @@ function parseBooleanEnv(name, fallback) {
 
 export function looksLikeReleaseVersionRef(ref) {
   const trimmed = normalizeRequestedRef(ref);
-  return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:beta|rc)[-.]?[0-9]+)?$/iu.test(
+  return /^v?[0-9]{4}\.[0-9]+\.[0-9]+(?:-(?:[1-9][0-9]*)|[-.](?:alpha|beta|rc)[-.]?[0-9]+)?$/iu.test(
     trimmed,
   );
 }

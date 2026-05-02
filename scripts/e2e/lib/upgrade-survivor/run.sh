@@ -70,10 +70,10 @@ rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
 
 validate_baseline_package_spec() {
   local spec="$1"
-  if [[ "$spec" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-beta\.[1-9][0-9]*)?)$ ]]; then
+  if [[ "$spec" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
     return 0
   fi
-  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
+  echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, an exact OpenClaw release version, or a bare release version; got: $spec" >&2
   return 1
 }
 
@@ -98,12 +98,12 @@ normalize_baseline() {
       ;;
   esac
   case "$baseline_version" in
-    latest | beta)
+    latest | beta | alpha)
       baseline_version=""
       baseline_version_expected="0"
       ;;
     dev | main | "")
-      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@<version>, or a bare version" >&2
+      echo "OPENCLAW_UPGRADE_SURVIVOR_BASELINE must be openclaw@latest, openclaw@beta, openclaw@alpha, openclaw@<version>, or a bare version" >&2
       return 1
       ;;
     *)
