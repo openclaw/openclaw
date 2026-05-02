@@ -343,6 +343,12 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
   modelHeaders?: Record<string, string>;
 }): Promise<void> {
   const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
+  // When skipModelLoad is enabled, skip the preload step entirely so that
+  // LM Studio's Just-In-Time (JIT) model loading can manage load/unload
+  // lifecycle automatically.  See openclaw/openclaw#75921.
+  if (providerConfig?.skipModelLoad === true) {
+    return;
+  }
   const providerHeaders = { ...providerConfig?.headers, ...params.modelHeaders };
   const runtimeApiKey =
     typeof params.options?.apiKey === "string" && params.options.apiKey.trim().length > 0

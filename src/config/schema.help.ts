@@ -872,6 +872,8 @@ export const FIELD_HELP: Record<string, string> = {
     "When true, credentials are sent via the HTTP Authorization header even if alternate auth is possible. Use this only when your provider or proxy explicitly requires Authorization forwarding.",
   "models.providers.*.request":
     "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
+  "models.providers.*.skipModelLoad":
+    "When true, skip the manual /api/v1/models/load preload call for this provider. Use this with LM Studio JIT mode so that LM Studio manages model loading and unloading automatically. Default is false (existing preload behavior preserved).",
   "models.providers.*.request.headers":
     "Extra headers merged into provider requests after default attribution and auth resolution.",
   "models.providers.*.request.auth":

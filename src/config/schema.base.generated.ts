@@ -2990,6 +2990,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
                 },
+                skipModelLoad: {
+                  type: "boolean",
+                  title: "Model Provider Skip Model Load",
+                  description:
+                    "When true, skip the manual /api/v1/models/load preload call for this provider. Use this with LM Studio JIT mode so that LM Studio manages model loading and unloading automatically. Default is false (existing preload behavior preserved).",
+                },
                 models: {
                   type: "array",
                   items: {
@@ -27007,6 +27013,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "models.providers.*.request": {
       label: "Model Provider Request Overrides",
       help: "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
+      tags: ["models"],
+    },
+    "models.providers.*.skipModelLoad": {
+      label: "Model Provider Skip Model Load",
+      help: "When true, skip the manual /api/v1/models/load preload call for this provider. Use this with LM Studio JIT mode so that LM Studio manages model loading and unloading automatically. Default is false (existing preload behavior preserved).",
       tags: ["models"],
     },
     "models.providers.*.request.headers": {

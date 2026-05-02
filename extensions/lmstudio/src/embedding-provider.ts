@@ -119,21 +119,25 @@ export async function createLmstudioEmbeddingProvider(
     ssrfPolicy,
   };
 
-  try {
-    await ensureLmstudioModelLoaded({
-      baseUrl,
-      apiKey,
-      headers: headerOverrides,
-      ssrfPolicy,
-      modelKey: model,
-      timeoutMs: 120_000,
-    });
-  } catch (error) {
-    log.warn("lmstudio embeddings warmup failed; continuing without preload", {
-      baseUrl,
-      model,
-      error: formatErrorMessage(error),
-    });
+  // When skipModelLoad is enabled, skip preload to let LM Studio JIT handle
+  // model loading automatically.  See openclaw/openclaw#75921.
+  if (providerConfig?.skipModelLoad !== true) {
+    try {
+      await ensureLmstudioModelLoaded({
+        baseUrl,
+        apiKey,
+        headers: headerOverrides,
+        ssrfPolicy,
+        modelKey: model,
+        timeoutMs: 120_000,
+      });
+    } catch (error) {
+      log.warn("lmstudio embeddings warmup failed; continuing without preload", {
+        baseUrl,
+        model,
+        error: formatErrorMessage(error),
+      });
+    }
   }
 
   return {

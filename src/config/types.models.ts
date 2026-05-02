@@ -127,6 +127,8 @@ export type ModelProviderConfig = {
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;
+  /** When true, skip the manual /api/v1/models/load call so that LM Studio JIT manages model lifecycle automatically. Default false. */
+  skipModelLoad?: boolean;
   models: ModelDefinitionConfig[];
 };
 

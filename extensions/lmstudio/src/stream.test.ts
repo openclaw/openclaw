@@ -509,4 +509,28 @@ describe("lmstudio stream wrapper", () => {
       delta: rawToolText,
     });
   });
+
+  it("skips preload when skipModelLoad is enabled", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = wrapLmstudioInferencePreload({
+      provider: "lmstudio",
+      modelId: "qwen3-8b-instruct",
+      config: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234",
+              skipModelLoad: true,
+              models: [],
+            },
+          },
+        },
+      },
+      streamFn: baseStream,
+    } as never);
+
+    const events = await collectEvents(runWrappedLmstudioStream(wrapped, {}));
+    expect(events.some((e) => e.type === "done")).toBe(true);
+    expect(ensureLmstudioModelLoadedMock).not.toHaveBeenCalled();
+  });
 });

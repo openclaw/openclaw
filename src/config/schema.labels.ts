@@ -538,6 +538,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.headers": "Model Provider Headers",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
   "models.providers.*.request": "Model Provider Request Overrides",
+  "models.providers.*.skipModelLoad": "Model Provider Skip Model Load",
   "models.providers.*.request.headers": "Model Provider Request Headers",
   "models.providers.*.request.auth": "Model Provider Request Auth Override",
   "models.providers.*.request.auth.mode": "Model Provider Request Auth Mode",
