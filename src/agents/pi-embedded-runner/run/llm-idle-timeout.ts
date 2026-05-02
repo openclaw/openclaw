@@ -33,7 +33,6 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
   }
   if (
     host === "localhost" ||
-    host === "127.0.0.1" ||
     host === "0.0.0.0" ||
     host === "::1" ||
     host === "::ffff:7f00:1" ||
@@ -42,13 +41,26 @@ function isLocalProviderBaseUrl(baseUrl: string): boolean {
   ) {
     return true;
   }
+  // Require a strict IPv4 literal before parsing; `Number.parseInt` is
+  // permissive and would otherwise let `10.0.0.5evil` parse to [10,0,0,5]
+  // and disable the watchdog for a non-IP hostname.
+  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+    return false;
+  }
   const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.length !== 4 || octets.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+  if (octets.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
     return false;
   }
   const [a, b] = octets;
+  // RFC 5735 loopback (127/8 — full range, not just .0.1; container/sandbox
+  // setups commonly bind 127.0.0.2+), RFC 1918 private IPv4, and RFC 6598
+  // shared CGNAT (100.64/10 — used by Tailscale and similar mesh VPNs).
   return (
-    a === 10 || (a === 172 && b !== undefined && b >= 16 && b <= 31) || (a === 192 && b === 168)
+    a === 127 ||
+    a === 10 ||
+    (a === 172 && b !== undefined && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 100 && b !== undefined && b >= 64 && b <= 127)
   );
 }
 

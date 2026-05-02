@@ -89,15 +89,42 @@ describe("resolveLlmIdleTimeoutMs", () => {
   it.each([
     "http://localhost:11434",
     "http://127.0.0.1:11434",
+    "http://127.0.0.2:11434",
+    "http://127.255.255.254:11434",
     "http://0.0.0.0:11434",
     "http://[::1]:11434",
     "http://my-rig.local:11434",
     "http://10.0.0.5:11434",
     "http://172.16.5.10:11434",
+    "http://172.31.99.1:11434",
     "http://192.168.1.20:11434",
+    "http://100.64.0.5:11434",
+    "http://100.127.255.254:11434",
   ])("disables the default idle watchdog for local provider baseUrl %s", (baseUrl) => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
   });
+
+  it.each([
+    "http://172.32.0.1:11434",
+    "http://192.169.1.1:11434",
+    "http://100.63.255.254:11434",
+    "http://100.128.0.1:11434",
+  ])("keeps the default idle watchdog for non-private IPv4 baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it.each([
+    "http://10.0.0.5evil:11434",
+    "http://127.0.0.1foo:11434",
+    "http://192.168.1.20attacker.com:11434",
+    "http://10.0.0.5.evil.com:11434",
+    "http://1.2.3.4.5:11434",
+  ])(
+    "keeps the default idle watchdog for numeric-looking hostnames that are not IPv4 literals (%s)",
+    (baseUrl) => {
+      expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    },
+  );
 
   it("keeps the default idle watchdog for remote provider baseUrls", () => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "https://api.openai.com/v1" } })).toBe(
