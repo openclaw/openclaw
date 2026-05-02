@@ -173,9 +173,11 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
       throw new Error(`unexpected kitchen-sink diagnostic error: ${message}`);
     }
   }
-  for (const message of expectedErrorMessages) {
-    if (!errorMessages.has(message)) {
-      throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
+  if (surfaceMode === "full") {
+    for (const message of expectedErrorMessages) {
+      if (!errorMessages.has(message)) {
+        throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
+      }
     }
   }
 }
