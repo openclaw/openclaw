@@ -48,25 +48,6 @@ function setAt(root: Record<string, unknown>, segments: readonly string[], value
   cur[segments[segments.length - 1]] = value;
 }
 
-// Delete the leaf and prune empty parent objects so disabled flags don't
-// leave dangling `experimental: {}` containers in the config file.
-function unsetAt(root: Record<string, unknown>, segments: readonly string[]): void {
-  const stack: Record<string, unknown>[] = [root];
-  let cur = root;
-  for (let i = 0; i < segments.length - 1; i += 1) {
-    const next = cur[segments[i]];
-    if (!next || typeof next !== "object" || Array.isArray(next)) return;
-    cur = next as Record<string, unknown>;
-    stack.push(cur);
-  }
-  delete cur[segments[segments.length - 1]];
-  for (let i = segments.length - 2; i >= 0; i -= 1) {
-    const child = stack[i + 1];
-    if (Object.keys(child).length === 0) delete stack[i][segments[i]];
-    else break;
-  }
-}
-
 export async function runExperimental(runtime: RuntimeEnv): Promise<void> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.exists || !snapshot.valid) {
@@ -127,18 +108,12 @@ export async function runExperimental(runtime: RuntimeEnv): Promise<void> {
   }
 
   const next = structuredClone(root as Record<string, unknown>);
-  const unsetPaths: string[][] = [];
   for (const d of deltas) {
-    if (d.next) setAt(next, d.segments, true);
-    else {
-      unsetAt(next, d.segments);
-      unsetPaths.push([...d.segments]);
-    }
+    setAt(next, d.segments, d.next);
   }
   await replaceConfigFile({
     nextConfig: next as unknown as OpenClawConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    writeOptions: unsetPaths.length > 0 ? { unsetPaths } : undefined,
   });
 
   const summary = deltas

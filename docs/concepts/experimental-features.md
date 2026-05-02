@@ -19,6 +19,16 @@ Treat them differently from normal config:
 - If you are rolling OpenClaw out broadly, test experimental flags in a smaller
   environment before baking them into a shared baseline.
 
+## Quick toggle
+
+```bash
+openclaw experimental
+```
+
+This opens an interactive picker that shows every registered experimental flag
+with its current state. Space to select, Enter to confirm — the command writes
+your choices back to `openclaw.json`. Restart the gateway afterward.
+
 ## Currently documented flags
 
 | Surface                  | Key                                                       | Use it when                                                                                                    | More                                                                                          |
