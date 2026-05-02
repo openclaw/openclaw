@@ -1,7 +1,8 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
   collectChangedExtensionIdsFromPaths,
@@ -155,6 +156,22 @@ describe("collectPublishablePluginPackageErrors", () => {
 });
 
 describe("collectPublishablePluginPackages", () => {
+  it("keeps publishable plugin dist trees out of the core npm package files list", () => {
+    const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
+      files?: unknown;
+    };
+    const packageFiles = new Set(Array.isArray(rootPackage.files) ? rootPackage.files : []);
+    const publishablePlugins = [
+      ...collectPublishablePluginPackages(),
+      ...collectClawHubPublishablePluginPackages(),
+    ];
+    const missingExclusions = Array.from(
+      new Set(publishablePlugins.map((plugin) => `!dist/extensions/${plugin.extensionId}/**`)),
+    ).filter((entry) => !packageFiles.has(entry));
+
+    expect(missingExclusions).toEqual([]);
+  });
+
   it("collects publishable npm plugins from extension package manifests", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });

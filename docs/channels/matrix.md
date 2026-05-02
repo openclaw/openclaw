@@ -6,22 +6,16 @@ read_when:
 title: "Matrix"
 ---
 
-Matrix is a bundled channel plugin for OpenClaw.
+Matrix is a downloadable channel plugin for OpenClaw.
 It uses the official `matrix-js-sdk` and supports DMs, rooms, threads, media, reactions, polls, location, and E2EE.
 
-## Bundled plugin
+## Install
 
-Current packaged OpenClaw releases ship the Matrix plugin in the box. You do not need to install anything; configuring `channels.matrix.*` (see [Setup](#setup)) is what activates it.
-
-For older builds or custom installs that exclude Matrix, install a current npm
-package when one is published:
+Install Matrix before configuring the channel:
 
 ```bash
 openclaw plugins install @openclaw/matrix
 ```
-
-If npm reports the OpenClaw-owned package as deprecated, use a current packaged
-OpenClaw build or a local checkout until a newer npm package is published.
 
 From a local checkout:
 
