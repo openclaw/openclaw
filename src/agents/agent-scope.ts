@@ -410,7 +410,7 @@ export function resolveAgentEnvVars(
 
   // Agent-specific vars always override
   for (const [key, value] of Object.entries(agentVars)) {
-    if (value) base[key] = value;
+    if (value !== undefined && value !== null) base[key] = value;
   }
 
   return base;
