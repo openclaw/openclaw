@@ -350,6 +350,21 @@ function buildExecutionBiasSection(params: { isMinimal: boolean }) {
   ];
 }
 
+function buildCompletenessScanSection(params: { isMinimal: boolean }) {
+  if (params.isMinimal) {
+    return [];
+  }
+  return [
+    "## Completeness Scan (mandatory)",
+    "Read and search operations require completeness verification before you finalize an answer:",
+    "- Do not stop early. If another read or search tool call is likely to materially improve correctness, completeness, or grounding, make it before concluding.",
+    '- Empty or partial results. If a read, grep, find, ls, glob, web_search, or web_fetch returns empty, partial, truncated, or suspiciously narrow results, retry with a different strategy (alternate query, path, source, or broader scope) before concluding "not found" or "no results".',
+    "- Truncation handling. If a read result is truncated, follow up to read the remaining content before acting on or summarizing the partial result.",
+    "- Verification before finalizing. If more tool work would likely change the answer, do it before replying. If no further verification is possible, state what was checked and why it is sufficient.",
+    "",
+  ];
+}
+
 function normalizeProviderPromptBlock(value?: string): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -874,6 +889,12 @@ export function buildAgentSystemPrompt(params: {
       ...buildOverridablePromptSection({
         override: providerSectionOverrides.execution_bias,
         fallback: buildExecutionBiasSection({
+          isMinimal,
+        }),
+      }),
+      ...buildOverridablePromptSection({
+        override: providerSectionOverrides.completeness_scan,
+        fallback: buildCompletenessScanSection({
           isMinimal,
         }),
       }),
