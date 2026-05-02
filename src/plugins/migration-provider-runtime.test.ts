@@ -33,7 +33,9 @@ const mocks = vi.hoisted(() => ({
   loadPluginManifestRegistry: vi.fn<(params?: Record<string, unknown>) => MockManifestRegistry>(
     () => createEmptyMockManifestRegistry(),
   ),
-  loadPluginRegistrySnapshot: vi.fn<() => MockPluginIndex>(() => createMockPluginIndex([])),
+  loadPluginRegistrySnapshot: vi.fn<(_params?: unknown) => MockPluginIndex>(() =>
+    createMockPluginIndex([]),
+  ),
   loadPluginRegistrySnapshotWithMetadata: vi.fn((params?: { index?: MockPluginIndex }) => ({
     source: params?.index ? "provided" : "derived",
     snapshot: params?.index ?? createMockPluginIndex([]),
@@ -61,7 +63,7 @@ vi.mock("./plugin-registry.js", () => ({
 
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistry,
-  resolveInstalledManifestRegistryIndexFingerprint: () => "test-index",
+  resolveInstalledManifestRegistryIndexFingerprint: () => "test-installed-index",
 }));
 
 vi.mock("./bundled-compat.js", () => ({

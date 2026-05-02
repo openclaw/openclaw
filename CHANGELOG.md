@@ -31,6 +31,11 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Control UI/chat: show inline feedback when local slash-command dispatch is unavailable or fails unexpectedly instead of clearing the composer silently. Fixes #52105. Thanks @MooreQiao.
+- Plugins/CLI: cache plugin CLI registration entries per command program so completion state generation does not repeat the full plugin sweep in one invocation. Thanks @ScientificProgrammer.
+- Plugins: reuse gateway-bindable plugin loader cache entries for later default-mode loads without serving default-built registries to gateway-bound requests, reducing repeated plugin registration during dispatch. Refs #61756. Thanks @DmitryPogodaev.
+- Gateway/secrets: include the caught error message in `secrets.reload` and `secrets.resolve` warning logs while keeping RPC errors generic, so operators can diagnose reload and permission failures. Thanks @davidangularme.
+- Providers/OpenRouter: fill DeepSeek V4 `reasoning_content` replay placeholders for `openrouter/deepseek/deepseek-v4-flash` and `openrouter/deepseek/deepseek-v4-pro`, so thinking/tool follow-up turns do not fail with DeepSeek's replay-shape error. Fixes #76018. Thanks @cloph-dsp.
+- Anthropic-compatible streams: recover text deltas that arrive before their matching content block, so Kimi Code and similar providers do not finish as empty `incomplete_result` replies. Fixes #76007. Thanks @vliuyt.
 - fix(infra): block workspace state-directory env override [AI]. (#75940) Thanks @pgondhi987.
 - MCP/OpenAI: normalize parameter-free tool schemas whose top-level object `properties` is missing, null, or invalid before sending tools to OpenAI, so MCP tools without params stay usable. Fixes #75362. Thanks @tolkonepiu and @SymbolStar.
 - TTS: honor explicit short `[[tts:text]]...[[/tts:text]]` blocks while keeping untagged short auto-TTS suppressed, so tagged voice replies are synthesized instead of being dropped as empty voice-only payloads. Fixes #73758. Thanks @yfge.
@@ -39,9 +44,11 @@ Docs: https://docs.openclaw.ai
 - Discord: allow explicitly configured ack reactions in tool-only guild channels while keeping automatic lifecycle/status reactions suppressed. Fixes #74922. Thanks @samvilian and @BlueBirdBack.
 - Discord: preserve attachment and sticker filenames when saving inbound media, so agents can see human-readable file names instead of only UUID-based paths. Fixes #59744. Thanks @xela92 and @rockcent.
 - Discord: preserve non-ASCII channel names in session display labels while keeping allowlist matching on the existing ASCII slug contract. Thanks @swjeong9.
+- Discord/PluralKit: canonicalize proxied webhook turns to the original Discord message id for inbound dedupe, while preserving the proxy message id for reply routing. Thanks @acgh213.
 - Gateway/diagnostics: include a bounded redacted startup error message in stability bundles, so crash-loop reports identify the failing plugin or contract without exposing secrets. Refs #75797. Thanks @ymebosma.
 - Gateway/pricing: abort in-flight model pricing catalog fetches when Gateway shutdown stops the refresh loop, and avoid post-stop cache writes or refresh timers. Fixes #72208. Thanks @rzcq.
 - Codex/app-server: make startup retry cleanup ownership-aware so concurrent Codex lanes cannot close another lane's freshly restarted shared app-server client. Thanks @vincentkoc.
+- Google Meet/Twilio: report missing dial-in details during setup and explain that Twilio cannot join Meet URLs without a phone dial plan.
 - Control UI/Talk: allow the OpenAI Realtime WebRTC offer endpoint through the Control UI CSP, configure browser sessions with explicit VAD/transcription input settings, and surface OpenAI realtime error/lifecycle events instead of leaving Talk stuck as live with no diagnostic. Fixes #73427.
 - Plugins: clarify config-selected duplicate plugin override diagnostics and document manifest schema updates for bundled-plugin forks. Fixes #8582. Thanks @sachah.
 - CLI backends/Claude: make live-session JSONL turn caps bounded and configurable via `reliability.outputLimits`, raising the default guard for tool-heavy Claude CLI turns while preserving memory limits. Fixes #75838. Thanks @hcordoba840.
@@ -51,6 +58,7 @@ Docs: https://docs.openclaw.ai
 - Voice Call: add `sessionScope: "per-call"` for fresh per-call agent memory while preserving the default per-phone caller history. Fixes #45280. Thanks @pondcountry.
 - Music generation: raise too-small tool timeouts to the provider-safe 10-second floor and collapse cascading abort fallback errors into a clearer root-cause summary. Thanks @shakkernerd.
 - Memory-core/dreaming: include the primary runtime workspace in multi-agent dreaming sweeps without mixing main-agent session transcripts into configured subagent workspaces. Fixes #70014. Thanks @ttomiczek.
+- Control UI: add tab/RPC timing attribution and decouple slow Overview/Cron secondary refreshes so Sessions navigation gets immediate visible feedback. Refs #64004. Thanks @WaMaSeDu.
 - Telegram/startup: use the existing `getMe` request guard for the gateway bot probe instead of a fixed 2.5-second budget, and honor higher `timeoutSeconds` configs for slow Telegram API paths. Fixes #75783. Thanks @tankotan.
 - Telegram/models: make model picker confirmations say selections are session-scoped and do not change the agent's persistent default. Fixes #75965. Thanks @sd1114820.
 - Control UI/slash commands: keep fallback command metadata on a browser-safe registry path, so provider thinking runtime imports cannot blank the Web UI with `process is not defined`. Fixes #75987. Thanks @novkien.
@@ -209,6 +217,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
 - Gateway/agents: avoid rebuilding core tools for plugin-only allowlists and keep the full plugin registry cache warm across scoped plugin loads, reducing per-turn latency spikes. Fixes #75882, #75907, #75906, #75887, and #75851. (#75922) Thanks @obviyus.
+- Agents/failover: classify bare `status: internal server error` provider messages as retryable server errors so model fallback can rotate instead of stopping. (#73844) Thanks @thesomewhatyou.
 
 ## 2026.4.30
 

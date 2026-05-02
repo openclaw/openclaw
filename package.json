@@ -1726,7 +1726,7 @@
     "vitest": "^4.1.5"
   },
   "overrides": {
-    "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+    "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
     "axios": "1.15.0",
     "follow-redirects": "1.16.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",

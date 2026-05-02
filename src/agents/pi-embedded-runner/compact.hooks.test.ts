@@ -1328,13 +1328,6 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
         sessionFile: TEST_SESSION_FILE,
       },
     } as never);
-    rotateTranscriptAfterCompactionMock.mockResolvedValueOnce({
-      rotated: true,
-      sessionId: "wrapper-rotated-session",
-      sessionFile: "/tmp/wrapper-rotated-session.jsonl",
-      leafId: "wrapper-rotated-leaf",
-    });
-
     const result = await compactEmbeddedPiSession(
       wrappedCompactionArgs({
         config: {

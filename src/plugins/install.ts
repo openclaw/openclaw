@@ -17,6 +17,7 @@ import {
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -38,11 +39,10 @@ import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 
 export { resolvePluginInstallDir } from "./install-paths.js";
 
-let pluginInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
+const pluginInstallRuntimeLoader = createLazyImportLoader(() => import("./install.runtime.js"));
 
 async function loadPluginInstallRuntime() {
-  pluginInstallRuntimePromise ??= import("./install.runtime.js");
-  return pluginInstallRuntimePromise;
+  return await pluginInstallRuntimeLoader.load();
 }
 
 type PluginInstallLogger = {
