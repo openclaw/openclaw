@@ -288,6 +288,10 @@ export class SessionHistorySseState {
         this.target.sessionId,
         this.target.storePath,
         this.target.sessionFile,
+        {
+          mode: "full",
+          reason: "session history cursor pagination",
+        },
       ),
     };
   }
