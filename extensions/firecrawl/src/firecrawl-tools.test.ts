@@ -36,6 +36,7 @@ describe("firecrawl tools", () => {
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
   let firecrawlClientTesting: typeof import("./firecrawl-client.js").__testing;
+  let runActualFirecrawlScrape: typeof import("./firecrawl-client.js").runFirecrawlScrape;
   let ssrfMock: { mockRestore: () => void } | undefined;
 
   beforeAll(async () => {
@@ -44,7 +45,7 @@ describe("firecrawl tools", () => {
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
-    ({ __testing: firecrawlClientTesting } =
+    ({ __testing: firecrawlClientTesting, runFirecrawlScrape: runActualFirecrawlScrape } =
       await vi.importActual<typeof import("./firecrawl-client.js")>("./firecrawl-client.js"));
   });
 
@@ -205,6 +206,61 @@ describe("firecrawl tools", () => {
 
     const authHeader = new Headers(capturedInit?.headers).get("Authorization");
     expect(authHeader).toBe("Bearer firecrawl-test-key");
+  });
+
+  it("blocks private and non-http scrape targets before Firecrawl requests", async () => {
+    expect(() =>
+      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("https://example.com/page"),
+    ).not.toThrow();
+
+    for (const blockedUrl of [
+      "http://localhost/admin",
+      "http://127.0.0.1/secret",
+      "http://10.0.0.5/secret",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://metadata.google.internal/computeMetadata/v1/",
+      "file:///etc/passwd",
+    ]) {
+      expect(() => firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed(blockedUrl)).toThrow(
+        /Blocked|non-HTTP/i,
+      );
+    }
+
+    try {
+      firecrawlClientTesting.assertFirecrawlScrapeTargetAllowed("not-a-valid-url?token=secret");
+      expect.fail("Expected invalid URL to be blocked");
+    } catch (error) {
+      expect((error as Error).message).toBe("Invalid URL supplied to Firecrawl scrape");
+      expect((error as Error).message).not.toContain("token=secret");
+    }
+  });
+
+  it("rejects blocked scrape targets before cache lookup or network fetch", async () => {
+    const fetchSpy = vi.fn(async () => new Response("should not be called"));
+    global.fetch = fetchSpy as typeof fetch;
+
+    await expect(
+      runActualFirecrawlScrape({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: "firecrawl-key",
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        url: "http://169.254.169.254/latest/meta-data/",
+        extractMode: "markdown",
+      }),
+    ).rejects.toThrow(/Blocked hostname or private\/internal IP/);
+
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 
   it("maps generic provider args into firecrawl search params", async () => {

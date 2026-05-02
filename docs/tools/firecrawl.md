@@ -86,6 +86,7 @@ Notes:
 - `maxAgeMs` controls how old cached results can be (ms). Default is 2 days.
 - Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor --fix`.
 - Firecrawl scrape/base URL overrides follow the same hosted/private rule as search: public hosted traffic uses `https://api.firecrawl.dev`; self-hosted overrides must resolve to private/internal endpoints.
+- `firecrawl_scrape` rejects obvious private, loopback, metadata, and non-HTTP(S) target URLs before forwarding them to Firecrawl, matching the `web_fetch` target-safety contract for explicit Firecrawl scrape calls.
 
 `firecrawl_scrape` reuses the same `plugins.entries.firecrawl.config.webFetch.*` settings and env vars.
 

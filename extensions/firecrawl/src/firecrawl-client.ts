@@ -14,6 +14,7 @@ import {
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import { wrapExternalContent, wrapWebContent } from "openclaw/plugin-sdk/security-runtime";
 import {
+  SsrFBlockedError,
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   resolvePinnedHostnameWithPolicy,
@@ -81,6 +82,25 @@ export type FirecrawlScrapeParams = {
   storeInCache?: boolean;
   timeoutSeconds?: number;
 };
+
+export function assertFirecrawlScrapeTargetAllowed(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SsrFBlockedError("Invalid URL supplied to Firecrawl scrape");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new SsrFBlockedError(
+      `Blocked non-HTTP(S) protocol in Firecrawl scrape URL: ${parsed.protocol}`,
+    );
+  }
+  if (isBlockedHostnameOrIp(parsed.hostname)) {
+    throw new SsrFBlockedError(
+      `Blocked hostname or private/internal IP in Firecrawl scrape URL: ${parsed.hostname}`,
+    );
+  }
+}
 
 function isOfficialFirecrawlEndpoint(url: URL): boolean {
   return url.protocol === "https:" && ALLOWED_FIRECRAWL_HOSTS.has(url.hostname);
@@ -487,6 +507,8 @@ export function parseFirecrawlScrapePayload(params: {
 export async function runFirecrawlScrape(
   params: FirecrawlScrapeParams,
 ): Promise<Record<string, unknown>> {
+  assertFirecrawlScrapeTargetAllowed(params.url);
+
   const apiKey = resolveFirecrawlApiKey(params.cfg);
   if (!apiKey) {
     throw new Error(
@@ -571,6 +593,7 @@ export async function runFirecrawlScrape(
 }
 
 export const __testing = {
+  assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
   resolveEndpoint,
