@@ -46,6 +46,7 @@ Docs: https://docs.openclaw.ai
 - Slack/DMs: honor `dmHistoryLimit` for fresh 1:1 Slack DM sessions by backfilling recent conversation history before the current reply. Fixes #64427. Thanks @brantley-creator.
 - Slack/DMs: keep top-level direct messages on the stable DM session even when `replyToMode` targets Slack thread replies, preserving context across DM turns. Fixes #58832. Thanks @daye-jjeong.
 - Slack/delivery: preserve Slack Web API missing-scope details in outbound delivery errors, so queued retry state identifies the OAuth scope to add. Fixes #62391. Thanks @alexey-pelykh.
+- Slack/DMs: send text/block-only proactive DMs directly with `chat.postMessage(channel=<user id>)` while keeping conversation resolution for uploads and threaded sends. Fixes #62042. Thanks @MarkMolina.
 - Slack/mentions: resolve `<!subteam^...>` user-group mentions through Slack `usergroups.users.list` and treat them as explicit mentions only when the bot user is a member, so mention-gated agent channels wake for real user-group mentions without config-only allowlists. Fixes #73827. Thanks @CG-Intelligence-Agent-Jack.
 - Slack/message tool: let `read` fetch an exact Slack message timestamp, including a specific thread reply when paired with `threadId`, instead of returning only the parent thread or recent channel history. Fixes #53943. Thanks @zomars.
 - Web search: point missing-key errors to `web_fetch` for known URLs and the browser tool for interactive pages. Thanks @zhaoyang97.

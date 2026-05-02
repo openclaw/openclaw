@@ -115,6 +115,27 @@ describe("sendMessageSlack blocks", () => {
     expect(result).toEqual({ messageId: "171234.567", channelId: "C123" });
   });
 
+  it("posts user-target block messages directly without conversations.open", async () => {
+    const client = createSlackSendTestClient();
+    client.conversations.open.mockRejectedValueOnce(new Error("missing_scope"));
+
+    const result = await sendMessageSlack("user:U123", "", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      blocks: [{ type: "divider" }],
+    });
+
+    expect(client.conversations.open).not.toHaveBeenCalled();
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "U123",
+        text: "Shared a Block Kit message",
+      }),
+    );
+    expect(result).toEqual({ messageId: "171234.567", channelId: "U123" });
+  });
+
   it("derives fallback text from image blocks", async () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "", {

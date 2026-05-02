@@ -300,6 +300,21 @@ function setSlackDmChannelCache(key: string, channelId: string): void {
   slackDmChannelCache.set(key, channelId);
 }
 
+function isSlackUserRecipient(recipient: SlackRecipient): boolean {
+  return recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(recipient.id);
+}
+
+function resolveDirectUserPostChannelId(params: {
+  recipient: SlackRecipient;
+  hasMedia: boolean;
+  threadTs?: string;
+}): string | undefined {
+  if (!isSlackUserRecipient(params.recipient) || params.hasMedia || params.threadTs) {
+    return undefined;
+  }
+  return params.recipient.id;
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
@@ -309,10 +324,9 @@ async function resolveChannelId(
   // target string had no explicit prefix (parseSlackTarget defaults bare IDs
   // to "channel"). chat.postMessage tolerates user IDs directly, but
   // files.uploadV2 → completeUploadExternal validates channel_id against
-  // ^[CGDZ][A-Z0-9]{8,}$ and rejects U-prefixed IDs.  Always resolve user
-  // IDs via conversations.open to obtain the DM channel ID.
-  const isUserId = recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(recipient.id);
-  if (!isUserId) {
+  // ^[CGDZ][A-Z0-9]{8,}$ and rejects U-prefixed IDs. Resolve user IDs via
+  // conversations.open only for paths that require the concrete DM channel ID.
+  if (!isSlackUserRecipient(recipient)) {
     return { channelId: recipient.id };
   }
   const cacheKey = createSlackDmCacheKey({
@@ -484,10 +498,17 @@ async function sendMessageSlackQueuedInner(params: {
 }): Promise<SlackSendResult> {
   const { opts, cfg, account, token, recipient, blocks, trimmedMessage } = params;
   const client = opts.client ?? getSlackWriteClient(token);
-  const { channelId } = await resolveChannelId(client, recipient, {
-    accountId: account.accountId,
-    token,
+  const directUserPostChannelId = resolveDirectUserPostChannelId({
+    recipient,
+    hasMedia: Boolean(opts.mediaUrl),
+    ...(opts.threadTs ? { threadTs: opts.threadTs } : {}),
   });
+  const { channelId } = directUserPostChannelId
+    ? { channelId: directUserPostChannelId }
+    : await resolveChannelId(client, recipient, {
+        accountId: account.accountId,
+        token,
+      });
   if (blocks) {
     if (opts.mediaUrl) {
       throw new Error("Slack send does not support blocks with mediaUrl");
