@@ -317,9 +317,10 @@ describe("before_tool_call loop detection behavior", () => {
       await expect(
         writeTool.execute("write-2", { path: "/tmp/out.txt", content: "x" }, undefined, undefined),
       ).rejects.toThrow("Permission denied");
-      await expect(
-        readTool.execute("read-3", { path: "/b.txt" }, undefined, undefined),
-      ).rejects.toThrow("consecutive tool calls failed");
+      const blocked = await readTool.execute("read-3", { path: "/b.txt" }, undefined, undefined);
+      expect(blocked).toBeDefined();
+      expect(blocked).toHaveProperty("details.status", "blocked");
+      expect(blocked).toHaveProperty("details.deniedReason", "tool-loop");
 
       const loopEvent = emitted.at(-1);
       expect(loopEvent?.type).toBe("tool.loop");
