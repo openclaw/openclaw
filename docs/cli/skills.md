@@ -38,6 +38,7 @@ openclaw skills info <name>
 openclaw skills info <name> --json
 openclaw skills info <name> --agent <id>
 openclaw skills check
+openclaw skills check --agent <id>
 openclaw skills check --json
 openclaw skills check --agent <id>
 ```
@@ -63,6 +64,8 @@ Notes:
 - `--agent <id>` targets one configured agent workspace and overrides current
   working directory inference.
 - `update --all` only updates tracked ClawHub installs in the active workspace.
+- `check --agent <id>` checks the selected agent's workspace and reports which
+  ready skills are actually visible to that agent's prompt or command surface.
 - `list` is the default action when no subcommand is provided.
 - `list`, `info`, and `check` write their rendered output to stdout. With
   `--json`, that means the machine-readable payload stays on stdout for pipes

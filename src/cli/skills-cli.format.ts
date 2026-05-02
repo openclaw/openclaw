@@ -17,6 +17,7 @@ export type SkillInfoOptions = {
 
 export type SkillsCheckOptions = {
   json?: boolean;
+  agent?: string;
 };
 
 function appendClawHubHint(output: string, json?: boolean): string {
@@ -108,6 +109,10 @@ export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOpti
         eligible: s.eligible,
         disabled: s.disabled,
         blockedByAllowlist: s.blockedByAllowlist,
+        blockedByAgentFilter: s.blockedByAgentFilter,
+        modelVisible: s.modelVisible,
+        userInvocable: s.userInvocable,
+        commandVisible: s.commandVisible,
         source: s.source,
         bundled: s.bundled,
         primaryEnv: s.primaryEnv,
@@ -291,25 +296,47 @@ export function formatSkillInfo(
 
 export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOptions): string {
   const eligible = report.skills.filter((s) => s.eligible);
+  const modelVisible = report.skills.filter((s) => s.modelVisible);
+  const commandVisible = report.skills.filter((s) => s.commandVisible);
   const disabled = report.skills.filter((s) => s.disabled);
   const blocked = report.skills.filter((s) => s.blockedByAllowlist && !s.disabled);
-  const missingReqs = report.skills.filter(
-    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
+  const agentFiltered = report.skills.filter((s) => s.eligible && s.blockedByAgentFilter);
+  const promptHidden = report.skills.filter(
+    (s) => s.eligible && !s.blockedByAgentFilter && !s.modelVisible,
   );
+  const missingReqs = report.skills.filter(
+    (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist && !s.blockedByAgentFilter,
+  );
+  const agentId = report.agentId ?? opts.agent;
 
   if (opts.json) {
     return JSON.stringify(
       sanitizeJsonValue({
+        agentId,
+        agentSkillFilter: report.agentSkillFilter,
+        workspaceDir: report.workspaceDir,
+        managedSkillsDir: report.managedSkillsDir,
         summary: {
           total: report.skills.length,
           eligible: eligible.length,
+          modelVisible: modelVisible.length,
+          commandVisible: commandVisible.length,
           disabled: disabled.length,
           blocked: blocked.length,
+          agentFiltered: agentFiltered.length,
+          notInjected: promptHidden.length,
           missingRequirements: missingReqs.length,
         },
         eligible: eligible.map((s) => s.name),
+        modelVisible: modelVisible.map((s) => s.name),
+        commandVisible: commandVisible.map((s) => s.name),
         disabled: disabled.map((s) => s.name),
         blocked: blocked.map((s) => s.name),
+        agentFiltered: agentFiltered.map((s) => s.name),
+        notInjected: promptHidden.map((s) => ({
+          name: s.name,
+          reason: "disable-model-invocation",
+        })),
         missingRequirements: missingReqs.map((s) => ({
           name: s.name,
           missing: s.missing,
@@ -323,19 +350,58 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
 
   const lines: string[] = [];
   lines.push(theme.heading("Skills Status Check"));
+  if (agentId) {
+    lines.push(`${theme.muted("Agent:")} ${sanitizeForLog(agentId)}`);
+  }
   lines.push("");
   lines.push(`${theme.muted("Total:")} ${report.skills.length}`);
   lines.push(`${theme.success("✓")} ${theme.muted("Eligible:")} ${eligible.length}`);
+  lines.push(`${theme.success("✓")} ${theme.muted("Visible to model:")} ${modelVisible.length}`);
+  lines.push(
+    `${theme.success("✓")} ${theme.muted("Available as command:")} ${commandVisible.length}`,
+  );
   lines.push(`${theme.warn("⏸")} ${theme.muted("Disabled:")} ${disabled.length}`);
   lines.push(`${theme.warn("🚫")} ${theme.muted("Blocked by allowlist:")} ${blocked.length}`);
+  if (agentId || agentFiltered.length > 0) {
+    lines.push(
+      `${theme.warn("🚫")} ${theme.muted("Excluded by agent allowlist:")} ${agentFiltered.length}`,
+    );
+  }
+  if (promptHidden.length > 0) {
+    lines.push(
+      `${theme.warn("△")} ${theme.muted("Ready but hidden from model prompt:")} ${promptHidden.length}`,
+    );
+  }
   lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
 
-  if (eligible.length > 0) {
+  if (modelVisible.length > 0) {
     lines.push("");
-    lines.push(theme.heading("Ready to use:"));
-    for (const skill of eligible) {
+    lines.push(theme.heading("Ready and visible to model:"));
+    for (const skill of modelVisible) {
       const emoji = normalizeSkillEmoji(skill.emoji);
       lines.push(`  ${emoji} ${sanitizeForLog(skill.name)}`);
+    }
+  }
+
+  if (promptHidden.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("Ready but hidden from model prompt:"));
+    for (const skill of promptHidden) {
+      const emoji = normalizeSkillEmoji(skill.emoji);
+      lines.push(
+        `  ${emoji} ${sanitizeForLog(skill.name)} ${theme.muted("(skill hides its instructions from the model; commands/cron may still use it)")}`,
+      );
+    }
+  }
+
+  if (agentFiltered.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("Excluded by agent allowlist:"));
+    for (const skill of agentFiltered) {
+      const emoji = normalizeSkillEmoji(skill.emoji);
+      lines.push(
+        `  ${emoji} ${sanitizeForLog(skill.name)} ${theme.muted("(loaded, but this agent is not allowed to see/use it)")}`,
+      );
     }
   }
 
