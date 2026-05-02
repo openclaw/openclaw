@@ -88,15 +88,25 @@ describe("cleanupLegacyPluginDependencyState", () => {
     const packageRoot = path.join(tempDir, "package");
     const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
     const staleRoot = path.join(runtimeRoot, "openclaw-2026.4.25-deadbeef");
+    const stalePluginRoot = path.join(runtimeRoot, "openclaw-2026.4.25-discord");
+    const staleBetaPluginRoot = path.join(runtimeRoot, "openclaw-2026.4.25-beta.1-telegram");
     const legacyPluginRoot = path.join(runtimeRoot, "discord");
+    const localVersionLikeRoot = path.join(runtimeRoot, "openclaw-local-data");
     const localDataFile = path.join(runtimeRoot, "README.local");
     const symlinkTarget = path.join(tempDir, "..", "external-local-data");
     const symlinkPath = path.join(runtimeRoot, "local-link");
 
     await fs.mkdir(path.join(staleRoot, "node_modules", "stale-dep"), { recursive: true });
+    await fs.mkdir(path.join(stalePluginRoot, "node_modules", "stale-dep"), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(staleBetaPluginRoot, "node_modules", "stale-dep"), {
+      recursive: true,
+    });
     await fs.mkdir(path.join(legacyPluginRoot, "node_modules", "legacy-dep"), {
       recursive: true,
     });
+    await fs.mkdir(localVersionLikeRoot, { recursive: true });
     await fs.writeFile(localDataFile, "keep me\n");
     await fs.symlink(symlinkTarget, symlinkPath);
     await fs.mkdir(packageRoot, { recursive: true });
@@ -114,15 +124,27 @@ describe("cleanupLegacyPluginDependencyState", () => {
     expect(result.changes).toEqual(
       expect.arrayContaining([`Removed legacy plugin dependency state: ${staleRoot}`]),
     );
+    expect(result.changes).toEqual(
+      expect.arrayContaining([
+        `Removed legacy plugin dependency state: ${stalePluginRoot}`,
+        `Removed legacy plugin dependency state: ${staleBetaPluginRoot}`,
+      ]),
+    );
     expect(result.changes).not.toContain(
       `Removed legacy plugin dependency state: ${legacyPluginRoot}`,
+    );
+    expect(result.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${localVersionLikeRoot}`,
     );
     expect(result.changes).not.toContain(
       `Removed legacy plugin dependency state: ${localDataFile}`,
     );
     expect(result.changes).not.toContain(`Removed legacy plugin dependency state: ${symlinkPath}`);
     await expect(fs.stat(staleRoot)).rejects.toThrow();
+    await expect(fs.stat(stalePluginRoot)).rejects.toThrow();
+    await expect(fs.stat(staleBetaPluginRoot)).rejects.toThrow();
     await expect(fs.stat(legacyPluginRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(localVersionLikeRoot)).resolves.toBeTruthy();
     await expect(fs.stat(localDataFile)).resolves.toBeTruthy();
     await expect(fs.lstat(symlinkPath)).resolves.toBeTruthy();
     await expect(fs.stat(runtimeRoot)).resolves.toBeTruthy();
@@ -133,14 +155,22 @@ describe("cleanupLegacyPluginDependencyState", () => {
     const packageRoot = path.join(tempDir, "package");
     const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
     const currentRoot = path.join(runtimeRoot, "openclaw-2026.4.29-a1b2c3d4");
+    const currentPluginRoot = path.join(runtimeRoot, "openclaw-2026.4.29-microsoft-teams");
     const staleRoot = path.join(runtimeRoot, "openclaw-2026.4.25-deadbeef");
+    const stalePluginRoot = path.join(runtimeRoot, "openclaw-2026.4.25-microsoft-teams");
     const legacyPluginRoot = path.join(runtimeRoot, "discord");
     const localDataFile = path.join(runtimeRoot, "README.local");
     const symlinkTarget = path.join(tempDir, "..", "external-local-data");
     const symlinkPath = path.join(runtimeRoot, "local-link");
 
     await fs.mkdir(path.join(currentRoot, "node_modules", "current-dep"), { recursive: true });
+    await fs.mkdir(path.join(currentPluginRoot, "node_modules", "current-dep"), {
+      recursive: true,
+    });
     await fs.mkdir(path.join(staleRoot, "node_modules", "stale-dep"), { recursive: true });
+    await fs.mkdir(path.join(stalePluginRoot, "node_modules", "stale-dep"), {
+      recursive: true,
+    });
     await fs.mkdir(path.join(legacyPluginRoot, "node_modules", "legacy-dep"), {
       recursive: true,
     });
@@ -161,6 +191,9 @@ describe("cleanupLegacyPluginDependencyState", () => {
     expect(result.changes).toEqual(
       expect.arrayContaining([`Removed legacy plugin dependency state: ${staleRoot}`]),
     );
+    expect(result.changes).toEqual(
+      expect.arrayContaining([`Removed legacy plugin dependency state: ${stalePluginRoot}`]),
+    );
     expect(result.changes).not.toContain(
       `Removed legacy plugin dependency state: ${legacyPluginRoot}`,
     );
@@ -169,7 +202,9 @@ describe("cleanupLegacyPluginDependencyState", () => {
     );
     expect(result.changes).not.toContain(`Removed legacy plugin dependency state: ${symlinkPath}`);
     await expect(fs.stat(currentRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(currentPluginRoot)).resolves.toBeTruthy();
     await expect(fs.stat(staleRoot)).rejects.toThrow();
+    await expect(fs.stat(stalePluginRoot)).rejects.toThrow();
     await expect(fs.stat(legacyPluginRoot)).resolves.toBeTruthy();
     await expect(fs.stat(localDataFile)).resolves.toBeTruthy();
     await expect(fs.lstat(symlinkPath)).resolves.toBeTruthy();
