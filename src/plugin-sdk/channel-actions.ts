@@ -35,7 +35,8 @@ export function createMessageToolButtonsSchema(): TSchema {
       Type.Array(
         Type.Object({
           text: Type.String(),
-          callback_data: Type.String(),
+          callback_data: Type.Optional(Type.String()),
+          url: Type.Optional(Type.String()),
           style: Type.Optional(createStringEnum(["danger", "success", "primary"])),
         }),
       ),
