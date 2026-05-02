@@ -1,5 +1,9 @@
 import path from "node:path";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
+import { modelKey } from "../agents/model-ref-shared.js";
+import { resolveModelRefFromString } from "../agents/model-selection-shared.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
@@ -39,6 +43,7 @@ import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-value
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import { resolveAgentModelPrimaryValue } from "./model-input.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -1400,4 +1405,50 @@ function validateConfigObjectWithPluginsBase(
   }
 
   return { ok: true, config: mutatedConfig, warnings };
+}
+
+/**
+ * Collect warnings for model references that aren't in the current catalog.
+ * Returns warnings (not errors) because forward-compat models are intentional.
+ */
+export function collectModelConfigWarnings(
+  config: OpenClawConfig,
+  catalog: ModelCatalogEntry[],
+): ConfigValidationIssue[] {
+  const warnings: ConfigValidationIssue[] = [];
+
+  const checkModelRef = (raw: string, configPath: string) => {
+    const resolved = resolveModelRefFromString({ raw, defaultProvider: DEFAULT_PROVIDER });
+    if (!resolved) {
+      return;
+    }
+    const key = modelKey(resolved.ref.provider, resolved.ref.model);
+    const inCatalog = catalog.some((entry) => modelKey(entry.provider, entry.id) === key);
+    if (!inCatalog) {
+      warnings.push({
+        path: configPath,
+        message: `model "${key}" not found in model catalog (may fail at runtime)`,
+      });
+    }
+  };
+
+  const defaultsPrimary = resolveAgentModelPrimaryValue(config.agents?.defaults?.model);
+  if (defaultsPrimary) {
+    checkModelRef(defaultsPrimary, "agents.defaults.model.primary");
+  }
+
+  const agents = config.agents?.list;
+  if (Array.isArray(agents)) {
+    for (const [index, entry] of agents.entries()) {
+      if (!entry) {
+        continue;
+      }
+      const agentPrimary = resolveAgentModelPrimaryValue(entry.model);
+      if (agentPrimary) {
+        checkModelRef(agentPrimary, `agents.list.${index}.model.primary`);
+      }
+    }
+  }
+
+  return warnings;
 }

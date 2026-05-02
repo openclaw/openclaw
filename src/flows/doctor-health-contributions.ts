@@ -392,6 +392,17 @@ async function runHooksModelHealth(ctx: DoctorHealthFlowContext): Promise<void> 
   }
 }
 
+async function runModelConfigHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { loadModelCatalog } = await import("../agents/model-catalog.js");
+  const { collectModelConfigWarnings } = await import("../config/validation.js");
+  const { note } = await import("../terminal/note.js");
+  const catalog = await loadModelCatalog({ config: ctx.cfg });
+  const warnings = collectModelConfigWarnings(ctx.cfg, catalog);
+  if (warnings.length > 0) {
+    note(warnings.map((w) => `- ${w.path}: ${w.message}`).join("\n"), "Model config");
+  }
+}
+
 async function runSystemdLingerHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   if (
     ctx.options.nonInteractive === true ||
@@ -658,6 +669,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:hooks-model",
       label: "Hooks model",
       run: runHooksModelHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:model-config",
+      label: "Model config",
+      run: runModelConfigHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:systemd-linger",
