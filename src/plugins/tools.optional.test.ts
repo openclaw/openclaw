@@ -26,6 +26,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
+let resetPluginToolFactoryCache: typeof import("./tools.js").resetPluginToolFactoryCache;
 let pinActivePluginChannelRegistry: typeof import("./runtime.js").pinActivePluginChannelRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
@@ -58,6 +59,7 @@ function createContext() {
 }
 
 function createResolveToolsParams(params?: {
+  context?: ReturnType<typeof createContext> & Record<string, unknown>;
   toolAllowlist?: readonly string[];
   existingToolNames?: Set<string>;
   env?: NodeJS.ProcessEnv;
@@ -65,7 +67,7 @@ function createResolveToolsParams(params?: {
   allowGatewaySubagentBinding?: boolean;
 }) {
   return {
-    context: createContext() as never,
+    context: (params?.context ?? createContext()) as never,
     ...(params?.toolAllowlist ? { toolAllowlist: [...params.toolAllowlist] } : {}),
     ...(params?.existingToolNames ? { existingToolNames: params.existingToolNames } : {}),
     ...(params?.env ? { env: params.env } : {}),
@@ -360,7 +362,8 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({ buildPluginToolMetadataKey, resolvePluginTools } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, resetPluginToolFactoryCache, resolvePluginTools } =
+      await import("./tools.js"));
     ({ pinActivePluginChannelRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
@@ -380,11 +383,13 @@ describe("resolvePluginTools optional tools", () => {
     }));
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
+    resetPluginToolFactoryCache?.();
   });
 
   afterEach(() => {
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
+    resetPluginToolFactoryCache?.();
     setLoggerOverride(null);
     loggingState.rawConsole = null;
     resetLogger();
@@ -810,6 +815,163 @@ describe("resolvePluginTools optional tools", () => {
 
     expectResolvedToolNames(tools, ["optional_tool"]);
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+
+  it("caches plugin tool factory results for equivalent request context", () => {
+    const factory = vi.fn(() => makeTool("cached_tool"));
+    setRegistry([
+      {
+        pluginId: "cache-test",
+        optional: false,
+        source: "/tmp/cache-test.js",
+        names: ["cached_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams({ context: createContext() }));
+    const second = resolvePluginTools(createResolveToolsParams({ context: createContext() }));
+
+    expectResolvedToolNames(first, ["cached_tool"]);
+    expectResolvedToolNames(second, ["cached_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expect(second[0]).toBe(first[0]);
+  });
+
+  it("does not reuse plugin tool factory results across sandbox context changes", () => {
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { sandboxed?: boolean };
+      return ctx.sandboxed ? null : makeTool("sandbox_sensitive_tool");
+    });
+    setRegistry([
+      {
+        pluginId: "sandbox-sensitive",
+        optional: false,
+        source: "/tmp/sandbox-sensitive.js",
+        names: ["sandbox_sensitive_tool"],
+        factory,
+      },
+    ]);
+
+    const hostTools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), sandboxed: false },
+      }),
+    );
+    const sandboxedTools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), sandboxed: true },
+      }),
+    );
+
+    expectResolvedToolNames(hostTools, ["sandbox_sensitive_tool"]);
+    expect(sandboxedTools).toEqual([]);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse plugin tool factory results across runtime config changes", () => {
+    const firstRuntimeConfig = {
+      ...createContext().config,
+      plugins: { ...createContext().config.plugins, allow: ["runtime_sensitive_tool"] },
+    };
+    const secondRuntimeConfig = {
+      ...createContext().config,
+      plugins: { ...createContext().config.plugins, allow: ["runtime_sensitive_next_tool"] },
+    };
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { runtimeConfig?: { plugins?: { allow?: string[] } } };
+      return makeTool(ctx.runtimeConfig?.plugins?.allow?.[0] ?? "runtime_missing_tool");
+    });
+    setRegistry([
+      {
+        pluginId: "runtime-sensitive",
+        optional: false,
+        source: "/tmp/runtime-sensitive.js",
+        names: ["runtime_sensitive_tool", "runtime_sensitive_next_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), runtimeConfig: firstRuntimeConfig as never },
+      }),
+    );
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), runtimeConfig: secondRuntimeConfig as never },
+      }),
+    );
+
+    expectResolvedToolNames(first, ["runtime_sensitive_tool"]);
+    expectResolvedToolNames(second, ["runtime_sensitive_next_tool"]);
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses plugin tool factory results when only runtime config getter identity changes", () => {
+    const runtimeConfig = {
+      ...createContext().config,
+      plugins: { ...createContext().config.plugins, allow: ["getter_sensitive_tool"] },
+    };
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { getRuntimeConfig?: () => { plugins?: { allow?: string[] } } };
+      return makeTool(ctx.getRuntimeConfig?.()?.plugins?.allow?.[0] ?? "getter_missing_tool");
+    });
+    setRegistry([
+      {
+        pluginId: "getter-sensitive",
+        optional: false,
+        source: "/tmp/getter-sensitive.js",
+        names: ["getter_sensitive_tool"],
+        factory,
+      },
+    ]);
+
+    const context = createContext();
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...context, getRuntimeConfig: () => runtimeConfig as never },
+      }),
+    );
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...context, getRuntimeConfig: () => runtimeConfig as never },
+      }),
+    );
+
+    expectResolvedToolNames(first, ["getter_sensitive_tool"]);
+    expectResolvedToolNames(second, ["getter_sensitive_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads live runtime config once per plugin tool resolution for cache keys", () => {
+    const runtimeConfig = createContext().config;
+    const getRuntimeConfig = vi.fn(() => runtimeConfig);
+    setRegistry([
+      {
+        pluginId: "getter-a",
+        optional: false,
+        source: "/tmp/getter-a.js",
+        names: ["getter_a_tool"],
+        factory: () => makeTool("getter_a_tool"),
+      },
+      {
+        pluginId: "getter-b",
+        optional: false,
+        source: "/tmp/getter-b.js",
+        names: ["getter_b_tool"],
+        factory: () => makeTool("getter_b_tool"),
+      },
+    ]);
+
+    const tools = resolvePluginTools(
+      createResolveToolsParams({
+        context: { ...createContext(), getRuntimeConfig: getRuntimeConfig as never },
+      }),
+    );
+
+    expectResolvedToolNames(tools, ["getter_a_tool", "getter_b_tool"]);
+    expect(getRuntimeConfig).toHaveBeenCalledTimes(1);
   });
 
   it("skips factory-returned tools outside the manifest tool contract", () => {
