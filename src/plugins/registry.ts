@@ -165,6 +165,7 @@ import type {
   PluginHookRegistration as TypedPluginHookRegistration,
   PluginLogger,
   PluginRegistrationMode,
+  PluginResetSessionResult,
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   RealtimeVoiceProviderPlugin,
@@ -2490,6 +2491,74 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               },
               on: (hookName, handler, opts) =>
                 registerTypedHook(record, hookName, handler, opts, params.hookPolicy),
+              ...(coreGatewayMethods.has("sessions.reset")
+                ? {
+                    resetSession: async (key: string, reason?: "new" | "reset") => {
+                      if (typeof key !== "string" || !key.trim()) {
+                        const safeKey = typeof key === "string" ? key.trim() : "";
+                        return {
+                          ok: false,
+                          key: safeKey,
+                          code: "INVALID_KEY",
+                          message: "session key must be a non-empty string",
+                        } satisfies PluginResetSessionResult;
+                      }
+                      const trimmedKey = key.trim();
+                      const normalizedReason: "new" | "reset" =
+                        reason === "reset" ? "reset" : "new";
+                      try {
+                        const { performGatewaySessionReset } =
+                          await import("../gateway/session-reset-service.js");
+                        const result = await performGatewaySessionReset({
+                          key: trimmedKey,
+                          reason: normalizedReason,
+                          commandSource: `plugin:${record.id}`,
+                        });
+                        if (result.ok) {
+                          return {
+                            ok: true,
+                            key: result.key,
+                            sessionId: result.entry.sessionId,
+                          } satisfies PluginResetSessionResult;
+                        }
+                        const err: unknown = result.error;
+                        const code =
+                          err != null &&
+                          typeof err === "object" &&
+                          "code" in err &&
+                          typeof (err as { code: unknown }).code === "string"
+                            ? (err as { code: string }).code
+                            : "RESET_FAILED";
+                        const msg =
+                          err != null &&
+                          typeof err === "object" &&
+                          "message" in err &&
+                          typeof (err as { message: unknown }).message === "string"
+                            ? (err as { message: string }).message
+                            : "session reset failed";
+                        return {
+                          ok: false,
+                          key: trimmedKey,
+                          code,
+                          message: msg,
+                        } satisfies PluginResetSessionResult;
+                      } catch (thrown: unknown) {
+                        const message =
+                          thrown instanceof Error
+                            ? thrown.message
+                            : typeof thrown === "string"
+                              ? thrown
+                              : "unknown error during session reset";
+                        return {
+                          ok: false,
+                          key: trimmedKey,
+                          code: "RESET_ERROR",
+                          message,
+                        } satisfies PluginResetSessionResult;
+                      }
+                    },
+                  }
+                : {}),
             }
           : {}),
         // Allow setup-only/setup-runtime paths to surface parse-time CLI metadata

@@ -73,6 +73,7 @@ export type BuildPluginApiParams = {
       | "registerMemoryRuntime"
       | "registerMemoryEmbeddingProvider"
       | "on"
+      | "resetSession"
     >
   >;
 };
@@ -240,6 +241,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerMemoryRuntime: handlers.registerMemoryRuntime ?? noopRegisterMemoryRuntime,
     registerMemoryEmbeddingProvider:
       handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
+    ...(handlers.resetSession ? { resetSession: handlers.resetSession } : {}),
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };

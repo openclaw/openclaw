@@ -545,6 +545,11 @@ Beyond `api.runtime`, the API object also provides:
 <ParamField path="api.registrationMode" type="PluginRegistrationMode">
   Current load mode; `"setup-runtime"` is the lightweight pre-full-entry startup/setup window.
 </ParamField>
+<ParamField path="api.resetSession(key, reason?)" type="(string, &quot;new&quot; | &quot;reset&quot;) => Promise&lt;PluginResetSessionResult&gt;">
+  Reset a session from full native plugin registration mode. The helper is only present when the
+  gateway exposes `sessions.reset`, and returns `{ ok: true, key, sessionId }` or a structured
+  `{ ok: false, key, code, message }` failure without throwing for normal reset failures.
+</ParamField>
 <ParamField path="api.resolvePath(input)" type="(string) => string">
   Resolve a path relative to the plugin root.
 </ParamField>
