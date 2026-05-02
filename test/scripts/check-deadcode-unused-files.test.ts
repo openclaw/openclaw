@@ -29,6 +29,17 @@ left-pad: package.json
     ]);
   });
 
+  it("ignores pnpm dlx progress noise in captured output", () => {
+    expect(
+      parseKnipCompactUnusedFiles(`
+Progress: resolved 1, reused 0, downloaded 0, added 0
+Progress: resolved 65, reused 8, downloaded 13, added 21, done
+Unused files (1)
+src/a.ts: src/a.ts
+`),
+    ).toEqual(["src/a.ts"]);
+  });
+
   it("reports unexpected and stale allowlist entries", () => {
     expect(
       compareUnusedFilesToAllowlist(["src/a.ts", "src/new.ts"], ["src/a.ts", "src/old.ts"]),

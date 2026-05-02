@@ -28,6 +28,17 @@ function uniqueSorted(values) {
   );
 }
 
+function looksLikeRepoFilePath(value) {
+  const normalized = normalizeRepoPath(value.trim());
+  return (
+    normalized.length > 0 &&
+    !normalized.includes(" ") &&
+    !normalized.startsWith("-") &&
+    /[./]/u.test(normalized) &&
+    /^[A-Za-z0-9_@./+~-]+$/u.test(normalized)
+  );
+}
+
 export function parseKnipCompactUnusedFiles(output) {
   const files = [];
   let inUnusedFilesSection = false;
@@ -50,7 +61,12 @@ export function parseKnipCompactUnusedFiles(output) {
     if (sawUnusedFilesSection && !inUnusedFilesSection) {
       continue;
     }
-    files.push(line.slice(separatorIndex + 2).trim());
+    const source = line.slice(0, separatorIndex).trim();
+    const file = line.slice(separatorIndex + 2).trim();
+    if (!looksLikeRepoFilePath(source) || !looksLikeRepoFilePath(file)) {
+      continue;
+    }
+    files.push(file);
   }
 
   return uniqueSorted(files);
