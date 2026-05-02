@@ -735,6 +735,16 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    slashCommandDeploy: z
+      .union([
+        z.enum(["always", "changed-only", "disabled"]),
+        z
+          .object({
+            mode: z.enum(["always", "changed-only", "disabled"]).optional(),
+          })
+          .strict(),
+      ])
+      .optional(),
     threadBindings: z
       .object({
         enabled: z.boolean().optional(),
