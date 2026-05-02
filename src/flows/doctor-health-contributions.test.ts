@@ -96,6 +96,13 @@ describe("doctor health contributions", () => {
     expect(ids.indexOf("doctor:command-owner")).toBeLessThan(ids.indexOf("doctor:write-config"));
   });
 
+  it("checks skill readiness before final config writes", () => {
+    const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+
+    expect(ids.indexOf("doctor:skills")).toBeGreaterThan(-1);
+    expect(ids.indexOf("doctor:skills")).toBeLessThan(ids.indexOf("doctor:write-config"));
+  });
+
   it("skips doctor config writes under legacy update parents", () => {
     expect(
       shouldSkipLegacyUpdateDoctorConfigWrite({
