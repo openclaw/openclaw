@@ -2,7 +2,12 @@ import { join } from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -48,15 +53,16 @@ let modelCatalogPromise: Promise<ModelCatalogEntry[]> | null = null;
 let hasLoggedModelCatalogError = false;
 const defaultImportPiSdk = () => import("./pi-model-discovery-runtime.js");
 let importPiSdk = defaultImportPiSdk;
-let modelSuppressionPromise: Promise<typeof import("./model-suppression.runtime.js")> | undefined;
+const modelSuppressionLoader = createLazyImportLoader(
+  () => import("./model-suppression.runtime.js"),
+);
 
 function shouldLogModelCatalogTiming(): boolean {
   return process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 }
 
 function loadModelSuppression() {
-  modelSuppressionPromise ??= import("./model-suppression.runtime.js");
-  return modelSuppressionPromise;
+  return modelSuppressionLoader.load();
 }
 
 export function resetModelCatalogCache() {
@@ -103,6 +109,56 @@ function appendCatalogEntriesIfAbsent(
     models.push(entry);
     seen.add(key);
   }
+}
+
+export function loadManifestModelCatalog(params: {
+  config: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ModelCatalogEntry[] {
+  const snapshot =
+    getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    }) ??
+    loadPluginMetadataSnapshot({
+      config: params.config,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      env: params.env ?? process.env,
+    });
+  const eligiblePlugins = snapshot.plugins.filter(
+    (plugin) =>
+      plugin.modelCatalog &&
+      isManifestPluginAvailableForControlPlane({
+        snapshot,
+        plugin,
+        config: params.config,
+      }),
+  );
+  const plan = planManifestModelCatalogRows({
+    registry: { plugins: eligiblePlugins },
+  });
+  return plan.rows.map((row) => {
+    const entry: ModelCatalogEntry = {
+      id: row.id,
+      name: row.name,
+      provider: row.provider,
+    };
+    const contextWindow = row.contextWindow ?? row.contextTokens;
+    if (contextWindow) {
+      entry.contextWindow = contextWindow;
+    }
+    if (typeof row.reasoning === "boolean") {
+      entry.reasoning = row.reasoning;
+    }
+    if (row.input?.length) {
+      entry.input = [...row.input];
+    }
+    if (row.compat) {
+      entry.compat = row.compat;
+    }
+    return entry;
+  });
 }
 
 export async function loadModelCatalog(params?: {

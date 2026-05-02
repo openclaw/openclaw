@@ -22,6 +22,7 @@ import {
 } from "./src/config.js";
 import {
   buildGoogleMeetPreflightReport,
+  endGoogleMeetActiveConference,
   fetchGoogleMeetArtifacts,
   fetchGoogleMeetAttendance,
   fetchLatestGoogleMeetConferenceRecord,
@@ -91,6 +92,26 @@ const googleMeetConfigSchema = {
       help: "Command that reads assistant audio from stdin in chrome.audioFormat.",
       advanced: true,
     },
+    "chrome.bargeInInputCommand": {
+      label: "Barge-In Input Command",
+      help: "Optional Gateway-hosted microphone command that writes signed 16-bit little-endian mono PCM for human interruption detection while assistant playback is active.",
+      advanced: true,
+    },
+    "chrome.bargeInRmsThreshold": {
+      label: "Barge-In RMS Threshold",
+      help: "RMS level on chrome.bargeInInputCommand that counts as a human interruption.",
+      advanced: true,
+    },
+    "chrome.bargeInPeakThreshold": {
+      label: "Barge-In Peak Threshold",
+      help: "Peak level on chrome.bargeInInputCommand that counts as a human interruption.",
+      advanced: true,
+    },
+    "chrome.bargeInCooldownMs": {
+      label: "Barge-In Cooldown (ms)",
+      help: "Minimum delay between repeated barge-in clears.",
+      advanced: true,
+    },
     "chrome.audioBridgeCommand": { label: "Audio Bridge Command", advanced: true },
     "chrome.audioBridgeHealthCommand": {
       label: "Audio Bridge Health Command",
@@ -118,7 +139,16 @@ const googleMeetConfigSchema = {
       label: "Voice Call Request Timeout (ms)",
       advanced: true,
     },
-    "voiceCall.dtmfDelayMs": { label: "DTMF Delay (ms)", advanced: true },
+    "voiceCall.dtmfDelayMs": {
+      label: "Legacy DTMF Delay (ms)",
+      help: "Compatibility setting from the old post-connect DTMF flow. Twilio Meet joins now play DTMF before realtime connect.",
+      advanced: true,
+    },
+    "voiceCall.postDtmfSpeechDelayMs": {
+      label: "Legacy Post-DTMF Speech Delay (ms)",
+      help: "Compatibility setting from the old delayed-speech flow. Twilio Meet joins now carry the intro as the initial Voice Call message.",
+      advanced: true,
+    },
     "voiceCall.introMessage": { label: "Voice Call Intro Message", advanced: true },
     "realtime.provider": {
       label: "Realtime Provider",
@@ -172,8 +202,10 @@ const GoogleMeetToolSchema = Type.Object({
       "export",
       "recover_current_tab",
       "leave",
+      "end_active_conference",
       "speak",
       "test_speech",
+      "test_listen",
     ],
     description:
       "Google Meet action to run. create creates and joins by default; pass join=false to only mint a URL. After a timeout or unclear browser state, call recover_current_tab before retrying join.",
@@ -181,6 +213,19 @@ const GoogleMeetToolSchema = Type.Object({
   join: Type.Optional(
     Type.Boolean({
       description: "For action=create, set false to create the URL without joining.",
+    }),
+  ),
+  accessType: Type.Optional(
+    Type.String({
+      enum: ["OPEN", "TRUSTED", "RESTRICTED"],
+      description:
+        "For action=create with Google Meet OAuth, configure who can join without knocking.",
+    }),
+  ),
+  entryPointAccess: Type.Optional(
+    Type.String({
+      enum: ["ALL", "CREATOR_APP_ONLY"],
+      description: "For action=create with Google Meet OAuth, configure allowed join entry points.",
     }),
   ),
   url: Type.Optional(Type.String({ description: "Explicit https://meet.google.com/... URL" })),
@@ -194,11 +239,19 @@ const GoogleMeetToolSchema = Type.Object({
         "Join mode. realtime starts live listen/talk-back through the realtime voice model; transcribe joins without the realtime talk-back bridge.",
     }),
   ),
-  dialInNumber: Type.Optional(Type.String({ description: "Meet dial-in number for Twilio" })),
-  pin: Type.Optional(Type.String({ description: "Meet phone PIN for Twilio" })),
+  dialInNumber: Type.Optional(
+    Type.String({
+      description:
+        "Meet dial-in phone number for Twilio. Required for Twilio unless twilio.defaultDialInNumber is configured; Meet URLs cannot be dialed directly.",
+    }),
+  ),
+  pin: Type.Optional(
+    Type.String({ description: "Meet phone PIN for Twilio; # is appended if omitted" }),
+  ),
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
+  timeoutMs: Type.Optional(Type.Number({ description: "Probe timeout in milliseconds" })),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
   today: Type.Optional(
     Type.Boolean({
@@ -299,12 +352,17 @@ function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
 
 const googleMeetToolDeps = {
   callGatewayFromCli,
+  platform: () => process.platform,
 };
 
 export const __testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     googleMeetToolDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
+  setPlatformForTests(next?: () => NodeJS.Platform): void {
+    googleMeetToolDeps.platform = next ?? (() => process.platform);
+  },
+  isGoogleMeetAgentToolActionUnsupportedOnHost,
 };
 
 type GoogleMeetGatewayToolAction =
@@ -314,8 +372,10 @@ type GoogleMeetGatewayToolAction =
   | "recover_current_tab"
   | "setup_status"
   | "leave"
+  | "end_active_conference"
   | "speak"
-  | "test_speech";
+  | "test_speech"
+  | "test_listen";
 
 function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolAction): string {
   switch (action) {
@@ -325,9 +385,50 @@ function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolActio
       return "googlemeet.setup";
     case "test_speech":
       return "googlemeet.testSpeech";
+    case "test_listen":
+      return "googlemeet.testListen";
+    case "end_active_conference":
+      return "googlemeet.endActiveConference";
     default:
       return `googlemeet.${action}`;
   }
+}
+
+function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
+  config: GoogleMeetConfig;
+  raw: Record<string, unknown>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  const platform = params.platform ?? googleMeetToolDeps.platform();
+  if (platform === "darwin") {
+    return false;
+  }
+  const action = params.raw.action;
+  if (
+    action !== "join" &&
+    action !== "test_speech" &&
+    !(action === "create" && shouldJoinCreatedMeet(params.raw))
+  ) {
+    return false;
+  }
+  const transport = normalizeTransport(params.raw.transport) ?? params.config.defaultTransport;
+  const mode =
+    action === "test_speech"
+      ? "realtime"
+      : (normalizeMode(params.raw.mode) ?? params.config.defaultMode);
+  return transport === "chrome" && mode === "realtime";
+}
+
+function assertGoogleMeetAgentToolActionSupported(params: {
+  config: GoogleMeetConfig;
+  raw: Record<string, unknown>;
+}): void {
+  if (!isGoogleMeetAgentToolActionUnsupportedOnHost(params)) {
+    return;
+  }
+  throw new Error(
+    "Google Meet local Chrome realtime audio is macOS-only. On this host, use mode: transcribe, transport: twilio, or transport: chrome-node backed by a macOS node.",
+  );
 }
 
 function resolveGoogleMeetToolGatewayTimeoutMs(config: GoogleMeetConfig): number {
@@ -647,7 +748,7 @@ export default definePluginEntry({
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
           const rt = await ensureRuntime();
-          respond(true, rt.status(normalizeOptionalString(params?.sessionId)));
+          respond(true, await rt.status(normalizeOptionalString(params?.sessionId)));
         } catch (err) {
           sendError(respond, err);
         }
@@ -682,6 +783,7 @@ export default definePluginEntry({
             await rt.setupStatus({
               transport: normalizeTransport(params?.transport),
               mode: normalizeMode(params?.mode),
+              dialInNumber: normalizeOptionalString(params?.dialInNumber),
             }),
           );
         } catch (err) {
@@ -814,6 +916,25 @@ export default definePluginEntry({
     );
 
     api.registerGatewayMethod(
+      "googlemeet.endActiveConference",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const raw = asParamRecord(params);
+          const token = await resolveGoogleMeetTokenFromParams(config, raw);
+          respond(
+            true,
+            await endGoogleMeetActiveConference({
+              accessToken: token.accessToken,
+              meeting: resolveMeetingInput(config, raw.meeting),
+            }),
+          );
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
+    api.registerGatewayMethod(
       "googlemeet.speak",
       async ({ params, respond }: GatewayRequestHandlerOptions) => {
         try {
@@ -851,15 +972,34 @@ export default definePluginEntry({
       },
     );
 
+    api.registerGatewayMethod(
+      "googlemeet.testListen",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const rt = await ensureRuntime();
+          const result = await rt.testListen({
+            url: resolveMeetingInput(config, params?.url),
+            transport: normalizeTransport(params?.transport),
+            mode: normalizeMode(params?.mode),
+            timeoutMs: typeof params?.timeoutMs === "number" ? params.timeoutMs : undefined,
+          });
+          respond(true, result);
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
     api.registerTool({
       name: "google_meet",
       label: "Google Meet",
       description:
-        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_speech; if it reports a Chrome node offline or local audio missing, surface that blocker instead of retrying or switching transports. Offline nodes are diagnostics only, not usable candidates. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
+        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline, local audio missing, or missing Twilio dial plan, surface that blocker instead of retrying or switching transports. Twilio cannot dial a Meet URL directly: provide dialInNumber plus optional pin/dtmfSequence, or configure twilio.defaultDialInNumber. Offline nodes are diagnostics only, not usable candidates. If local Chrome realtime audio is unsupported on this OS, use mode=transcribe, transport=twilio, or a macOS chrome-node for realtime Chrome. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);
         try {
+          assertGoogleMeetAgentToolActionSupported({ config, raw });
           switch (raw.action) {
             case "join": {
               return json(await callGoogleMeetGatewayFromTool({ config, action: "join", raw }));
@@ -870,6 +1010,11 @@ export default definePluginEntry({
             case "test_speech": {
               return json(
                 await callGoogleMeetGatewayFromTool({ config, action: "test_speech", raw }),
+              );
+            }
+            case "test_listen": {
+              return json(
+                await callGoogleMeetGatewayFromTool({ config, action: "test_listen", raw }),
               );
             }
             case "status": {
@@ -969,6 +1114,15 @@ export default definePluginEntry({
                 throw new Error("sessionId required");
               }
               return json(await callGoogleMeetGatewayFromTool({ config, action: "leave", raw }));
+            }
+            case "end_active_conference": {
+              return json(
+                await callGoogleMeetGatewayFromTool({
+                  config,
+                  action: "end_active_conference",
+                  raw,
+                }),
+              );
             }
             case "speak": {
               const sessionId = normalizeOptionalString(raw.sessionId);

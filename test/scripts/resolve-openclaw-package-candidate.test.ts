@@ -1,6 +1,10 @@
+import { mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   parseArgs,
+  readArtifactPackageCandidateMetadata,
   validateOpenClawPackageSpec,
 } from "../../scripts/resolve-openclaw-package-candidate.mjs";
 
@@ -19,6 +23,12 @@ describe("resolve-openclaw-package-candidate", () => {
       "package_spec must be openclaw@beta",
     );
     expect(() => validateOpenClawPackageSpec("openclaw@2026.04.27")).toThrow(
+      "package_spec must be openclaw@beta",
+    );
+    expect(() => validateOpenClawPackageSpec("openclaw@npm:other-package")).toThrow(
+      "package_spec must be openclaw@beta",
+    );
+    expect(() => validateOpenClawPackageSpec("openclaw@file:../other-package.tgz")).toThrow(
       "package_spec must be openclaw@beta",
     );
   });
@@ -49,6 +59,30 @@ describe("resolve-openclaw-package-candidate", () => {
       packageSpec: "openclaw@beta",
       packageUrl: "",
       source: "npm",
+    });
+  });
+
+  it("reads package source metadata from package artifacts", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "openclaw-package-candidate-"));
+    await writeFile(
+      path.join(dir, "package-candidate.json"),
+      JSON.stringify(
+        {
+          packageRef: "release/2026.4.30",
+          packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
+          packageTrustedReason: "repository-branch-history",
+          sha256: "a".repeat(64),
+        },
+        null,
+        2,
+      ),
+    );
+
+    await expect(readArtifactPackageCandidateMetadata(dir)).resolves.toMatchObject({
+      packageRef: "release/2026.4.30",
+      packageSourceSha: "66ce632b9b7c5c7fdd3e66c739687d51638ad6e2",
+      packageTrustedReason: "repository-branch-history",
+      sha256: "a".repeat(64),
     });
   });
 });

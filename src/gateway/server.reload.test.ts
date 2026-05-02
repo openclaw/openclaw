@@ -51,6 +51,7 @@ const hoisted = vi.hoisted(() => {
   const stopGmailWatcher = vi.fn(async () => {});
   const resetModelCatalogCache = vi.fn();
   const disposeAllSessionMcpRuntimes = vi.fn(async () => {});
+  const resolveOpenClawPackageRootSync = vi.fn((_params: unknown) => "/package");
 
   const providerManager = {
     getRuntimeSnapshot: vi.fn(() => ({
@@ -153,6 +154,7 @@ const hoisted = vi.hoisted(() => {
     stopGmailWatcher,
     resetModelCatalogCache,
     disposeAllSessionMcpRuntimes,
+    resolveOpenClawPackageRootSync,
     providerManager,
     createChannelManager,
     startGatewayConfigReloader,
@@ -199,6 +201,14 @@ vi.mock("../agents/pi-bundle-mcp-tools.js", async () => {
   return {
     ...actual,
     disposeAllSessionMcpRuntimes: hoisted.disposeAllSessionMcpRuntimes,
+  };
+});
+
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/openclaw-root.js")>();
+  return {
+    ...actual,
+    resolveOpenClawPackageRootSync: hoisted.resolveOpenClawPackageRootSync,
   };
 });
 
@@ -306,6 +316,8 @@ describe("gateway hot reload", () => {
     hoisted.resetModelCatalogCache.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockReset();
     hoisted.disposeAllSessionMcpRuntimes.mockResolvedValue(undefined);
+    hoisted.resolveOpenClawPackageRootSync.mockClear();
+    hoisted.resolveOpenClawPackageRootSync.mockReturnValue("/package");
     hoisted.resetReloadCallbacks();
   });
 
@@ -847,7 +859,6 @@ describe("gateway hot reload", () => {
       expect(hoisted.resetModelCatalogCache).toHaveBeenCalledTimes(1);
     });
   });
-
   it("disposes cached MCP runtimes on MCP config hot reloads", async () => {
     await withNonMinimalGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();

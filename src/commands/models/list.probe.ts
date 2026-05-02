@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/ag
 import {
   type AuthProfileCredential,
   type AuthProfileEligibilityReasonCode,
+  externalCliDiscoveryScoped,
   ensureAuthProfileStore,
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
@@ -27,16 +28,18 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { redactSecrets } from "../status-all/format.js";
 import { DEFAULT_PROVIDER, formatMs } from "./shared.js";
 
 const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 
-let embeddedRunnerModulePromise: Promise<typeof import("../../agents/pi-embedded.js")> | undefined;
+const embeddedRunnerModuleLoader = createLazyImportLoader(
+  () => import("../../agents/pi-embedded.js"),
+);
 
 function loadEmbeddedRunnerModule() {
-  embeddedRunnerModulePromise ??= import("../../agents/pi-embedded.js");
-  return embeddedRunnerModulePromise;
+  return embeddedRunnerModuleLoader.load();
 }
 
 export type AuthProbeStatus =
@@ -256,7 +259,14 @@ export async function buildProbeTargets(params: {
   options: AuthProbeOptions;
 }): Promise<{ targets: AuthProbeTarget[]; results: AuthProbeResult[] }> {
   const { cfg, agentDir, providers, modelCandidates, options, workspaceDir } = params;
-  const store = ensureAuthProfileStore(agentDir);
+  const store = ensureAuthProfileStore(agentDir, {
+    externalCli: externalCliDiscoveryScoped({
+      config: cfg,
+      allowKeychainPrompt: false,
+      providerIds: providers,
+      profileIds: options.profileIds,
+    }),
+  });
   const providerFilter = options.provider?.trim();
   const providerFilterKey = providerFilter ? normalizeProviderId(providerFilter) : null;
   const profileFilter = new Set((options.profileIds ?? []).map((id) => id.trim()).filter(Boolean));

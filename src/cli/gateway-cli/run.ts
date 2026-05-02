@@ -8,6 +8,7 @@ import type {
   GatewayBindMode,
   GatewayTailscaleMode,
 } from "../../config/config.js";
+import { formatConfigIssueSummary } from "../../config/issue-format.js";
 import { CONFIG_PATH, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
@@ -34,6 +35,7 @@ import { formatCliCommand } from "../command-format.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import { withProgress } from "../progress.js";
 import { parsePort } from "../shared/parse-port.js";
+import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
 
 type GatewayRunOpts = {
@@ -290,8 +292,12 @@ async function readGatewayStartupConfig(params: {
       }),
     );
     if (recovered) {
+      const issueSummary = formatConfigIssueSummary([
+        ...invalidSnapshot.issues,
+        ...invalidSnapshot.legacyIssues,
+      ]);
       gatewayLog.warn(
-        `gateway: restored invalid effective config from last-known-good backup: ${invalidSnapshot.path}`,
+        `gateway: restored invalid effective config from last-known-good backup: ${invalidSnapshot.path}${issueSummary ? `; Rejected validation details: ${issueSummary}.` : ""}`,
       );
       try {
         const { writeRestartSentinel } = await import("../../infra/restart-sentinel.js");
@@ -499,6 +505,7 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
 }
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
+  installQaParentWatchdog();
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {

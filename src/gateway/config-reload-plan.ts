@@ -38,7 +38,7 @@ type ReloadAction =
   | "dispose-mcp-runtimes"
   | `restart-channel:${ChannelId}`;
 
-export type GatewayReloadPlanOptions = {
+type GatewayReloadPlanOptions = {
   noopPaths?: Iterable<string>;
   forceChangedPaths?: Iterable<string>;
 };

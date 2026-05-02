@@ -95,6 +95,18 @@ function createRuntimeWebFetchProvider() {
 
 describe("resolvePluginWebFetchProviders", () => {
   beforeAll(async () => {
+    vi.doMock("./plugin-registry.js", async () => {
+      const actual =
+        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
+      return {
+        ...actual,
+        loadPluginRegistrySnapshotWithMetadata: () => ({
+          snapshot: { plugins: [], diagnostics: [] },
+          source: "derived",
+          diagnostics: [],
+        }),
+      };
+    });
     loaderModule = await import("./loader.js");
     manifestRegistryModule = await import("./manifest-registry.js");
     webFetchProvidersSharedModule = await import("./web-fetch-providers.shared.js");
@@ -165,7 +177,7 @@ describe("resolvePluginWebFetchProviders", () => {
     expect(inFlightSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         activate: false,
-        cache: false,
+        cache: true,
         onlyPluginIds: ["firecrawl"],
         workspaceDir: DEFAULT_WORKSPACE,
       }),
@@ -189,7 +201,7 @@ describe("resolvePluginWebFetchProviders", () => {
       workspaceDir: DEFAULT_WORKSPACE,
       env,
       onlyPluginIds: ["firecrawl"],
-      cache: false,
+      cache: true,
       activate: false,
     });
     const registry = createEmptyPluginRegistry();
@@ -226,7 +238,7 @@ describe("resolvePluginWebFetchProviders", () => {
       workspaceDir: DEFAULT_WORKSPACE,
       env,
       onlyPluginIds: ["firecrawl"],
-      cache: false,
+      cache: true,
       activate: false,
     });
     const registry = createEmptyPluginRegistry();

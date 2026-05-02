@@ -26,7 +26,6 @@ function withWindowsExeAliases(names: readonly string[]): string[] {
 }
 
 export const POSIX_SHELL_WRAPPERS = new Set(POSIX_SHELL_WRAPPER_NAMES);
-export const WINDOWS_CMD_WRAPPERS = new Set(withWindowsExeAliases(WINDOWS_CMD_WRAPPER_NAMES));
 export const POWERSHELL_WRAPPERS = new Set(withWindowsExeAliases(POWERSHELL_WRAPPER_NAMES));
 
 const POSIX_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);
@@ -52,7 +51,7 @@ const SHELL_WRAPPER_SPECS: ReadonlyArray<ShellWrapperSpec> = [
   { kind: "powershell", names: POWERSHELL_WRAPPER_CANONICAL },
 ];
 
-export type ShellWrapperCommand = {
+type ShellWrapperCommand = {
   isWrapper: boolean;
   command: string | null;
 };
@@ -159,7 +158,7 @@ function findShellWrapperSpec(baseExecutable: string): ShellWrapperSpec | null {
   return null;
 }
 
-export type ShellMultiplexerUnwrapResult =
+type ShellMultiplexerUnwrapResult =
   | { kind: "not-wrapper" }
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };

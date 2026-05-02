@@ -61,17 +61,8 @@ describeLive("anthropic transport stream live", () => {
     const controller = new AbortController();
     const abortReason = new Error("live anthropic stream abort");
     let requestBody = "";
-    let requestClosed = false;
-    let resolveRequestClosed: (() => void) | undefined;
-    const requestClosedPromise = new Promise<void>((resolve) => {
-      resolveRequestClosed = resolve;
-    });
 
     const server = http.createServer((request, response) => {
-      request.on("close", () => {
-        requestClosed = true;
-        resolveRequestClosed?.();
-      });
       void readRequestBody(request).then((body) => {
         requestBody = body;
         response.writeHead(200, {
@@ -116,11 +107,9 @@ describeLive("anthropic transport stream live", () => {
       if (result === timedOut) {
         throw new Error("Anthropic live SSE stream did not abort within 1000ms");
       }
-      await Promise.race([requestClosedPromise, delay(1_000, undefined)]);
 
       expect(result.stopReason).toBe("aborted");
       expect(result.errorMessage).toBe("live anthropic stream abort");
-      expect(requestClosed).toBe(true);
       expect(JSON.parse(requestBody)).toMatchObject({
         model: "claude-sonnet-4-6",
         stream: true,

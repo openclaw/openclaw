@@ -18,6 +18,7 @@ let buildGoogleGenerativeAiParams: typeof import("./transport-stream.js").buildG
 let createGoogleGenerativeAiTransportStreamFn: typeof import("./transport-stream.js").createGoogleGenerativeAiTransportStreamFn;
 let createGoogleVertexTransportStreamFn: typeof import("./transport-stream.js").createGoogleVertexTransportStreamFn;
 let hasGoogleVertexAuthorizedUserAdcSync: typeof import("./vertex-adc.js").hasGoogleVertexAuthorizedUserAdcSync;
+let resetGoogleVertexAuthorizedUserTokenCacheForTest: typeof import("./vertex-adc.js").resetGoogleVertexAuthorizedUserTokenCacheForTest;
 
 const MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL = Symbol.for(
   "openclaw.modelProviderRequestTransport",
@@ -91,13 +92,15 @@ describe("google transport stream", () => {
       createGoogleGenerativeAiTransportStreamFn,
       createGoogleVertexTransportStreamFn,
     } = await import("./transport-stream.js"));
-    ({ hasGoogleVertexAuthorizedUserAdcSync } = await import("./vertex-adc.js"));
+    ({ hasGoogleVertexAuthorizedUserAdcSync, resetGoogleVertexAuthorizedUserTokenCacheForTest } =
+      await import("./vertex-adc.js"));
   });
 
   beforeEach(() => {
     buildGuardedModelFetchMock.mockReset();
     guardedFetchMock.mockReset();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
+    resetGoogleVertexAuthorizedUserTokenCacheForTest();
   });
 
   afterEach(() => {
@@ -377,7 +380,7 @@ describe("google transport stream", () => {
       }),
       "utf8",
     );
-    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", undefined);
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", "");
     vi.stubEnv("HOME", homeDir);
     vi.stubEnv("APPDATA", appDataDir);
     vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
@@ -740,5 +743,28 @@ describe("google transport stream", () => {
     } as never);
 
     expect(params.contents).toEqual([{ role: "user", parts: [{ text: " " }] }]);
+  });
+
+  it.each([
+    ["gemini-2.5-flash-lite", "minimal", 512],
+    ["gemini-2.5-flash-lite", "low", 2048],
+    ["gemini-2.5-flash", "minimal", 128],
+    ["gemini-2.5-flash", "low", 2048],
+    ["gemini-2.5-pro", "minimal", 128],
+    ["gemini-2.5-pro", "low", 2048],
+    ["gemini-2.5-flash", "medium", 8192],
+    ["gemini-2.5-pro", "medium", 8192],
+  ] as const)("%s with reasoning=%s uses thinkingBudget %i", (id, reasoning, expectedBudget) => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({ id }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      { reasoning },
+    );
+
+    expect(params.generationConfig).toMatchObject({
+      thinkingConfig: { includeThoughts: true, thinkingBudget: expectedBudget },
+    });
   });
 });

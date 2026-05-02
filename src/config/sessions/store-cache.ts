@@ -75,6 +75,23 @@ export function readSessionStoreCache(params: {
   return cloneSessionStoreRecord(cached.store, cached.serialized);
 }
 
+export function takeMutableSessionStoreCache(params: {
+  storePath: string;
+  mtimeMs?: number;
+  sizeBytes?: number;
+}): Record<string, SessionEntry> | null {
+  const cached = SESSION_STORE_CACHE.get(params.storePath);
+  if (!cached) {
+    return null;
+  }
+  if (params.mtimeMs !== cached.mtimeMs || params.sizeBytes !== cached.sizeBytes) {
+    invalidateSessionStoreCache(params.storePath);
+    return null;
+  }
+  SESSION_STORE_CACHE.delete(params.storePath);
+  return cached.store;
+}
+
 export function writeSessionStoreCache(params: {
   storePath: string;
   store: Record<string, SessionEntry>;

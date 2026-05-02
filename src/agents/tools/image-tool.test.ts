@@ -93,6 +93,7 @@ vi.mock("../pi-tools.abort.js", () => ({
 }));
 
 vi.mock("../auth-profiles.js", () => ({
+  externalCliDiscoveryForProviderAuth: () => undefined,
   ensureAuthProfileStore: (agentDir?: string) => {
     if (!agentDir) {
       return { version: 1, profiles: {} };
@@ -624,6 +625,38 @@ describe("image tool implicit imageModel config", () => {
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toBeNull();
       expect(createImageTool({ config: cfg, agentDir })).toBeNull();
+    });
+  });
+
+  it("defers implicit image model discovery during hot-path tool registration", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const resolveDefaultMediaModelSpy = vi.fn(() => "gpt-5.4-mini");
+      const resolveAutoMediaKeyProvidersSpy = vi.fn(() => ["openai"]);
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveDefaultMediaModel: resolveDefaultMediaModelSpy,
+        resolveAutoMediaKeyProviders: resolveAutoMediaKeyProvidersSpy,
+      });
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+      };
+
+      const tool = createImageTool({
+        config: cfg,
+        agentDir,
+        deferAutoModelResolution: true,
+      });
+
+      expect(tool).not.toBeNull();
+      expect(resolveDefaultMediaModelSpy).not.toHaveBeenCalled();
+      expect(resolveAutoMediaKeyProvidersSpy).not.toHaveBeenCalled();
     });
   });
 
