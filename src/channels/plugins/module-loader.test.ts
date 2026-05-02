@@ -89,13 +89,13 @@ describe("channel plugin module loader helpers", () => {
       }),
     ).toEqual({
       loadedBy: "jiti",
-      target: modulePath,
+      target: fs.realpathSync.native(modulePath),
     });
     expect(createJiti).toHaveBeenCalledOnce();
     expect(createJiti).toHaveBeenCalledWith(
       expect.stringContaining("module-loader.ts"),
       expect.objectContaining({ tryNative: false }),
     );
-    expect(loadWithJiti).toHaveBeenCalledWith(modulePath);
+    expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
   });
 });
