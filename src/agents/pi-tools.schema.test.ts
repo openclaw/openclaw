@@ -207,6 +207,8 @@ describe("normalizeToolParameters", () => {
     expect(parameters.type).toBe("object");
     expect(parameters.properties).toEqual({});
   });
+
+  it("preserves existing properties on type:object schemas", () => {
     const tool: AnyAgentTool = {
       name: "query",
       label: "query",
