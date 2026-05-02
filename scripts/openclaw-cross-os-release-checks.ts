@@ -1866,6 +1866,20 @@ async function runInstalledModelsSet(params) {
     });
   }
   if (typeof params.providerConfig.timeoutSeconds === "number") {
+    await runInstalledCli({
+      cliPath: params.cliPath,
+      args: [
+        "config",
+        "set",
+        `models.providers.${params.providerConfig.extensionId}.models`,
+        "[]",
+        "--strict-json",
+      ],
+      cwd: params.cwd,
+      env: params.env,
+      logPath: params.logPath,
+      timeoutMs: 2 * 60 * 1000,
+    });
     if (typeof params.providerConfig.baseUrl === "string") {
       await runInstalledCli({
         cliPath: params.cliPath,
@@ -2690,6 +2704,19 @@ async function runModelsSet(params) {
     });
   }
   if (typeof params.providerConfig.timeoutSeconds === "number") {
+    await runOpenClaw({
+      lane: params.lane,
+      env: params.env,
+      args: [
+        "config",
+        "set",
+        `models.providers.${params.providerConfig.extensionId}.models`,
+        "[]",
+        "--strict-json",
+      ],
+      logPath: params.logPath,
+      timeoutMs: 2 * 60 * 1000,
+    });
     if (typeof params.providerConfig.baseUrl === "string") {
       await runOpenClaw({
         lane: params.lane,
