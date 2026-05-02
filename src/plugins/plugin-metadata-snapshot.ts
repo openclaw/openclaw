@@ -180,7 +180,9 @@ function loadPluginMetadataSnapshotImpl(
   const registryResult = loadPluginRegistrySnapshotWithMetadata({
     config: params.config,
     workspaceDir: params.workspaceDir,
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     env: params.env,
+    ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
     ...(params.index ? { index: params.index } : {}),
   });
   const registrySnapshotMs = performance.now() - registryStartedAt;

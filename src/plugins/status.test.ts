@@ -15,6 +15,21 @@ const loadPluginMetadataRegistrySnapshotMock = vi.fn();
 const loadPluginManifestRegistryForPluginRegistryMock = vi.fn();
 const loadPluginRegistrySnapshotWithMetadataMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
+const loadPluginMetadataSnapshotMock = vi.fn((rawParams: unknown = {}) => {
+  const params = rawParams as { index?: unknown };
+  const manifestRegistry = loadPluginManifestRegistryForInstalledIndexMock(params) ?? {
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    index: params.index ?? createInstalledPluginIndexSnapshot([]),
+    manifestRegistry,
+    plugins: manifestRegistry.plugins,
+    byPluginId: new Map(
+      manifestRegistry.plugins.map((plugin: { id: string }) => [plugin.id, plugin]),
+    ),
+  };
+});
 const applyPluginAutoEnableMock = vi.fn();
 const resolveBundledProviderCompatPluginIdsMock = vi.fn();
 const withBundledPluginAllowlistCompatMock = vi.fn();
@@ -59,6 +74,10 @@ vi.mock("./plugin-registry.js", () => ({
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: (...args: unknown[]) =>
     loadPluginManifestRegistryForInstalledIndexMock(...args),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: (...args: unknown[]) => loadPluginMetadataSnapshotMock(...args),
 }));
 
 vi.mock("./providers.js", () => ({
@@ -370,6 +389,7 @@ describe("plugin status reports", () => {
     loadPluginManifestRegistryForPluginRegistryMock.mockReset();
     loadPluginRegistrySnapshotWithMetadataMock.mockReset();
     loadPluginManifestRegistryForInstalledIndexMock.mockReset();
+    loadPluginMetadataSnapshotMock.mockClear();
     applyPluginAutoEnableMock.mockReset();
     resolveBundledProviderCompatPluginIdsMock.mockReset();
     withBundledPluginAllowlistCompatMock.mockReset();

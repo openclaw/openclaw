@@ -3,9 +3,8 @@ import {
   hasManifestContractValue,
   listAvailableManifestContractPlugins,
 } from "./manifest-contract-eligibility.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestContractListKey } from "./manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 export type ManifestContractRuntimePluginResolution = {
   pluginIds: string[];
@@ -21,17 +20,12 @@ export function resolveManifestContractRuntimePluginResolution(params: {
   contract: PluginManifestContractListKey;
   value?: string;
 }): ManifestContractRuntimePluginResolution {
-  const index = loadPluginRegistrySnapshot({
-    config: params.cfg,
+  const snapshot = loadPluginMetadataSnapshot({
+    config: params.cfg ?? {},
     env: process.env,
     ...DEMAND_ONLY_CONTRACT_LOOKUP_OPTIONS,
   });
-  const allContractPlugins = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.cfg,
-    env: process.env,
-    includeDisabled: true,
-  }).plugins.filter((plugin) =>
+  const allContractPlugins = snapshot.plugins.filter((plugin) =>
     hasManifestContractValue({
       plugin,
       contract: params.contract,
@@ -42,7 +36,7 @@ export function resolveManifestContractRuntimePluginResolution(params: {
     .filter((plugin) => plugin.origin === "bundled")
     .map((plugin) => plugin.id);
   const pluginIds = listAvailableManifestContractPlugins({
-    snapshot: { index, plugins: allContractPlugins },
+    snapshot: { index: snapshot.index, plugins: allContractPlugins },
     contract: params.contract,
     value: params.value,
     config: params.cfg,
