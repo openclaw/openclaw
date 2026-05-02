@@ -356,6 +356,7 @@ vi.mock("../../session-write-lock.js", () => ({
     hoisted.acquireSessionWriteLockMock(params),
   resolveSessionWriteLockAcquireTimeoutMs: () => 60000,
   resolveSessionLockMaxHoldFromTimeout: () => 1,
+  resolveSessionWriteLockAcquireTimeoutMs: () => 60_000,
 }));
 
 vi.mock("../tool-result-context-guard.js", async () => {
