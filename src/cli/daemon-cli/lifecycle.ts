@@ -134,7 +134,7 @@ function resolveGatewayRestartIntentOptions(
     return { force: true };
   }
   if (opts.wait !== undefined) {
-    return { waitMs: parseDurationMs(String(opts.wait)) };
+    return { waitMs: parseDurationMs(opts.wait) };
   }
   return undefined;
 }

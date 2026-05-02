@@ -846,17 +846,32 @@ export type ActiveTaskRestartBlocker = {
   title?: string;
 };
 
+function isActiveTaskRestartBlockerStatus(
+  status: TaskStatus,
+): status is ActiveTaskRestartBlocker["status"] {
+  return status === "queued" || status === "running";
+}
+
 export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
   return reconcileInspectableTasks()
-    .filter((task) => task.status === "queued" || task.status === "running")
-    .map((task) => ({
-      taskId: task.taskId,
-      status: task.status as Extract<TaskStatus, "queued" | "running">,
-      runtime: task.runtime,
-      ...(task.runId ? { runId: task.runId } : {}),
-      ...(task.label ? { label: task.label } : {}),
-      ...(task.task ? { title: task.task } : {}),
-    }));
+    .filter((task) => isActiveTaskRestartBlockerStatus(task.status))
+    .map((task) => {
+      const blocker: ActiveTaskRestartBlocker = {
+        taskId: task.taskId,
+        status: task.status,
+        runtime: task.runtime,
+      };
+      if (task.runId) {
+        blocker.runId = task.runId;
+      }
+      if (task.label) {
+        blocker.label = task.label;
+      }
+      if (task.task) {
+        blocker.title = task.task;
+      }
+      return blocker;
+    });
 }
 
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
