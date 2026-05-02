@@ -24,7 +24,8 @@ Docs: https://docs.openclaw.ai
 - CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
 - Agents/failover: exempt run-level timeouts that fire during tool execution from model fallback, timeout-triggered compaction, and generic timeout payload synthesis. Long `process(poll)`, browser, or `exec` tool calls that exceed `agents.defaults.timeoutSeconds` previously rotated auth profiles, switched to a fallback model, and surfaced a misleading "LLM request timed out" error even though the primary model had already responded. Mirrors the existing `timedOutDuringCompaction` precedent (#46889). Fixes #52147. (#75873) Thanks @simonusa.
 - Docker: copy Bun 1.3.13 from a digest-pinned image and keep CI on the same version. Fixes #74356. Thanks @fede-kamel and @sallyom.
-- Agents/compaction: keep prior context on consecutive turns against z.ai-style providers (z.ai direct, openrouter z-ai/*, in-house GLM gateways); Pi's internal auto-compaction was misfiring after successful turns and clearing state.messages before the next provider request. (#76056) Thanks @openperf.
+- Agents/compaction: keep prior context on consecutive turns against z.ai-style providers (z.ai direct, openrouter z-ai/\*, in-house GLM gateways); Pi's internal auto-compaction was misfiring after successful turns and clearing state.messages before the next provider request. (#76056) Thanks @openperf.
+- Build/Feishu: externalize `@larksuiteoapi/node-sdk` from the tsdown bundle so the SDK's CJS `__dirname` usage is not inlined into ESM output, fixing Feishu channel startup crashes on Node 24.
 
 ## 2026.5.2
 
