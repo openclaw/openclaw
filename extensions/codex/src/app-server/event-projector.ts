@@ -173,7 +173,6 @@ export class CodexAppServerEventProjector {
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
-  private latestRateLimits: JsonValue | undefined;
   private readonly nativeSubagentTaskMirror: CodexNativeSubagentTaskMirror;
 
   constructor(
@@ -206,7 +205,6 @@ export class CodexAppServerEventProjector {
     // before the per-turn filter so we can attribute the latest rate-limit
     // snapshot to a subsequent error notification on this turn.
     if (notification.method === "account/rateLimits/updated") {
-      this.latestRateLimits = params;
       rememberCodexRateLimits(params);
       this.handleAccountRateLimitsUpdated(params);
       return;
@@ -1502,12 +1500,14 @@ export class CodexAppServerEventProjector {
   private captureCodexTurnError(turnError: CodexTurn["error"] | undefined): void {
     const message = turnError?.message;
     const codexErrorInfo = turnError ? readCodexErrorInfo(turnError.codexErrorInfo) : null;
-    const additionalDetails = turnError?.additionalDetails ?? undefined;
+    const rawAdditionalDetails = turnError?.additionalDetails;
+    const additionalDetails =
+      typeof rawAdditionalDetails === "string" ? rawAdditionalDetails : undefined;
     this.applyCodexProjectedError({
       fallbackMessage: "codex app-server turn failed",
       message: message ?? undefined,
       codexErrorInfo,
-      additionalDetails: additionalDetails ?? undefined,
+      additionalDetails,
     });
   }
 
