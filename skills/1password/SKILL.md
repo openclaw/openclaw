@@ -80,11 +80,25 @@ SESSION="op-auth-$(date +%Y%m%d-%H%M%S)"
 
 tmux -S "$SOCKET" new -d -s "$SESSION" -n shell
 tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- 'eval "$(op signin --account my.1password.com)"' Enter
-tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op whoami" Enter
-tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- "op vault list" Enter
-tmux -S "$SOCKET" capture-pane -p -J -t "$SESSION":0.0 -S -200
-tmux -S "$SOCKET" kill-session -t "$SESSION"
+tmux -S "$SOCKET" capture-pane -t "$SESSION":0.0 -p -S - | tail -40
 ```
+
+Do not queue follow-up commands while signin is prompting. Poll the pane with `capture-pane`
+until signin has either completed and the shell prompt has returned, or it is clearly waiting for
+human input. If the prompt requires a password, MFA, or account choice, pause and ask the user to
+complete signin in their own terminal; give them the socket and session values so they can attach
+locally. The agent should not run `tmux attach` from exec because attach consumes the current TTY and
+prevents scripted `send-keys` / `capture-pane` control.
+
+After the shell prompt returns, verify by sending the checks into the same pane:
+
+```bash
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- 'op whoami' Enter
+tmux -S "$SOCKET" send-keys -t "$SESSION":0.0 -- 'op vault list' Enter
+tmux -S "$SOCKET" capture-pane -t "$SESSION":0.0 -p -S - | tail -80
+```
+
+Keep the tmux session running so later `op read` / `op run` commands reuse the same authenticated shell.
 
 See the `tmux` skill for socket conventions; do not reuse old session names.
 
