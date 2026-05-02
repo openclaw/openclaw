@@ -74,10 +74,10 @@ The `models` root also owns global model-catalog behavior.
 
 - `models.mode`: provider catalog behavior (`merge` or `replace`).
 - `models.providers`: custom provider map keyed by provider id.
-- `models.pricing.enabled`: controls the background pricing bootstrap. When
-  `false`, Gateway startup skips OpenRouter and LiteLLM pricing-catalog fetches;
-  configured `models.providers.*.models[].cost` values still work for local cost
-  estimates.
+- `models.pricing.enabled`: controls the background pricing bootstrap that
+  starts after sidecars and channels reach the Gateway ready path. When `false`,
+  the Gateway skips OpenRouter and LiteLLM pricing-catalog fetches; configured
+  `models.providers.*.models[].cost` values still work for local cost estimates.
 
 ## MCP
 
