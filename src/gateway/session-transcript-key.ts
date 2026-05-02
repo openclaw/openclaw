@@ -8,11 +8,17 @@ import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/sessi
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   loadCombinedSessionStoreForGateway,
+  resolveGatewaySessionStoreFingerprint,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.js";
 
-const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, string>();
+type TranscriptSessionKeyCacheEntry = {
+  key: string;
+  storeFingerprint: string;
+};
+
+const TRANSCRIPT_SESSION_KEY_CACHE = new Map<string, TranscriptSessionKeyCacheEntry>();
 const TRANSCRIPT_SESSION_KEY_CACHE_MAX = 256;
 
 function resolveTranscriptPathForComparison(value: string | undefined): string | undefined {
@@ -63,9 +69,20 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
     return undefined;
   }
   const cfg = getRuntimeConfig();
-  const { store } = loadCombinedSessionStoreForGateway(cfg);
+  const cachedEntry = TRANSCRIPT_SESSION_KEY_CACHE.get(targetPath);
+  const currentStoreFingerprint = cachedEntry
+    ? resolveGatewaySessionStoreFingerprint(cfg)
+    : undefined;
+  if (
+    cachedEntry &&
+    currentStoreFingerprint !== undefined &&
+    cachedEntry.storeFingerprint === currentStoreFingerprint
+  ) {
+    return cachedEntry.key;
+  }
 
-  const cachedKey = TRANSCRIPT_SESSION_KEY_CACHE.get(targetPath);
+  const { store } = loadCombinedSessionStoreForGateway(cfg);
+  const cachedKey = cachedEntry?.key;
   if (
     cachedKey &&
     sessionKeyMatchesTranscriptPath({
@@ -75,6 +92,15 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
       targetPath,
     })
   ) {
+    const storeFingerprint = currentStoreFingerprint ?? resolveGatewaySessionStoreFingerprint(cfg);
+    if (storeFingerprint) {
+      TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, {
+        key: cachedKey,
+        storeFingerprint,
+      });
+    } else {
+      TRANSCRIPT_SESSION_KEY_CACHE.delete(targetPath);
+    }
     return cachedKey;
   }
 
@@ -147,7 +173,13 @@ export function resolveSessionKeyForTranscriptFile(sessionFile: string): string 
           TRANSCRIPT_SESSION_KEY_CACHE.delete(oldest);
         }
       }
-      TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, resolvedKey);
+      const storeFingerprint =
+        currentStoreFingerprint ?? resolveGatewaySessionStoreFingerprint(cfg);
+      if (storeFingerprint) {
+        TRANSCRIPT_SESSION_KEY_CACHE.set(targetPath, { key: resolvedKey, storeFingerprint });
+      } else {
+        TRANSCRIPT_SESSION_KEY_CACHE.delete(targetPath);
+      }
       return resolvedKey;
     }
   }

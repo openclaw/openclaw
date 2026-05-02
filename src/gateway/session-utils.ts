@@ -797,6 +797,51 @@ function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
 
+function readGatewaySessionStoreFingerprintPart(storePath: string): string | undefined {
+  try {
+    const stat = fs.statSync(storePath, { bigint: true });
+    return `${storePath}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}:${stat.ino}`;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === "ENOENT" || code === "ENOTDIR") {
+      return `${storePath}:missing`;
+    }
+    return undefined;
+  }
+}
+
+function resolveGatewaySessionStoreConfigFingerprint(cfg: OpenClawConfig): string {
+  return JSON.stringify({
+    agentIds: listAgentIds(cfg)
+      .map((agentId) => normalizeAgentId(agentId))
+      .toSorted(),
+    defaultAgentId: normalizeAgentId(resolveDefaultAgentId(cfg)),
+    sessionMainKey: normalizeMainKey(cfg.session?.mainKey),
+    sessionScope: normalizeOptionalString(cfg.session?.scope) ?? "",
+    sessionStore: normalizeOptionalString(cfg.session?.store) ?? "",
+  });
+}
+
+export function resolveGatewaySessionStoreFingerprint(cfg: OpenClawConfig): string | undefined {
+  const storeConfig = cfg.session?.store;
+  const targets =
+    storeConfig && !isStorePathTemplate(storeConfig)
+      ? [{ storePath: resolveStorePath(storeConfig) }]
+      : resolveAllAgentSessionStoreTargetsSync(cfg).map((target) => ({
+          storePath: target.storePath,
+        }));
+  const storePaths = [...new Set(targets.map((target) => target.storePath))].toSorted();
+  const parts: string[] = [];
+  for (const storePath of storePaths) {
+    const part = readGatewaySessionStoreFingerprintPart(storePath);
+    if (!part) {
+      return undefined;
+    }
+    parts.push(part);
+  }
+  return [resolveGatewaySessionStoreConfigFingerprint(cfg), ...parts].join("|");
+}
+
 function listExistingAgentIdsFromDisk(): string[] {
   const root = resolveStateDir();
   const agentsDir = path.join(root, "agents");

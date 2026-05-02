@@ -4,11 +4,13 @@ import type { SessionEntry } from "../config/sessions/types.js";
 const {
   loadConfigMock,
   loadCombinedSessionStoreForGatewayMock,
+  resolveGatewaySessionStoreFingerprintMock,
   resolveGatewaySessionStoreTargetMock,
   resolveSessionTranscriptCandidatesMock,
 } = vi.hoisted(() => ({
   loadConfigMock: vi.fn(() => ({ session: {} })),
   loadCombinedSessionStoreForGatewayMock: vi.fn(),
+  resolveGatewaySessionStoreFingerprintMock: vi.fn(() => "store:v1"),
   resolveGatewaySessionStoreTargetMock: vi.fn(),
   resolveSessionTranscriptCandidatesMock: vi.fn(),
 }));
@@ -19,6 +21,7 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadCombinedSessionStoreForGateway: loadCombinedSessionStoreForGatewayMock,
+  resolveGatewaySessionStoreFingerprint: resolveGatewaySessionStoreFingerprintMock,
   resolveGatewaySessionStoreTarget: resolveGatewaySessionStoreTargetMock,
   resolveSessionTranscriptCandidates: resolveSessionTranscriptCandidatesMock,
 }));
@@ -35,6 +38,8 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     clearSessionTranscriptKeyCacheForTests();
     loadConfigMock.mockClear();
     loadCombinedSessionStoreForGatewayMock.mockReset();
+    resolveGatewaySessionStoreFingerprintMock.mockReset();
+    resolveGatewaySessionStoreFingerprintMock.mockReturnValue("store:v1");
     resolveGatewaySessionStoreTargetMock.mockReset();
     resolveSessionTranscriptCandidatesMock.mockReset();
     resolveGatewaySessionStoreTargetMock.mockImplementation(({ key }: { key: string }) => ({
@@ -68,7 +73,8 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     expect(resolveSessionTranscriptCandidatesMock).toHaveBeenCalledTimes(2);
 
     expect(resolveSessionKeyForTranscriptFile("/tmp/two.jsonl")).toBe("agent:main:two");
-    expect(resolveSessionTranscriptCandidatesMock).toHaveBeenCalledTimes(3);
+    expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(1);
+    expect(resolveSessionTranscriptCandidatesMock).toHaveBeenCalledTimes(2);
   });
 
   it("drops stale cached mappings and falls back to the current store contents", () => {
@@ -97,6 +103,7 @@ describe("resolveSessionKeyForTranscriptFile", () => {
 
     expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:beta");
 
+    resolveGatewaySessionStoreFingerprintMock.mockReturnValue("store:v2");
     store = {
       "agent:main:alpha": { sessionId: "sess-alpha-2", updatedAt: now + 1 },
       "agent:main:beta": {
@@ -107,6 +114,7 @@ describe("resolveSessionKeyForTranscriptFile", () => {
     };
 
     expect(resolveSessionKeyForTranscriptFile("/tmp/shared.jsonl")).toBe("agent:main:alpha");
+    expect(loadCombinedSessionStoreForGatewayMock).toHaveBeenCalledTimes(2);
   });
 
   it("returns undefined for blank transcript paths", () => {

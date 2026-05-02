@@ -23,6 +23,7 @@ import {
   pruneLegacyStoreKeys,
   resolveDeletedAgentIdFromSessionKey,
   resolveGatewayModelSupportsImages,
+  resolveGatewaySessionStoreFingerprint,
   resolveGatewaySessionStoreTarget,
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelIdentityRef,
@@ -427,6 +428,40 @@ describe("gateway session utils", () => {
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
     expect(target.canonicalKey).toBe("global");
     expect(target.agentId).toBe("ops");
+  });
+
+  test("resolveGatewaySessionStoreFingerprint changes when a session store appears", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-fingerprint-"));
+    const storePath = path.join(dir, "sessions.json");
+    const cfg = {
+      session: { mainKey: "main", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+
+    const missingFingerprint = resolveGatewaySessionStoreFingerprint(cfg);
+    fs.writeFileSync(storePath, JSON.stringify({ "agent:ops:main": { sessionId: "s1" } }));
+    const createdFingerprint = resolveGatewaySessionStoreFingerprint(cfg);
+
+    expect(missingFingerprint).toContain(`${storePath}:missing`);
+    expect(createdFingerprint).not.toBe(missingFingerprint);
+  });
+
+  test("resolveGatewaySessionStoreFingerprint changes when session key config changes", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "session-utils-config-fingerprint-"));
+    const storePath = path.join(dir, "sessions.json");
+    fs.writeFileSync(storePath, JSON.stringify({ "agent:ops:main": { sessionId: "s1" } }));
+    const cfg = {
+      session: { mainKey: "main", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const changedCfg = {
+      session: { mainKey: "work", store: storePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+
+    expect(resolveGatewaySessionStoreFingerprint(changedCfg)).not.toBe(
+      resolveGatewaySessionStoreFingerprint(cfg),
+    );
   });
 
   test("resolveGatewaySessionStoreTarget uses canonical key for main alias", () => {
