@@ -274,8 +274,8 @@ export async function prepareCliRunContext(
     );
   }
   let openClawHistoryMessages: unknown[] | undefined;
-  const loadOpenClawHistoryMessages = () => {
-    openClawHistoryMessages ??= loadCliSessionHistoryMessages({
+  const loadOpenClawHistoryMessages = async () => {
+    openClawHistoryMessages ??= await loadCliSessionHistoryMessages({
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,
       sessionKey: params.sessionKey,
@@ -340,7 +340,7 @@ export async function prepareCliRunContext(
     const hookResult = await resolvePromptBuildHookResult({
       config: params.config ?? getRuntimeConfig(),
       prompt: params.prompt,
-      messages: loadOpenClawHistoryMessages(),
+      messages: await loadOpenClawHistoryMessages(),
       hookCtx: {
         runId: params.runId,
         agentId: sessionAgentId,
@@ -382,7 +382,7 @@ export async function prepareCliRunContext(
   const openClawHistoryPrompt = reusableCliSession.sessionId
     ? undefined
     : buildCliSessionHistoryPrompt({
-        messages: loadCliSessionReseedMessages({
+        messages: await loadCliSessionReseedMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,

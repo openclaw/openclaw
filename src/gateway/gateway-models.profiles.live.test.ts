@@ -50,7 +50,7 @@ import {
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
 import { startGatewayServer } from "./server.impl.js";
-import { loadSessionEntry, readSessionMessages } from "./session-utils.js";
+import { loadSessionEntry, readSessionMessagesAsync } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -1158,12 +1158,12 @@ function extractTranscriptMessageText(message: unknown): string {
     .trim();
 }
 
-function readSessionAssistantTexts(sessionKey: string, modelKey?: string): string[] {
+async function readSessionAssistantTexts(sessionKey: string, modelKey?: string): Promise<string[]> {
   const { storePath, entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile);
   const assistantTexts: string[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -1190,7 +1190,7 @@ async function waitForSessionAssistantText(params: {
   let lastHeartbeatAt = startedAt;
   let delayMs = 50;
   while (Date.now() - startedAt < GATEWAY_LIVE_PROBE_TIMEOUT_MS) {
-    const assistantTexts = readSessionAssistantTexts(params.sessionKey, params.modelKey);
+    const assistantTexts = await readSessionAssistantTexts(params.sessionKey, params.modelKey);
     if (assistantTexts.length > params.baselineAssistantCount) {
       const freshText = assistantTexts
         .slice(params.baselineAssistantCount)
@@ -1226,9 +1226,8 @@ async function requestGatewayAgentText(params: {
     content: string;
   }>;
 }) {
-  const baselineAssistantCount = readSessionAssistantTexts(
-    params.sessionKey,
-    params.modelKey,
+  const baselineAssistantCount = (
+    await readSessionAssistantTexts(params.sessionKey, params.modelKey)
   ).length;
   const accepted = await withGatewayLiveProbeTimeout(
     params.client.request("agent", {

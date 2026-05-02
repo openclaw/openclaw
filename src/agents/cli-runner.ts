@@ -129,7 +129,7 @@ export async function runPreparedCliAgent(
   const hasAgentEndHooks = hookRunner?.hasHooks("agent_end") === true;
   const historyMessages =
     hasLlmInputHooks || hasAgentEndHooks
-      ? loadCliSessionHistoryMessages({
+      ? await loadCliSessionHistoryMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,

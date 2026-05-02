@@ -13,25 +13,12 @@ const hoisted = await vi.hoisted(async () => {
       injectedFiles: [],
       sandboxRuntime: { sandboxed: false, mode: "off" },
     })),
-    getEntriesMock: vi.fn(() => []),
-    getHeaderMock: vi.fn(() => null),
-    getLeafIdMock: vi.fn(() => null),
     writeFileSyncMock: vi.fn(),
     mkdirSyncMock: vi.fn(),
     existsSyncMock: vi.fn(() => true),
     exportHtmlTemplateContents: new Map<string, string>(),
   };
 });
-
-vi.mock("@mariozechner/pi-coding-agent", () => ({
-  SessionManager: {
-    open: vi.fn(() => ({
-      getEntries: hoisted.getEntriesMock,
-      getHeader: hoisted.getHeaderMock,
-      getLeafId: hoisted.getLeafIdMock,
-    })),
-  },
-}));
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveDefaultSessionStorePath: hoisted.resolveDefaultSessionStorePathMock,
@@ -69,6 +56,23 @@ vi.mock("node:fs", async () => {
   return {
     ...mockedFs,
     default: mockedFs,
+  };
+});
+
+vi.mock("node:fs/promises", async () => {
+  const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+  const mockedFsPromises = {
+    ...actual,
+    readFile: vi.fn(async (filePath: string, encoding?: BufferEncoding) => {
+      if (filePath === "/tmp/target-store/session.jsonl") {
+        return "";
+      }
+      return actual.readFile(filePath, encoding);
+    }),
+  };
+  return {
+    ...mockedFsPromises,
+    default: mockedFsPromises,
   };
 });
 
