@@ -50,6 +50,7 @@ describe("secrets handlers", () => {
       diagnostics: string[];
       inactiveRefPaths: string[];
     }>;
+    log?: { warn?: (message: string) => void };
   }) {
     const reloadSecrets = overrides?.reloadSecrets ?? (async () => ({ warningCount: 0 }));
     const resolveSecrets =
@@ -62,6 +63,7 @@ describe("secrets handlers", () => {
     return createSecretsHandlers({
       reloadSecrets,
       resolveSecrets,
+      log: overrides?.log,
     });
   }
 
@@ -75,8 +77,10 @@ describe("secrets handlers", () => {
   });
 
   it("returns unavailable when reload fails", async () => {
+    const warn = vi.fn();
     const handlers = createHandlers({
-      reloadSecrets: vi.fn().mockRejectedValue(new Error("reload failed")),
+      reloadSecrets: vi.fn().mockRejectedValue(new Error("disk full")),
+      log: { warn },
     });
     const respond = vi.fn();
     await invokeSecretsReload({ handlers, respond });
@@ -88,6 +92,7 @@ describe("secrets handlers", () => {
         message: "secrets.reload failed",
       }),
     );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("disk full"));
   });
 
   it("resolves requested command secret assignments from the active snapshot", async () => {
@@ -210,5 +215,26 @@ describe("secrets handlers", () => {
         message: "secrets.resolve failed",
       }),
     );
+  });
+
+  it("logs error details when resolve throws", async () => {
+    const warn = vi.fn();
+    const handlers = createHandlers({
+      resolveSecrets: vi.fn().mockRejectedValue(new Error("EACCES: permission denied")),
+      log: { warn },
+    });
+    const respond = vi.fn();
+    await invokeSecretsResolve({
+      handlers,
+      respond,
+      commandName: "memory status",
+      targetIds: ["talk.providers.*.apiKey"],
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "UNAVAILABLE" }),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("EACCES: permission denied"));
   });
 });

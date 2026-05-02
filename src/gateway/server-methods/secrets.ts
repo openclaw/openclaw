@@ -43,8 +43,9 @@ export function createSecretsHandlers(params: {
       try {
         const result = await params.reloadSecrets();
         respond(true, { ok: true, warningCount: result.warningCount });
-      } catch {
-        params.log?.warn?.("secrets.reload failed");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        params.log?.warn?.(`secrets.reload failed: ${message}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.reload failed"));
       }
     },
@@ -100,8 +101,9 @@ export function createSecretsHandlers(params: {
           throw new Error("secrets.resolve returned invalid payload.");
         }
         respond(true, payload);
-      } catch {
-        params.log?.warn?.("secrets.resolve failed");
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        params.log?.warn?.(`secrets.resolve failed: ${message}`);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "secrets.resolve failed"));
       }
     },
