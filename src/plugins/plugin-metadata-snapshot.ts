@@ -14,7 +14,7 @@ import type {
   PluginMetadataSnapshotOwnerMaps,
 } from "./plugin-metadata-snapshot.types.js";
 import { createPluginRegistryIdNormalizer } from "./plugin-registry-id-normalizer.js";
-import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
+import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 export type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataManifestView,
@@ -102,13 +102,13 @@ function buildPluginMetadataOwnerMaps(
   const contracts = new Map<string, string[]>();
 
   for (const plugin of plugins) {
-    for (const channelId of plugin.channels) {
+    for (const channelId of plugin.channels ?? []) {
       appendOwner(channels, channelId, plugin.id);
     }
     for (const channelId of Object.keys(plugin.channelConfigs ?? {})) {
       appendOwner(channelConfigs, channelId, plugin.id);
     }
-    for (const providerId of plugin.providers) {
+    for (const providerId of plugin.providers ?? []) {
       appendOwner(providers, providerId, plugin.id);
     }
     for (const providerId of Object.keys(plugin.modelCatalog?.providers ?? {})) {
@@ -117,7 +117,7 @@ function buildPluginMetadataOwnerMaps(
     for (const providerId of Object.keys(plugin.modelCatalog?.aliases ?? {})) {
       appendOwner(modelCatalogProviders, providerId, plugin.id);
     }
-    for (const cliBackendId of plugin.cliBackends) {
+    for (const cliBackendId of plugin.cliBackends ?? []) {
       appendOwner(cliBackends, cliBackendId, plugin.id);
     }
     for (const cliBackendId of plugin.setup?.cliBackends ?? []) {

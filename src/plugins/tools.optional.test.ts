@@ -234,16 +234,19 @@ function createOptionalDemoActiveRegistry() {
 
 function installToolManifestSnapshot(params: {
   config: ReturnType<typeof createContext>["config"];
+  env?: NodeJS.ProcessEnv;
   plugin: Record<string, unknown>;
 }) {
   installToolManifestSnapshots({
     config: params.config,
+    env: params.env,
     plugins: [params.plugin],
   });
 }
 
 function installToolManifestSnapshots(params: {
   config: ReturnType<typeof createContext>["config"];
+  env?: NodeJS.ProcessEnv;
   plugins: Record<string, unknown>[];
 }) {
   const plugins = params.plugins;
@@ -287,7 +290,7 @@ function installToolManifestSnapshots(params: {
         manifestPluginCount: plugins.length,
       },
     } as never,
-    { config: params.config, env: process.env, workspaceDir: "/tmp" },
+    { config: params.config, env: params.env ?? process.env, workspaceDir: "/tmp" },
   );
 }
 
@@ -392,6 +395,7 @@ describe("resolvePluginTools optional tools", () => {
     const config = createContext().config;
     installToolManifestSnapshot({
       config,
+      env: {},
       plugin: createXaiToolManifest(),
     });
     const factory = vi.fn(() => makeTool("x_search"));
@@ -434,6 +438,7 @@ describe("resolvePluginTools optional tools", () => {
     const config = createContext().config;
     installToolManifestSnapshot({
       config,
+      env: {},
       plugin: createXaiToolManifest(),
     });
     const factory = vi.fn(() => makeTool("x_search"));
@@ -474,6 +479,7 @@ describe("resolvePluginTools optional tools", () => {
     const config = createContext().config;
     installToolManifestSnapshot({
       config,
+      env: { XAI_API_KEY: "test-key" },
       plugin: createXaiToolManifest(),
     });
     const factory = vi.fn(() => makeTool("x_search"));
@@ -541,6 +547,7 @@ describe("resolvePluginTools optional tools", () => {
     } as const;
     installToolManifestSnapshot({
       config,
+      env: {},
       plugin: createXaiToolManifest(),
     });
     const factory = vi.fn(() => makeTool("x_search"));

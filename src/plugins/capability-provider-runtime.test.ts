@@ -70,6 +70,11 @@ vi.mock("./plugin-registry.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
+    loadPluginRegistrySnapshotWithMetadata: (params?: { index?: unknown }) => ({
+      snapshot: params?.index ?? mocks.loadPluginRegistrySnapshot(),
+      source: params?.index ? "provided" : "derived",
+      diagnostics: [],
+    }),
     loadPluginManifestRegistryForPluginRegistry: (
       ...args: Parameters<typeof mocks.loadPluginManifestRegistry>
     ) => {
@@ -1078,7 +1083,7 @@ describe("resolvePluginCapabilityProviders", () => {
     expectResolvedCapabilityProviderIds(providers, ["google"]);
     expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledWith(
       expect.objectContaining({
-        config: undefined,
+        config: {},
         env: process.env,
         includeDisabled: true,
         index: expect.any(Object),

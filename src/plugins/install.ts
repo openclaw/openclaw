@@ -850,6 +850,7 @@ async function installPluginFromPackageDir(
   const { plugin } = validated;
 
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
+  const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
 
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,
@@ -865,7 +866,9 @@ async function installPluginFromPackageDir(
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
     hasDeps:
-      plugin.hasRuntimeDependencies && params.installPolicyRequest?.kind === "plugin-archive",
+      plugin.hasRuntimeDependencies &&
+      !hasBundleManifest &&
+      params.installPolicyRequest?.kind === "plugin-archive",
     depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
     afterInstall: async (installedDir) => {
