@@ -239,6 +239,17 @@ function batchUsesRuntimeWebToolsOnly(batch: readonly SecretRegistryEntry[]): bo
   );
 }
 
+function collectOpenClawCoverageEntries(options: {
+  includePluginEntries: boolean;
+}): SecretRegistryEntry[] {
+  return COVERAGE_REGISTRY_ENTRIES.filter(
+    (entry) =>
+      entry.configFile === "openclaw.json" &&
+      entry.id.startsWith("plugins.entries.") === options.includePluginEntries &&
+      !PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS.has(entry.id),
+  );
+}
+
 function applyConfigForOpenClawTarget(
   config: OpenClawConfig,
   entry: SecretRegistryEntry,
@@ -510,6 +521,39 @@ async function prepareAuthCoverageSnapshot(params: {
   };
 }
 
+async function expectOpenClawCoverageEntriesResolved(
+  label: string,
+  entries: readonly SecretRegistryEntry[],
+): Promise<void> {
+  for (const batch of buildCoverageBatches(entries)) {
+    logCoverageBatch(label, batch);
+    const config = {} as OpenClawConfig;
+    const env: Record<string, string> = {};
+    for (const [index, entry] of batch.entries()) {
+      const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
+      const runtimeEnvId = resolveCoverageEnvId(entry, envId);
+      const expectedValue = `resolved-${entry.id}`;
+      const wildcardToken = resolveCoverageWildcardToken(index);
+      env[runtimeEnvId] = expectedValue;
+      applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
+    }
+    const snapshot = await prepareConfigCoverageSnapshot({
+      config,
+      env,
+      loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
+      includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
+      skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
+    });
+    for (const [index, entry] of batch.entries()) {
+      const resolved = getPath(
+        snapshot.config,
+        resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
+      );
+      expect(resolved).toBe(`resolved-${entry.id}`);
+    }
+  }
+}
+
 describe("secrets runtime target coverage", () => {
   beforeAll(async () => {
     const [sharedRuntime, resolver] = await Promise.all([
@@ -520,39 +564,18 @@ describe("secrets runtime target coverage", () => {
     ({ resolveSecretRefValues } = resolver);
   });
 
-  it("handles every openclaw.json registry target when configured as active", async () => {
-    const entries = COVERAGE_REGISTRY_ENTRIES.filter(
-      (entry) =>
-        entry.configFile === "openclaw.json" &&
-        !PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS.has(entry.id),
+  it("handles every core and channel openclaw.json registry target when configured as active", async () => {
+    await expectOpenClawCoverageEntriesResolved(
+      "openclaw.json core",
+      collectOpenClawCoverageEntries({ includePluginEntries: false }),
     );
-    for (const batch of buildCoverageBatches(entries)) {
-      logCoverageBatch("openclaw.json", batch);
-      const config = {} as OpenClawConfig;
-      const env: Record<string, string> = {};
-      for (const [index, entry] of batch.entries()) {
-        const envId = `OPENCLAW_SECRET_TARGET_${entry.id}`;
-        const runtimeEnvId = resolveCoverageEnvId(entry, envId);
-        const expectedValue = `resolved-${entry.id}`;
-        const wildcardToken = resolveCoverageWildcardToken(index);
-        env[runtimeEnvId] = expectedValue;
-        applyConfigForOpenClawTarget(config, entry, envId, wildcardToken);
-      }
-      const snapshot = await prepareConfigCoverageSnapshot({
-        config,
-        env,
-        loadablePluginOrigins: COVERAGE_LOADABLE_PLUGIN_ORIGINS,
-        includeRuntimeWebTools: batchNeedsRuntimeWebTools(batch),
-        skipConfigCollectors: batchUsesRuntimeWebToolsOnly(batch),
-      });
-      for (const [index, entry] of batch.entries()) {
-        const resolved = getPath(
-          snapshot.config,
-          resolveCoverageResolvedSegments(entry, resolveCoverageWildcardToken(index)),
-        );
-        expect(resolved).toBe(`resolved-${entry.id}`);
-      }
-    }
+  });
+
+  it("handles every plugin openclaw.json registry target when configured as active", async () => {
+    await expectOpenClawCoverageEntriesResolved(
+      "openclaw.json plugins",
+      collectOpenClawCoverageEntries({ includePluginEntries: true }),
+    );
   });
 
   it("handles every auth-profiles registry target", async () => {

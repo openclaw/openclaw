@@ -21780,6 +21780,22 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                         },
                       ],
                     },
+                    storepackSha256: {
+                      type: "string",
+                    },
+                    storepackSpecVersion: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
+                    storepackManifestSha256: {
+                      type: "string",
+                    },
+                    storepackSize: {
+                      type: "integer",
+                      minimum: 0,
+                      maximum: 9007199254740991,
+                    },
                     gitUrl: {
                       type: "string",
                     },
