@@ -133,5 +133,5 @@ export function isInstalledPluginEnabled(
     rootConfig: config,
     enabledByDefault: record.enabledByDefault,
   });
-  return state.enabled && (record.enabled || state.explicitlyEnabled === true);
+  return state.enabled && (record.enabled || state.explicitlyEnabled);
 }
