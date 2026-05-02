@@ -1,3 +1,8 @@
+import {
+  resolveHumanResetBoundaryMs,
+  resolveHumanResetCycleKey,
+} from "../../infra/format-time/human-day.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import type { SessionConfig, SessionResetConfig } from "../types.base.js";
 import { DEFAULT_IDLE_MINUTES } from "./types.js";
 
@@ -20,14 +25,12 @@ export type SessionFreshness = {
 export const DEFAULT_RESET_MODE: SessionResetMode = "daily";
 export const DEFAULT_RESET_AT_HOUR = 4;
 
-export function resolveDailyResetAtMs(now: number, atHour: number): number {
-  const normalizedAtHour = normalizeResetAtHour(atHour);
-  const resetAt = new Date(now);
-  resetAt.setHours(normalizedAtHour, 0, 0, 0);
-  if (now < resetAt.getTime()) {
-    resetAt.setDate(resetAt.getDate() - 1);
-  }
-  return resetAt.getTime();
+export function resolveDailyResetAtMs(
+  now: number,
+  atHour: number,
+  cfg?: OpenClawConfig,
+): number | undefined {
+  return resolveHumanResetBoundaryMs(now, normalizeResetAtHour(atHour), cfg);
 }
 
 export function resolveSessionResetPolicy(params: {
@@ -75,6 +78,7 @@ export function evaluateSessionFreshness(params: {
   lastInteractionAt?: number;
   now: number;
   policy: SessionResetPolicy;
+  cfg?: OpenClawConfig;
 }): SessionFreshness {
   const updatedAt = resolveTimestamp(params.updatedAt, params.now) ?? 0;
   const sessionStartedAt = resolveTimestamp(params.sessionStartedAt, params.now) ?? updatedAt;
@@ -82,13 +86,17 @@ export function evaluateSessionFreshness(params: {
     resolveTimestamp(params.lastInteractionAt, params.now) ?? sessionStartedAt;
   const dailyResetAt =
     params.policy.mode === "daily"
-      ? resolveDailyResetAtMs(params.now, params.policy.atHour)
+      ? resolveDailyResetAtMs(params.now, params.policy.atHour, params.cfg)
       : undefined;
   const idleExpiresAt =
     params.policy.idleMinutes != null && params.policy.idleMinutes > 0
       ? lastInteractionAt + params.policy.idleMinutes * 60_000
       : undefined;
-  const staleDaily = dailyResetAt != null && sessionStartedAt < dailyResetAt;
+  const staleDaily =
+    params.policy.mode === "daily"
+      ? resolveHumanResetCycleKey(sessionStartedAt, params.policy.atHour, params.cfg) <
+        resolveHumanResetCycleKey(params.now, params.policy.atHour, params.cfg)
+      : false;
   const staleIdle = idleExpiresAt != null && params.now > idleExpiresAt;
   return {
     fresh: !(staleDaily || staleIdle),

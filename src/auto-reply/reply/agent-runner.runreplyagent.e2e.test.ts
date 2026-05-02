@@ -1,8 +1,29 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveCronStyleNow } from "../../agents/current-time.js";
+import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
+import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import * as sessions from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  getMemoryFlushPlanResolver,
+  getMemoryPromptSectionBuilder,
+  getMemoryRuntime,
+  listMemoryCorpusSupplements,
+  listMemoryPromptSupplements,
+  type MemoryFlushPlan,
+  registerMemoryFlushPlanResolver,
+  restoreMemoryPluginState,
+} from "../../plugins/memory-state.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import type { TemplateContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveMemoryFlushRelativePathForRun } from "./memory-flush.js";
 import {
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
@@ -22,10 +43,61 @@ type AgentRunParams = {
   silentExpected?: boolean;
 };
 
+type EmbeddedRunParams = {
+  prompt?: string;
+  extraSystemPrompt?: string;
+  memoryFlushWritePath?: string;
+  sessionId?: string;
+  sessionFile?: string;
+  silentExpected?: boolean;
+  bootstrapPromptWarningSignaturesSeen?: string[];
+  bootstrapPromptWarningSignature?: string;
+  onAgentEvent?: (evt: { stream?: string; data?: { phase?: string; willRetry?: boolean } }) => void;
+};
+
 const state = vi.hoisted(() => ({
   compactEmbeddedPiSessionMock: vi.fn(),
   runEmbeddedPiAgentMock: vi.fn(),
+  runCliAgentMock: vi.fn(),
 }));
+
+const initialMemoryPluginState = {
+  corpusSupplements: listMemoryCorpusSupplements(),
+  promptBuilder: getMemoryPromptSectionBuilder(),
+  promptSupplements: listMemoryPromptSupplements(),
+  flushPlanResolver: getMemoryFlushPlanResolver(),
+  runtime: getMemoryRuntime(),
+};
+
+const DEFAULT_MEMORY_FLUSH_SOFT_TOKENS = 4_000;
+const DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+const MEMORY_FLUSH_TARGET_HINT =
+  "Store durable memories only in memory/YYYY-MM-DD.md (create memory/ if needed).";
+const MEMORY_FLUSH_APPEND_ONLY_HINT =
+  "If memory/YYYY-MM-DD.md already exists, APPEND new content only and do not overwrite existing entries.";
+const MEMORY_FLUSH_READ_ONLY_HINT =
+  "Treat workspace bootstrap/reference files such as MEMORY.md, DREAMS.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.";
+const MEMORY_FLUSH_REQUIRED_HINTS = [
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+];
+const DEFAULT_MEMORY_FLUSH_PROMPT = [
+  "Pre-compaction memory flush.",
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  "Do NOT create timestamped variant files (e.g., YYYY-MM-DD-HHMM.md); always use the canonical YYYY-MM-DD.md filename.",
+  `If nothing to store, reply with ${SILENT_REPLY_TOKEN}.`,
+].join(" ");
+const DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT = [
+  "Pre-compaction memory flush turn.",
+  "The session is near auto-compaction; capture durable memories to disk.",
+  MEMORY_FLUSH_TARGET_HINT,
+  MEMORY_FLUSH_READ_ONLY_HINT,
+  MEMORY_FLUSH_APPEND_ONLY_HINT,
+  `You may reply, but usually ${SILENT_REPLY_TOKEN} is correct.`,
+].join(" ");
 
 let modelFallbackModule: typeof import("../../agents/model-fallback.js");
 let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
@@ -68,6 +140,10 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => state.runEmbeddedPiAgentMock(params),
 }));
 
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (params: unknown) => state.runCliAgentMock(params),
+}));
+
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: vi.fn(),
   refreshQueuedFollowupSession: vi.fn(),
@@ -93,6 +169,12 @@ beforeEach(() => {
     payloads: [{ text: "final" }],
     meta: { agentMeta: { usage: { input: 1, output: 1 } } },
   });
+  state.runCliAgentMock.mockReset();
+  state.runCliAgentMock.mockResolvedValue({
+    payloads: [{ text: "final" }],
+    meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+  });
+  restoreMemoryPluginState(initialMemoryPluginState);
   vi.mocked(enqueueFollowupRun).mockClear();
   vi.mocked(refreshQueuedFollowupSession).mockClear();
   vi.mocked(scheduleFollowupDrain).mockClear();
@@ -187,6 +269,198 @@ function createMinimalRun(params?: {
   };
 }
 
+async function seedSessionStore(params: {
+  storePath: string;
+  sessionKey: string;
+  entry: Record<string, unknown>;
+}) {
+  await fs.mkdir(path.dirname(params.storePath), { recursive: true });
+  await fs.writeFile(
+    params.storePath,
+    JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
+    "utf-8",
+  );
+}
+
+function createBaseRun(params: {
+  storePath: string;
+  sessionEntry: Record<string, unknown>;
+  config?: Record<string, unknown>;
+  runOverrides?: Partial<FollowupRun["run"]>;
+}) {
+  const typing = createMockTypingController();
+  const sessionCtx = {
+    Provider: "whatsapp",
+    OriginatingTo: "+15550001111",
+    AccountId: "primary",
+    MessageSid: "msg",
+  } as unknown as TemplateContext;
+  const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+  const followupRun = {
+    prompt: "hello",
+    summaryLine: "hello",
+    enqueuedAt: Date.now(),
+    run: {
+      agentId: "main",
+      agentDir: "/tmp/agent",
+      sessionId: "session",
+      sessionKey: "main",
+      messageProvider: "whatsapp",
+      sessionFile: "/tmp/session.jsonl",
+      workspaceDir: "/tmp",
+      config: params.config ?? {},
+      skillsSnapshot: {},
+      provider: "anthropic",
+      model: "claude",
+      thinkLevel: "low",
+      verboseLevel: "off",
+      elevatedLevel: "off",
+      bashElevated: {
+        enabled: false,
+        allowed: false,
+        defaultLevel: "off",
+      },
+      timeoutMs: 1_000,
+      blockReplyBreak: "message_end",
+    },
+  } as unknown as FollowupRun;
+  const run = {
+    ...followupRun.run,
+    ...params.runOverrides,
+    config: params.config ?? followupRun.run.config,
+  };
+
+  return {
+    typing,
+    sessionCtx,
+    resolvedQueue,
+    followupRun: { ...followupRun, run },
+  };
+}
+
+async function runReplyAgentWithBase(params: {
+  baseRun: ReturnType<typeof createBaseRun>;
+  storePath: string;
+  sessionKey: string;
+  sessionEntry: SessionEntry;
+  commandBody: string;
+  typingMode?: "instant";
+}): Promise<void> {
+  const runReplyAgent = await getRunReplyAgent();
+  const { typing, sessionCtx, resolvedQueue, followupRun } = params.baseRun;
+  await runReplyAgent({
+    commandBody: params.commandBody,
+    followupRun,
+    queueKey: params.sessionKey,
+    resolvedQueue,
+    shouldSteer: false,
+    shouldFollowup: false,
+    isActive: false,
+    isStreaming: false,
+    typing,
+    sessionCtx,
+    sessionEntry: params.sessionEntry,
+    sessionStore: { [params.sessionKey]: params.sessionEntry } as Record<string, SessionEntry>,
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+    defaultModel: "anthropic/claude-opus-4-6",
+    agentCfgContextTokens: 100_000,
+    resolvedVerboseLevel: "off",
+    isNewSession: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
+    shouldInjectGroupIntro: false,
+    typingMode: params.typingMode ?? "instant",
+  });
+}
+
+function normalizeNonNegativeInt(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  const int = Math.floor(value);
+  return int >= 0 ? int : null;
+}
+
+function ensureNoReplyHint(text: string): string {
+  if (text.includes(SILENT_REPLY_TOKEN)) {
+    return text;
+  }
+  return `${text}\n\nIf no user-visible reply is needed, start with ${SILENT_REPLY_TOKEN}.`;
+}
+
+function ensureMemoryFlushSafetyHints(text: string): string {
+  let next = text.trim();
+  for (const hint of MEMORY_FLUSH_REQUIRED_HINTS) {
+    if (!next.includes(hint)) {
+      next = next ? `${next}\n\n${hint}` : hint;
+    }
+  }
+  return next;
+}
+
+function appendCurrentTimeLine(text: string, timeLine: string): string {
+  const trimmed = text.trimEnd();
+  if (!trimmed) {
+    return timeLine;
+  }
+  if (trimmed.includes("Current time:")) {
+    return trimmed;
+  }
+  return `${trimmed}\n${timeLine}`;
+}
+
+function resolveMemoryFlushDateStamp(relativePath: string): string {
+  const match = /^memory\/(\d{4}-\d{2}-\d{2})\.md$/.exec(relativePath);
+  return match?.[1] ?? "YYYY-MM-DD";
+}
+
+function buildTestMemoryFlushPlan(params: {
+  cfg?: OpenClawConfig;
+  nowMs?: number;
+}): MemoryFlushPlan | null {
+  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+  const cfg = params.cfg;
+  const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
+  if (defaults?.enabled === false) {
+    return null;
+  }
+
+  const relativePath = resolveMemoryFlushRelativePathForRun({ cfg, nowMs });
+  const dateStamp = resolveMemoryFlushDateStamp(relativePath);
+  const { timeLine } = resolveCronStyleNow(cfg ?? {}, nowMs);
+  const promptBase = ensureNoReplyHint(
+    ensureMemoryFlushSafetyHints(defaults?.prompt?.trim() || DEFAULT_MEMORY_FLUSH_PROMPT),
+  );
+  const systemPrompt = ensureNoReplyHint(
+    ensureMemoryFlushSafetyHints(
+      defaults?.systemPrompt?.trim() || DEFAULT_MEMORY_FLUSH_SYSTEM_PROMPT,
+    ),
+  );
+
+  return {
+    softThresholdTokens:
+      normalizeNonNegativeInt(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+    forceFlushTranscriptBytes:
+      parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
+      DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
+    reserveTokensFloor:
+      normalizeNonNegativeInt(cfg?.agents?.defaults?.compaction?.reserveTokensFloor) ??
+      DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR,
+    prompt: appendCurrentTimeLine(promptBase.replaceAll("YYYY-MM-DD", dateStamp), timeLine),
+    systemPrompt: systemPrompt.replaceAll("YYYY-MM-DD", dateStamp),
+    relativePath,
+  };
+}
+
+function registerBuiltInMemoryFlushPlanResolver() {
+  registerMemoryFlushPlanResolver(({ cfg, nowMs }) => {
+    return buildTestMemoryFlushPlan({
+      cfg,
+      nowMs,
+    });
+  });
+}
 describe("runReplyAgent heartbeat followup guard", () => {
   it("drops heartbeat runs when another run is active", async () => {
     const { run, typing } = createMinimalRun({
@@ -278,6 +552,34 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent typing (heartbeat)", () => {
+  async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>): Promise<T> {
+    return await withStateDirEnv(
+      "openclaw-typing-heartbeat-",
+      async ({ stateDir }) => await fn(stateDir),
+    );
+  }
+
+  async function writeCorruptGeminiSessionFixture(params: {
+    stateDir: string;
+    sessionId: string;
+    persistStore: boolean;
+  }) {
+    const storePath = path.join(params.stateDir, "sessions", "sessions.json");
+    const sessionEntry: SessionEntry = { sessionId: params.sessionId, updatedAt: Date.now() };
+    const sessionStore = { main: sessionEntry };
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    if (params.persistStore) {
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+    }
+
+    const transcriptPath = sessions.resolveSessionTranscriptPath(params.sessionId);
+    await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+    await fs.writeFile(transcriptPath, "bad", "utf-8");
+
+    return { storePath, sessionEntry, sessionStore, transcriptPath };
+  }
+
   it("signals typing for normal runs", async () => {
     const onPartialReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
@@ -640,6 +942,121 @@ describe("runReplyAgent typing (heartbeat)", () => {
     vi.useRealTimers();
   });
 
+  it("delivers tool results in order even when dispatched concurrently", async () => {
+    const deliveryOrder: string[] = [];
+    const onToolResult = vi.fn(async (payload: { text?: string }) => {
+      // Simulate variable network latency: first result is slower than second
+      const delay = payload.text === "first" ? 5 : 1;
+      await new Promise((r) => setTimeout(r, delay));
+      deliveryOrder.push(payload.text ?? "");
+    });
+
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      // Fire two tool results without awaiting each one; await both at the end.
+      const first = params.onToolResult?.({ text: "first", mediaUrls: [] });
+      const second = params.onToolResult?.({ text: "second", mediaUrls: [] });
+      await Promise.all([first, second]);
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    // Despite "first" having higher latency, it must be delivered before "second"
+    expect(deliveryOrder).toEqual(["first", "second"]);
+  });
+
+  it("continues delivering later tool results after an earlier tool result fails", async () => {
+    const delivered: string[] = [];
+    const onToolResult = vi.fn(async (payload: { text?: string }) => {
+      if (payload.text === "first") {
+        throw new Error("simulated delivery failure");
+      }
+      delivered.push(payload.text ?? "");
+    });
+
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      const first = params.onToolResult?.({ text: "first", mediaUrls: [] });
+      const second = params.onToolResult?.({ text: "second", mediaUrls: [] });
+      await Promise.allSettled([first, second]);
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const { run } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(onToolResult).toHaveBeenCalledTimes(2);
+    expect(delivered).toEqual(["second"]);
+  });
+
+  it("announces auto-compaction in verbose mode and tracks count", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (_params: AgentRunParams) => {
+        return {
+          payloads: [{ text: "final" }],
+          meta: { agentMeta: { compactionCount: 1 } },
+        };
+      });
+
+      const { run } = createMinimalRun({
+        resolvedVerboseLevel: "on",
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+      expect(Array.isArray(res)).toBe(true);
+      const payloads = res as { text?: string }[];
+      expect(payloads[0]?.text).toContain("Auto-compaction complete");
+      expect(payloads[0]?.text).toContain("count 1");
+      expect(sessionStore.main.compactionCount).toBe(1);
+    });
+  });
+
+  it("refreshes queued followups when auto-compaction rotates the session", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "final" }],
+        meta: {
+          agentMeta: {
+            sessionId: "session-rotated",
+            compactionCount: 1,
+          },
+        },
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
+        key: "main",
+        previousSessionId: "session",
+        nextSessionId: "session-rotated",
+        nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
+      });
+    });
+  });
   it("announces model fallback only when verbose mode is enabled", async () => {
     const cases = [
       { name: "verbose on", verbose: "on" as const, expectNotice: true },
@@ -1102,6 +1519,162 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payload.text).toContain("/new");
   });
 
+  it("resets the session after role ordering payloads", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      const sessionEntry = { sessionId, updatedAt: Date.now(), sessionFile: transcriptPath };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+        payloads: [{ text: "Message ordering conflict - please try again.", isError: true }],
+        meta: {
+          durationMs: 1,
+          error: {
+            kind: "role_ordering",
+            message: 'messages: roles must alternate between "user" and "assistant"',
+          },
+        },
+      }));
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      const payload = Array.isArray(res) ? res[0] : res;
+      expect(payload).toMatchObject({
+        text: expect.stringContaining("Message ordering conflict"),
+      });
+      if (!payload) {
+        throw new Error("expected payload");
+      }
+      expect(payload.text?.toLowerCase()).toContain("reset");
+      expect(sessionStore.main.sessionId).not.toBe(sessionId);
+      await expect(fs.access(transcriptPath)).rejects.toBeDefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main.sessionId).toBe(sessionStore.main.sessionId);
+    });
+  });
+
+  it("resets corrupted Gemini sessions and deletes transcripts", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const { storePath, sessionEntry, sessionStore, transcriptPath } =
+        await writeCorruptGeminiSessionFixture({
+          stateDir,
+          sessionId: "session-corrupt",
+          persistStore: true,
+        });
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error(
+          "function call turn comes immediately after a user turn or after a function response turn",
+        );
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Session history was corrupted"),
+      });
+      expect(sessionStore.main).toBeUndefined();
+      await expect(fs.access(transcriptPath)).rejects.toThrow();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main).toBeUndefined();
+    });
+  });
+
+  it("keeps sessions intact on other errors", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const sessionId = "session-ok";
+      const storePath = path.join(stateDir, "sessions", "sessions.json");
+      const sessionEntry = { sessionId, updatedAt: Date.now() };
+      const sessionStore = { main: sessionEntry };
+
+      await fs.mkdir(path.dirname(storePath), { recursive: true });
+      await fs.writeFile(storePath, JSON.stringify(sessionStore), "utf-8");
+
+      const transcriptPath = sessions.resolveSessionTranscriptPath(sessionId);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "ok", "utf-8");
+
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+        throw new Error("INVALID_ARGUMENT: some other failure");
+      });
+
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+      });
+      const res = await run();
+
+      expect(res).toMatchObject({
+        text: expect.stringContaining("Something went wrong while processing your request"),
+      });
+      expect(sessionStore.main).toBeDefined();
+      await expect(fs.access(transcriptPath)).resolves.toBeUndefined();
+
+      const persisted = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(persisted.main).toBeDefined();
+    });
+  });
+
+  it("still replies even if session reset fails to persist", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const saveSpy = vi
+        .spyOn(sessions, "saveSessionStore")
+        .mockRejectedValueOnce(new Error("boom"));
+      try {
+        const { storePath, sessionEntry, sessionStore, transcriptPath } =
+          await writeCorruptGeminiSessionFixture({
+            stateDir,
+            sessionId: "session-corrupt",
+            persistStore: false,
+          });
+
+        state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+          throw new Error(
+            "function call turn comes immediately after a user turn or after a function response turn",
+          );
+        });
+
+        const { run } = createMinimalRun({
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+          storePath,
+        });
+        const res = await run();
+
+        expect(res).toMatchObject({
+          text: expect.stringContaining("Session history was corrupted"),
+        });
+        expect(sessionStore.main).toBeUndefined();
+        await expect(fs.access(transcriptPath)).rejects.toThrow();
+      } finally {
+        saveSpy.mockRestore();
+      }
+    });
+  });
   it("returns friendly message for role ordering errors thrown as exceptions", async () => {
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
       throw new Error("400 Incorrect role information");
@@ -1139,4 +1712,730 @@ describe("runReplyAgent typing (heartbeat)", () => {
   });
 });
 
-import type { ReplyPayload } from "../types.js";
+describe("runReplyAgent memory flush", () => {
+  let fixtureRoot = "";
+  let caseId = 0;
+
+  async function withTempStore<T>(fn: (storePath: string) => Promise<T>): Promise<T> {
+    const dir = path.join(fixtureRoot, `case-${++caseId}`);
+    await fs.mkdir(dir, { recursive: true });
+    return await fn(path.join(dir, "sessions.json"));
+  }
+
+  async function normalizeComparablePath(filePath: string): Promise<string> {
+    const parent = await fs.realpath(path.dirname(filePath)).catch(() => path.dirname(filePath));
+    return path.join(parent, path.basename(filePath));
+  }
+
+  beforeAll(async () => {
+    fixtureRoot = await fs.mkdtemp(path.join(tmpdir(), "openclaw-memory-flush-"));
+  });
+
+  beforeEach(() => {
+    registerBuiltInMemoryFlushPlanResolver();
+  });
+
+  afterAll(async () => {
+    restoreMemoryPluginState(initialMemoryPluginState);
+    if (fixtureRoot) {
+      await fs.rm(fixtureRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("skips memory flush for CLI providers", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              cliBackends: {
+                "codex-cli": {
+                  command: "codex",
+                  args: ["exec", "--json"],
+                },
+              },
+            },
+          },
+        },
+        runOverrides: { provider: "codex-cli" },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(state.runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      expect(state.runCliAgentMock).toHaveBeenCalledTimes(1);
+      const call = state.runCliAgentMock.mock.calls[0]?.[0] as { prompt?: string } | undefined;
+      expect(call?.prompt).toBe("hello");
+    });
+  });
+
+  it("runs preflight compaction when transcript-estimated tokens cross the threshold", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "session-relative.jsonl";
+      const workspaceDir = path.dirname(storePath);
+      const transcriptPath = path.join(path.dirname(storePath), sessionFile);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(
+        transcriptPath,
+        `${JSON.stringify({
+          message: {
+            role: "user",
+            content: "x".repeat(320_000),
+            timestamp: Date.now(),
+          },
+        })}\n`,
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(workspaceDir, "AGENTS.md"),
+        [
+          "## Session Startup",
+          "Read AGENTS.md before replying.",
+          "",
+          "## Red Lines",
+          "Never skip safety checks.",
+        ].join("\n"),
+        "utf-8",
+      );
+
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: 10,
+        totalTokensFresh: false,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      state.compactEmbeddedPiSessionMock.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+        result: {
+          summary: "compacted",
+          firstKeptEntryId: "first-kept",
+          tokensBefore: 90_000,
+          tokensAfter: 8_000,
+        },
+      });
+      const calls: Array<{ prompt?: string; extraSystemPrompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({
+          prompt: params.prompt,
+          extraSystemPrompt: params.extraSystemPrompt,
+        });
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        runOverrides: { sessionFile, workspaceDir },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(state.compactEmbeddedPiSessionMock).toHaveBeenCalledOnce();
+      const compactionCall = state.compactEmbeddedPiSessionMock.mock.calls[0]?.[0] as
+        | {
+            sessionId?: string;
+            sessionKey?: string;
+            trigger?: string;
+            currentTokenCount?: number;
+            sessionFile?: string;
+          }
+        | undefined;
+      expect(compactionCall?.sessionId).toBe("session");
+      expect(compactionCall?.sessionKey).toBe(sessionKey);
+      expect(compactionCall?.trigger).toBe("budget");
+      expect(compactionCall?.currentTokenCount).toEqual(expect.any(Number));
+      expect(await normalizeComparablePath(compactionCall?.sessionFile ?? "")).toBe(
+        await normalizeComparablePath(transcriptPath),
+      );
+      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
+      expect(calls[0]?.extraSystemPrompt).toContain("Post-compaction context refresh");
+      expect(calls[0]?.extraSystemPrompt).toContain("Read AGENTS.md before replying.");
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].compactionCount).toBe(2);
+    });
+  });
+
+  it("uses configured prompts for memory flush runs", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      registerMemoryFlushPlanResolver(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 1_000_000_000,
+        reserveTokensFloor: 20_000,
+        prompt: "Write notes.\nNO_REPLY to memory/2023-11-14.md and MEMORY.md",
+        systemPrompt: "Flush memory now. NO_REPLY memory/2023-11-14.md MEMORY.md",
+        relativePath: "memory/2023-11-14.md",
+      }));
+
+      const calls: Array<EmbeddedRunParams> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push(params);
+        if (params.prompt?.includes("Write notes.")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        runOverrides: { extraSystemPrompt: "extra system" },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      const flushCall = calls[0];
+      expect(flushCall?.prompt).toContain("Write notes.");
+      expect(flushCall?.prompt).toContain("NO_REPLY");
+      expect(flushCall?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(flushCall?.prompt).toContain("MEMORY.md");
+      expect(flushCall?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
+      expect(flushCall?.extraSystemPrompt).toContain("extra system");
+      expect(flushCall?.extraSystemPrompt).toContain("Flush memory now.");
+      expect(flushCall?.extraSystemPrompt).toContain("NO_REPLY");
+      expect(flushCall?.extraSystemPrompt).toContain("memory/2023-11-14.md");
+      expect(flushCall?.extraSystemPrompt).toContain("MEMORY.md");
+      expect(flushCall?.silentExpected).toBe(true);
+      expect(calls[1]?.prompt).toBe("hello");
+    });
+  });
+
+  it("preserves plugin-provided memory flush paths", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "oversized-session.jsonl";
+      const transcriptPath = path.join(path.dirname(storePath), sessionFile);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "x".repeat(3_000), "utf-8");
+
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: 10,
+        totalTokensFresh: false,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      registerMemoryFlushPlanResolver(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 1,
+        reserveTokensFloor: 1_000,
+        prompt: "Plugin flush into memory/custom-snapshot.md.",
+        systemPrompt: "Plugin system prompt for memory/custom-snapshot.md.",
+        relativePath: "memory/custom-snapshot.md",
+      }));
+
+      const calls: Array<EmbeddedRunParams> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push(params);
+        if (params.prompt?.includes("Plugin flush into")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        runOverrides: { sessionFile },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.memoryFlushWritePath).toBe("memory/custom-snapshot.md");
+      expect(calls[0]?.prompt).toContain("Plugin flush into memory/custom-snapshot.md.");
+      expect(calls[0]?.prompt).not.toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(calls[0]?.extraSystemPrompt).toContain(
+        "Plugin system prompt for memory/custom-snapshot.md.",
+      );
+      expect(calls[0]?.extraSystemPrompt).not.toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(calls[1]?.prompt).toBe("hello");
+    });
+  });
+
+  it("passes stored bootstrap warning signatures to memory flush runs", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 1,
+        systemPromptReport: {
+          source: "run",
+          generatedAt: Date.now(),
+          systemPrompt: {
+            chars: 1,
+            projectContextChars: 0,
+            nonProjectContextChars: 1,
+          },
+          injectedWorkspaceFiles: [],
+          skills: {
+            promptChars: 0,
+            entries: [],
+          },
+          tools: {
+            listChars: 0,
+            schemaChars: 0,
+            entries: [],
+          },
+          bootstrapTruncation: {
+            warningMode: "once",
+            warningShown: true,
+            promptWarningSignature: "sig-b",
+            warningSignaturesSeen: ["sig-a", "sig-b"],
+            truncatedFiles: 1,
+            nearLimitFiles: 0,
+            totalNearLimit: false,
+          },
+        },
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      const calls: Array<EmbeddedRunParams> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push(params);
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.bootstrapPromptWarningSignaturesSeen).toEqual(["sig-a", "sig-b"]);
+      expect(calls[0]?.bootstrapPromptWarningSignature).toBe("sig-b");
+    });
+  });
+
+  it("runs a memory flush turn and updates session metadata", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      const calls: Array<{
+        prompt?: string;
+        extraSystemPrompt?: string;
+        memoryFlushWritePath?: string;
+        sessionId?: string;
+        sessionFile?: string;
+      }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({
+          prompt: params.prompt,
+          extraSystemPrompt: params.extraSystemPrompt,
+          memoryFlushWritePath: params.memoryFlushWritePath,
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+        });
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          params.onAgentEvent?.({
+            stream: "compaction",
+            data: { phase: "end", willRetry: false },
+          });
+          return {
+            payloads: [],
+            meta: { agentMeta: { sessionId: "session-rotated" } },
+          };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
+      expect(calls[0]?.prompt).toContain("Current time:");
+      expect(calls[0]?.prompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(calls[0]?.prompt).toContain("MEMORY.md");
+      expect(calls[0]?.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
+      expect(calls[0]?.extraSystemPrompt).toMatch(/memory\/\d{4}-\d{2}-\d{2}\.md/);
+      expect(calls[0]?.extraSystemPrompt).toContain("MEMORY.md");
+      expect(calls[1]?.prompt).toBe("hello");
+      expect(calls[1]?.sessionId).toBe("session-rotated");
+      expect(await normalizeComparablePath(calls[1]?.sessionFile ?? "")).toBe(
+        await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+      );
+      expect(vi.mocked(refreshQueuedFollowupSession)).toHaveBeenCalledWith({
+        key: sessionKey,
+        previousSessionId: "session",
+        nextSessionId: "session-rotated",
+        nextSessionFile: expect.stringContaining("session-rotated.jsonl"),
+      });
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
+      expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
+      expect(stored[sessionKey].compactionCount).toBe(2);
+      expect(stored[sessionKey].sessionId).toBe("session-rotated");
+      expect(await normalizeComparablePath(stored[sessionKey].sessionFile)).toBe(
+        await normalizeComparablePath(path.join(path.dirname(storePath), "session-rotated.jsonl")),
+      );
+    });
+  });
+
+  it("runs memory flush when transcript fallback uses a relative sessionFile path", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "session-relative.jsonl";
+      const transcriptPath = path.join(path.dirname(storePath), sessionFile);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(
+        transcriptPath,
+        JSON.stringify({ usage: { input: 90_000, output: 8_000 } }),
+        "utf-8",
+      );
+
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: 10,
+        totalTokensFresh: false,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      registerMemoryFlushPlanResolver(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 256,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+
+      const calls: Array<{ prompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({ prompt: params.prompt });
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        runOverrides: { sessionFile },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
+      expect(calls[1]?.prompt).toBe("hello");
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].memoryFlushAt).toBeTypeOf("number");
+    });
+  });
+
+  it("forces memory flush when transcript file exceeds configured byte threshold", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionFile = "oversized-session.jsonl";
+      const transcriptPath = path.join(path.dirname(storePath), sessionFile);
+      await fs.mkdir(path.dirname(transcriptPath), { recursive: true });
+      await fs.writeFile(transcriptPath, "x".repeat(3_000), "utf-8");
+
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        sessionFile,
+        totalTokens: 10,
+        totalTokensFresh: false,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      registerMemoryFlushPlanResolver(() => ({
+        softThresholdTokens: 4_000,
+        forceFlushTranscriptBytes: 256,
+        reserveTokensFloor: 20_000,
+        prompt: "Pre-compaction memory flush.\nNO_REPLY",
+        systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+        relativePath: "memory/2023-11-14.md",
+      }));
+
+      const calls: Array<{ prompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({ prompt: params.prompt });
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: {
+          agents: {
+            defaults: {
+              compaction: {
+                memoryFlush: {
+                  forceFlushTranscriptBytes: 256,
+                },
+              },
+            },
+          },
+        },
+        runOverrides: { sessionFile },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls).toHaveLength(2);
+      expect(calls[0]?.prompt).toContain("Pre-compaction memory flush.");
+      expect(calls[1]?.prompt).toBe("hello");
+    });
+  });
+
+  it("skips memory flush when disabled in config", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+      registerMemoryFlushPlanResolver(() => null);
+
+      state.runEmbeddedPiAgentMock.mockImplementation(async () => ({
+        payloads: [{ text: "ok" }],
+        meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+      }));
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+        config: { agents: { defaults: { compaction: { memoryFlush: { enabled: false } } } } },
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+      const call = state.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+        | { prompt?: string }
+        | undefined;
+      expect(call?.prompt).toBe("hello");
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].memoryFlushAt).toBeUndefined();
+    });
+  });
+
+  it("skips memory flush after a prior flush in the same compaction cycle", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 2,
+        memoryFlushCompactionCount: 2,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      const calls: Array<{ prompt?: string }> = [];
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        calls.push({ prompt: params.prompt });
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      expect(calls.map((call) => call.prompt)).toEqual(["hello"]);
+    });
+  });
+
+  it("increments compaction count when flush compaction completes", async () => {
+    await withTempStore(async (storePath) => {
+      const sessionKey = "main";
+      const sessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        totalTokens: 80_000,
+        compactionCount: 1,
+      };
+
+      await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+
+      state.runEmbeddedPiAgentMock.mockImplementation(async (params: EmbeddedRunParams) => {
+        if (params.prompt?.includes("Pre-compaction memory flush.")) {
+          params.onAgentEvent?.({
+            stream: "compaction",
+            data: { phase: "end", willRetry: false },
+          });
+          return { payloads: [], meta: {} };
+        }
+        return {
+          payloads: [{ text: "ok" }],
+          meta: { agentMeta: { usage: { input: 1, output: 1 } } },
+        };
+      });
+
+      const baseRun = createBaseRun({
+        storePath,
+        sessionEntry,
+      });
+
+      await runReplyAgentWithBase({
+        baseRun,
+        storePath,
+        sessionKey,
+        sessionEntry,
+        commandBody: "hello",
+      });
+
+      const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+      expect(stored[sessionKey].compactionCount).toBe(2);
+      expect(stored[sessionKey].memoryFlushCompactionCount).toBe(2);
+    });
+  });
+});

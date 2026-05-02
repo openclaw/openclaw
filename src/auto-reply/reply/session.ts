@@ -445,6 +445,7 @@ export async function initSessionState(params: {
           lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
           now,
           policy: resetPolicy,
+          cfg,
         })
     : undefined;
   const softResetAllowed =

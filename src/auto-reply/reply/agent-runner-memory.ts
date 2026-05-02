@@ -12,6 +12,7 @@ import {
   normalizeUsage,
   type UsageLike,
 } from "../../agents/usage.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveFreshSessionTotalTokens,
@@ -20,6 +21,13 @@ import {
   type SessionEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import {
+  resolveChannelResetConfig,
+  resolveSessionResetPolicy,
+  resolveSessionResetType,
+  resolveThreadFlag,
+} from "../../config/sessions/reset.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -39,6 +47,7 @@ import {
   hasAlreadyFlushedForCurrentCompaction,
   resolveMaxActiveTranscriptBytes,
   resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushRelativePathForRun,
   shouldRunMemoryFlush,
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
@@ -168,6 +177,48 @@ export type SessionTranscriptUsageSnapshot = {
 const TRANSCRIPT_OUTPUT_READ_BUFFER_TOKENS = 8192;
 const TRANSCRIPT_TAIL_CHUNK_BYTES = 64 * 1024;
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
+
+export function resolveMemoryFlushResetAtHour(params: {
+  cfg: OpenClawConfig;
+  sessionCtx: TemplateContext;
+  sessionKey?: string;
+}): number | undefined {
+  const sessionCfg = params.cfg.session;
+  const groupResolution = resolveGroupSessionKey(params.sessionCtx) ?? undefined;
+  const normalizedChatType = normalizeChatType(params.sessionCtx.ChatType);
+  const isGroup =
+    normalizedChatType != null && normalizedChatType !== "direct" ? true : Boolean(groupResolution);
+  const isThread = resolveThreadFlag({
+    sessionKey: params.sessionKey,
+    messageThreadId: params.sessionCtx.MessageThreadId,
+    threadLabel: params.sessionCtx.ThreadLabel,
+    threadStarterBody: params.sessionCtx.ThreadStarterBody,
+    parentSessionKey: params.sessionCtx.ParentSessionKey,
+  });
+  const resetType = resolveSessionResetType({
+    sessionKey: params.sessionKey,
+    isGroup,
+    isThread,
+  });
+  const channelReset = resolveChannelResetConfig({
+    sessionCfg,
+    channel:
+      groupResolution?.channel ??
+      (params.sessionCtx.OriginatingChannel as string | undefined) ??
+      params.sessionCtx.Surface ??
+      params.sessionCtx.Provider,
+  });
+  const resetPolicy = resolveSessionResetPolicy({
+    sessionCfg,
+    resetType,
+    resetOverride: channelReset,
+  });
+  return resetPolicy.mode === "daily" ? resetPolicy.atHour : undefined;
+}
+
+function replaceMemoryFlushPlanPath(text: string, fromPath: string, toPath: string): string {
+  return fromPath === toPath ? text : text.replaceAll(fromPath, toPath);
+}
 
 function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalizeUsage> | undefined {
   const trimmed = line.trim();
@@ -871,15 +922,42 @@ export async function runMemoryFlushIfNeeded(params: {
   }
   let memoryCompactionCompleted = false;
   const memoryFlushNowMs = memoryDeps.now();
+  const memoryFlushResetAtHour = resolveMemoryFlushResetAtHour({
+    cfg: params.cfg,
+    sessionCtx: params.sessionCtx,
+    sessionKey: params.sessionKey,
+  });
   const activeMemoryFlushPlan =
     resolveMemoryFlushPlan({
       cfg: params.cfg,
       nowMs: memoryFlushNowMs,
     }) ?? memoryFlushPlan;
-  const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;
+  const defaultMemoryFlushWritePath = resolveMemoryFlushRelativePathForRun({
+    cfg: params.cfg,
+    nowMs: memoryFlushNowMs,
+  });
+  const resetCycleMemoryFlushWritePath = resolveMemoryFlushRelativePathForRun({
+    cfg: params.cfg,
+    nowMs: memoryFlushNowMs,
+    resetAtHour: memoryFlushResetAtHour,
+  });
+  const memoryFlushWritePath =
+    activeMemoryFlushPlan.relativePath === defaultMemoryFlushWritePath
+      ? resetCycleMemoryFlushWritePath
+      : activeMemoryFlushPlan.relativePath;
+  const effectiveMemoryFlushPrompt = replaceMemoryFlushPlanPath(
+    activeMemoryFlushPlan.prompt,
+    activeMemoryFlushPlan.relativePath,
+    memoryFlushWritePath,
+  );
+  const effectiveMemoryFlushSystemPrompt = replaceMemoryFlushPlanPath(
+    activeMemoryFlushPlan.systemPrompt,
+    activeMemoryFlushPlan.relativePath,
+    memoryFlushWritePath,
+  );
   const flushSystemPrompt = [
     params.followupRun.run.extraSystemPrompt,
-    activeMemoryFlushPlan.systemPrompt,
+    effectiveMemoryFlushSystemPrompt,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -914,7 +992,7 @@ export async function runMemoryFlushIfNeeded(params: {
           silentExpected: true,
           trigger: "memory",
           memoryFlushWritePath,
-          prompt: activeMemoryFlushPlan.prompt,
+          prompt: effectiveMemoryFlushPrompt,
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           bootstrapPromptWarningSignaturesSeen,

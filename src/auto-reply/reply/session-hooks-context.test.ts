@@ -277,6 +277,48 @@ describe("session hook context wiring", () => {
     }
   });
 
+  it("keeps the daily end reason across a DST-skipped reset hour", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(Date.UTC(2026, 2, 8, 8, 0, 0)));
+      const sessionKey = "agent:main:telegram:direct:dst-gap";
+      const storePath = await createStorePath("openclaw-session-hook-dst-gap");
+      const transcriptPath = await writeTranscript(storePath, "dst-gap-session", "dst gap");
+      await writeStore(storePath, {
+        [sessionKey]: {
+          sessionId: "dst-gap-session",
+          sessionFile: transcriptPath,
+          updatedAt: Date.UTC(2026, 2, 8, 6, 30, 0), // 01:30 local before the skipped 02:00 reset hour
+        },
+      });
+      const cfg = {
+        agents: {
+          defaults: {
+            userTimezone: "America/New_York",
+          },
+        },
+        session: {
+          store: storePath,
+          reset: {
+            mode: "daily",
+            atHour: 2,
+          },
+        },
+      } as OpenClawConfig;
+
+      await initSessionState({
+        ctx: { Body: "hello", SessionKey: sessionKey },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      const [event] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+      expect(event).toMatchObject({ reason: "daily" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("marks idle stale rollovers with reason idle", async () => {
     vi.useFakeTimers();
     try {

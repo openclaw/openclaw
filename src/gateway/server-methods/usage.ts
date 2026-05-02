@@ -8,6 +8,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type {
   CostUsageSummary,
+  DayBucketMode,
   SessionDailyModelUsage,
   SessionMessageCounts,
   SessionModelUsage,
@@ -320,12 +321,32 @@ async function discoverAllSessionsForUsage(params: {
   return results.flat().toSorted((a, b) => b.mtime - a.mtime);
 }
 
+function resolveDayBucketMode(interpretation: DateInterpretation): DayBucketMode {
+  if (interpretation.mode === "specific") {
+    return { type: "specific", utcOffsetMinutes: interpretation.utcOffsetMinutes };
+  }
+  if (interpretation.mode === "gateway") {
+    return { type: "gateway" };
+  }
+  return { type: "utc" };
+}
+
+function formatInterpretationCacheKey(interpretation: DateInterpretation): string {
+  return interpretation.mode === "specific"
+    ? `specific:${interpretation.utcOffsetMinutes}`
+    : interpretation.mode;
+}
+
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
   config: OpenClawConfig;
+  dayBucketMode?: DayBucketMode;
+  interpretationCacheKey?: string;
 }): Promise<CostUsageSummary> {
-  const cacheKey = `${params.startMs}-${params.endMs}`;
+  const dayBucketMode = params.dayBucketMode ?? { type: "utc" };
+  const interpretationCacheKey = params.interpretationCacheKey ?? "utc";
+  const cacheKey = `${params.startMs}-${params.endMs}-${interpretationCacheKey}`;
   const now = Date.now();
   const cached = costUsageCache.get(cacheKey);
   if (cached?.summary && cached.updatedAt && now - cached.updatedAt < COST_USAGE_CACHE_TTL_MS) {
@@ -344,6 +365,7 @@ async function loadCostUsageSummaryCached(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     config: params.config,
+    dayBucketMode,
   })
     .then((summary) => {
       setCostUsageCache(cacheKey, { summary, updatedAt: Date.now() });
@@ -395,6 +417,10 @@ export const usageHandlers: GatewayRequestHandlers = {
   },
   "usage.cost": async ({ respond, params, context }) => {
     const config = context.getRuntimeConfig();
+    const interpretation = resolveDateInterpretation({
+      mode: params?.mode,
+      utcOffset: params?.utcOffset,
+    });
     const { startMs, endMs } = parseDateRange({
       startDate: params?.startDate,
       endDate: params?.endDate,
@@ -402,7 +428,13 @@ export const usageHandlers: GatewayRequestHandlers = {
       mode: params?.mode,
       utcOffset: params?.utcOffset,
     });
-    const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
+    const summary = await loadCostUsageSummaryCached({
+      startMs,
+      endMs,
+      config,
+      dayBucketMode: resolveDayBucketMode(interpretation),
+      interpretationCacheKey: formatInterpretationCacheKey(interpretation),
+    });
     respond(true, summary, undefined);
   },
   "sessions.usage": async ({ respond, params, context }) => {
@@ -420,6 +452,10 @@ export const usageHandlers: GatewayRequestHandlers = {
 
     const p = params;
     const config = context.getRuntimeConfig();
+    const interpretation = resolveDateInterpretation({
+      mode: p.mode,
+      utcOffset: p.utcOffset,
+    });
     const { startMs, endMs } = parseDateRange({
       startDate: p.startDate,
       endDate: p.endDate,
@@ -639,6 +675,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         agentId,
         startMs,
         endMs,
+        dayBucketMode: resolveDayBucketMode(interpretation),
       });
 
       if (usage) {

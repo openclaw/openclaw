@@ -176,6 +176,136 @@ describe("session cost usage", () => {
     });
   });
 
+  it("groups daily totals by userTimezone instead of host or UTC day", async () => {
+    const root = await makeSessionCostRoot("cost-timezone");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-tz.jsonl");
+
+    const entries = [
+      {
+        type: "message",
+        timestamp: "2026-03-18T15:30:00.000Z", // 2026-03-18 23:30 in Asia/Shanghai
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-18T16:30:00.000Z", // 2026-03-19 00:30 in Asia/Shanghai
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 7,
+            output: 8,
+            totalTokens: 15,
+            cost: { total: 0.02 },
+          },
+        },
+      },
+    ];
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const config = {
+      agents: {
+        defaults: {
+          userTimezone: "Asia/Shanghai",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.parse("2026-03-18T00:00:00.000Z"),
+        endMs: Date.parse("2026-03-19T23:59:59.999Z"),
+        config,
+      });
+      expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-03-18", "2026-03-19"]);
+      expect(summary.daily[0]?.totalTokens).toBe(10);
+      expect(summary.daily[1]?.totalTokens).toBe(15);
+    });
+  });
+
+  it("keeps explicit UTC usage buckets aligned with the requested date interpretation", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-utc-buckets-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-utc.jsonl");
+
+    const entries = [
+      {
+        type: "message",
+        timestamp: "2026-03-18T15:30:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-18T16:30:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 7,
+            output: 8,
+            totalTokens: 15,
+            cost: { total: 0.02 },
+          },
+        },
+      },
+    ];
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const config = {
+      agents: {
+        defaults: {
+          userTimezone: "Asia/Shanghai",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.parse("2026-03-18T00:00:00.000Z"),
+        endMs: Date.parse("2026-03-18T23:59:59.999Z"),
+        config,
+        dayBucketMode: { type: "utc" },
+      });
+      expect(summary.daily.map((entry) => entry.date)).toEqual(["2026-03-18"]);
+      expect(summary.daily[0]?.totalTokens).toBe(25);
+    });
+  });
+
   it("summarizes a single session file", async () => {
     const root = await makeSessionCostRoot("cost-session");
     const sessionFile = path.join(root, "session.jsonl");
@@ -207,6 +337,67 @@ describe("session cost usage", () => {
     expect(summary?.totalCost).toBeCloseTo(0.03, 5);
     expect(summary?.totalTokens).toBe(30);
     expect(summary?.lastActivity).toBeGreaterThan(0);
+  });
+
+  it("labels session daily breakdown with the requested day bucket mode", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-session-buckets-"));
+    const sessionFile = path.join(root, "session.jsonl");
+
+    const entries = [
+      {
+        type: "message",
+        timestamp: "2026-03-18T15:30:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 5,
+            output: 5,
+            totalTokens: 10,
+            cost: { total: 0.01 },
+          },
+        },
+      },
+      {
+        type: "message",
+        timestamp: "2026-03-18T16:30:00.000Z",
+        message: {
+          role: "assistant",
+          provider: "openai",
+          model: "gpt-5.2",
+          usage: {
+            input: 7,
+            output: 8,
+            totalTokens: 15,
+            cost: { total: 0.02 },
+          },
+        },
+      },
+    ];
+
+    await fs.writeFile(
+      sessionFile,
+      entries.map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    const config = {
+      agents: {
+        defaults: {
+          userTimezone: "Asia/Shanghai",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const summary = await loadSessionCostSummary({
+      sessionFile,
+      config,
+      dayBucketMode: { type: "utc" },
+    });
+
+    expect(summary?.activityDates).toEqual(["2026-03-18"]);
+    expect(summary?.dailyBreakdown).toEqual([{ date: "2026-03-18", tokens: 25, cost: 0.03 }]);
   });
 
   it("captures message counts, tool usage, and model usage", async () => {
