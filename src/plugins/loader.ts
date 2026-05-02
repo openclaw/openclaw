@@ -671,7 +671,12 @@ function buildCacheKey(params: {
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
-  const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
+  // Note: runtimeSubagentMode is intentionally excluded from the cache key.
+  // It does not affect which plugins are loaded or how they are configured —
+  // it is metadata stored alongside the active registry state. Including it
+  // produces redundant register() calls when call sites pass inconsistent
+  // allowGatewaySubagentBinding values across the message processing pipeline.
+  // Restores the fix originally landed in #61854 (issue #61756).
   const gatewayMethodsKey = JSON.stringify(params.coreGatewayMethodNames ?? []);
   const activationMode = params.activate === false ? "snapshot" : "active";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
@@ -681,7 +686,7 @@ function buildCacheKey(params: {
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${discoveryMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${discoveryMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
 }
 
 function matchesScopedPluginRequest(params: {
