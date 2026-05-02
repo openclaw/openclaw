@@ -930,21 +930,6 @@ export function buildAgentSystemPrompt(params: {
     lines.push("## Reasoning Format", reasoningHint, "");
   }
 
-  const contextFiles = params.contextFiles ?? [];
-  const validContextFiles = contextFiles.filter(
-    (file) => typeof file.path === "string" && file.path.trim().length > 0,
-  );
-  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
-  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
-  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
-  lines.push(
-    ...buildProjectContextSection({
-      files: stableContextFiles,
-      heading: "# Project Context",
-      dynamic: false,
-    }),
-  );
-
   // Skip silent replies for subagent/none modes
   if (!isMinimal && silentReplyPromptMode !== "none") {
     lines.push(
@@ -967,6 +952,23 @@ export function buildAgentSystemPrompt(params: {
   // transports can reuse it across labs and turns. Dynamic group/session
   // additions and volatile project context below it are the primary cache invalidators.
   lines.push(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+  // Context files (MEMORY.md, SOUL.md, etc.) are placed AFTER the cache boundary
+  // so that agent memory writes between turns do not invalidate the cached stable prefix.
+  const contextFiles = params.contextFiles ?? [];
+  const validContextFiles = contextFiles.filter(
+    (file) => typeof file.path === "string" && file.path.trim().length > 0,
+  );
+  const orderedContextFiles = sortContextFilesForPrompt(validContextFiles);
+  const stableContextFiles = orderedContextFiles.filter((file) => !isDynamicContextFile(file.path));
+  const dynamicContextFiles = orderedContextFiles.filter((file) => isDynamicContextFile(file.path));
+  lines.push(
+    ...buildProjectContextSection({
+      files: stableContextFiles,
+      heading: "# Project Context",
+      dynamic: false,
+    }),
+  );
 
   lines.push(
     ...buildProjectContextSection({
