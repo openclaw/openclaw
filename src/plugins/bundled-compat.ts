@@ -6,6 +6,9 @@ export function withBundledPluginAllowlistCompat(params: {
   config: OpenClawConfig | undefined;
   pluginIds: readonly string[];
 }): OpenClawConfig | undefined {
+  if (params.config?.plugins?.bundledMode === "respect-allow") {
+    return params.config;
+  }
   const allow = params.config?.plugins?.allow;
   if (!Array.isArray(allow) || allow.length === 0) {
     return params.config;
@@ -39,11 +42,16 @@ export function withBundledPluginEnablementCompat(params: {
 }): OpenClawConfig | undefined {
   const existingEntries = params.config?.plugins?.entries ?? {};
   const forcePluginsEnabled = params.config?.plugins?.enabled === false;
+  const respectAllow = params.config?.plugins?.bundledMode === "respect-allow";
+  const allowSet = respectAllow ? new Set(params.config?.plugins?.allow ?? []) : undefined;
   let changed = false;
   const nextEntries: Record<string, PluginEntryConfig> = { ...existingEntries };
 
   for (const pluginId of params.pluginIds) {
     if (existingEntries[pluginId] !== undefined) {
+      continue;
+    }
+    if (allowSet && !allowSet.has(pluginId)) {
       continue;
     }
     nextEntries[pluginId] = { enabled: true };
