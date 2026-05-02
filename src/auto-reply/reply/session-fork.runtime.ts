@@ -10,7 +10,6 @@ import {
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
 } from "@mariozechner/pi-coding-agent";
-import { v7 as uuidv7 } from "uuid";
 import { estimateMessagesTokens } from "../../agents/compaction.js";
 import { resolveSessionFilePath } from "../../config/sessions/paths.js";
 import {
@@ -177,7 +176,7 @@ async function writeForkHeaderOnly(params: {
   sessionDir: string;
   cwd: string;
 }): Promise<{ sessionId: string; sessionFile: string }> {
-  const sessionId = uuidv7();
+  const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const fileTimestamp = timestamp.replace(/[:.]/g, "-");
   const sessionFile = path.join(params.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
@@ -202,7 +201,7 @@ async function writeBranchedSession(params: {
   parentSessionFile: string;
   source: ForkSourceTranscript;
 }): Promise<{ sessionId: string; sessionFile: string }> {
-  const sessionId = uuidv7();
+  const sessionId = crypto.randomUUID();
   const timestamp = new Date().toISOString();
   const fileTimestamp = timestamp.replace(/[:.]/g, "-");
   const sessionFile = path.join(params.source.sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);
