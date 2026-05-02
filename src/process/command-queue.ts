@@ -31,6 +31,26 @@ export class CommandLaneTaskTimeoutError extends Error {
 }
 
 /**
+ * Dedicated error type thrown when a new command is rejected because the lane
+ * circuit breaker is open — the lane is saturated (depth or oldest wait
+ * threshold exceeded). Callers should back off for retryAfterMs milliseconds.
+ *
+ * Introduced to fail fast when queueAhead >= circuitBreakerDepth or the oldest
+ * queued entry has waited >= circuitBreakerWaitMs, preventing cascading queue
+ * buildup during LLM provider degradation events.
+ */
+export class CommandLaneCircuitBreakerError extends Error {
+  readonly retryAfterMs: number;
+  constructor(lane: string, retryAfterMs: number) {
+    super(
+      `Command lane "${lane}" circuit breaker open: lane is saturated. Retry after ${retryAfterMs}ms.`,
+    );
+    this.name = "CommandLaneCircuitBreakerError";
+    this.retryAfterMs = retryAfterMs;
+  }
+}
+
+/**
  * Dedicated error type thrown when a new command is rejected because the
  * gateway is currently draining for restart.
  */
@@ -53,6 +73,8 @@ type QueueEntry = {
   enqueuedAt: number;
   warnAfterMs: number;
   taskTimeoutMs?: number;
+  /** Higher priority entries are dequeued first. Default 0. */
+  priority: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -228,6 +250,26 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
   }
 }
 
+/**
+ * Dequeue the highest-priority entry. Among equal priorities, FIFO order is
+ * preserved. When all priorities are 0 (the common case), degrades to shift().
+ */
+function dequeueHighestPriority(queue: QueueEntry[]): QueueEntry {
+  if (queue.length <= 1) {
+    return queue.shift() as QueueEntry;
+  }
+  let bestIdx = 0;
+  for (let i = 1; i < queue.length; i++) {
+    if (queue[i].priority > queue[bestIdx].priority) {
+      bestIdx = i;
+    }
+  }
+  if (bestIdx === 0) {
+    return queue.shift() as QueueEntry;
+  }
+  return queue.splice(bestIdx, 1)[0];
+}
+
 function drainLane(lane: string) {
   const state = getLaneState(lane);
   if (state.draining) {
@@ -243,7 +285,7 @@ function drainLane(lane: string) {
   const pump = () => {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
-        const entry = state.queue.shift() as QueueEntry;
+        const entry = dequeueHighestPriority(state.queue);
         const waitedMs = Date.now() - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
@@ -327,6 +369,26 @@ export function enqueueCommandInLane<T>(
   const cleaned = normalizeLane(lane);
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
+  // Circuit breaker: fail fast when lane is saturated to prevent cascading
+  // queue buildup during LLM provider degradation events.
+  const cbDepth = opts?.circuitBreakerDepth;
+  const cbWaitMs = opts?.circuitBreakerWaitMs;
+  if (cbDepth != null || cbWaitMs != null) {
+    const depth = getLaneDepth(state);
+    const depthTripped = cbDepth != null && depth >= cbDepth;
+    let waitTripped = false;
+    if (cbWaitMs != null && state.queue.length > 0) {
+      const oldestWait = Date.now() - Math.min(...state.queue.map((e) => e.enqueuedAt));
+      waitTripped = oldestWait >= cbWaitMs;
+    }
+    if (depthTripped || waitTripped) {
+      const retryAfterMs = Math.min(depth * 30_000, 300_000);
+      diag.warn(
+        `[circuit-breaker] lane ${cleaned} open: depth=${depth} depthTripped=${depthTripped} waitTripped=${waitTripped} retryAfterMs=${retryAfterMs}`,
+      );
+      return Promise.reject(new CommandLaneCircuitBreakerError(cleaned, retryAfterMs));
+    }
+  }
   return new Promise<T>((resolve, reject) => {
     state.queue.push({
       task: () => task(),
@@ -335,6 +397,7 @@ export function enqueueCommandInLane<T>(
       enqueuedAt: Date.now(),
       warnAfterMs,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
+      priority: opts?.priority ?? 0,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
@@ -346,7 +409,14 @@ export function enqueueCommand<T>(
   task: () => Promise<T>,
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
-  return enqueueCommandInLane(CommandLane.Main, task, opts);
+  // Enable circuit breaker for the main run lane: fail fast when depth >= 9
+  // or oldest queued run waited > 10 minutes, to prevent cascading queue
+  // buildup during LLM provider degradation events.
+  return enqueueCommandInLane(CommandLane.Main, task, {
+    ...opts,
+    circuitBreakerDepth: 9,
+    circuitBreakerWaitMs: 600_000,
+  });
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {
