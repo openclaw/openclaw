@@ -22,6 +22,7 @@ export function isWebView2(): boolean {
 }
 
 export function sendToNative(msg: NativeBridgeMessage): void {
+  // eslint-disable-next-line unicorn/require-post-message-target-origin -- WebView2 bridge does not use origin-based routing
   getWebview()?.postMessage(msg);
 }
 
@@ -61,7 +62,6 @@ export function initNativeBridge(host: NativeBridgeHost): () => void {
     handleNativeMessage(host, event.data);
   };
 
-  bridge.postMessage({ type: "ready" });
   bridge.addEventListener("message", handler);
   sendToNative({ type: "ready" });
 
