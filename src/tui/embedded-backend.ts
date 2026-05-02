@@ -34,13 +34,13 @@ import { performGatewaySessionReset } from "../gateway/session-reset-service.js"
 import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
 import {
   listAgentsForGateway,
-  listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  readSessionMessages,
+  readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
@@ -197,7 +197,9 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const sessionAgentId = resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
     const localMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+      sessionId && storePath
+        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile)
+        : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
@@ -245,12 +247,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    return listSessionsFromStore({
+    return (await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,
       opts: opts ?? {},
-    }) as TuiSessionList;
+    })) as TuiSessionList;
   }
 
   async listAgents(): Promise<TuiAgentsList> {

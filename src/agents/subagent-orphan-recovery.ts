@@ -19,7 +19,7 @@ import {
   type SessionEntry,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
-import { readSessionMessages } from "../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildAnnounceIdempotencyKey } from "./announce-idempotency.js";
@@ -350,7 +350,11 @@ export async function recoverOrphanedSubagentSessions(params: {
 
         log.info(`found orphaned subagent session: ${childSessionKey} (run=${runId})`);
 
-        const messages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
+        const messages = await readSessionMessagesAsync(
+          entry.sessionId,
+          storePath,
+          entry.sessionFile,
+        );
         const lastHumanMessage = [...messages]
           .toReversed()
           .find((msg) => (msg as { role?: unknown } | null)?.role === "user");

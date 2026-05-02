@@ -11,7 +11,7 @@ const runtime = vi.hoisted(() => ({
     entry: { sessionId: "sess-main" },
   })),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
-  readSessionMessages: vi.fn((): unknown[] => []),
+  readSessionMessagesAsync: vi.fn(async (): Promise<unknown[]> => []),
   augmentChatHistoryWithCliSessionImports: vi.fn(
     ({ localMessages }: { localMessages?: unknown[] }) => localMessages ?? [],
   ),
@@ -34,7 +34,7 @@ describe("embedded gateway stub", () => {
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.projectRecentChatDisplayMessages.mockClear();
-    runtime.readSessionMessages.mockClear();
+    runtime.readSessionMessagesAsync.mockClear();
   });
 
   it("resolves sessions through the gateway session resolver", async () => {
@@ -78,7 +78,7 @@ describe("embedded gateway stub", () => {
       { role: "assistant", content: "hi" },
     ];
     const projectedMessages = [{ role: "assistant", content: "hi" }];
-    runtime.readSessionMessages.mockReturnValueOnce(rawMessages);
+    runtime.readSessionMessagesAsync.mockResolvedValueOnce(rawMessages);
     runtime.projectRecentChatDisplayMessages.mockReturnValueOnce(projectedMessages);
 
     const callGateway = createEmbeddedCallGateway();
@@ -99,7 +99,7 @@ describe("embedded gateway stub", () => {
       { role: "user", content: "visible older" },
       { role: "assistant", content: "hidden newer" },
     ];
-    runtime.readSessionMessages.mockReturnValueOnce(rawMessages);
+    runtime.readSessionMessagesAsync.mockResolvedValueOnce(rawMessages);
 
     const callGateway = createEmbeddedCallGateway();
     await callGateway<{ messages: unknown[] }>({

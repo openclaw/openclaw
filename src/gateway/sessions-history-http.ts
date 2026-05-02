@@ -31,8 +31,8 @@ import {
   SessionHistorySseState,
 } from "./session-history-state.js";
 import {
-  readRecentSessionMessagesWithStats,
-  readSessionMessages,
+  readRecentSessionMessagesWithStatsAsync,
+  readSessionMessagesAsync,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
@@ -156,7 +156,7 @@ export async function handleSessionHistoryHttpRequest(
       : DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
   const boundedSnapshot =
     cursor === undefined && typeof limit === "number"
-      ? readRecentSessionMessagesWithStats(
+      ? await readRecentSessionMessagesWithStatsAsync(
           entry.sessionId,
           target.storePath,
           entry.sessionFile,
@@ -168,7 +168,7 @@ export async function handleSessionHistoryHttpRequest(
   const rawSnapshot =
     boundedSnapshot?.messages ??
     (entry?.sessionId
-      ? readSessionMessages(entry.sessionId, target.storePath, entry.sessionFile)
+      ? await readSessionMessagesAsync(entry.sessionId, target.storePath, entry.sessionFile)
       : []);
   const historySnapshot = buildSessionHistorySnapshot({
     rawMessages: rawSnapshot,
@@ -338,7 +338,7 @@ export async function handleSessionHistoryHttpRequest(
           return;
         }
       }
-      sentHistory = sseState.refresh();
+      sentHistory = await sseState.refreshAsync();
       sseWrite(res, "history", {
         sessionKey: target.canonicalKey,
         ...sentHistory,

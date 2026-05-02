@@ -21,7 +21,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { readSessionMessages } from "../../gateway/session-utils.fs.js";
+import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveMemoryFlushPlan } from "../../plugins/memory-state.js";
@@ -341,21 +341,21 @@ async function readLastNonzeroUsageFromSessionLog(logPath: string) {
   }
 }
 
-function estimatePromptTokensFromSessionTranscript(params: {
+async function estimatePromptTokensFromSessionTranscript(params: {
   sessionId?: string;
   storePath?: string;
   sessionFile?: string;
-}): number | undefined {
+}): Promise<number | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
   try {
-    const messages = readSessionMessages(
+    const messages = (await readSessionMessagesAsync(
       sessionId,
       params.storePath,
       params.sessionFile,
-    ) as AgentMessage[];
+    )) as AgentMessage[];
     if (messages.length === 0) {
       return undefined;
     }
@@ -444,7 +444,7 @@ export async function runPreflightCompactionIfNeeded(params: {
   const transcriptPromptTokens =
     typeof freshPersistedTokens === "number"
       ? undefined
-      : estimatePromptTokensFromSessionTranscript({
+      : await estimatePromptTokensFromSessionTranscript({
           sessionId: entry.sessionId,
           storePath: params.storePath,
           sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
