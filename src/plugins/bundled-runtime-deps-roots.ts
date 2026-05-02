@@ -72,12 +72,6 @@ function isPackagedBundledPluginRoot(pluginRoot: string): boolean {
   return Boolean(packageRoot && !isSourceCheckoutRoot(packageRoot));
 }
 
-function createPathHash(value: string): string {
-  // Hash the OS-canonical (realpath) form so symlinked / junctioned
-  // packageRoots converge on a single staging directory across call sites.
-  return createHash("sha256").update(realpathOrResolve(value)).digest("hex").slice(0, 12);
-}
-
 function createPackageRuntimeDepsRootHash(packageRoot: string): string {
   const hash = createHash("sha256");
   hash.update(realpathOrResolve(packageRoot));

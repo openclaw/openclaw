@@ -327,7 +327,7 @@ describe("prepareGatewayPluginBootstrap runtime-deps staging", () => {
       ...pluginManifestRegistry,
       plugins: [
         {
-          ...pluginManifestRegistry.plugins[0]!,
+          ...pluginManifestRegistry.plugins[0],
           rootDir: "/app/dist-runtime/extensions/telegram",
           source: "/app/dist-runtime/extensions/telegram/index.js",
           manifestPath: "/app/dist-runtime/extensions/telegram/package.json",
