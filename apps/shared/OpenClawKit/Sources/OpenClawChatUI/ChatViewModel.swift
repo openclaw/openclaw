@@ -1179,14 +1179,6 @@ public final class OpenClawChatViewModel {
             return
         }
 
-        if processed.count > 5_000_000 {
-            // Best-effort safety net: the processor returns its lowest-quality
-            // pass even if budget couldn't be met. For an image so large that
-            // even q=0.3 at 1600px exceeds 5 MB, refuse rather than upload.
-            self.errorText = "Attachment \(fileName) still exceeds 5 MB after compression"
-            return
-        }
-
         let outputFileName: String = {
             let base = (fileName as NSString).deletingPathExtension
             return base.isEmpty ? "image.jpg" : "\(base).jpg"

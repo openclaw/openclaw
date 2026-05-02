@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 - Discord/channels: add reusable message-channel access groups plus Discord channel-audience DM authorization, so allowlists can reference `accessGroup:<name>` across channel auth paths. (#75813)
 
 ### Fixes
+- iOS/chat: inline image resize now caps the longest edge (not just width) to 1600 px, strips EXIF/GPS/TIFF metadata, and flattens alpha to white before upload. Fixes #68524. Thanks @devicemanager.
 
 - Discord/reactions: skip reaction listener registration when DMs and group DMs are disabled and every configured guild has `reactionNotifications: "off"`, avoiding needless reaction-event queue work. Fixes #47516. Thanks @x4v13r1120.
 - Telegram/streaming: keep partial preview streaming enabled for plain reply-to replies, disabling drafts only for real native quote excerpts that require Telegram quote parameters. Fixes #73505. Thanks @choury.

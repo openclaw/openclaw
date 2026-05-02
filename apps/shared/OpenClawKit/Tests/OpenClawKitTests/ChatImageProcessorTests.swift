@@ -1,12 +1,11 @@
-import XCTest
 import ImageIO
 import UniformTypeIdentifiers
+import XCTest
 @testable import OpenClawKit
 
 final class ChatImageProcessorTests: XCTestCase {
-
-    // Build a synthetic JPEG with embedded EXIF + GPS so we can verify the
-    // metadata-stripping behavior. Resolution can be tuned.
+    /// Build a synthetic JPEG with embedded EXIF + GPS so we can verify the
+    /// metadata-stripping behavior. Resolution can be tuned.
     private func syntheticJPEG(width: Int, height: Int) throws -> Data {
         let ctx = CGContext(
             data: nil,
@@ -25,7 +24,8 @@ final class ChatImageProcessorTests: XCTestCase {
 
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(
-            data, UTType.jpeg.identifier as CFString, 1, nil) else {
+            data, UTType.jpeg.identifier as CFString, 1, nil)
+        else {
             throw XCTSkip("could not create image destination")
         }
         let props: [CFString: Any] = [
@@ -81,10 +81,40 @@ final class ChatImageProcessorTests: XCTestCase {
         XCTAssertEqual(srcRatio, outRatio, accuracy: 0.02, "aspect preserved")
     }
 
+    func test_resizesPortraitLongEdgeTo1600() throws {
+        // Portrait: width < height — the long edge is the height.
+        let src = try syntheticJPEG(width: 3000, height: 4000)
+        let out = try ChatImageProcessor.processForUpload(data: src)
+        guard let (w, h) = readDimensions(out) else {
+            return XCTFail("could not read output dimensions")
+        }
+        XCTAssertLessThanOrEqual(h, 1600, "portrait long edge (height) should be <= 1600")
+        XCTAssertLessThanOrEqual(max(w, h), 1600, "no dimension should exceed 1600")
+        // aspect preserved
+        let srcRatio = 3000.0 / 4000.0
+        let outRatio = Double(w) / Double(h)
+        XCTAssertEqual(srcRatio, outRatio, accuracy: 0.02, "aspect preserved")
+    }
+
+    func test_resizesNarrowTallLongEdgeTo1600() throws {
+        // Narrow-tall: width well below 1600, height well above.
+        let src = try syntheticJPEG(width: 1080, height: 2400)
+        let out = try ChatImageProcessor.processForUpload(data: src)
+        guard let (w, h) = readDimensions(out) else {
+            return XCTFail("could not read output dimensions")
+        }
+        XCTAssertLessThanOrEqual(h, 1600, "narrow-tall long edge (height) should be <= 1600")
+        XCTAssertLessThanOrEqual(max(w, h), 1600, "no dimension should exceed 1600")
+        // aspect preserved
+        let srcRatio = 1080.0 / 2400.0
+        let outRatio = Double(w) / Double(h)
+        XCTAssertEqual(srcRatio, outRatio, accuracy: 0.02, "aspect preserved")
+    }
+
     func test_stripsEXIFAndGPSAndTIFF() throws {
         let src = try syntheticJPEG(width: 3000, height: 2000)
         let out = try ChatImageProcessor.processForUpload(data: src)
-        let props = readProperties(out)
+        let props = self.readProperties(out)
 
         // Verify the dictionaries either are absent or empty.
         let exif = props[kCGImagePropertyExifDictionary] as? [CFString: Any] ?? [:]
@@ -146,8 +176,7 @@ final class ChatImageProcessorTests: XCTestCase {
             let needleBytes = Array(needle.utf8)
             XCTAssertNil(
                 out.range(of: Data(needleBytes)),
-                "output JPEG must not contain leaked source string: \(needle)"
-            )
+                "output JPEG must not contain leaked source string: \(needle)")
         }
     }
 
@@ -171,7 +200,8 @@ final class ChatImageProcessorTests: XCTestCase {
         }
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(
-            data, UTType.png.identifier as CFString, 1, nil) else {
+            data, UTType.png.identifier as CFString, 1, nil)
+        else {
             throw XCTSkip("could not create PNG destination")
         }
         CGImageDestinationAddImage(dest, image, nil)
@@ -190,14 +220,14 @@ final class ChatImageProcessorTests: XCTestCase {
         let out = try ChatImageProcessor.processForUpload(data: src)
 
         guard let source = CGImageSourceCreateWithData(out as CFData, nil),
-              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+              let cg = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else {
             return XCTFail("could not decode output")
         }
         // JPEG cannot have an alpha channel; if any is reported it must be a 'skip' variant.
         let alpha = cg.alphaInfo
         XCTAssertTrue(
             alpha == .none || alpha == .noneSkipFirst || alpha == .noneSkipLast,
-            "output JPEG should be opaque; got alphaInfo=\(alpha.rawValue)"
-        )
+            "output JPEG should be opaque; got alphaInfo=\(alpha.rawValue)")
     }
 }

@@ -17,7 +17,6 @@ import Foundation
 ///   `test_outputContainsNoLeakedSensitiveStrings` against planted needles.
 /// - Normalize to JPEG so the receiver has a predictable decode surface.
 public enum ChatImageProcessor {
-
     /// Upper bound on the longest edge after resize, in pixels.
     public static let maxDimension: Int = 1600
 
@@ -52,7 +51,7 @@ public enum ChatImageProcessor {
         do {
             let result = try JPEGTranscoder.transcodeToJPEG(
                 imageData: data,
-                maxWidthPx: self.maxDimension,
+                maxLongEdgePx: self.maxDimension,
                 quality: self.jpegQuality,
                 maxBytes: self.maxPayloadBytes)
             return result.data
