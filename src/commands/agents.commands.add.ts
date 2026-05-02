@@ -259,7 +259,22 @@ export async function agentsAddCommand(
       }
     }
 
-    const workspaceDefault = resolveAgentWorkspaceDir(cfg, agentId);
+    // Pre-fill peer-level workspace-<id> per docs/concepts/multi-agent.md
+    // ("Paths quick map"). resolveAgentWorkspaceDir's fallback path nests
+    // non-default agents under main's workspace, which contradicts the
+    // documented convention and causes a silent footgun (rm -rf
+    // ~/.openclaw/workspace deletes every nested agent's data). Compute
+    // the peer-level default here so the wizard pre-fill matches docs.
+    // Issue: https://github.com/openclaw/openclaw/issues/71889
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    const mainWorkspaceDir = resolveAgentWorkspaceDir(cfg, defaultAgentId);
+    const workspaceDefault =
+      agentId === defaultAgentId
+        ? mainWorkspaceDir
+        : path.join(
+            path.dirname(mainWorkspaceDir),
+            `${path.basename(mainWorkspaceDir)}-${agentId}`,
+          );
     const workspaceInput = await prompter.text({
       message: "Workspace directory",
       initialValue: workspaceDefault,
@@ -277,7 +292,6 @@ export async function agentsAddCommand(
       agentDir,
     });
 
-    const defaultAgentId = resolveDefaultAgentId(cfg);
     if (defaultAgentId !== agentId) {
       const sourceAgentDir = resolveAgentDir(cfg, defaultAgentId);
       const sourceAuthPath = resolveAuthStorePath(sourceAgentDir);
