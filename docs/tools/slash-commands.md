@@ -402,12 +402,14 @@ Config is validated before write; invalid changes are rejected. `/config` update
 
 `/messaging_window` manages the inbound batching window for rapid same-sender
 messages. It writes the same `messages.inbound` config keys you can edit
-manually, but keeps the common operations short.
+manually, but keeps the common operations short. `/messaging-window` is also
+accepted as an alias.
 
 Examples:
 
 ```
 /messaging_window status
+/messaging-window status
 /messaging_window 3s
 /messaging_window off
 /messaging_window global 2s

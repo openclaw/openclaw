@@ -33,15 +33,16 @@ function parseWindowMs(raw: string): number | null {
 function parseAlias(raw: string): string | null {
   const trimmed = raw.trim();
   const lowered = normalizeOptionalLowercaseString(trimmed) ?? "";
-  for (const alias of ALIASES) {
-    if (lowered === alias) {
-      return "";
-    }
-    if (lowered.startsWith(`${alias} `)) {
-      return trimmed.slice(alias.length).trim();
-    }
+  const alias = ALIASES.find(
+    (candidate) => lowered === candidate || lowered.startsWith(`${candidate} `),
+  );
+  if (!alias) {
+    return null;
   }
-  return null;
+  if (lowered === alias) {
+    return "";
+  }
+  return trimmed.slice(alias.length).trim();
 }
 
 function parseSetScope(action: string, args: string): MessagingWindowCommand {
