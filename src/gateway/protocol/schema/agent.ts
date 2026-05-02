@@ -174,6 +174,10 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    // Opaque wake envelope attached by Paperclip's openclaw_gateway adapter.
+    // The gateway does not read it; declared so `additionalProperties: false`
+    // can stay strict for everything else.
+    paperclip: Type.Optional(Type.Unknown()),
   },
   { additionalProperties: false },
 );

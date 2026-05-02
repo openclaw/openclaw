@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { TALK_TEST_PROVIDER_ID } from "../../test-utils/talk-test-provider.js";
 import {
   formatValidationErrors,
+  validateAgentParams,
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePresenceAlivePayload,
@@ -176,6 +177,43 @@ describe("validateWakeParams", () => {
         anotherExtra: true,
       }),
     ).toBe(true);
+  });
+});
+
+describe("validateAgentParams", () => {
+  const baseParams = {
+    message: "hello there",
+    idempotencyKey: "idem-1",
+  };
+
+  it("accepts a minimal agent request", () => {
+    expect(validateAgentParams(baseParams)).toBe(true);
+  });
+
+  it("accepts an opaque paperclip envelope at the root", () => {
+    expect(
+      validateAgentParams({
+        ...baseParams,
+        paperclip: {
+          runId: "run-123",
+          taskId: "task-456",
+          wakeReason: "issue_assigned",
+          workspace: { cwd: "/tmp" },
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("still rejects unknown root properties other than paperclip", () => {
+    expect(
+      validateAgentParams({
+        ...baseParams,
+        someOtherUnknownField: "nope",
+      }),
+    ).toBe(false);
+    expect(formatValidationErrors(validateAgentParams.errors)).toContain(
+      "unexpected property 'someOtherUnknownField'",
+    );
   });
 });
 
