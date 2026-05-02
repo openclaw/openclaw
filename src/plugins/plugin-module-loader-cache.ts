@@ -24,15 +24,9 @@ export function getCachedPluginModuleLoader(params: {
   tryNative?: boolean;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cacheScopeKey?: string;
+  sharedCacheScopeKey?: string;
 }): PluginModuleLoader {
   const loaderFilename = toSafeImportPath(params.loaderFilename ?? params.modulePath);
-  if (params.cacheScopeKey) {
-    const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey}`;
-    const cached = params.cache.get(scopedCacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
   const hasAliasOverride = Boolean(params.aliasMap);
   const hasTryNativeOverride = typeof params.tryNative === "boolean";
   const defaultConfig =
@@ -71,7 +65,10 @@ export function getCachedPluginModuleLoader(params: {
       tryNative,
       aliasMap,
     });
-  const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ?? cacheKey}`;
+  const scopedCacheKey = `${loaderFilename}::${
+    params.sharedCacheScopeKey ??
+    (params.cacheScopeKey ? `${params.cacheScopeKey}::${cacheKey}` : cacheKey)
+  }`;
   const cached = params.cache.get(scopedCacheKey);
   if (cached) {
     return cached;

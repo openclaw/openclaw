@@ -7,6 +7,7 @@ import {
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { resolvePluginMetadataSnapshotConfigFingerprint } from "./plugin-metadata-config-fingerprint.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -36,13 +37,24 @@ function indexesMatch(
 }
 
 export function isPluginMetadataSnapshotCompatible(params: {
-  snapshot: Pick<PluginMetadataSnapshot, "index" | "policyHash" | "workspaceDir">;
+  snapshot: Pick<
+    PluginMetadataSnapshot,
+    "configFingerprint" | "index" | "policyHash" | "workspaceDir"
+  >;
   config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   index?: InstalledPluginIndex;
 }): boolean {
+  const env = params.env ?? process.env;
   return (
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
+    (!params.snapshot.configFingerprint ||
+      params.snapshot.configFingerprint ===
+        resolvePluginMetadataSnapshotConfigFingerprint(params.config, {
+          env,
+          policyHash: params.snapshot.policyHash,
+        })) &&
     (params.snapshot.workspaceDir ?? "") === (params.workspaceDir ?? "") &&
     indexesMatch(params.snapshot.index, params.index)
   );
@@ -171,6 +183,10 @@ function loadPluginMetadataSnapshotImpl(
 
   return {
     policyHash: index.policyHash,
+    configFingerprint: resolvePluginMetadataSnapshotConfigFingerprint(params.config, {
+      env: params.env,
+      policyHash: index.policyHash,
+    }),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,
     registryDiagnostics: registryResult.diagnostics,

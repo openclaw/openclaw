@@ -35,6 +35,7 @@ export type PluginMetadataSnapshotRegistryDiagnostic = {
 
 export type PluginMetadataSnapshot = {
   policyHash: string;
+  configFingerprint?: string;
   workspaceDir?: string;
   index: InstalledPluginIndex;
   registryDiagnostics: readonly PluginMetadataSnapshotRegistryDiagnostic[];
