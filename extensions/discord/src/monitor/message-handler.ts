@@ -83,7 +83,7 @@ function startAcceptedTypingFeedback(params: {
 }): DiscordReplyTypingFeedback | undefined {
   const { ctx, createFeedback } = params;
   if (shouldSkipInitialTypingSignal(createFeedback) || !shouldStartAcceptedTypingFeedback(ctx)) {
-    return;
+    return undefined;
   }
   if (ctx.replyTypingFeedback) {
     void ctx.replyTypingFeedback.onReplyStart().catch((err) => {

@@ -105,6 +105,16 @@ function createReplyTypingFeedbackMock(channelId = "ch-1") {
   };
 }
 
+function createReplyTypingFeedbackMock(channelId = "ch-1") {
+  return {
+    onReplyStart: vi.fn(async () => {}),
+    onIdle: vi.fn(),
+    onCleanup: vi.fn(),
+    updateChannelId: vi.fn(),
+    getChannelId: vi.fn(() => channelId),
+  };
+}
+
 function createHandlerWithDefaultPreflight(overrides?: { setStatus?: SetStatusFn }) {
   preflightDiscordMessageMock.mockImplementation(async (params: { data: { channel_id: string } }) =>
     createPreflightContext(params.data.channel_id),
@@ -321,13 +331,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     processDiscordMessageMock.mockReset();
     installDefaultDiscordPreflight();
     processDiscordMessageMock.mockResolvedValue(undefined);
-    const replyTypingFeedback = {
-      onReplyStart: vi.fn(async () => {}),
-      onIdle: vi.fn(),
-      onCleanup: vi.fn(),
-      updateChannelId: vi.fn(),
-      getChannelId: vi.fn(() => "ch-1"),
-    };
+    const replyTypingFeedback = createReplyTypingFeedbackMock();
     const createReplyTypingFeedback = vi.fn(() => replyTypingFeedback);
     const handler = createDiscordMessageHandler({
       ...createDiscordHandlerParams(),
@@ -622,6 +626,56 @@ describe("createDiscordMessageHandler queue behavior", () => {
     processDiscordMessageMock.mockReset();
 
     const firstRun = createDeferred();
+    const firstFeedback = createReplyTypingFeedbackMock();
+    const skippedFeedback = createReplyTypingFeedbackMock();
+    const feedbackQueue = [firstFeedback, skippedFeedback];
+    const createReplyTypingFeedback = vi.fn(() => {
+      const feedback = feedbackQueue.shift();
+      if (!feedback) {
+        throw new Error("unexpected reply typing feedback creation");
+      }
+      return feedback;
+    });
+    processDiscordMessageMock
+      .mockImplementationOnce(async (ctx: { replyTypingFeedback?: { onCleanup?: () => void } }) => {
+        try {
+          await firstRun.promise;
+        } finally {
+          ctx.replyTypingFeedback?.onCleanup?.();
+        }
+      })
+      .mockImplementationOnce(async () => undefined);
+    preflightDiscordMessageMock.mockImplementation(
+      async (params: { data: { channel_id: string } }) =>
+        createPreflightContext(params.data.channel_id),
+    );
+
+    const handler = createDiscordMessageHandler({
+      ...createDiscordHandlerParams(),
+      __testing: { createReplyTypingFeedback },
+    });
+    await expect(handler(createMessageData("m-1") as never, {} as never)).resolves.toBeUndefined();
+    await flushQueueWork();
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
+    handler.deactivate();
+
+    firstRun.resolve();
+    await firstRun.promise;
+    await flushQueueWork();
+
+    expect(createReplyTypingFeedback).toHaveBeenCalledTimes(2);
+    expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    expect(firstFeedback.onCleanup).toHaveBeenCalledTimes(1);
+    expect(skippedFeedback.onCleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries duplicate deliveries after a queued run is skipped before processing", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+
+    const firstRun = createDeferred();
     processDiscordMessageMock
       .mockImplementationOnce(async () => {
         await firstRun.promise;
@@ -642,9 +696,13 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     firstRun.resolve();
     await firstRun.promise;
-    await Promise.resolve();
+    await flushQueueWork();
 
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+
+    await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
+    await flushQueueWork();
+    expect(preflightDiscordMessageMock).toHaveBeenCalledTimes(3);
   });
 
   it("preserves non-debounced message ordering by awaiting debouncer enqueue", async () => {
