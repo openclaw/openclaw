@@ -29,9 +29,10 @@ import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
   filterNonEmptyMemoryChunks,
+  isRetryableMemoryEmbeddingTransportError,
   isRetryableMemoryEmbeddingError,
   resolveMemoryEmbeddingRetryDelay,
-  runMemoryEmbeddingRetryLoop,
+  runMemoryEmbeddingBatchRetryWithSplit,
 } from "./manager-embedding-policy.js";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
@@ -296,26 +297,33 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!provider) {
       throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
     }
-    return await runMemoryEmbeddingRetryLoop({
-      run: async () => {
+    return await runMemoryEmbeddingBatchRetryWithSplit({
+      items: texts,
+      run: async (batchTexts) => {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: batch start", {
           provider: provider.id,
-          items: texts.length,
+          items: batchTexts.length,
           timeoutMs,
         });
         return await this.withTimeout(
-          provider.embedBatch(texts),
+          provider.embedBatch(batchTexts),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       },
       isRetryable: isRetryableMemoryEmbeddingError,
+      isSplittable: isRetryableMemoryEmbeddingTransportError,
       waitForRetry: async (delayMs) => {
         await this.waitForEmbeddingRetry(delayMs, "retrying");
       },
       maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
       baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+      onSplit: ({ itemCount, splitAt }) => {
+        log.warn(
+          `memory embeddings transport failed after retries; splitting batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+        );
+      },
     });
   }
 
@@ -328,26 +336,33 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     if (!embedBatchInputs) {
       return await this.embedBatchWithRetry(inputs.map((input) => input.text));
     }
-    return await runMemoryEmbeddingRetryLoop({
-      run: async () => {
+    return await runMemoryEmbeddingBatchRetryWithSplit({
+      items: inputs,
+      run: async (batchInputs) => {
         const timeoutMs = this.resolveEmbeddingTimeout("batch");
         log.debug("memory embeddings: structured batch start", {
           provider: provider.id,
-          items: inputs.length,
+          items: batchInputs.length,
           timeoutMs,
         });
         return await this.withTimeout(
-          embedBatchInputs(inputs),
+          embedBatchInputs(batchInputs),
           timeoutMs,
           `memory embeddings batch timed out after ${Math.round(timeoutMs / 1000)}s`,
         );
       },
       isRetryable: isRetryableMemoryEmbeddingError,
+      isSplittable: isRetryableMemoryEmbeddingTransportError,
       waitForRetry: async (delayMs) => {
         await this.waitForEmbeddingRetry(delayMs, "retrying structured batch");
       },
       maxAttempts: EMBEDDING_RETRY_MAX_ATTEMPTS,
       baseDelayMs: EMBEDDING_RETRY_BASE_DELAY_MS,
+      onSplit: ({ itemCount, splitAt }) => {
+        log.warn(
+          `memory embeddings transport failed after retries; splitting structured batch of ${itemCount} into ${splitAt} + ${itemCount - splitAt}`,
+        );
+      },
     });
   }
 
@@ -357,7 +372,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       Math.random(),
       EMBEDDING_RETRY_MAX_DELAY_MS,
     );
-    log.warn(`memory embeddings rate limited; ${action} in ${waitMs}ms`);
+    log.warn(`memory embeddings retryable error; ${action} in ${waitMs}ms`);
     await new Promise((resolve) => setTimeout(resolve, waitMs));
   }
 
