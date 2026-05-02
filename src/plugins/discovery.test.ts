@@ -1580,7 +1580,7 @@ describe("discoverOpenClawPlugins", () => {
 
   it.runIf(process.platform !== "win32" && typeof process.getuid === "function")(
     "emits blocked-ownership diagnostic only once per path even when seen via multiple discovery paths",
-    async () => {
+    () => {
       const stateDir = makeTempDir();
       const globalExt = path.join(stateDir, "extensions");
       mkdirSafe(globalExt);
@@ -1596,7 +1596,7 @@ describe("discoverOpenClawPlugins", () => {
       }
       // Pass the same extension path twice via extraPaths to force two addCandidate calls.
       const env = buildDiscoveryEnv(stateDir);
-      const result = await discoverOpenClawPlugins({
+      const result = discoverOpenClawPlugins({
         env,
         ownershipUid: actualUid + 1,
         extraPaths: [globalExt, globalExt],
