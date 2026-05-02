@@ -2,6 +2,7 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { recordSlackInteractiveMessageOwner } from "./interactive-message-owner-cache.js";
 import {
   createActionGate,
   imageResultFromFile,
@@ -97,7 +98,40 @@ export type SlackActionContext = {
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  /** Originating session for tool-driven sends. */
+  sessionKey?: string;
 };
+
+function blocksContainSlackInteractiveReply(blocks: unknown[] | undefined): boolean {
+  if (!Array.isArray(blocks) || blocks.length === 0) {
+    return false;
+  }
+  const queue: unknown[] = [...blocks];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current || typeof current !== "object") {
+      continue;
+    }
+    const record = current as Record<string, unknown>;
+    const actionId = readStringParam(record, "action_id");
+    if (
+      actionId === "openclaw:reply_button" ||
+      actionId === "openclaw:reply_select" ||
+      actionId?.startsWith("openclaw:reply_button:") ||
+      actionId?.startsWith("openclaw:reply_select:")
+    ) {
+      return true;
+    }
+    for (const value of Object.values(record)) {
+      if (Array.isArray(value)) {
+        queue.push(...value);
+      } else if (value && typeof value === "object") {
+        queue.push(value);
+      }
+    }
+  }
+  return false;
+}
 
 /**
  * Resolve threadTs for a Slack message based on context and replyToMode.
@@ -279,6 +313,15 @@ export async function handleSlackAction(
             result.channelId,
             threadTs,
           );
+        }
+        if (blocksContainSlackInteractiveReply(blocks) && result.messageId && result.channelId) {
+          recordSlackInteractiveMessageOwner({
+            accountId: account.accountId,
+            channelId: result.channelId,
+            messageTs: result.messageId,
+            sessionKey: context?.sessionKey,
+            threadTs: threadTs ?? undefined,
+          });
         }
 
         // Keep "first" mode consistent even when the agent explicitly provided

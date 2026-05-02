@@ -49,7 +49,10 @@ export function createSlackActions(
         includeReadThreadId: true,
         invoke: async (action, cfg, toolContext) => {
           const actionContext = resolveSlackActionContext({
-            toolContext,
+            toolContext: {
+              ...(toolContext as SlackActionContext | undefined),
+              sessionKey: ctx.sessionKey ?? undefined,
+            },
             mediaLocalRoots: ctx.mediaLocalRoots,
             mediaReadFile: ctx.mediaReadFile,
           });

@@ -13,6 +13,8 @@ const buildPluginBindingResolvedTextMock = vi.hoisted(() => vi.fn(() => "Binding
 const resolveApprovalOverGatewayMock = vi.hoisted(() =>
   vi.fn<(arg: unknown) => Promise<void>>(async () => undefined),
 );
+const readSlackInteractiveMessageOwnerMock = vi.hoisted(() => vi.fn());
+const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
 
@@ -69,6 +71,19 @@ vi.mock("../../interactive-dispatch.js", () => ({
           getCurrentConversationBinding: vi.fn(),
         }),
     }),
+}));
+
+vi.mock("../../interactive-message-owner-cache.js", () => ({
+  readSlackInteractiveMessageOwner: (...args: unknown[]) =>
+    readSlackInteractiveMessageOwnerMock(...args),
+}));
+
+vi.mock("../../runtime.js", () => ({
+  getOptionalSlackRuntime: () => ({
+    system: {
+      requestHeartbeat: (...args: unknown[]) => requestHeartbeatMock(...args),
+    },
+  }),
 }));
 
 vi.mock("../conversation.runtime.js", () => {
@@ -281,6 +296,7 @@ describe("registerSlackInteractionEvents", () => {
 
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
+    enqueueSystemEventMock.mockReturnValue(true);
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockResolvedValue({ status: "expired" });
@@ -288,6 +304,9 @@ describe("registerSlackInteractionEvents", () => {
     buildPluginBindingResolvedTextMock.mockReturnValue("Binding updated.");
     resolveApprovalOverGatewayMock.mockClear();
     resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
+    readSlackInteractiveMessageOwnerMock.mockReset();
+    readSlackInteractiveMessageOwnerMock.mockReturnValue(undefined);
+    requestHeartbeatMock.mockReset();
     dispatchPluginInteractiveHandlerMock.mockResolvedValue({
       matched: false,
       handled: false,
@@ -368,6 +387,7 @@ describe("registerSlackInteractionEvents", () => {
       channelId: "C1",
       channelType: "channel",
       senderId: "U123",
+      threadTs: "100.100",
     });
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(app.client.chat.update).toHaveBeenCalledTimes(1);
@@ -1309,6 +1329,7 @@ describe("registerSlackInteractionEvents", () => {
       channelId: "C222",
       channelType: "channel",
       senderId: "U111",
+      threadTs: "222.111",
     });
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
     const [eventText] = enqueueSystemEventMock.mock.calls[0] as [string];
@@ -2178,6 +2199,65 @@ describe("registerSlackInteractionEvents", () => {
     );
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(options.sessionKey).toBe("agent:main:slack:channel:C99");
+  });
+
+  it("prefers cached interactive message ownership over inferred thread routing", async () => {
+    readSlackInteractiveMessageOwnerMock.mockReturnValue({
+      sessionKey: "agent:main:slack:direct:U123",
+      threadTs: "100.100",
+    });
+    const { ctx, getHandler, resolveSessionKey } = createContext();
+    registerSlackInteractionEvents({ ctx: ctx as never });
+
+    const handler = getHandler();
+    expect(handler).toBeTruthy();
+
+    const ack = vi.fn().mockResolvedValue(undefined);
+    const respond = vi.fn().mockResolvedValue(undefined);
+    await handler!({
+      ack,
+      respond,
+      body: {
+        user: { id: "U123" },
+        team: { id: "T9" },
+        channel: { id: "D123" },
+        container: { channel_id: "D123", message_ts: "100.200", thread_ts: "100.100" },
+        message: {
+          ts: "100.200",
+          text: "fallback",
+          blocks: [
+            {
+              type: "actions",
+              block_id: "reply_row",
+              elements: [{ type: "button", action_id: "openclaw:reply_button:1:1" }],
+            },
+          ],
+        },
+      },
+      action: {
+        type: "button",
+        action_id: "openclaw:reply_button:1:1",
+        block_id: "reply_row",
+        text: { text: "Approve" },
+        value: "approve",
+      },
+    });
+
+    expect(ack).toHaveBeenCalled();
+    expect(resolveSessionKey).not.toHaveBeenCalled();
+    expect(readSlackInteractiveMessageOwnerMock).toHaveBeenCalledWith({
+      accountId: "default",
+      channelId: "D123",
+      messageTs: "100.200",
+    });
+    const [, options] = enqueueSystemEventMock.mock.calls[0] as [string, { sessionKey?: string }];
+    expect(options.sessionKey).toBe("agent:main:slack:direct:U123");
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "other",
+      intent: "event",
+      reason: "slack-interaction",
+      sessionKey: "agent:main:slack:direct:U123",
+    });
   });
 
   it("defaults modal close isCleared to false when Slack omits the flag", async () => {

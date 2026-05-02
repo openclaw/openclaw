@@ -10,7 +10,7 @@ import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk/config-types";
 import { createDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -78,6 +78,7 @@ export type SlackMonitorContext = {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
+    threadTs?: string | null;
   }) => string;
   isChannelAllowed: (params: {
     channelId?: string;
@@ -178,6 +179,7 @@ export function createSlackMonitorContext(params: {
     channelId?: string | null;
     channelType?: string | null;
     senderId?: string | null;
+    threadTs?: string | null;
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
     if (!channelId) {
@@ -207,18 +209,25 @@ export function createSlackMonitorContext(params: {
           teamId: params.teamId,
           peer: { kind: peerKind, id: peerId },
         });
-        return route.sessionKey;
+        return resolveThreadSessionKeys({
+          baseSessionKey: route.sessionKey,
+          threadId: p.threadTs,
+        }).sessionKey;
       }
     } catch {
       // Fall through to legacy key derivation.
     }
 
-    return resolveSessionKey(
+    const baseSessionKey = resolveSessionKey(
       params.sessionScope,
       { From: from, ChatType: chatType, Provider: "slack" },
       params.mainKey,
       resolveDefaultAgentId(params.cfg),
     );
+    return resolveThreadSessionKeys({
+      baseSessionKey,
+      threadId: p.threadTs,
+    }).sessionKey;
   };
 
   const resolveChannelName = async (channelId: string) => {

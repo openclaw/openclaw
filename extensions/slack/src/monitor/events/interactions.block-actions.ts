@@ -9,10 +9,12 @@ import {
   isSlackExecApprovalAuthorizedSender,
 } from "../../exec-approvals.js";
 import { dispatchSlackPluginInteractiveHandler } from "../../interactive-dispatch.js";
+import { readSlackInteractiveMessageOwner } from "../../interactive-message-owner-cache.js";
 import {
   SLACK_REPLY_BUTTON_ACTION_ID,
   SLACK_REPLY_SELECT_ACTION_ID,
 } from "../../reply-action-ids.js";
+import { getOptionalSlackRuntime } from "../../runtime.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import {
@@ -695,21 +697,37 @@ function enqueueSlackBlockActionEvent(params: {
   params.ctx.runtime.log?.(
     `slack:interaction action=${params.parsed.actionId} type=${params.parsed.actionSummary.actionType ?? "unknown"} user=${params.parsed.userId} channel=${params.parsed.channelId}`,
   );
-  const sessionKey = params.ctx.resolveSlackSystemEventSessionKey({
+  const owner = readSlackInteractiveMessageOwner({
+    accountId: params.ctx.accountId,
     channelId: params.parsed.channelId,
-    channelType: params.auth.channelType,
-    senderId: params.parsed.userId,
+    messageTs: params.parsed.messageTs,
   });
+  const sessionKey =
+    owner?.sessionKey ??
+    params.ctx.resolveSlackSystemEventSessionKey({
+      channelId: params.parsed.channelId,
+      channelType: params.auth.channelType,
+      senderId: params.parsed.userId,
+      threadTs: params.parsed.threadTs,
+    });
   const contextParts = [
     "slack:interaction",
     params.parsed.channelId,
     params.parsed.messageTs,
     params.parsed.actionId,
   ].filter(Boolean);
-  enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
+  const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
     sessionKey,
     contextKey: contextParts.join(":"),
   });
+  if (queued) {
+    getOptionalSlackRuntime()?.system.requestHeartbeat({
+      source: "other",
+      intent: "event",
+      reason: "slack-interaction",
+      sessionKey,
+    });
+  }
 }
 
 function buildSlackConfirmationBlocks(params: {
