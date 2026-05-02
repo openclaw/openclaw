@@ -27,6 +27,7 @@ import {
   createSlackSessionStoreFixture,
   createSlackTestAccount,
 } from "./prepare.test-helpers.js";
+import { clearSlackSubteamMentionCacheForTest } from "./subteam-mentions.js";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 
@@ -49,6 +50,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     resetSlackThreadStarterCacheForTest();
     clearSlackThreadParticipationCache();
     clearSlackAllowFromCacheForTest();
+    clearSlackSubteamMentionCacheForTest();
     enqueueSystemEventMock.mockClear();
   });
 
@@ -1181,6 +1183,95 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(root!.ctxPayload.WasMentioned).toBe(true);
     expect(followUp!.ctxPayload.WasMentioned).toBe(true);
     expect(new Set([root!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(1);
+  });
+
+  it("treats Slack user-group mentions as explicit mentions when the bot is a member", async () => {
+    const usergroupsUsersList = vi.fn().mockResolvedValue({
+      ok: true,
+      users: ["U_OTHER", "B1"],
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            channels: { C0AGENTS: { requireMention: true } },
+          },
+        },
+      } as OpenClawConfig,
+      appClient: {
+        usergroups: { users: { list: usergroupsUsersList } },
+      } as unknown as App["client"],
+      defaultRequireMention: true,
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount(),
+      message: {
+        type: "message",
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<!subteam^S0AGENTS|agents> triage this",
+        ts: "1777244692.409919",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(usergroupsUsersList).toHaveBeenCalledWith({
+      usergroup: "S0AGENTS",
+      team_id: "T1",
+    });
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("drops Slack user-group mentions when the bot is not a member", async () => {
+    const usergroupsUsersList = vi.fn().mockResolvedValue({
+      ok: true,
+      users: ["U_OTHER"],
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            channels: { C0AGENTS: { requireMention: true } },
+          },
+        },
+      } as OpenClawConfig,
+      appClient: {
+        usergroups: { users: { list: usergroupsUsersList } },
+      } as unknown as App["client"],
+      defaultRequireMention: true,
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount(),
+      message: {
+        type: "message",
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<!subteam^S0AGENTS|agents> triage this",
+        ts: "1777244692.409920",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(usergroupsUsersList).toHaveBeenCalledWith({
+      usergroup: "S0AGENTS",
+      team_id: "T1",
+    });
+    expect(prepared).toBeNull();
   });
 
   it("keeps a regex-mentioned Slack thread root and URL-only follow-up on one parent session", async () => {

@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - macOS/Voice Wake: send wake-word and Push-to-Talk transcripts through the selected macOS session target instead of always falling back to main WebChat. Fixes #51040. Thanks @carl-jeffrolc.
 - Providers/xAI: give Grok `web_search` a 60s default timeout, harden malformed xAI Responses parsing, and return structured timeout errors instead of aborting the tool call. Fixes #58063 and #58733. Thanks @dnishimura, @marvcasasola-svg, and @Nanako0129.
 - Providers/configure: preserve the existing default model when adding or reauthing a provider whose plugin returns a default-model config patch. Fixes #50268. Thanks @rixcorp-oc.
+- Slack/mentions: resolve `<!subteam^...>` user-group mentions through Slack `usergroups.users.list` and treat them as explicit mentions only when the bot user is a member, so mention-gated agent channels wake for real user-group mentions without config-only allowlists. Fixes #73827. Thanks @CG-Intelligence-Agent-Jack.
 - Slack/message tool: let `read` fetch an exact Slack message timestamp, including a specific thread reply when paired with `threadId`, instead of returning only the parent thread or recent channel history. Fixes #53943. Thanks @zomars.
 - Web search: point missing-key errors to `web_fetch` for known URLs and the browser tool for interactive pages. Thanks @zhaoyang97.
 - Web search: late-bind managed agent `web_search` calls to the current runtime config snapshot, so existing sessions do not keep stale unresolved SecretRefs after secrets reload. Fixes #75420. Thanks @richardmqq.

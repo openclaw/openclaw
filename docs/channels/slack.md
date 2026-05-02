@@ -205,6 +205,7 @@ Base manifest (Socket Mode default):
         "pins:write",
         "reactions:read",
         "reactions:write",
+        "usergroups:read",
         "users:read"
       ]
     }
@@ -572,6 +573,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     Mention sources:
 
     - explicit app mention (`<@botId>`)
+    - Slack user-group mention (`<!subteam^S...>`) when the bot user is a member of that user group; requires `usergroups:read`
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 

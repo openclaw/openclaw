@@ -62,6 +62,7 @@ import { resolveSlackThreadStarter } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
+import { isSlackSubteamMentionForBot } from "./subteam-mentions.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -284,9 +285,17 @@ export async function prepareSlackMessage(params: {
     return null;
   }
   const { senderId, allowFromLower } = authorization;
-  const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
+  const hasAnyMention = /<@[^>]+>|<!subteam\^[^>]+>/.test(message.text ?? "");
   const explicitlyMentioned = Boolean(
-    ctx.botUserId && message.text?.includes(`<@${ctx.botUserId}>`),
+    ctx.botUserId &&
+    (message.text?.includes(`<@${ctx.botUserId}>`) ||
+      (await isSlackSubteamMentionForBot({
+        client: ctx.app.client,
+        text: message.text,
+        botUserId: ctx.botUserId,
+        teamId: ctx.teamId,
+        log: logVerbose,
+      }))),
   );
   const seedTopLevelRoomThreadBySource =
     opts.source === "app_mention" || opts.wasMentioned === true || explicitlyMentioned;
