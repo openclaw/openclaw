@@ -110,6 +110,7 @@ type PluginInstallPolicyRequest = {
 };
 
 const defaultLogger: PluginInstallLogger = {};
+const TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES = new Map([["@openclaw/codex", "codex"]]);
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   | {
@@ -182,6 +183,26 @@ function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
   return (
     Object.keys(manifest.dependencies ?? {}).length > 0 ||
     Object.keys(manifest.optionalDependencies ?? {}).length > 0
+  );
+}
+
+function isTrustedOfficialNpmPluginInstall(params: {
+  installPolicyRequest?: PluginInstallPolicyRequest;
+  packageName: string;
+  pluginId: string;
+}): boolean {
+  if (params.installPolicyRequest?.kind !== "plugin-npm") {
+    return false;
+  }
+  const requested = parseRegistryNpmSpec(params.installPolicyRequest.requestedSpecifier ?? "");
+  if (!requested) {
+    return false;
+  }
+  const expectedPluginId = TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES.get(requested.name);
+  return (
+    expectedPluginId !== undefined &&
+    params.packageName === requested.name &&
+    params.pluginId === expectedPluginId
   );
 }
 
@@ -697,12 +718,19 @@ async function validatePackagePluginInstallSource(params: {
   const scanMode = params.resolveEffectiveMode
     ? await params.resolveEffectiveMode(pluginId)
     : params.mode;
+  const trustedOfficialInstall =
+    params.trustedSourceLinkedOfficialInstall ||
+    isTrustedOfficialNpmPluginInstall({
+      installPolicyRequest: params.installPolicyRequest,
+      packageName: pkgName,
+      pluginId,
+    });
   const scanResult = await runInstallSourceScan({
     subject: `Plugin "${pluginId}"`,
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+        trustedSourceLinkedOfficialInstall: trustedOfficialInstall,
         packageDir: params.packageDir,
         pluginId,
         logger: params.logger,

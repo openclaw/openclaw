@@ -260,6 +260,44 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
+  it("allows the official Codex npm plugin to spawn its managed app-server", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const warnings: string[] = [];
+    mockNpmViewAndInstall({
+      spec: "@openclaw/codex@beta",
+      packageName: "@openclaw/codex",
+      version: "2026.5.1-beta.1",
+      pluginId: "codex",
+      npmRoot,
+      indexJs: `import { spawn } from "node:child_process";\nspawn("codex", ["app-server"]);`,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/codex@beta",
+      npmDir: npmRoot,
+      logger: {
+        info: () => {},
+        warn: (msg: string) => warnings.push(msg),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.pluginId).toBe("codex");
+    expect(
+      warnings.some((warning) =>
+        warning.includes("allowed because it is an official OpenClaw package"),
+      ),
+    ).toBe(true);
+    expectNpmInstallIntoRoot({
+      calls: runCommandWithTimeoutMock.mock.calls,
+      npmRoot,
+      spec: "@openclaw/codex@beta",
+    });
+  });
+
   it("rejects non-registry npm specs", async () => {
     const result = await installPluginFromNpmSpec({ spec: "github:evil/evil" });
     expect(result.ok).toBe(false);

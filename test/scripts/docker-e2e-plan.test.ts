@@ -423,6 +423,27 @@ describe("scripts/lib/docker-e2e-plan", () => {
     });
   });
 
+  it("plans the Codex npm plugin live lane as package-backed OpenAI proof", () => {
+    const plan = planFor({ selectedLaneNames: ["live-codex-npm-plugin"] });
+
+    expect(plan.credentials).toEqual(["openai"]);
+    expect(plan.lanes).toEqual([
+      expect.objectContaining({
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
+        imageKind: "bare",
+        live: true,
+        name: "live-codex-npm-plugin",
+        resources: ["docker", "live", "live:openai", "npm"],
+        stateScenario: "empty",
+      }),
+    ]);
+    expect(plan.needs).toMatchObject({
+      bareImage: true,
+      liveImage: true,
+      package: true,
+    });
+  });
+
   it("plans Open WebUI as a functional-image lane with OpenAI credentials", () => {
     const plan = planFor({
       includeOpenWebUI: true,

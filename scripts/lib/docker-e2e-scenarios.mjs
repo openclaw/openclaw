@@ -299,6 +299,19 @@ export const tailLanes = [
     },
   ),
   liveLane(
+    "live-codex-npm-plugin",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
+    {
+      cacheKey: "codex-npm-plugin",
+      e2eImageKind: "bare",
+      provider: "openai",
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  ),
+  liveLane(
     "live-cli-backend-codex",
     liveDockerScriptCommand(
       "test-live-cli-backend-docker.sh",

@@ -1527,6 +1527,7 @@
     "test:docker:live-cli-backend:gemini:resume": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-codex-bind": "OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-harness": "bash scripts/test-live-codex-harness-docker.sh",
+    "test:docker:live-codex-npm-plugin": "bash scripts/e2e/codex-npm-plugin-live-docker.sh",
     "test:docker:live-gateway": "bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:claude": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=claude-cli OPENCLAW_LIVE_GATEWAY_MODELS=claude-cli/claude-sonnet-4-6 bash scripts/test-live-gateway-models-docker.sh",
     "test:docker:live-gateway:codex": "OPENCLAW_LIVE_GATEWAY_PROVIDERS=codex-cli OPENCLAW_LIVE_GATEWAY_MODELS=codex-cli/gpt-5.5 bash scripts/test-live-gateway-models-docker.sh",
