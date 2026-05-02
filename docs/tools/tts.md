@@ -48,6 +48,9 @@ audio attachments everywhere else, and PCM/Ulaw streams for telephony and Talk.
 <Note>
 Auto-TTS is **off** by default. When `messages.tts.provider` is unset,
 OpenClaw picks the first configured provider in registry auto-select order.
+The built-in `tts` agent tool is explicit-intent only: ordinary chat stays
+text unless the user asks for audio, uses `/tts`, or enables Auto-TTS/directive
+speech.
 </Note>
 
 ## Supported providers
