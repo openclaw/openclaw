@@ -113,13 +113,13 @@ export const discordChannelConfigUiHints = {
     label: "Discord Thread Binding Max Age (hours)",
     help: "Optional hard max age in hours for Discord thread-bound sessions. Set 0 to disable hard cap (default: 0). Overrides session.threadBindings.maxAgeHours when set.",
   },
-  "threadBindings.spawnSubagentSessions": {
-    label: "Discord Thread-Bound Subagent Spawn",
-    help: "Allow subagent spawns with thread=true to auto-create and bind Discord threads (default: false; opt-in). Set true to enable thread-bound subagent spawns for this account/channel.",
+  "threadBindings.spawnSessions": {
+    label: "Discord Thread-Bound Session Spawn",
+    help: "Allow sessions_spawn(thread=true) and ACP thread spawns to auto-create and bind Discord threads (default: true). Set false to disable for this account/channel.",
   },
-  "threadBindings.spawnAcpSessions": {
-    label: "Discord Thread-Bound ACP Spawn",
-    help: "Allow /acp spawn to auto-create and bind Discord threads for ACP sessions (default: false; opt-in). Set true to enable thread-bound ACP spawns for this account/channel.",
+  "threadBindings.defaultSpawnContext": {
+    label: "Discord Thread Spawn Context",
+    help: 'Default native subagent context for thread-bound spawns. "fork" starts from the requester transcript; "isolated" starts clean. Default: "fork".',
   },
   "ui.components.accentColor": {
     label: "Discord Component Accent Color",

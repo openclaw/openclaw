@@ -186,6 +186,58 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
   });
 
+  it("hides thread-bound spawn fields when current channel disables spawnSessions", () => {
+    const tool = createSessionsSpawnTool({
+      agentChannel: "discord",
+      agentAccountId: "default",
+      config: {
+        channels: {
+          discord: {
+            threadBindings: {
+              spawnSessions: false,
+            },
+          },
+        },
+      },
+    });
+    const schema = tool.parameters as {
+      properties?: {
+        thread?: unknown;
+        mode?: { enum?: string[] };
+      };
+    };
+
+    expect(schema.properties?.thread).toBeUndefined();
+    expect(schema.properties?.mode?.enum).toEqual(["run"]);
+    expect(tool.description).not.toContain("thread-bound");
+  });
+
+  it("shows thread-bound spawn fields when current channel allows spawnSessions", () => {
+    const tool = createSessionsSpawnTool({
+      agentChannel: "discord",
+      agentAccountId: "default",
+      config: {
+        channels: {
+          discord: {
+            threadBindings: {
+              spawnSessions: true,
+            },
+          },
+        },
+      },
+    });
+    const schema = tool.parameters as {
+      properties?: {
+        thread?: unknown;
+        mode?: { enum?: string[] };
+      };
+    };
+
+    expect(schema.properties?.thread).toBeDefined();
+    expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
+    expect(tool.description).toContain("thread-bound");
+  });
+
   it("uses subagent runtime by default", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",

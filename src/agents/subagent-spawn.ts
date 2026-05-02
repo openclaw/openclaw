@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../acp/runtime/availability.js";
+import { resolveThreadBindingSpawnPolicy } from "../channels/thread-bindings-policy.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SubagentSpawnPreparation } from "../context-engine/types.js";
@@ -525,6 +526,29 @@ function resolveSpawnMode(params: {
   return params.threadRequested ? "session" : "run";
 }
 
+function resolveSubagentContextMode(params: {
+  requestedContext?: SpawnSubagentContextMode;
+  threadRequested: boolean;
+  cfg: OpenClawConfig;
+  requester: {
+    channel?: string;
+    accountId?: string;
+  };
+}): SpawnSubagentContextMode {
+  if (params.requestedContext === "fork" || params.requestedContext === "isolated") {
+    return params.requestedContext;
+  }
+  if (!params.threadRequested || !params.requester.channel) {
+    return "isolated";
+  }
+  return resolveThreadBindingSpawnPolicy({
+    cfg: params.cfg,
+    channel: params.requester.channel,
+    accountId: params.requester.accountId,
+    kind: "subagent",
+  }).defaultSpawnContext;
+}
+
 function summarizeError(err: unknown): string {
   if (err instanceof Error) {
     return err.message;
@@ -649,7 +673,6 @@ export async function spawnSubagentDirect(
   const thinkingOverrideRaw = params.thinking;
   const requestThreadBinding = params.thread === true;
   const sandboxMode = params.sandbox === "require" ? "require" : "inherit";
-  const contextMode: SpawnSubagentContextMode = params.context === "fork" ? "fork" : "isolated";
   const spawnMode = resolveSpawnMode({
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
@@ -682,6 +705,15 @@ export async function spawnSubagentDirect(
   let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
+  const contextMode = resolveSubagentContextMode({
+    requestedContext: params.context,
+    threadRequested: requestThreadBinding,
+    cfg,
+    requester: {
+      channel: ctx.agentChannel,
+      accountId: ctx.agentAccountId,
+    },
+  });
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const requesterSessionKey = ctx.agentSessionKey;
   const requesterInternalKey = requesterSessionKey

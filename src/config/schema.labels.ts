@@ -723,6 +723,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.threadBindings.enabled": "Thread Binding Enabled",
   "session.threadBindings.idleHours": "Thread Binding Idle Timeout (hours)",
   "session.threadBindings.maxAgeHours": "Thread Binding Max Age (hours)",
+  "session.threadBindings.spawnSessions": "Thread-Bound Session Spawns",
+  "session.threadBindings.defaultSpawnContext": "Thread Spawn Context",
   "session.maintenance": "Session Maintenance",
   "session.maintenance.mode": "Session Maintenance Mode",
   "session.maintenance.pruneAfter": "Session Prune After",

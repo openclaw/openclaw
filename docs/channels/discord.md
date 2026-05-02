@@ -738,7 +738,8 @@ Default slash command settings:
         enabled: true,
         idleHours: 24,
         maxAgeHours: 0,
-        spawnSubagentSessions: false, // opt-in
+        spawnSessions: true,
+        defaultSpawnContext: "fork",
       },
     },
   },
@@ -749,8 +750,9 @@ Default slash command settings:
 
     - `session.threadBindings.*` sets global defaults.
     - `channels.discord.threadBindings.*` overrides Discord behavior.
-    - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
-    - `spawnAcpSessions` must be true to auto-create/bind threads for ACP (`/acp spawn ... --thread ...` or `sessions_spawn({ runtime: "acp", thread: true })`).
+    - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })` and ACP thread spawns. Default: `true`.
+    - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
+    - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
     - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
@@ -816,7 +818,7 @@ Default slash command settings:
 
     - `/acp spawn codex --bind here` binds the current channel or thread in place and keeps future messages on the same ACP session. Thread messages inherit the parent channel binding.
     - In a bound channel or thread, `/new` and `/reset` reset the same ACP session in place. Temporary thread bindings can override target resolution while active.
-    - `spawnAcpSessions` is only required when OpenClaw needs to create/bind a child thread via `--thread auto|here`.
+    - `spawnSessions` gates child thread creation/binding via `--thread auto|here`.
 
     See [ACP Agents](/tools/acp-agents) for binding behavior details.
 
