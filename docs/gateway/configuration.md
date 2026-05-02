@@ -554,6 +554,20 @@ If you see `Config auto-restored from last-known-good` or
 `openclaw config validate`. See [Gateway troubleshooting](/gateway/troubleshooting#gateway-restored-last-known-good-config)
 for the recovery checklist.
 
+To disable automatic revert entirely — for example, when using an external config
+management tool that writes the file atomically — set `gateway.reload.recovery: "off"`.
+The Gateway will log the full validation issues and block the reload or startup
+rather than overwriting the file from the last-known-good backup. When `reload.mode`
+is `"off"`, recovery is disabled automatically.
+
+```json5
+{
+  gateway: {
+    reload: { recovery: "off" },
+  },
+}
+```
+
 ### Reload modes
 
 | Mode                   | Behavior                                                                                |
