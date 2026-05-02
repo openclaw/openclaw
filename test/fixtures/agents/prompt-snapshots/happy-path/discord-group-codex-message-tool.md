@@ -148,9 +148,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
       "model": "gpt-5.5",
       "personality": "pragmatic",
       "source": {
-        "catalogGitHead": "35aaa5d9fcb606fb6f27dd5747ecab3f4ba0c07e",
-        "catalogKind": "checked_in_catalog",
-        "catalogPath": "<codex-checkout>/codex-rs/models-manager/models.json",
+        "catalogKind": "models_cache",
+        "catalogPath": "<codex-home>/models_cache.json",
         "field": "model_messages.instructions_template + model_messages.instructions_variables.personality_pragmatic"
       }
     }

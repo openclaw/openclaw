@@ -6,7 +6,12 @@ import {
   createFormattedPromptSnapshotFiles,
   deleteStalePromptSnapshotFiles,
 } from "../../scripts/generate-prompt-snapshots.js";
-import { renderCodexModelInstructions } from "../../scripts/sync-codex-model-prompt-fixture.js";
+import {
+  defaultCatalogPathCandidates,
+  findDefaultCatalogPath,
+  renderCodexModelInstructions,
+  runCodexModelPromptFixtureSync,
+} from "../../scripts/sync-codex-model-prompt-fixture.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -92,5 +97,54 @@ describe("happy path prompt snapshots", () => {
       field:
         "model_messages.instructions_template + model_messages.instructions_variables.personality_pragmatic",
     });
+  });
+
+  it("prefers the Codex runtime model cache before local checkout fallbacks", () => {
+    const candidates = defaultCatalogPathCandidates({
+      env: { CODEX_HOME: "/tmp/codex-home" },
+      homeDir: "/tmp/home",
+    });
+
+    expect(candidates).toEqual([
+      path.join("/tmp/codex-home", "models_cache.json"),
+      path.join("/tmp/home", ".codex", "models_cache.json"),
+      path.join("/tmp/home", "code", "codex", "codex-rs", "models-manager", "models.json"),
+    ]);
+  });
+
+  it("finds the first available default Codex model catalog source", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-catalog-"));
+    try {
+      const cachePath = path.join(root, ".codex", "models_cache.json");
+      fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+      fs.writeFileSync(cachePath, JSON.stringify({ models: [] }));
+
+      await expect(findDefaultCatalogPath({ env: {}, homeDir: root })).resolves.toMatchObject({
+        catalogPath: cachePath,
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips Codex model prompt fixture sync when no default catalog exists", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-catalog-missing-"));
+    const chunks: string[] = [];
+    try {
+      const result = await runCodexModelPromptFixtureSync([], {
+        env: {},
+        homeDir: root,
+        stdout: {
+          write(chunk) {
+            chunks.push(chunk);
+          },
+        },
+      });
+
+      expect(result.status).toBe("skipped");
+      expect(chunks.join("")).toContain("No Codex model catalog/cache found");
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

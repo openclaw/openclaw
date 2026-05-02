@@ -33,6 +33,15 @@ type CodexModelPromptFixture = {
   };
 };
 
+type CatalogPathResolution = {
+  catalogPath?: string;
+  candidates: string[];
+};
+
+type WritableOutput = {
+  write(chunk: string): unknown;
+};
+
 function isJsonObject(value: unknown): value is JsonObject {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -147,16 +156,53 @@ function parsePersonality(value: string | undefined): CodexPromptPersonality {
   return "pragmatic";
 }
 
-function defaultCatalogPath(): string {
-  const localCodexCatalog = path.join(
-    os.homedir(),
-    "code",
-    "codex",
-    "codex-rs",
-    "models-manager",
-    "models.json",
+function pushUnique(paths: string[], candidate: string) {
+  if (!paths.includes(candidate)) {
+    paths.push(candidate);
+  }
+}
+
+export function defaultCatalogPathCandidates(
+  params: {
+    env?: Record<string, string | undefined>;
+    homeDir?: string;
+  } = {},
+): string[] {
+  const env = params.env ?? process.env;
+  const homeDir = params.homeDir ?? os.homedir();
+  const candidates: string[] = [];
+  const codexHome = env.CODEX_HOME?.trim() || path.join(homeDir, ".codex");
+  pushUnique(candidates, path.join(codexHome, "models_cache.json"));
+  pushUnique(candidates, path.join(homeDir, ".codex", "models_cache.json"));
+  pushUnique(
+    candidates,
+    path.join(homeDir, "code", "codex", "codex-rs", "models-manager", "models.json"),
   );
-  return localCodexCatalog;
+  return candidates;
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fs.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function findDefaultCatalogPath(
+  params: {
+    env?: Record<string, string | undefined>;
+    homeDir?: string;
+  } = {},
+): Promise<CatalogPathResolution> {
+  const candidates = defaultCatalogPathCandidates(params);
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return { catalogPath: candidate, candidates };
+    }
+  }
+  return { candidates };
 }
 
 function fixtureBaseName(params: { model: string; personality: CodexPromptPersonality }): string {
@@ -189,8 +235,35 @@ async function writeFixture(params: { fixture: CodexModelPromptFixture; outputDi
   return { promptPath, metadataPath };
 }
 
-async function run(argv = process.argv.slice(2)) {
-  const catalogPath = path.resolve(parseArgValue(argv, "--catalog") ?? defaultCatalogPath());
+export async function runCodexModelPromptFixtureSync(
+  argv = process.argv.slice(2),
+  options: {
+    env?: Record<string, string | undefined>;
+    homeDir?: string;
+    stdout?: WritableOutput;
+  } = {},
+) {
+  const explicitCatalogPath = parseArgValue(argv, "--catalog");
+  const defaultCatalog =
+    explicitCatalogPath === undefined
+      ? await findDefaultCatalogPath({ env: options.env, homeDir: options.homeDir })
+      : undefined;
+  const catalogPath =
+    explicitCatalogPath !== undefined
+      ? path.resolve(explicitCatalogPath)
+      : defaultCatalog?.catalogPath;
+  if (!catalogPath) {
+    const output = options.stdout ?? process.stdout;
+    output.write("No Codex model catalog/cache found; leaving prompt fixture unchanged.\n");
+    output.write("Looked in:\n");
+    for (const candidate of defaultCatalog?.candidates ?? []) {
+      output.write(`- ${candidate}\n`);
+    }
+    output.write(
+      "Pass --catalog <path-to-models_cache.json-or-models.json> to refresh explicitly.\n",
+    );
+    return { status: "skipped" as const, candidates: defaultCatalog?.candidates ?? [] };
+  }
   const model = parseArgValue(argv, "--model") ?? "gpt-5.5";
   const personality = parsePersonality(parseArgValue(argv, "--personality"));
   const catalogGitHead = parseArgValue(argv, "--catalog-git-head");
@@ -213,9 +286,10 @@ async function run(argv = process.argv.slice(2)) {
       written.promptPath,
     )} and ${path.relative(repoRoot, written.metadataPath)}.`,
   );
+  return { status: "written" as const, catalogPath, written };
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(path.resolve(process.argv[1])).href : "";
 if (import.meta.url === invokedPath) {
-  await run();
+  await runCodexModelPromptFixtureSync();
 }

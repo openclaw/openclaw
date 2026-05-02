@@ -676,7 +676,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",
-    "The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from a local Codex checkout or cache with:",
+    "The Codex model prompt fixture is generated from the same Codex model catalog/cache shape that the Codex runtime uses for remote model metadata. Regenerate it from Codex's runtime cache or, when present, a local Codex checkout with:",
     "",
     markdownFence("sh", "pnpm prompt:snapshots:sync-codex-model"),
     "",

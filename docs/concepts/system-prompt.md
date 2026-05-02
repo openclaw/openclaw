@@ -121,12 +121,13 @@ OpenClaw developer instructions, user turn input, and references to the dynamic
 tool specs.
 
 Refresh the pinned Codex model prompt fixture with
-`pnpm prompt:snapshots:sync-codex-model`. By default, the script reads the
-maintainer Codex checkout convention; pass
-`--catalog <codex-home>/models_cache.json` to derive it from the runtime cache
-instead, or pass
-`--catalog <codex-checkout>/codex-rs/models-manager/models.json` to use a
-specific Codex checkout.
+`pnpm prompt:snapshots:sync-codex-model`. By default, the script looks for
+Codex's runtime cache at `$CODEX_HOME/models_cache.json`, then
+`~/.codex/models_cache.json`, and only then falls back to the maintainer Codex
+checkout convention at `~/code/codex/codex-rs/models-manager/models.json`. If
+none of those sources exist, the command exits without changing the committed
+fixture. Pass `--catalog <path>` to refresh from a specific `models_cache.json`
+or `models.json` file.
 
 These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex
 can add runtime-owned workspace context such as `AGENTS.md`, environment
