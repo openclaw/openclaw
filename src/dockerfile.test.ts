@@ -30,6 +30,20 @@ describe("Dockerfile", () => {
     expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
   });
 
+  it("keeps runtime base image and digest metadata aligned", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const slimImageMatch = dockerfile.match(
+      /ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@(sha256:[a-f0-9]+)"/,
+    );
+    const slimDigestMatch = dockerfile.match(
+      /ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="(sha256:[a-f0-9]+)"/,
+    );
+
+    expect(slimImageMatch?.[1]).toBeDefined();
+    expect(slimDigestMatch?.[1]).toBeDefined();
+    expect(slimImageMatch?.[1]).toBe(slimDigestMatch?.[1]);
+  });
+
   it("installs CA certificates in the slim runtime stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const collapsed = collapseDockerContinuations(dockerfile);
@@ -200,5 +214,21 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'",
     );
+  });
+
+  it("declares the OpenClaw home as a persistent runtime volume", async () => {
+    const dockerfile = await readFile(dockerfilePath, "utf8");
+    const runtimeStageIndex = dockerfile.lastIndexOf("FROM base-runtime");
+    const stateDirIndex = dockerfile.indexOf(
+      "RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \\",
+      runtimeStageIndex,
+    );
+    const volumeIndex = dockerfile.indexOf('VOLUME ["/home/node/.openclaw"]', runtimeStageIndex);
+    const userIndex = dockerfile.indexOf("USER node", runtimeStageIndex);
+
+    expect(runtimeStageIndex).toBeGreaterThan(-1);
+    expect(stateDirIndex).toBeGreaterThan(-1);
+    expect(volumeIndex).toBeGreaterThan(stateDirIndex);
+    expect(volumeIndex).toBeLessThan(userIndex);
   });
 });

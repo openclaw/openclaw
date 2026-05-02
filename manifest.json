@@ -21,5 +21,13 @@
     "agents": "AGENTS.md",
     "notice": "LICENSE-ZEKEBOT-NOTICE.md",
     "zeke_brief": "zeke-repo/docs/briefs/OCL-FORK-001-ZekeBot-OpenClaw-Fork-FINAL.md"
-  }
+  },
+  "local_changes": [
+    {
+      "story": "OCL-FORK-001/S4",
+      "file": "Dockerfile",
+      "summary": "Declares /home/node/.openclaw as a Docker volume while preserving digest-pinned Node base images.",
+      "docs": "docs/zekebot-vs-upstream.md"
+    }
+  ]
 }

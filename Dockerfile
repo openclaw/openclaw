@@ -272,6 +272,11 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
     stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
 
+# ZekeBot treats the default state directory as persistent container state.
+# Declaring it as a Docker volume makes accidental container replacement less
+# likely to discard agent config, sessions, and local runtime state.
+VOLUME ["/home/node/.openclaw"]
+
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
