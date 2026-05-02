@@ -252,7 +252,7 @@ async function extractImagesFromPages(
   if (usePdftoppmFallback) {
     const rand = Math.random().toString(36).slice(2, 8);
     tmpDir = FS.mkdtempSync(`${process.env.TMPDIR ?? "/tmp"}/openclaw-pdf-`);
-    pdfPath = path.join(tmpDir, `doc-${rand}.pdf`);
+    pdfPath = path.join(tmpDir!, `doc-${rand}.pdf`);
     FS.writeFileSync(pdfPath, pdfBuffer);
   }
 
