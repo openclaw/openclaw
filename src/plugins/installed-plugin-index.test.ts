@@ -486,6 +486,37 @@ describe("installed plugin index", () => {
     });
   });
 
+  it("keeps package bundle metadata needed for core inclusion decisions", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "downloadable-bundled-provider",
+      providers: ["downloadable-bundled-provider"],
+      configSchema: { type: "object" },
+    });
+
+    const index = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          packageManifest: {
+            bundle: {
+              includeInCore: false,
+            },
+          },
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(index.plugins[0]).toMatchObject({
+      pluginId: "downloadable-bundled-provider",
+      packageBundle: {
+        includeInCore: false,
+      },
+    });
+  });
+
   it("keeps packageJson paths root-relative when packageDir is reached through a symlink", () => {
     const fixture = createRichPluginFixture();
     const linkParent = makeTempDir();
@@ -925,6 +956,36 @@ describe("installed plugin index", () => {
     };
 
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([]);
+  });
+
+  it("treats package bundle metadata changes as stale package metadata", () => {
+    const rootDir = makeTempDir();
+    writeRuntimeEntry(rootDir);
+    writePluginManifest(rootDir, {
+      id: "bundle-policy-demo",
+      configSchema: { type: "object" },
+    });
+    const previous = loadInstalledPluginIndex({
+      candidates: [createPluginCandidate({ rootDir })],
+      env: hermeticEnv(),
+    });
+    const current = loadInstalledPluginIndex({
+      candidates: [
+        createPluginCandidate({
+          rootDir,
+          packageManifest: {
+            bundle: {
+              includeInCore: false,
+            },
+          },
+        }),
+      ],
+      env: hermeticEnv(),
+    });
+
+    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
+      "stale-package",
+    ]);
   });
 
   it("treats plugin index changes as source invalidation", () => {

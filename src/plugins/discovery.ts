@@ -15,6 +15,7 @@ import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manif
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
+  isPackageIncludedInCoreBundle,
   loadPluginManifest,
   type PluginManifest,
   resolvePackageExtensionEntries,
@@ -626,6 +627,10 @@ function discoverInDirectory(params: {
     const rejectHardlinks = params.origin !== "bundled";
     const fullPathRealPath = safeRealpathSync(fullPath, params.realpathCache) ?? undefined;
     const manifest = readPackageManifest(fullPath, rejectHardlinks, fullPathRealPath);
+    const packageManifest = getPackageManifestMetadata(manifest ?? undefined);
+    if (params.origin === "bundled" && !isPackageIncludedInCoreBundle(packageManifest)) {
+      continue;
+    }
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(fullPath, rejectHardlinks, fullPathRealPath);

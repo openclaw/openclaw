@@ -21,6 +21,10 @@ const DYNAMIC_CONSTANT_IMPORT_PATTERNS = [
 ];
 const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
   [
+    "@homebridge/ciao",
+    "keep at root; the Bonjour runtime is shipped with packaged startup surfaces even though the bundled plugin also declares it",
+  ],
+  [
     "playwright-core",
     "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
   ],

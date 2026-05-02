@@ -224,6 +224,35 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     });
   });
 
+  it("hydrates package bundle metadata from the installed index", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "installed", "installed-");
+
+    const index = createIndex(rootDir);
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index: {
+        ...index,
+        plugins: [
+          {
+            ...index.plugins[0],
+            packageBundle: {
+              includeInCore: false,
+            },
+          },
+        ],
+      },
+      env: {
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+      includeDisabled: true,
+    });
+
+    expect(registry.plugins[0]?.packageManifest?.bundle).toEqual({
+      includeInCore: false,
+    });
+  });
+
   it("round-trips bundle metadata through the persisted index before reconstruction", async () => {
     const stateDir = makeTempDir();
     const rootDir = makeTempDir();

@@ -109,6 +109,19 @@ section when the direct/group chat context already includes the resolved
 conversation-specific `NO_REPLY` behavior. This avoids repeating token mechanics
 in both the global system prompt and channel context.
 
+## Prompt snapshots
+
+OpenClaw keeps committed happy-path prompt snapshots for the Codex/message-tool
+runtime under `test/fixtures/agents/prompt-snapshots/happy-path/`. They render
+the OpenClaw-owned Codex app-server developer instructions, selected thread
+start/resume params, turn user input, and dynamic tool specs for Telegram direct,
+Discord group, and heartbeat turns. The hidden base Codex system prompt and
+turn-scoped Codex collaboration-mode instructions are owned by the Codex runtime
+and are not rendered by OpenClaw.
+
+Regenerate them with `pnpm prompt:snapshots:gen` and verify drift with
+`pnpm prompt:snapshots:check`.
+
 ## Workspace bootstrap injection
 
 Bootstrap files are trimmed and appended under **Project Context** so the model sees identity and profile context without needing explicit reads:

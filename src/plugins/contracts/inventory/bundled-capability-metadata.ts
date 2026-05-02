@@ -79,11 +79,8 @@ function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityMani
   if (isExplicitlyDownloadablePlugin(packageJson)) {
     return undefined;
   }
-  const extensions = normalizeBundledPluginStringList(
-    packageJson?.openclaw && typeof packageJson.openclaw === "object"
-      ? (packageJson.openclaw as { extensions?: unknown }).extensions
-      : undefined,
-  );
+  const packageManifest = getPackageManifestMetadata(packageJson as PackageManifest);
+  const extensions = normalizeBundledPluginStringList(packageManifest?.extensions);
   if (extensions.length === 0) {
     return undefined;
   }

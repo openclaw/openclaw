@@ -54,6 +54,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import { applyCodexDynamicToolProfile } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -99,15 +100,6 @@ const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
-const CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES = [
-  "read",
-  "write",
-  "edit",
-  "apply_patch",
-  "exec",
-  "process",
-  "update_plan",
-] as const;
 const LOG_FIELD_MAX_LENGTH = 160;
 
 type OpenClawCodingToolsOptions = NonNullable<
@@ -1497,26 +1489,6 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
-}
-
-function applyCodexDynamicToolProfile<T extends { name: string }>(
-  tools: T[],
-  config: CodexPluginConfig,
-): T[] {
-  const excludes = new Set<string>();
-  const profile = config.codexDynamicToolsProfile ?? "native-first";
-  if (profile === "native-first") {
-    for (const name of CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES) {
-      excludes.add(name);
-    }
-  }
-  for (const name of config.codexDynamicToolsExclude ?? []) {
-    const trimmed = name.trim();
-    if (trimmed) {
-      excludes.add(trimmed);
-    }
-  }
-  return excludes.size === 0 ? tools : tools.filter((tool) => !excludes.has(tool.name));
 }
 
 async function withCodexStartupTimeout<T>(params: {

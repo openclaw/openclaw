@@ -11,12 +11,13 @@ import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-m
 import type {
   InstalledPluginIndexRecord,
   InstalledPluginInstallRecordInfo,
+  InstalledPluginPackageBundleInfo,
   InstalledPluginPackageChannelInfo,
   InstalledPluginStartupInfo,
 } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import type { PluginPackageChannel } from "./manifest.js";
+import type { OpenClawPackageBundle, PluginPackageChannel } from "./manifest.js";
 import { safeRealpathSync } from "./path-safety.js";
 import { hasKind } from "./slots.js";
 
@@ -150,6 +151,17 @@ function normalizePackageChannel(
   };
 }
 
+function normalizePackageBundle(
+  bundle: OpenClawPackageBundle | undefined,
+): InstalledPluginPackageBundleInfo | undefined {
+  if (typeof bundle?.includeInCore !== "boolean") {
+    return undefined;
+  }
+  return {
+    includeInCore: bundle.includeInCore,
+  };
+}
+
 function hashManifestlessBundleRecord(record: PluginManifestRecord): string {
   return hashJson({
     id: record.id,
@@ -211,6 +223,7 @@ export function buildInstalledPluginIndexRecords(params: {
     const packageChannel = normalizePackageChannel(
       record.packageChannel ?? candidate?.packageManifest?.channel,
     );
+    const packageBundle = normalizePackageBundle(candidate?.packageManifest?.bundle);
     const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
     const manifestFile = hasOptionalMissingPluginManifestFile(record)
       ? undefined
@@ -269,6 +282,9 @@ export function buildInstalledPluginIndexRecords(params: {
     }
     if (packageChannel) {
       indexRecord.packageChannel = packageChannel;
+    }
+    if (packageBundle) {
+      indexRecord.packageBundle = packageBundle;
     }
     if (packageJson) {
       indexRecord.packageJson = packageJson;
