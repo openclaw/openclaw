@@ -580,13 +580,13 @@ export const __testing = {
   },
 };
 
-function getPluginRegistryCache(onlyPluginIds?: string[]) {
+function getPluginRegistryCache(onlyPluginIds?: readonly string[]) {
   return onlyPluginIds ? pluginLoaderCacheState : fullWorkspacePluginLoaderCacheState;
 }
 
 function getCachedPluginRegistry(
   cacheKey: string,
-  onlyPluginIds?: string[],
+  onlyPluginIds?: readonly string[],
 ): CachedPluginState | undefined {
   return getPluginRegistryCache(onlyPluginIds).get(cacheKey);
 }
@@ -594,14 +594,14 @@ function getCachedPluginRegistry(
 function setCachedPluginRegistry(
   cacheKey: string,
   state: CachedPluginState,
-  onlyPluginIds?: string[],
+  onlyPluginIds?: readonly string[],
 ): void {
   getPluginRegistryCache(onlyPluginIds).set(cacheKey, state);
 }
 
 function getReusableCachedPluginRegistry(params: {
   cacheKey: string;
-  onlyPluginIds: string[] | undefined;
+  onlyPluginIds?: readonly string[];
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   options: PluginLoadOptions;
 }):
@@ -703,12 +703,13 @@ function resolveBundledPackageCacheIdentity(stockRoot?: string):
   if (cached) {
     return cached;
   }
-  const packageJsonPath = path.join(packageRoot, "package.json");
+  const packageRootPath = packageRoot;
+  const packageJsonPath = path.join(packageRootPath, "package.json");
   try {
     const stat = fs.statSync(packageJsonPath);
     const identity = {
       packageJson: safeRealpathOrResolve(packageJsonPath),
-      packageRoot: safeRealpathOrResolve(packageRoot),
+      packageRoot: safeRealpathOrResolve(packageRootPath),
       packageVersion: readPackageVersionForCache(packageJsonPath),
       size: stat.size,
       mtimeMs: stat.mtimeMs,
@@ -718,7 +719,7 @@ function resolveBundledPackageCacheIdentity(stockRoot?: string):
   } catch {
     const identity = {
       packageJson: path.resolve(packageJsonPath),
-      packageRoot: safeRealpathOrResolve(packageRoot),
+      packageRoot: safeRealpathOrResolve(packageRootPath),
       packageVersion: "missing",
       size: -1,
       mtimeMs: -1,
