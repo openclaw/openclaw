@@ -237,7 +237,14 @@ function ensureContextWindowCacheLoaded(): Promise<void> {
         await import("./pi-model-discovery-runtime.js");
       const agentDir = resolveOpenClawAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
-      const modelRegistry = discoverModels(authStorage, agentDir) as unknown as ModelRegistryLike;
+      // Skip provider-plugin normalization here: applyDiscoveredContextWindows
+      // only reads model.id / contextTokens / contextWindow, none of which are
+      // mutated by the normalize/compat/transport hooks. Running those hooks
+      // for every catalog entry on TUI/chat startup blocks the main thread for
+      // tens of seconds when users have large registries (e.g. 100+ HF models).
+      const modelRegistry = discoverModels(authStorage, agentDir, {
+        normalizeModels: false,
+      }) as unknown as ModelRegistryLike;
       const models =
         typeof modelRegistry.getAvailable === "function"
           ? modelRegistry.getAvailable()
