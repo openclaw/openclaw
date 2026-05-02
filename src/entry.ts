@@ -26,6 +26,15 @@ const cleanupCallbacks: (() => Promise<void> | void)[] = [];
 export function registerCleanup(cb: () => Promise<void> | void): void {
   if (!cleanupRegistered) {
     cleanupRegistered = true;
+    process.on("beforeExit", async () => {
+      for (const cb of cleanupCallbacks) {
+        try {
+          await cb();
+        } catch {
+          // Ignore cleanup errors on exit
+        }
+      }
+    });
     process.on("exit", () => {
       for (const cb of cleanupCallbacks) {
         try {
@@ -35,6 +44,18 @@ export function registerCleanup(cb: () => Promise<void> | void): void {
         }
       }
     });
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
+      process.on(signal, () => {
+        for (const cb of cleanupCallbacks) {
+          try {
+            void cb();
+          } catch {
+            // Ignore cleanup errors on exit
+          }
+        }
+        process.exit(128 + (signal === "SIGINT" ? 2 : signal === "SIGTERM" ? 15 : 1));
+      });
+    }
   }
   cleanupCallbacks.push(cb);
 }

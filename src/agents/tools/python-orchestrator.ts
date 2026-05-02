@@ -320,6 +320,8 @@ async function startToolBridgeServer(
         }
 
         // Per-session limit check (only for non-cached calls)
+        // Note: callCount is incremented sequentially because tool calls are
+        // processed one at a time per bridge session (no concurrent requests).
         callCount++;
         if (callCount > maxCalls) {
           res.writeHead(429, { "Content-Type": "application/json" });
@@ -366,7 +368,10 @@ async function startToolBridgeServer(
   return {
     port,
     toolCalls,
-    stop: () => server.close(),
+    stop: () => {
+      server.closeAllConnections?.();
+      server.close();
+    },
     authToken,
   };
 }
