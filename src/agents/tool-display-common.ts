@@ -17,7 +17,7 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-export type CoerceDisplayValueOptions = {
+type CoerceDisplayValueOptions = {
   includeFalse?: boolean;
   includeZero?: boolean;
   includeNonFinite?: boolean;

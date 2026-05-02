@@ -29,7 +29,7 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
 
-export type SubagentListItem = {
+type SubagentListItem = {
   index: number;
   line: string;
   runId: string;
