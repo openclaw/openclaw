@@ -58,16 +58,7 @@ export type EmbeddedRunAttemptResult = {
   idleTimedOut: boolean;
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
-  /**
-   * True if the run-level timer fired while at least one tool execution was
-   * still in flight. The LLM had already responded; the timeout is unrelated
-   * to the primary model and must not trigger model fallback. Closes #52147.
-   *
-   * Optional for plugin-SDK back-compat: this type is re-exported as
-   * `AgentHarnessAttemptResult` and third-party harnesses cannot necessarily
-   * observe in-flight tool state. Treat absent as `false` at the runner
-   * boundary; internal embedded-runner code always sets it explicitly.
-   */
+  /** Optional because this type is re-exported as `AgentHarnessAttemptResult`. */
   timedOutDuringToolExecution?: boolean;
   promptError: unknown;
   /**

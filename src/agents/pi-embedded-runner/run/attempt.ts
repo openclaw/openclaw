@@ -2252,11 +2252,6 @@ export async function runEmbeddedAttempt(
         aborted = true;
         if (isTimeout) {
           timedOut = true;
-          // Distinguish run-timer fires that occur while tool execution is in
-          // flight (LLM already responded; primary model is not at fault) from
-          // LLM-phase timeouts. Mirrors the `timedOutDuringCompaction` precedent
-          // (#46889) so the failover policy can skip pointless model fallback.
-          // Closes #52147.
           if (!timedOutDuringCompaction && countActiveToolExecutions(params.runId) > 0) {
             timedOutDuringToolExecution = true;
           }

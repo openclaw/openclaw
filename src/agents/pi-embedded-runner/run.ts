@@ -1138,9 +1138,6 @@ export async function runEmbeddedPiAgent(
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
-          // Field is optional in the public harness SDK contract; default to
-          // false here so internal code can rely on a strict boolean. Internal
-          // embedded-runner attempt sets this explicitly. See #52147.
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
@@ -1247,9 +1244,6 @@ export async function runEmbeddedPiAgent(
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
-          // Skip when the timeout fired during tool execution: the LLM had
-          // already responded, the prompt wasn't the problem, and compacting
-          // would lose the in-flight tool context. See #52147.
           if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
@@ -2084,11 +2078,6 @@ export async function runEmbeddedPiAgent(
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
-          // Skip when the timeout fired during tool execution: the assistant
-          // did produce a response (a tool call) that ran long; the generic
-          // "no response from model" payload would mislead the caller. The
-          // partial tool output already in the session is the correct artifact
-          // to surface. See #52147.
           if (
             timedOut &&
             !timedOutDuringCompaction &&
