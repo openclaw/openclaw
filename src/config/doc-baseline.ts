@@ -25,7 +25,7 @@ type JsonSchemaObject = JsonSchemaNode & {
   oneOf?: JsonSchemaObject[];
 };
 
-export type ConfigDocBaselineKind = "core" | "channel" | "plugin";
+type ConfigDocBaselineKind = "core" | "channel" | "plugin";
 
 export type ConfigDocBaselineEntry = {
   path: string;
@@ -49,32 +49,32 @@ export type ConfigDocBaseline = {
   pluginEntries: ConfigDocBaselineEntry[];
 };
 
-export type ConfigDocBaselineKindBaseline = {
+type ConfigDocBaselineKindBaseline = {
   generatedBy: "scripts/generate-config-doc-baseline.ts";
   kind: ConfigDocBaselineKind;
   entries: ConfigDocBaselineEntry[];
 };
 
-export type ConfigDocBaselineArtifacts = {
+type ConfigDocBaselineArtifacts = {
   combined: string;
   core: string;
   channel: string;
   plugin: string;
 };
 
-export type ConfigDocBaselineArtifactsRender = {
+type ConfigDocBaselineArtifactsRender = {
   baseline: ConfigDocBaseline;
   json: ConfigDocBaselineArtifacts;
 };
 
-export type ConfigDocBaselineArtifactPaths = {
+type ConfigDocBaselineArtifactPaths = {
   combined: string;
   core: string;
   channel: string;
   plugin: string;
 };
 
-export type ConfigDocBaselineArtifactsWriteResult = {
+type ConfigDocBaselineArtifactsWriteResult = {
   changed: boolean;
   wrote: boolean;
   jsonPaths: ConfigDocBaselineArtifactPaths;
