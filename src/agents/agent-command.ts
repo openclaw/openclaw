@@ -635,7 +635,7 @@ async function agentCommandInternal(
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
     const buildSkillsSnapshot = async () => {
       const [
-        { buildWorkspaceSkillSnapshot },
+        { buildWorkspaceSkillSnapshotAsync },
         { getRemoteSkillEligibility },
         { canExecRequestNode },
       ] = await Promise.all([
@@ -643,7 +643,7 @@ async function agentCommandInternal(
         loadSkillsRemoteRuntime(),
         loadExecDefaultsRuntime(),
       ]);
-      return buildWorkspaceSkillSnapshot(workspaceDir, {
+      return buildWorkspaceSkillSnapshotAsync(workspaceDir, {
         config: cfg,
         eligibility: {
           remote: getRemoteSkillEligibility({

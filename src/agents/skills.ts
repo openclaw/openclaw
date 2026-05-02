@@ -29,6 +29,7 @@ export type {
 } from "./skills/types.js";
 export {
   buildWorkspaceSkillSnapshot,
+  buildWorkspaceSkillSnapshotAsync,
   buildWorkspaceSkillsPrompt,
   filterWorkspaceSkillEntries,
   filterWorkspaceSkillEntriesWithOptions,

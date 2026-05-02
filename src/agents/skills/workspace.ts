@@ -221,6 +221,57 @@ function listChildDirectories(
   }
 }
 
+async function listChildDirectoriesAsync(
+  dir: string,
+  opts?: {
+    maxCandidateDirs?: number;
+    maxRawEntriesToScan?: number;
+  },
+): Promise<ChildDirectoryScan> {
+  const maxRawEntriesToScan =
+    opts?.maxRawEntriesToScan === undefined
+      ? resolveRawEntryScanLimit(opts?.maxCandidateDirs)
+      : Math.max(0, opts.maxRawEntriesToScan);
+  try {
+    const dirs: string[] = [];
+    let scannedEntryCount = 0;
+    let truncated = false;
+    const handle = await fsp.opendir(dir);
+    try {
+      for await (const entry of handle) {
+        if (scannedEntryCount >= maxRawEntriesToScan) {
+          truncated = true;
+          break;
+        }
+        scannedEntryCount += 1;
+
+        if (entry.name.startsWith(".")) continue;
+        if (entry.name === "node_modules") continue;
+        const fullPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          dirs.push(entry.name);
+          continue;
+        }
+        if (entry.isSymbolicLink()) {
+          try {
+            const stat = await fsp.stat(fullPath);
+            if (stat.isDirectory()) {
+              dirs.push(entry.name);
+            }
+          } catch {
+            // ignore broken symlinks
+          }
+        }
+      }
+    } finally {
+      await handle.close();
+    }
+    return { dirs, scannedEntryCount, truncated };
+  } catch {
+    return { dirs: [], scannedEntryCount: 0, truncated: false };
+  }
+}
+
 function resolveRawEntryScanLimit(maxCandidateDirs: number | undefined): number {
   if (maxCandidateDirs === undefined) {
     return Number.POSITIVE_INFINITY;
@@ -405,6 +456,7 @@ function loadContainedSkillRecords(params: {
   );
 }
 
+// Synchronous version for backward compatibility with non-async callers
 function loadSkillEntries(
   workspaceDir: string,
   opts?: {
@@ -417,6 +469,253 @@ function loadSkillEntries(
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
 
   const loadSkills = (params: { dir: string; source: string }): LoadedSkillRecord[] => {
+    const rootDir = path.resolve(params.dir);
+    if (!fs.existsSync(rootDir)) {
+      return [];
+    }
+    const rootRealPath = tryRealpath(rootDir) ?? rootDir;
+    const resolved = resolveNestedSkillsRoot(params.dir, {
+      maxEntriesToScan: limits.maxCandidatesPerRoot,
+    });
+    const baseDir = resolved.baseDir;
+    const baseDirRealPath = resolveContainedSkillPath({
+      source: params.source,
+      rootDir,
+      rootRealPath,
+      candidatePath: baseDir,
+    });
+    if (!baseDirRealPath) {
+      return [];
+    }
+
+    const rootSkillMd = path.join(baseDir, "SKILL.md");
+    if (fs.existsSync(rootSkillMd)) {
+      const rootSkillRealPath = resolveContainedSkillPath({
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+        candidatePath: rootSkillMd,
+      });
+      if (!rootSkillRealPath) {
+        return [];
+      }
+      try {
+        const size = fs.statSync(rootSkillRealPath).size;
+        if (size > limits.maxSkillFileBytes) {
+          return [];
+        }
+      } catch {
+        return [];
+      }
+
+      return loadContainedSkillRecords({
+        skillDir: baseDir,
+        source: params.source,
+        maxSkillFileBytes: limits.maxSkillFileBytes,
+      });
+    }
+
+    const maxCandidatesPerRoot = Math.max(0, limits.maxCandidatesPerRoot);
+    const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
+    const childDirScan = listChildDirectories(baseDir, {
+      maxCandidateDirs: maxCandidatesPerRoot,
+    });
+    const childDirs = childDirScan.dirs;
+    const limitedChildren =
+      maxSkillsLoadedPerSource === 0 ? [] : childDirs.toSorted().slice(0, maxCandidatesPerRoot);
+
+    const loadedSkills: LoadedSkillRecord[] = [];
+    const loadCandidateSkill = ({ skillDir, name, skillMdRealPath }: CandidateSkillDir) => {
+      try {
+        const size = fs.statSync(skillMdRealPath).size;
+        if (size > limits.maxSkillFileBytes) {
+          return;
+        }
+      } catch {
+        return;
+      }
+
+      loadedSkills.push(
+        ...loadContainedSkillRecords({
+          skillDir,
+          source: params.source,
+          maxSkillFileBytes: limits.maxSkillFileBytes,
+        }),
+      );
+    };
+
+    for (const name of limitedChildren) {
+      const skillDir = path.join(baseDir, name);
+      const skillDirRealPath = resolveContainedSkillPath({
+        source: params.source,
+        rootDir,
+        rootRealPath: baseDirRealPath,
+        candidatePath: skillDir,
+      });
+      if (!skillDirRealPath) {
+        continue;
+      }
+      const skillMd = path.join(skillDir, "SKILL.md");
+      if (fs.existsSync(skillMd)) {
+        const skillMdRealPath = resolveContainedSkillPath({
+          source: params.source,
+          rootDir,
+          rootRealPath: baseDirRealPath,
+          candidatePath: skillMd,
+        });
+        if (skillMdRealPath) {
+          loadCandidateSkill({ skillDir, name, skillMdRealPath });
+        }
+      } else {
+        const nestedChildScan = listChildDirectories(skillDir, {
+          maxCandidateDirs: maxCandidatesPerRoot,
+        });
+        const nestedChildren = nestedChildScan.dirs;
+        const limitedNested = nestedChildren.toSorted().slice(0, maxCandidatesPerRoot);
+        for (const nestedName of limitedNested) {
+          const nestedDir = path.join(skillDir, nestedName);
+          const nestedSkillMd = path.join(nestedDir, "SKILL.md");
+          if (fs.existsSync(nestedSkillMd)) {
+            const nestedDirRealPath = resolveContainedSkillPath({
+              source: params.source,
+              rootDir,
+              rootRealPath: baseDirRealPath,
+              candidatePath: nestedDir,
+            });
+            const nestedSkillMdRealPath = resolveContainedSkillPath({
+              source: params.source,
+              rootDir,
+              rootRealPath: baseDirRealPath,
+              candidatePath: nestedSkillMd,
+            });
+            if (nestedDirRealPath && nestedSkillMdRealPath) {
+              loadCandidateSkill({
+                skillDir: nestedDir,
+                name: `${name}/${nestedName}`,
+                skillMdRealPath: nestedSkillMdRealPath,
+              });
+            }
+          }
+          if (loadedSkills.length >= maxSkillsLoadedPerSource) {
+            break;
+          }
+        }
+      }
+      if (loadedSkills.length >= maxSkillsLoadedPerSource) {
+        break;
+      }
+    }
+
+    if (loadedSkills.length > maxSkillsLoadedPerSource) {
+      return loadedSkills
+        .slice()
+        .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+        .slice(0, maxSkillsLoadedPerSource);
+    }
+
+    return loadedSkills;
+  };
+
+  const managedSkillsDir = opts?.managedSkillsDir ?? path.join(CONFIG_DIR, "skills");
+  const workspaceSkillsDir = path.resolve(workspaceDir, "skills");
+  const bundledSkillsDir = opts?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  const extraDirsRaw = opts?.config?.skills?.load?.extraDirs ?? [];
+  const extraDirs = extraDirsRaw.map((d) => normalizeOptionalString(d) ?? "").filter(Boolean);
+  const pluginSkillDirs = resolvePluginSkillDirs({
+    workspaceDir,
+    config: opts?.config,
+  });
+  const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
+
+  const bundledSkills = bundledSkillsDir
+    ? loadSkills({ dir: bundledSkillsDir, source: "openclaw-bundled" })
+    : [];
+  const extraSkills = mergedExtraDirs.flatMap((dir) => {
+    const resolved = resolveUserPath(dir);
+    return loadSkills({ dir: resolved, source: "openclaw-extra" });
+  });
+  const managedSkills = loadSkills({ dir: managedSkillsDir, source: "openclaw-managed" });
+  const osHomeDir = resolveUserHomeDir();
+  const personalAgentsSkillsDir = osHomeDir
+    ? path.resolve(osHomeDir, ".agents", "skills")
+    : path.resolve(".agents", "skills");
+  const personalAgentsSkills = loadSkills({
+    dir: personalAgentsSkillsDir,
+    source: "agents-skills-personal",
+  });
+  const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
+  const projectAgentsSkills = loadSkills({
+    dir: projectAgentsSkillsDir,
+    source: "agents-skills-project",
+  });
+  const workspaceSkills = loadSkills({ dir: workspaceSkillsDir, source: "openclaw-workspace" });
+
+  const merged = new Map<string, LoadedSkillRecord>();
+  for (const record of extraSkills) {
+    merged.set(record.skill.name, record);
+  }
+  for (const record of bundledSkills) {
+    merged.set(record.skill.name, record);
+  }
+  for (const record of managedSkills) {
+    merged.set(record.skill.name, record);
+  }
+  for (const record of personalAgentsSkills) {
+    merged.set(record.skill.name, record);
+  }
+  for (const record of projectAgentsSkills) {
+    merged.set(record.skill.name, record);
+  }
+  for (const record of workspaceSkills) {
+    merged.set(record.skill.name, record);
+  }
+
+  const skillEntries: SkillEntry[] = Array.from(merged.values())
+    .sort((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+    .map((record) => {
+      const skill = record.skill;
+      const frontmatter =
+        record.frontmatter ??
+        readSkillFrontmatterSafe({
+          rootDir: skill.baseDir,
+          filePath: skill.filePath,
+          maxBytes: limits.maxSkillFileBytes,
+        }) ??
+        ({} as ParsedSkillFrontmatter);
+      const invocation = resolveSkillInvocationPolicy(frontmatter);
+      return {
+        skill,
+        frontmatter,
+        metadata: resolveOpenClawMetadata(frontmatter),
+        invocation,
+        exposure: {
+          includeInRuntimeRegistry: true,
+          includeInAvailableSkillsPrompt:
+            invocation?.disableModelInvocation !== true && skill.disableModelInvocation !== true,
+          userInvocable: true,
+        },
+      };
+    });
+
+  return skillEntries;
+}
+
+// Async version with non-blocking directory scans for agent startup
+async function loadSkillEntriesAsync(
+  workspaceDir: string,
+  opts?: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+  },
+): Promise<SkillEntry[]> {
+  const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
+
+  const loadSkills = async (params: {
+    dir: string;
+    source: string;
+  }): Promise<LoadedSkillRecord[]> => {
     const rootDir = path.resolve(params.dir);
     if (!fs.existsSync(rootDir)) {
       return [];
@@ -472,7 +771,7 @@ function loadSkillEntries(
 
     const maxCandidatesPerRoot = Math.max(0, limits.maxCandidatesPerRoot);
     const maxSkillsLoadedPerSource = Math.max(0, limits.maxSkillsLoadedPerSource);
-    const childDirScan = listChildDirectories(baseDir, {
+    const childDirScan = await listChildDirectoriesAsync(baseDir, {
       maxCandidateDirs: maxCandidatesPerRoot,
     });
     const childDirs = childDirScan.dirs;
@@ -554,7 +853,7 @@ function loadSkillEntries(
       } else {
         // No SKILL.md here — check one level deeper for grouped skill directories.
         // Apply the same per-root cap as the outer scan to avoid scanning huge nested trees.
-        const nestedChildScan = listChildDirectories(skillDir, {
+        const nestedChildScan = await listChildDirectoriesAsync(skillDir, {
           maxCandidateDirs: maxCandidatesPerRoot,
         });
         const nestedChildren = nestedChildScan.dirs;
@@ -639,40 +938,37 @@ function loadSkillEntries(
   });
   const mergedExtraDirs = [...extraDirs, ...pluginSkillDirs];
 
-  const bundledSkills = bundledSkillsDir
-    ? loadSkills({
-        dir: bundledSkillsDir,
-        source: "openclaw-bundled",
-      })
-    : [];
-  const extraSkills = mergedExtraDirs.flatMap((dir) => {
-    const resolved = resolveUserPath(dir);
-    return loadSkills({
-      dir: resolved,
-      source: "openclaw-extra",
-    });
-  });
-  const managedSkills = loadSkills({
-    dir: managedSkillsDir,
-    source: "openclaw-managed",
-  });
+  // Load all skill directories in parallel to avoid blocking the event loop
   const osHomeDir = resolveUserHomeDir();
   const personalAgentsSkillsDir = osHomeDir
     ? path.resolve(osHomeDir, ".agents", "skills")
     : path.resolve(".agents", "skills");
-  const personalAgentsSkills = loadSkills({
-    dir: personalAgentsSkillsDir,
-    source: "agents-skills-personal",
-  });
   const projectAgentsSkillsDir = path.resolve(workspaceDir, ".agents", "skills");
-  const projectAgentsSkills = loadSkills({
-    dir: projectAgentsSkillsDir,
-    source: "agents-skills-project",
-  });
-  const workspaceSkills = loadSkills({
-    dir: workspaceSkillsDir,
-    source: "openclaw-workspace",
-  });
+
+  const [
+    bundledSkills,
+    extraSkillsResults,
+    managedSkills,
+    personalAgentsSkills,
+    projectAgentsSkills,
+    workspaceSkills,
+  ] = await Promise.all([
+    bundledSkillsDir
+      ? loadSkills({ dir: bundledSkillsDir, source: "openclaw-bundled" })
+      : Promise.resolve([]),
+    Promise.all(
+      mergedExtraDirs.map((dir) => {
+        const resolved = resolveUserPath(dir);
+        return loadSkills({ dir: resolved, source: "openclaw-extra" });
+      }),
+    ),
+    loadSkills({ dir: managedSkillsDir, source: "openclaw-managed" }),
+    loadSkills({ dir: personalAgentsSkillsDir, source: "agents-skills-personal" }),
+    loadSkills({ dir: projectAgentsSkillsDir, source: "agents-skills-project" }),
+    loadSkills({ dir: workspaceSkillsDir, source: "openclaw-workspace" }),
+  ]);
+
+  const extraSkills = extraSkillsResults.flat();
 
   const merged = new Map<string, LoadedSkillRecord>();
   // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
@@ -814,11 +1110,77 @@ function applySkillsPromptLimits(params: {
   return { skillsForPrompt, truncated, compact };
 }
 
+// Synchronous version for backward compatibility
+function resolveWorkspaceSkillPromptState(
+  workspaceDir: string,
+  opts?: WorkspaceSkillBuildOptions,
+): {
+  eligible: SkillEntry[];
+  prompt: string;
+  resolvedSkills: Skill[];
+} {
+  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+  const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  const eligible = filterSkillEntries(
+    skillEntries,
+    opts?.config,
+    effectiveSkillFilter,
+    opts?.eligibility,
+  );
+  const promptEntries = eligible.filter((entry) => isSkillVisibleInAvailableSkillsPrompt(entry));
+  const remoteNote = opts?.eligibility?.remote?.note?.trim();
+  const resolvedSkills = promptEntries.map((entry) => entry.skill);
+  const promptSkills = compactSkillPaths(resolvedSkills)
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name, "en"));
+  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
+    skills: promptSkills,
+    config: opts?.config,
+    agentId: opts?.agentId,
+  });
+  const truncationNote = truncated
+    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+    : compact
+      ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
+      : "";
+  const prompt = [
+    remoteNote,
+    truncationNote,
+    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return { eligible, prompt, resolvedSkills };
+}
+
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
   const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
+  const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  return {
+    prompt,
+    skills: eligible.map((entry) => ({
+      name: entry.skill.name,
+      primaryEnv: entry.metadata?.primaryEnv,
+      requiredEnv: entry.metadata?.requires?.env?.slice(),
+    })),
+    ...(skillFilter === undefined ? {} : { skillFilter }),
+    resolvedSkills,
+    version: opts?.snapshotVersion,
+  };
+}
+
+// Async version for agent startup to avoid event loop blocking
+export async function buildWorkspaceSkillSnapshotAsync(
+  workspaceDir: string,
+  opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
+): Promise<SkillSnapshot> {
+  const { eligible, prompt, resolvedSkills } = await resolveWorkspaceSkillPromptStateAsync(
+    workspaceDir,
+    opts,
+  );
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   return {
     prompt,
@@ -863,15 +1225,15 @@ function resolveEffectiveWorkspaceSkillFilter(
   return resolveEffectiveAgentSkillFilter(opts.config, opts.agentId);
 }
 
-function resolveWorkspaceSkillPromptState(
+async function resolveWorkspaceSkillPromptStateAsync(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions,
-): {
+): Promise<{
   eligible: SkillEntry[];
   prompt: string;
   resolvedSkills: Skill[];
-} {
-  const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
+}> {
+  const skillEntries = opts?.entries ?? (await loadSkillEntriesAsync(workspaceDir, opts));
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   const eligible = filterSkillEntries(
     skillEntries,

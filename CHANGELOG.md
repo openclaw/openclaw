@@ -32,6 +32,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **perf(gateway)**: Fix severe event loop blocking during agent startup by (1) caching plugin tool factory config keys using object identity instead of expensive SHA256 hashing, (2) adding WeakMap cache for skills snapshot hydration to avoid redundant workspace scans, and (3) converting directory scans to async operations with parallel loading. Resolves 50-100+ second startup delays and gateway timeout/reconnection issues. (#75944)
 - Telegram/native commands: pass persisted session files into plugin commands for topic-bound sessions, so `/codex bind` works from Telegram forum topics. Refs #75845 and #76049. Thanks @MatthewSchleder.
 - Security audit/plugins: ignore plugin install backup, disabled, and dependency debris directories when enumerating installed plugin roots, avoiding false-positive findings for `.openclaw-install-backups` after plugin updates. Fixes #75456.
 - Telegram: honor runtime conversation bindings for native slash commands in bound top-level groups, so commands like `/status@bot` route to the active non-`main` session instead of falling back to the default route. Fixes #75405; supersedes #75558. Thanks @ziptbm and @yfge.

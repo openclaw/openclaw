@@ -39,10 +39,16 @@ function getPluginToolFactoryConfigCacheKey(
   if (!value) {
     return null;
   }
+  // Use object identity as primary cache key to avoid expensive SHA256 hashing.
+  // Only fall back to resolveRuntimeConfigCacheKey for exact runtime snapshot matches.
+  const objectId = getPluginToolFactoryCacheObjectId(value);
+  if (objectId !== null) {
+    return objectId;
+  }
   try {
     return resolveRuntimeConfigCacheKey(value);
   } catch {
-    return getPluginToolFactoryCacheObjectId(value);
+    return null;
   }
 }
 
