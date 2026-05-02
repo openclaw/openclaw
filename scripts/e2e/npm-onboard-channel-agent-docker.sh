@@ -126,7 +126,7 @@ openclaw onboard --non-interactive --accept-risk \
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-onboard-state "$HOME"
 node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs configure-mock-model "$MOCK_PORT"
 
-openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
+openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 
 echo "Configuring $CHANNEL..."
 openclaw channels add --channel "$CHANNEL" --token "$CHANNEL_TOKEN" >/tmp/openclaw-channel-add.log 2>&1
@@ -134,7 +134,7 @@ node scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs assert-channel-con
 
 echo "Running doctor after channel activation..."
 openclaw doctor --repair --non-interactive >/tmp/openclaw-doctor.log 2>&1
-openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$package_root" "$HOME/.openclaw"
+openclaw_e2e_assert_dep_absent "$DEP_SENTINEL" "$HOME/.openclaw"
 
 echo "Running local agent turn against mocked OpenAI..."
 openclaw agent --local \
