@@ -2,11 +2,25 @@ import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
+  CommandArgChoiceContext,
   CommandCategory,
   CommandScope,
   CommandTier,
 } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
+import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";
+
+type ListThinkingLevels = (
+  provider?: string | null,
+  model?: string | null,
+  catalog?: CommandArgChoiceContext["catalog"],
+) => ThinkLevel[];
+
+const BROWSER_SAFE_THINKING_LEVELS: ThinkLevel[] = [
+  ...BASE_THINKING_LEVELS,
+  "xhigh",
+  "adaptive",
+  "max",
+];
 
 type DefineChatCommandInput = {
   key: string;
@@ -121,7 +135,11 @@ export function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
   }
 }
 
-export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
+export function buildBuiltinChatCommands(
+  params: { listThinkingLevels?: ListThinkingLevels } = {},
+): ChatCommandDefinition[] {
+  const listThinkingLevelChoices =
+    params.listThinkingLevels ?? (() => BROWSER_SAFE_THINKING_LEVELS);
   const commands: ChatCommandDefinition[] = [
     defineChatCommand({
       key: "help",
@@ -727,7 +745,8 @@ export function buildBuiltinChatCommands(): ChatCommandDefinition[] {
           name: "level",
           description: "Thinking level",
           type: "string",
-          choices: ({ provider, model, catalog }) => listThinkingLevels(provider, model, catalog),
+          choices: ({ provider, model, catalog }) =>
+            listThinkingLevelChoices(provider, model, catalog),
         },
       ],
       argsMenu: "auto",
