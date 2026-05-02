@@ -887,6 +887,11 @@ export type PluginHookHandlerMap = {
     event: PluginHookSessionStartEvent,
     ctx: PluginHookSessionContext,
   ) => Promise<void> | void;
+  /**
+   * Fired when a session ends. This includes normal conversation sessions,
+   * cron isolated-agent sessions after each run, and subagent sessions when
+   * a spawn attempt fails (in cases where the lifecycle cascade is suppressed).
+   */
   session_end: (
     event: PluginHookSessionEndEvent,
     ctx: PluginHookSessionContext,

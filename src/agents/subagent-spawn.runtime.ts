@@ -18,6 +18,7 @@ export {
   resolveGatewaySessionStoreTarget,
 } from "../gateway/session-utils.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+export { buildSessionEndHookPayload } from "../auto-reply/reply/session-hooks.js";
 export { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 export {
   mergeDeliveryContext,

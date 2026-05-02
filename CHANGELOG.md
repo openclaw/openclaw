@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/hooks: extend `session_end` to fire when a subagent spawn fails and when a cron isolated agent session completes, so plugins can react to task completion without polling. The `subagent_ended` hook continues to fire alongside `session_end` for backward compatibility. (#10142) Thanks @mitchelldavis44.
 - Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
 - Plugins/update: on the beta OpenClaw update channel, default-line npm and ClawHub plugin updates try `@beta` first and fall back to default/latest when no plugin beta release exists.
 

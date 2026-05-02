@@ -26,3 +26,5 @@ export {
   mapHookExternalContentSource,
   resolveHookExternalContentSource,
 } from "../../security/external-content-source.js";
+export { buildSessionEndHookPayload } from "../../auto-reply/reply/session-hooks.js";
+export { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";

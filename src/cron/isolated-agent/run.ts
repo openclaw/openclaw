@@ -35,9 +35,11 @@ import {
   type PersistCronSessionEntry,
 } from "./run-session-state.js";
 import {
+  buildSessionEndHookPayload,
   DEFAULT_CONTEXT_TOKENS,
   deriveSessionTotalTokens,
   ensureAgentWorkspace,
+  getGlobalHookRunner,
   hasNonzeroUsage,
   isCliProvider,
   isExternalHookSession,
@@ -765,6 +767,23 @@ async function prepareCronRunContext(params: {
   };
 }
 
+async function emitCronSessionEnd(prepared: PreparedCronRunContext): Promise<void> {
+  const hookRunner = getGlobalHookRunner();
+  if (hookRunner?.hasHooks("session_end") !== true) {
+    return;
+  }
+  try {
+    const { event, context } = buildSessionEndHookPayload({
+      sessionId: prepared.runSessionId,
+      sessionKey: prepared.runSessionKey,
+      cfg: prepared.cfgWithAgentDefaults,
+    });
+    await hookRunner.runSessionEnd(event, context);
+  } catch {
+    // Session end hook failure should not block result delivery.
+  }
+}
+
 async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
   execution: CronExecutionResult;
@@ -859,6 +878,7 @@ async function finalizeCronRun(params: {
     telemetry = { model: modelUsed, provider: providerUsed };
   }
   await prepared.persistSessionEntry();
+  await emitCronSessionEnd(prepared);
 
   if (params.isAborted()) {
     return prepared.withRunSession({ status: "error", error: params.abortReason(), ...telemetry });
@@ -1065,6 +1085,7 @@ export async function runCronIsolatedAgentTurn(params: {
       suppressExecNotifyOnExit: prepared.context.suppressExecNotifyOnExit,
     });
     if (isAborted()) {
+      await emitCronSessionEnd(prepared.context);
       return prepared.context.withRunSession({ status: "error", error: abortReason() });
     }
     return await finalizeCronRun({
@@ -1074,6 +1095,7 @@ export async function runCronIsolatedAgentTurn(params: {
       isAborted,
     });
   } catch (err) {
+    await emitCronSessionEnd(prepared.context);
     return prepared.context.withRunSession({ status: "error", error: String(err) });
   }
 }

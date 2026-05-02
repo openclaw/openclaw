@@ -45,6 +45,7 @@ import {
   AGENT_LANE_SUBAGENT,
   DEFAULT_SUBAGENT_MAX_CHILDREN_PER_AGENT,
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
+  buildSessionEndHookPayload,
   buildSubagentSystemPrompt,
   callGateway,
   emitSessionLifecycleEvent,
@@ -1185,6 +1186,24 @@ export async function spawnSubagentDirect(
         }
       }
       emitLifecycleHooks = !endedHookEmitted;
+    }
+    // Fire session_end when sessions.delete won't emit the lifecycle cascade.
+    // When emitLifecycleHooks=true the gateway fires session_end itself; when
+    // false (no thread binding, or subagent_ended already fired) we own it.
+    if (!emitLifecycleHooks) {
+      const globalHookRunner = getGlobalHookRunner();
+      if (globalHookRunner?.hasHooks("session_end") === true) {
+        try {
+          const { event, context } = buildSessionEndHookPayload({
+            sessionId: childIdem,
+            sessionKey: childSessionKey,
+            cfg,
+          });
+          await globalHookRunner.runSessionEnd(event, context);
+        } catch {
+          // Spawn should still return an actionable error even if cleanup hooks fail.
+        }
+      }
     }
     // Always delete the provisional child session after a failed spawn attempt.
     // If we already emitted subagent_ended above, suppress a duplicate lifecycle hook.
