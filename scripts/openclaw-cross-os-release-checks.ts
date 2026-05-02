@@ -40,6 +40,7 @@ const providerConfig = {
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
     model: "openai/gpt-5.5",
+    baseUrl: "https://api.openai.com/v1",
     timeoutSeconds: 600,
   },
   anthropic: {
@@ -1842,6 +1843,22 @@ async function runInstalledModelsSet(params) {
     timeoutMs: 2 * 60 * 1000,
   });
   if (typeof params.providerConfig.timeoutSeconds === "number") {
+    if (typeof params.providerConfig.baseUrl === "string") {
+      await runInstalledCli({
+        cliPath: params.cliPath,
+        args: [
+          "config",
+          "set",
+          `models.providers.${params.providerConfig.extensionId}.baseUrl`,
+          JSON.stringify(params.providerConfig.baseUrl),
+          "--strict-json",
+        ],
+        cwd: params.cwd,
+        env: params.env,
+        logPath: params.logPath,
+        timeoutMs: 2 * 60 * 1000,
+      });
+    }
     await runInstalledCli({
       cliPath: params.cliPath,
       args: [
@@ -2634,6 +2651,21 @@ async function runModelsSet(params) {
     timeoutMs: 2 * 60 * 1000,
   });
   if (typeof params.providerConfig.timeoutSeconds === "number") {
+    if (typeof params.providerConfig.baseUrl === "string") {
+      await runOpenClaw({
+        lane: params.lane,
+        env: params.env,
+        args: [
+          "config",
+          "set",
+          `models.providers.${params.providerConfig.extensionId}.baseUrl`,
+          JSON.stringify(params.providerConfig.baseUrl),
+          "--strict-json",
+        ],
+        logPath: params.logPath,
+        timeoutMs: 2 * 60 * 1000,
+      });
+    }
     await runOpenClaw({
       lane: params.lane,
       env: params.env,

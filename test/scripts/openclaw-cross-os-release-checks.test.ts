@@ -165,6 +165,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
     expect(source).toContain('"--thinking",\n    "minimal"');
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
+    expect(source).toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
     expect(source).toContain(
       "models.providers.${params.providerConfig.extensionId}.timeoutSeconds",
     );
