@@ -260,7 +260,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor does not repair this automatically because both routes are valid:
 
     - `openai-codex/*` + PI means "use Codex OAuth/subscription auth through the normal OpenClaw runner."
-    - `openai/*` + `runtime: "codex"` means "run the embedded turn through native Codex app-server."
+    - `openai/*` + `agentRuntime.id: "codex"` means "run the embedded turn through native Codex app-server."
     - `/codex ...` means "control or bind a native Codex conversation from chat."
     - `/acp ...` or `runtime: "acp"` means "use the external ACP/acpx adapter."
 
