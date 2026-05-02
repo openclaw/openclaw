@@ -98,6 +98,9 @@ describe("collectPublishablePluginPackageErrors", () => {
           },
           openclaw: {
             extensions: ["./index.ts"],
+            install: {
+              npmSpec: "@openclaw/zalo",
+            },
             release: {
               publishToNpm: true,
             },
@@ -118,6 +121,9 @@ describe("collectPublishablePluginPackageErrors", () => {
           private: true,
           openclaw: {
             extensions: [""],
+            install: {
+              npmSpec: "   ",
+            },
             release: {
               publishToNpm: true,
             },
@@ -130,6 +136,7 @@ describe("collectPublishablePluginPackageErrors", () => {
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
       'package.json version must match YYYY.M.D, YYYY.M.D-N, or YYYY.M.D-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
+      "openclaw.install.npmSpec must be a non-empty string for publishable plugins.",
     ]);
   });
 
@@ -143,6 +150,9 @@ describe("collectPublishablePluginPackageErrors", () => {
           version: "2026.5.1-beta.1",
           openclaw: {
             extensions: ["./index.ts"],
+            install: {
+              npmSpec: "@openclaw/twitch",
+            },
             release: {
               publishToNpm: true,
             },
@@ -152,6 +162,29 @@ describe("collectPublishablePluginPackageErrors", () => {
     ).toEqual([
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
     ]);
+  });
+
+  it("requires npm install metadata for publishable plugins", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "voice-call",
+        packageDir: bundledPluginRoot("voice-call"),
+        packageJson: {
+          name: "@openclaw/voice-call",
+          version: "2026.5.1-beta.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
+          openclaw: {
+            extensions: ["./index.ts"],
+            release: {
+              publishToNpm: true,
+            },
+          },
+        },
+      }),
+    ).toEqual(["openclaw.install.npmSpec must be a non-empty string for publishable plugins."]);
   });
 });
 
@@ -218,6 +251,9 @@ describe("collectPublishablePluginPackages", () => {
       },
       openclaw: {
         extensions: ["./index.ts"],
+        install: {
+          npmSpec: "@openclaw/demo-plugin",
+        },
         release: {
           publishToNpm: true,
         },
@@ -230,6 +266,9 @@ describe("collectPublishablePluginPackages", () => {
       private: true,
       openclaw: {
         extensions: ["./index.ts"],
+        install: {
+          npmSpec: "@openclaw/private-plugin",
+        },
         release: {
           publishToNpm: true,
         },

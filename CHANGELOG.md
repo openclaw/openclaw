@@ -9,6 +9,8 @@ Docs: https://docs.openclaw.ai
 - Tools: add a platform-level tool descriptor planner for descriptor-first visibility, generic availability checks, and executor references. Thanks @shakkernerd.
 - Docs/Codex: clarify that ChatGPT/Codex subscription setups should use `openai/gpt-*` with `agentRuntime.id: "codex"` for native Codex runtime, while `openai-codex/*` remains the PI OAuth route. Thanks @pashpashpash.
 - Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.
+- Plugins/beta: externalize ACPX behind the official `@openclaw/acpx` package so packaged installs keep ACP harness adapter binaries out of core until the ACP backend is installed. Thanks @vincentkoc.
+- Plugins/beta: externalize diagnostics OpenTelemetry behind the official `@openclaw/diagnostics-otel` package so packaged installs keep the OTEL dependency stack out of core until the plugin is installed. Thanks @vincentkoc.
 - Plugins/beta: prepare Google Chat, LINE, Matrix, and Mattermost for `2026.5.1-beta.2` npm and ClawHub publishing, and keep publishable plugin dist trees out of the core npm package. Thanks @vincentkoc.
 - Plugins/beta: prepare BlueBubbles, diagnostics Prometheus, Google Meet, Nextcloud Talk, Nostr, Zalo, and Zalo Personal for `2026.5.1-beta.2` npm and ClawHub publishing. Thanks @vincentkoc.
 - Plugins/beta: prepare diagnostics OpenTelemetry, Discord, Diffs, Lobster, Memory LanceDB, Microsoft Teams, QQ Bot, Voice Call, and WhatsApp for `2026.5.1-beta.1` npm and ClawHub publishing. Thanks @vincentkoc.

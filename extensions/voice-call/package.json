@@ -29,6 +29,8 @@
       "./index.ts"
     ],
     "install": {
+      "npmSpec": "@openclaw/voice-call",
+      "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {

@@ -161,13 +161,13 @@ export OTEL_SERVICE_NAME="openclaw-gateway"
 ./scripts/docker/setup.sh
 ```
 
-The official OpenClaw Docker release image includes the bundled
-`diagnostics-otel` plugin source. To enable export, allow and enable the
-`diagnostics-otel` plugin in config, then set
-`diagnostics.otel.enabled=true` or use the config example in
-[OpenTelemetry export](/gateway/opentelemetry). Collector auth headers are
-configured through `diagnostics.otel.headers`, not through Docker environment
-variables.
+Install the official `@openclaw/diagnostics-otel` plugin in packaged Docker
+installs before enabling export. Custom source-built images can still include
+the local plugin source with `OPENCLAW_EXTENSIONS=diagnostics-otel`. To enable
+export, allow and enable the `diagnostics-otel` plugin in config, then set
+`diagnostics.otel.enabled=true` or use the config example in [OpenTelemetry
+export](/gateway/opentelemetry). Collector auth headers are configured through
+`diagnostics.otel.headers`, not through Docker environment variables.
 
 Prometheus metrics use the already-published Gateway port. Enable the
 `diagnostics-prometheus` plugin, then scrape:

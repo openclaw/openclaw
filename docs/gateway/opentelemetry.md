@@ -7,7 +7,7 @@ read_when:
   - You need the exact metric names, span names, or attribute shapes to build dashboards or alerts
 ---
 
-OpenClaw exports diagnostics through the bundled `diagnostics-otel` plugin
+OpenClaw exports diagnostics through the official `diagnostics-otel` plugin
 using **OTLP/HTTP (protobuf)**. Any collector or backend that accepts OTLP/HTTP
 works without code changes. For local file logs and how to read them, see
 [Logging](/logging).
@@ -26,6 +26,12 @@ works without code changes. For local file logs and how to read them, see
   enabled, so the in-process cost stays near zero by default.
 
 ## Quick start
+
+For packaged installs, install the plugin first:
+
+```bash
+openclaw plugins install @openclaw/diagnostics-otel
+```
 
 ```json5
 {
