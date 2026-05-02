@@ -17,9 +17,9 @@ const OPENCLAW_PACKAGE_ROOT =
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
-const loadedPublicSurfaceModules = new Map<string, unknown>();
+const publicSurfaceModuleCache = new Map<string, unknown>();
 const sourceArtifactRequire = createRequire(import.meta.url);
-const publicSurfaceLocations = new Map<
+const publicSurfaceLocationCache = new Map<
   string,
   {
     modulePath: string;
@@ -83,11 +83,11 @@ function resolvePublicSurfaceLocation(params: {
   artifactBasename: string;
 }): { modulePath: string; boundaryRoot: string } | null {
   const key = createResolutionKey(params);
-  if (publicSurfaceLocations.has(key)) {
-    return publicSurfaceLocations.get(key) ?? null;
+  if (publicSurfaceLocationCache.has(key)) {
+    return publicSurfaceLocationCache.get(key) ?? null;
   }
   const resolved = resolvePublicSurfaceLocationUncached(params);
-  publicSurfaceLocations.set(key, resolved);
+  publicSurfaceLocationCache.set(key, resolved);
   return resolved;
 }
 
@@ -120,7 +120,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  const cached = loadedPublicSurfaceModules.get(location.modulePath);
+  const cached = publicSurfaceModuleCache.get(location.modulePath);
   if (cached) {
     return cached as T;
   }
@@ -150,15 +150,15 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
   }
 
   const sentinel = {} as T;
-  loadedPublicSurfaceModules.set(location.modulePath, sentinel);
-  loadedPublicSurfaceModules.set(validatedPath, sentinel);
+  publicSurfaceModuleCache.set(location.modulePath, sentinel);
+  publicSurfaceModuleCache.set(validatedPath, sentinel);
   try {
     const loaded = loadPublicSurfaceModule(validatedPath) as T;
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {
-    loadedPublicSurfaceModules.delete(location.modulePath);
-    loadedPublicSurfaceModules.delete(validatedPath);
+    publicSurfaceModuleCache.delete(location.modulePath);
+    publicSurfaceModuleCache.delete(validatedPath);
     throw error;
   }
 }
@@ -171,7 +171,7 @@ export function resolveBundledPluginPublicArtifactPath(params: {
 }
 
 export function resetBundledPluginPublicArtifactLoaderForTest(): void {
-  loadedPublicSurfaceModules.clear();
-  publicSurfaceLocations.clear();
+  publicSurfaceModuleCache.clear();
+  publicSurfaceLocationCache.clear();
   moduleLoaders.clear();
 }
