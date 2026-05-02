@@ -105,6 +105,13 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 
+export function formatTelegramDebounceFlushError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.stack?.trim() || err.message || err.name;
+  }
+  return String(err);
+}
+
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -281,7 +288,9 @@ export const registerTelegramHandlers = ({
       );
     },
     onError: (err, items) => {
-      runtime.error?.(danger(`telegram debounce flush failed: ${String(err)}`));
+      runtime.error?.(
+        danger(`telegram debounce flush failed: ${formatTelegramDebounceFlushError(err)}`),
+      );
       const chatId = items[0]?.msg.chat.id;
       if (chatId != null) {
         const threadId = items[0]?.msg.message_thread_id;

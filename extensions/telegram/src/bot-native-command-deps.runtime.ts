@@ -5,6 +5,7 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "openclaw/plugin-sdk/re
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
+import { editMessageTelegram } from "./send.js";
 
 export type TelegramNativeCommandDeps = Pick<
   TelegramBotDeps,
@@ -17,13 +18,6 @@ export type TelegramNativeCommandDeps = Pick<
 > & {
   getPluginCommandSpecs?: typeof getPluginCommandSpecs;
 };
-
-let telegramSendRuntimePromise: Promise<typeof import("./send.js")> | undefined;
-
-async function loadTelegramSendRuntime() {
-  telegramSendRuntimePromise ??= import("./send.js");
-  return await telegramSendRuntimePromise;
-}
 
 export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
   get loadConfig() {
@@ -45,7 +39,6 @@ export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps = {
     return getPluginCommandSpecs;
   },
   async editMessageTelegram(...args) {
-    const { editMessageTelegram } = await loadTelegramSendRuntime();
     return await editMessageTelegram(...args);
   },
 };
