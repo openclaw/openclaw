@@ -233,6 +233,15 @@ describe("buildGatewayReloadPlan", () => {
     expect(afterPinPlan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it("restarts loaded channel plugins when plugin entry state changes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.telegram.enabled"]);
+
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(plan.restartChannels).toEqual(new Set(["telegram"]));
+  });
+
   it("restarts heartbeat when model-related config changes", () => {
     const plan = buildGatewayReloadPlan([
       "models.providers.openai.models",
@@ -281,7 +290,7 @@ describe("buildGatewayReloadPlan", () => {
     ]);
   });
 
-  it("keeps colliding whole-record plugin install changes as restart reasons", () => {
+  it("restarts for whole-record plugin install changes", () => {
     const plan = buildGatewayReloadPlan(
       ["plugins.installs.lossless.resolvedAt", "plugins.installs.lossless.resolvedAt"],
       {
@@ -291,11 +300,30 @@ describe("buildGatewayReloadPlan", () => {
     );
 
     expect(plan.restartGateway).toBe(true);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
     expect(plan.restartReasons).toEqual([
       "plugins.installs.lossless.resolvedAt",
       "plugins.installs.lossless.resolvedAt",
     ]);
     expect(plan.noopPaths).toEqual([]);
+  });
+
+  it("requires restart when plugin load paths change", () => {
+    const plan = buildGatewayReloadPlan(["plugins.load.paths.0"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+    expect(plan.restartReasons).toEqual(["plugins.load.paths.0"]);
+  });
+
+  it("hot-reloads plugin entry config changes", () => {
+    const plan = buildGatewayReloadPlan(["plugins.entries.lossless-claw.config.mode"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.reloadPlugins).toBe(true);
+    expect(plan.disposeMcpRuntimes).toBe(true);
+    expect(plan.hotReasons).toContain("plugins.entries.lossless-claw.config.mode");
   });
 
   it("lists plugin install metadata and whole-record paths structurally", () => {
@@ -809,13 +837,14 @@ describe("startGatewayConfigReloader", () => {
 
     expect(recoverSnapshot).not.toHaveBeenCalled();
     expect(readSnapshot).toHaveBeenCalledTimes(1);
-    expect(onHotReload).not.toHaveBeenCalled();
-    expect(onRestart).toHaveBeenCalledTimes(1);
-    expect(onRestart).toHaveBeenCalledWith(
+    expect(onRestart).not.toHaveBeenCalled();
+    expect(onHotReload).toHaveBeenCalledTimes(1);
+    expect(onHotReload).toHaveBeenCalledWith(
       expect.objectContaining({
         changedPaths: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
-        restartGateway: true,
-        restartReasons: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
+        restartGateway: false,
+        reloadPlugins: true,
+        hotReasons: ["plugins.entries.lossless-claw.config.cacheAwareCompaction"],
       }),
       expect.objectContaining({
         plugins: expect.objectContaining({
@@ -1162,6 +1191,28 @@ describe("startGatewayConfigReloader", () => {
 
     expect(harness.onHotReload).not.toHaveBeenCalled();
     expect(harness.onRestart).toHaveBeenCalledTimes(1);
+    expect(harness.onRestart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        changedPaths: [
+          "plugins.installs.lossless.resolvedAt",
+          "plugins.installs.lossless.resolvedAt",
+        ],
+        restartGateway: true,
+        restartReasons: [
+          "plugins.installs.lossless.resolvedAt",
+          "plugins.installs.lossless.resolvedAt",
+        ],
+      }),
+      expect.objectContaining({
+        plugins: expect.objectContaining({
+          installs: expect.objectContaining({
+            "lossless.resolvedAt": expect.objectContaining({
+              source: "npm",
+            }),
+          }),
+        }),
+      }),
+    );
 
     await harness.reloader.stop();
   });
