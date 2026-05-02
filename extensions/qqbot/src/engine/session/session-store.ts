@@ -213,14 +213,6 @@ export function clearSession(accountId: string): void {
   }
 }
 
-/** Update only lastSeq on the persisted session. */
-export function updateLastSeq(accountId: string, lastSeq: number): void {
-  const existing = loadSession(accountId);
-  if (existing?.sessionId) {
-    saveSession({ ...existing, lastSeq });
-  }
-}
-
 /** Load all saved sessions from disk. */
 export function getAllSessions(): SessionState[] {
   const sessions = new Map<string, SessionState>();
