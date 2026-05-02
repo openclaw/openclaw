@@ -9,6 +9,7 @@ import {
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import * as ws from "ws";
+import { resolveDiscordManagedProxyUrlForWebSocket } from "../fetch.js";
 import * as discordGateway from "../internal/gateway.js";
 import { validateDiscordProxyUrl } from "../proxy-fetch.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
@@ -257,6 +258,8 @@ export function createDiscordGatewayPlugin(params: {
     voiceEnabled: resolveDiscordVoiceEnabled(params.discordConfig?.voice),
   });
   const proxy = resolveEffectiveDebugProxyUrl(params.discordConfig?.proxy);
+  const managedProxy = proxy ? undefined : resolveDiscordManagedProxyUrlForWebSocket();
+  const effectiveProxy = proxy || managedProxy;
   const debugProxySettings = resolveDebugProxySettings();
   const gatewayInfoTimeoutMs = resolveDiscordGatewayInfoTimeoutMs({
     configuredTimeoutMs: params.discordConfig?.gatewayInfoTimeoutMs,
@@ -265,12 +268,12 @@ export function createDiscordGatewayPlugin(params: {
   let fetchImpl = createDiscordGatewayMetadataFetch(debugProxySettings.enabled);
   let wsAgent: InstanceType<typeof httpsProxyAgent.HttpsProxyAgent<string>> | undefined;
 
-  if (proxy) {
+  if (effectiveProxy) {
     try {
-      validateDiscordProxyUrl(proxy);
+      validateDiscordProxyUrl(effectiveProxy);
       const HttpsProxyAgentCtor =
         params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
-      wsAgent = new HttpsProxyAgentCtor<string>(proxy);
+      wsAgent = new HttpsProxyAgentCtor<string>(effectiveProxy);
       params.runtime.log?.("discord: gateway proxy enabled");
     } catch (err) {
       params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));

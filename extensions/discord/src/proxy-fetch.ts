@@ -2,7 +2,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { ResolvedDiscordAccount } from "./accounts.js";
-import { resolveDiscordFetch, validateDiscordProxyUrl } from "./fetch.js";
+import {
+  hasDiscordManagedProxyConfig,
+  resolveDiscordFetch,
+  validateDiscordProxyUrl,
+} from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
 function resolveDiscordProxyUrl(
@@ -21,13 +25,25 @@ function resolveDiscordProxyUrl(
   return trimmed || undefined;
 }
 
-function resolveDiscordProxyFetchByUrl(
+export function resolveDiscordProxyFetchByUrl(
   proxyUrl: string | undefined,
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
-  return withValidatedDiscordProxy(proxyUrl, runtime, (proxy) =>
-    resolveDiscordFetch(makeProxyFetch(proxy)),
-  );
+  const explicitProxy = proxyUrl?.trim();
+  if (explicitProxy) {
+    return withValidatedDiscordProxy(explicitProxy, runtime, (proxy) =>
+      resolveDiscordFetch(makeProxyFetch(proxy)),
+    );
+  }
+  if (!hasDiscordManagedProxyConfig()) {
+    return undefined;
+  }
+  try {
+    return resolveDiscordFetch(undefined);
+  } catch (err) {
+    runtime?.error?.(danger(`discord: invalid proxy: ${String(err)}`));
+    return undefined;
+  }
 }
 
 export function resolveDiscordProxyFetchForAccount(

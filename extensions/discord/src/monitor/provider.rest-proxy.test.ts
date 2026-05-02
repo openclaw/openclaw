@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
+const { envProxyAgentSpy, undiciFetchMock, proxyAgentSpy } = vi.hoisted(() => ({
+  envProxyAgentSpy: vi.fn(),
   undiciFetchMock: vi.fn(),
   proxyAgentSpy: vi.fn(),
 }));
@@ -10,6 +11,9 @@ vi.mock("undici", () => {
     async destroy() {}
   }
   class EnvHttpProxyAgent {
+    constructor(options?: Record<string, unknown>) {
+      envProxyAgentSpy(options);
+    }
     async destroy() {}
   }
   class ProxyAgent {
@@ -41,6 +45,22 @@ describe("resolveDiscordRestFetch", () => {
 
   beforeEach(() => {
     vi.unstubAllEnvs();
+    for (const key of [
+      "OPENCLAW_DEBUG_PROXY_ENABLED",
+      "OPENCLAW_DEBUG_PROXY_URL",
+      "OPENCLAW_PROXY_URL",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "NO_PROXY",
+      "no_proxy",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
+    envProxyAgentSpy.mockReset();
     undiciFetchMock.mockReset();
     proxyAgentSpy.mockReset();
   });
@@ -135,6 +155,25 @@ describe("resolveDiscordRestFetch", () => {
     expect(proxyAgentSpy).toHaveBeenCalledWith(
       expect.objectContaining({ uri: "http://127.0.0.1:7777" }),
     );
+    expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
+  });
+
+  it("uses standard proxy env when no discord proxy URL is configured", async () => {
+    vi.stubEnv("https_proxy", "http://proxy.test:7890");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    } as const;
+    undiciFetchMock.mockResolvedValue(new Response("ok", { status: 200 }));
+
+    const fetcher = resolveDiscordRestFetch(undefined, runtime);
+    await fetcher("https://discord.com/api/v10/oauth2/applications/@me");
+
+    expect(envProxyAgentSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ httpsProxy: "http://proxy.test:7890" }),
+    );
+    expect(proxyAgentSpy).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith("discord: rest proxy enabled");
   });
 });

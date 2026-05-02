@@ -25,6 +25,22 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async () => {
 
 describe("createDiscordRestClient proxy support", () => {
   beforeEach(() => {
+    vi.unstubAllEnvs();
+    for (const key of [
+      "OPENCLAW_DEBUG_PROXY_ENABLED",
+      "OPENCLAW_DEBUG_PROXY_URL",
+      "OPENCLAW_PROXY_URL",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "ALL_PROXY",
+      "http_proxy",
+      "https_proxy",
+      "all_proxy",
+      "NO_PROXY",
+      "no_proxy",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
     makeProxyFetchMock.mockClear();
   });
 
@@ -119,6 +135,24 @@ describe("createDiscordRestClient proxy support", () => {
     };
 
     expect(makeProxyFetchMock).toHaveBeenCalledWith("http://[::1]:8080");
+    expect(requestClient.options?.fetch).toEqual(expect.any(Function));
+  });
+
+  it("injects a custom fetch when OPENCLAW_PROXY_URL is configured", () => {
+    vi.stubEnv("OPENCLAW_PROXY_URL", "http://proxy.test:8080");
+    const cfg = {
+      channels: {
+        discord: {
+          token: "Bot test-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const { rest } = createDiscordRestClient({ cfg });
+    const requestClient = rest as unknown as {
+      options?: { fetch?: typeof fetch };
+    };
+
     expect(requestClient.options?.fetch).toEqual(expect.any(Function));
   });
 

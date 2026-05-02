@@ -4,6 +4,7 @@ import {
   getProxyUrlFromFetch,
   hasEnvHttpProxyAgentConfigured,
   resolveEnvHttpProxyAgentOptions,
+  resolveEnvHttpProxyUrl,
   resolveFetch,
   type PinnedDispatcherPolicy,
 } from "openclaw/plugin-sdk/fetch-runtime";
@@ -58,6 +59,24 @@ function resolveOpenClawProxyUrlForDiscord(
 ): string | undefined {
   const proxyUrl = env.OPENCLAW_PROXY_URL?.trim();
   return proxyUrl ? proxyUrl : undefined;
+}
+
+export function hasDiscordManagedProxyConfig(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(
+    resolveEffectiveDebugProxyUrl(undefined) ||
+    hasEnvHttpProxyForDiscordApi(env) ||
+    resolveOpenClawProxyUrlForDiscord(env),
+  );
+}
+
+export function resolveDiscordManagedProxyUrlForWebSocket(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return (
+    resolveEnvHttpProxyAgentOptions(env)?.httpsProxy ??
+    resolveEnvHttpProxyUrl("https", env) ??
+    resolveOpenClawProxyUrlForDiscord(env)
+  );
 }
 
 function resolveDiscordDispatcherPolicy(params: { useEnvProxy: boolean; proxyUrl?: string }): {

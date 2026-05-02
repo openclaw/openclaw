@@ -6,31 +6,29 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveDiscordFetch } from "../fetch.js";
-import { withValidatedDiscordProxy } from "../proxy-fetch.js";
-import { makeProxyFetch } from "../proxy.js";
+import { resolveDiscordProxyFetchByUrl } from "../proxy-fetch.js";
 
 export function resolveDiscordRestFetch(
   proxyUrl: string | undefined,
   runtime: RuntimeEnv,
 ): typeof fetch {
   const effectiveProxyUrl = resolveEffectiveDebugProxyUrl(proxyUrl);
-  const fetcher = withValidatedDiscordProxy(effectiveProxyUrl, runtime, (proxy) => {
-    const discordFetch = resolveDiscordFetch(makeProxyFetch(proxy));
-    return wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
-      discordFetch(input, init).then((response) => {
-        captureHttpExchange({
-          url: resolveRequestUrl(input),
-          method: init?.method ?? "GET",
-          requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
-          response,
-          flowId: randomUUID(),
-          meta: { subsystem: "discord-rest" },
-        });
-        return response;
-      })) as typeof fetch);
-  });
+  const discordFetch = resolveDiscordProxyFetchByUrl(effectiveProxyUrl, runtime);
+  const fetcher = discordFetch
+    ? wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
+        discordFetch(input, init).then((response) => {
+          captureHttpExchange({
+            url: resolveRequestUrl(input),
+            method: init?.method ?? "GET",
+            requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
+            requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+            response,
+            flowId: randomUUID(),
+            meta: { subsystem: "discord-rest" },
+          });
+          return response;
+        })) as typeof fetch)
+    : undefined;
   if (!fetcher) {
     return fetch;
   }

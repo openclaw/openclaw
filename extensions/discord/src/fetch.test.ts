@@ -55,8 +55,10 @@ beforeEach(() => {
     "OPENCLAW_PROXY_URL",
     "HTTP_PROXY",
     "HTTPS_PROXY",
+    "ALL_PROXY",
     "http_proxy",
     "https_proxy",
+    "all_proxy",
     "NO_PROXY",
     "no_proxy",
   ]) {
