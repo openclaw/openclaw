@@ -342,7 +342,7 @@ async function finalizeSearchProviderSetup(params: {
   prompter: WizardPrompter;
   opts?: SetupSearchOptions;
 }): Promise<OpenClawConfig> {
-  let next = preserveDisabledState(params.originalConfig, params.nextConfig);
+  let next = params.nextConfig;
   const installEntry = params.entry[SEARCH_INSTALL_CATALOG_ENTRY];
   if (installEntry && next.tools?.web?.search?.enabled !== false) {
     const { ensureOnboardingPluginInstalled } =
@@ -363,6 +363,7 @@ async function finalizeSearchProviderSetup(params: {
     }
     next = installed.cfg;
   }
+  next = preserveDisabledState(params.originalConfig, next);
   if (!params.entry.runSetup) {
     return next;
   }

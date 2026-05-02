@@ -322,4 +322,53 @@ describe("runSearchSetupFlow", () => {
       spec: "@openclaw/brave-plugin",
     });
   });
+
+  it("installs an external catalog search provider when web search stays disabled", async () => {
+    const select = vi.fn().mockResolvedValueOnce("brave");
+    const text = vi.fn().mockResolvedValue("brave-disabled-key");
+    const prompter = createWizardPrompter({
+      select: select as never,
+      text: text as never,
+    });
+
+    const next = await runSearchSetupFlow(
+      {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+              enabled: false,
+            },
+          },
+        },
+      },
+      createNonExitingRuntime(),
+      prompter,
+    );
+
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          pluginId: "brave",
+          label: "Brave",
+          install: expect.objectContaining({
+            npmSpec: "@openclaw/brave-plugin",
+          }),
+        }),
+        autoConfirmSingleSource: true,
+      }),
+    );
+    expect(next.tools?.web?.search).toMatchObject({
+      provider: "brave",
+      enabled: false,
+    });
+    expect(next.plugins?.entries?.brave?.config?.webSearch).toMatchObject({
+      apiKey: "brave-disabled-key",
+    });
+    expect(next.plugins?.entries?.brave?.enabled).toBeUndefined();
+    expect(next.plugins?.installs?.brave).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/brave-plugin",
+    });
+  });
 });
