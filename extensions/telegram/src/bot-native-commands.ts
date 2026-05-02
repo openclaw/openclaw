@@ -888,16 +888,21 @@ export const registerTelegramNativeCommands = ({
             senderId,
           });
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-          const threadKeys = shouldUseTelegramDmThreadSession({
-            dmThreadId,
-            directConfig: !isGroup ? (groupConfig as TelegramDirectConfig | undefined) : undefined,
-            topicConfig,
-          })
-            ? (await resolveNativeCommandRuntime()).resolveThreadSessionKeys({
-                baseSessionKey,
-                threadId: `${chatId}:${dmThreadId}`,
-              })
-            : null;
+          const directConfig = !isGroup
+            ? (groupConfig as TelegramDirectConfig | undefined)
+            : undefined;
+          const threadKeys =
+            shouldUseTelegramDmThreadSession({
+              dmThreadId,
+              accountConfig: runtimeTelegramCfg,
+              directConfig,
+              topicConfig,
+            }) && dmThreadId != null
+              ? (await resolveNativeCommandRuntime()).resolveThreadSessionKeys({
+                  baseSessionKey,
+                  threadId: `${chatId}:${dmThreadId}`,
+                })
+              : null;
           cachedTargetSessionKey = threadKeys?.sessionKey ?? baseSessionKey;
           return cachedTargetSessionKey;
         };

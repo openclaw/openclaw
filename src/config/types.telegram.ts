@@ -119,6 +119,8 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Direct-message threading behavior. Defaults to flat DM sessions. */
+  dm?: TelegramDmConfig;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;
@@ -218,6 +220,13 @@ export type TelegramAccountConfig = {
   autoTopicLabel?: AutoTopicLabelConfig;
 };
 
+export type TelegramDmThreadReplies = "off" | "inbound" | "always";
+
+export type TelegramDmConfig = {
+  /** DM-only session threading override for message_thread_id (off|inbound|always). Default: off. */
+  threadReplies?: TelegramDmThreadReplies;
+};
+
 export type TelegramTopicConfig = {
   requireMention?: boolean;
   /** Emit internal message hooks for mention-skipped topic messages. */
@@ -290,6 +299,8 @@ export type TelegramDirectConfig = {
   skills?: string[];
   /** Per-topic configuration for DM topics (key is message_thread_id as string) */
   topics?: Record<string, TelegramTopicConfig>;
+  /** Per-DM override for message_thread_id session threading. */
+  threadReplies?: TelegramDmThreadReplies;
   /** If false, disable the bot for this DM (and its topics). */
   enabled?: boolean;
   /** If true, require messages to be from a topic when topics are enabled. */

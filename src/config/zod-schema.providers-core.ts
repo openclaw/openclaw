@@ -147,6 +147,14 @@ export const TelegramGroupSchema = z
   })
   .strict();
 
+const TelegramDmThreadRepliesSchema = z.enum(["off", "inbound", "always"]);
+
+const TelegramDmSchema = z
+  .object({
+    threadReplies: TelegramDmThreadRepliesSchema.optional(),
+  })
+  .strict();
+
 const AutoTopicLabelSchema = z
   .union([
     z.boolean(),
@@ -170,6 +178,7 @@ export const TelegramDirectSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    threadReplies: TelegramDmThreadRepliesSchema.optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
     requireTopic: z.boolean().optional(),
@@ -229,6 +238,7 @@ export const TelegramAccountSchemaBase = z
     botToken: SecretInputSchema.optional().register(sensitive),
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    dm: TelegramDmSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.union([z.string(), z.number()]).optional(),
