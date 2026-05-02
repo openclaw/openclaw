@@ -259,6 +259,7 @@ async function assertReadyzProbe(options) {
 }
 
 async function rpcCall(method, params, options) {
+  const rpcStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-runtime-rpc-"));
   const args = [
     options.entrypoint,
     "gateway",
@@ -279,6 +280,7 @@ async function rpcCall(method, params, options) {
       ...process.env,
       ...options.env,
       OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_STATE_DIR: rpcStateDir,
     },
   });
   return unwrapRpcPayload(parseJsonOutput(stdout));

@@ -736,6 +736,7 @@ function laneEnv(poolLane, baseEnv, logDir, cacheKey) {
     ...baseEnv,
   };
   const name = poolLane.name;
+  env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
   const image = e2eImageForLane(poolLane, baseEnv);
   if (image) {
     env.OPENCLAW_DOCKER_E2E_IMAGE = image;
