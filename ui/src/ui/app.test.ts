@@ -102,7 +102,7 @@ describe("OpenClawApp dictation recorder lifecycle", () => {
   it("does not submit collected audio after a recorder error and later stop", async () => {
     const app = await createRecordingApp();
     await app.toggleChatDictation();
-    const recorder = MockMediaRecorder.instances[0]!;
+    const recorder = MockMediaRecorder.instances[0];
 
     recorder.emitData(new Blob(["audio"], { type: "audio/webm" }));
     recorder.emitError("microphone failed");
@@ -118,7 +118,7 @@ describe("OpenClawApp dictation recorder lifecycle", () => {
   it("releases recorded chunks after copying them for normal transcription", async () => {
     const app = await createRecordingApp();
     await app.toggleChatDictation();
-    const recorder = MockMediaRecorder.instances[0]!;
+    const recorder = MockMediaRecorder.instances[0];
     recorder.emitData(new Blob(["audio"], { type: "audio/webm" }));
 
     await app.toggleChatDictation();
