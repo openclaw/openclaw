@@ -63,7 +63,7 @@ function stripDescriptorVolatileConfigFields(
     return value;
   }
   const { meta: _meta, wizard: _wizard, ...stableConfig } = value as Record<string, unknown>;
-  return stableConfig as PluginLoadOptions["config"];
+  return stableConfig as NonNullable<PluginLoadOptions["config"]>;
 }
 
 function getDescriptorConfigCacheKey(
