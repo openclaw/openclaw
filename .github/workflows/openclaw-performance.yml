@@ -309,14 +309,25 @@ jobs:
           if-no-files-found: ignore
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
 
-      - name: Checkout clawgrit reports
+      - name: Prepare clawgrit reports checkout
         if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
-        uses: actions/checkout@v6
-        with:
-          repository: openclaw/clawgrit-reports
-          path: .artifacts/clawgrit-reports
-          token: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
-          persist-credentials: true
+        env:
+          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          reports_root=".artifacts/clawgrit-reports"
+          mkdir -p "$reports_root"
+          git -C "$reports_root" init -b main
+          git -C "$reports_root" remote add origin https://github.com/openclaw/clawgrit-reports.git
+          auth_header="$(printf 'x-access-token:%s' "$CLAWGRIT_REPORTS_TOKEN" | base64 -w0)"
+          git -C "$reports_root" config http.https://github.com/.extraheader "AUTHORIZATION: basic ${auth_header}"
+          if git -C "$reports_root" ls-remote --exit-code --heads origin main >/dev/null 2>&1; then
+            git -C "$reports_root" fetch --depth=1 origin main
+            git -C "$reports_root" checkout -B main FETCH_HEAD
+          else
+            git -C "$reports_root" checkout -B main
+          fi
 
       - name: Publish to clawgrit reports
         if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
@@ -358,4 +369,4 @@ jobs:
             exit 0
           fi
           git -C "$reports_root" commit -m "perf: add OpenClaw ${LANE_ID} report ${GITHUB_SHA::12}"
-          git -C "$reports_root" push
+          git -C "$reports_root" push origin HEAD:main
