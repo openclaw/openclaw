@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Model commands: clarify direct and inline `/model` acknowledgements for non-default selections as session-scoped. Thanks @addu2612.
 - Doctor/gateway: stop warning that non-existent, unconfigured user-bin directories are required in the Gateway service PATH. Fixes #76017. Thanks @xiphis.
 - TUI/chat: skip full provider model normalization during context-window warmup while preserving provider-owned context metadata, avoiding cold-start stalls with large model registries. Thanks @547895019.
+- Agents: enable malformed tool-call argument repair for Codex and Azure OpenAI Responses transports while keeping generic OpenAI Responses paths out of the repair gate. Fixes #75154. Thanks @Nimraakram22.
 - Memory Wiki: accept relative Markdown links that include the `.md` suffix during broken-wikilink validation, avoiding false positives for native render-mode links. Thanks @Kenneth8128.
 - OpenAI Codex: show the device-pairing code in the interactive SSH/headless prompt while keeping the short-lived code out of persistent runtime logs. Fixes #74212. Thanks @da22le123.
 - QA Lab: stop gateway children when the suite parent disappears, so interrupted local QA runs cannot leave hot orphaned gateways behind.
