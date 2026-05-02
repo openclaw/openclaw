@@ -196,6 +196,14 @@ describe("resolveChannelSetupSelectionContributions", () => {
     ).toBe("remote install from npm: @openclaw/googlechat");
   });
 
+  it("sanitizes remote npm install hints", () => {
+    expect(
+      resolveCatalogChannelSelectionHint({
+        install: { npmSpec: "@openclaw/googlechat\u001B[31m\nbeta" },
+      }),
+    ).toBe("remote install from npm: @openclaw/googlechat\\nbeta");
+  });
+
   it("suppresses remote install hints for bundled channels", () => {
     expect(
       resolveCatalogChannelSelectionHint(
