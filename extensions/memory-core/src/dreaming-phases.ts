@@ -669,9 +669,13 @@ function filterRecallEntriesForAgentIsolation(params: {
   currentAgentId?: string;
   isShared?: boolean;
 }): ShortTermRecallEntry[] {
-  if (!params.isShared || !params.currentAgentId) {
-    // Non-shared workspace or no identity: no filtering needed
+  if (!params.isShared) {
+    // Non-shared workspace: no filtering needed
     return params.entries;
+  }
+  if (!params.currentAgentId?.trim()) {
+    // Shared workspace without identity: fail closed, return nothing
+    return [];
   }
   const agentCorpusPrefix = `memory/.dreams/session-corpus/${params.currentAgentId}/`;
   return params.entries.filter((entry) => {
@@ -727,6 +731,16 @@ function resolveSessionAgentsForWorkspace(params: {
   }
   // Filter to current agent when workspace is shared and identity is known
   if (currentAgentId && match.agentIds.length > 1) {
+    // Validate that currentAgentId is actually configured for this workspace
+    const isValidAgent = match.agentIds.some(
+      (id) => id.toLowerCase() === currentAgentId.toLowerCase(),
+    );
+    if (!isValidAgent) {
+      logger?.warn(
+        `memory-core: currentAgentId "${currentAgentId}" is not configured for shared workspace ${match.workspaceDir} — skipping dreaming.`,
+      );
+      return { agentIds: [], isShared: match.shared };
+    }
     return { agentIds: [currentAgentId], isShared: true };
   }
   return {
@@ -1643,12 +1657,15 @@ async function runLightDreaming(params: {
   currentAgentId?: string;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  // Determine if workspace is shared for read-path isolation (Bug #65374)
+  // Determine if THIS workspace is shared for read-path isolation (Bug #65374)
   const workspaceIsShared = params.cfg
     ? resolveMemoryDreamingWorkspaces(
         params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
         { primaryWorkspaceDir: params.primaryWorkspaceDir, primaryAgentId: "main" },
-      ).some((entry) => entry.shared && entry.agentIds.length > 1)
+      ).some(
+        (entry) =>
+          entry.shared && entry.agentIds.length > 1 && entry.workspaceDir === params.workspaceDir,
+      )
     : false;
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
@@ -1756,12 +1773,15 @@ async function runRemDreaming(params: {
   currentAgentId?: string;
 }): Promise<void> {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
-  // Determine if workspace is shared for read-path isolation (Bug #65374)
+  // Determine if THIS workspace is shared for read-path isolation (Bug #65374)
   const workspaceIsShared = params.cfg
     ? resolveMemoryDreamingWorkspaces(
         params.cfg as Parameters<typeof resolveMemoryDreamingWorkspaces>[0],
         { primaryWorkspaceDir: params.primaryWorkspaceDir, primaryAgentId: "main" },
-      ).some((entry) => entry.shared && entry.agentIds.length > 1)
+      ).some(
+        (entry) =>
+          entry.shared && entry.agentIds.length > 1 && entry.workspaceDir === params.workspaceDir,
+      )
     : false;
   await ingestDailyMemorySignals({
     workspaceDir: params.workspaceDir,
