@@ -116,6 +116,7 @@ export const PACKED_CLI_SMOKE_COMMANDS = [
   ["config", "schema"],
   ["models", "list", "--provider", "amazon-bedrock"],
 ] as const;
+export const PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS = ["plugins", "deps", "--repair"] as const;
 export const PACKED_COMPLETION_SMOKE_ARGS = [
   "completion",
   "--write-state",
@@ -364,6 +365,15 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
   });
 
   writePackedBundledPluginActivationConfig(homeDir);
+  execFileSync(
+    process.execPath,
+    [join(packageRoot, "openclaw.mjs"), ...PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS],
+    {
+      cwd: packageRoot,
+      stdio: "inherit",
+      env,
+    },
+  );
   execFileSync(process.execPath, [join(packageRoot, "openclaw.mjs"), "plugins", "doctor"], {
     cwd: packageRoot,
     stdio: "inherit",
