@@ -1374,7 +1374,6 @@ async function executeMainSessionCronJob(
   });
   if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
     const reason = `cron:${job.id}`;
-    const isRecurringJob = job.schedule.kind !== "at";
     const maxWaitMs = state.deps.wakeNowHeartbeatBusyMaxWaitMs ?? 2 * 60_000;
     const retryDelayMs = state.deps.wakeNowHeartbeatBusyRetryDelayMs ?? 250;
     const waitStartedAt = state.deps.nowMs();
@@ -1396,11 +1395,12 @@ async function executeMainSessionCronJob(
       ) {
         break;
       }
-      if (isRecurringJob || heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
-        // Recurring main-session cron jobs should not hold the cron lane open
-        // while runtime lanes are busy. A cron-in-progress skip is caused by
-        // this job's own active marker, so direct wake-now cannot succeed until
-        // the cron job returns and clears it (#50773).
+      if (heartbeatResult.reason === HEARTBEAT_SKIP_CRON_IN_PROGRESS) {
+        // A cron-in-progress skip is caused by this job's own active marker, so
+        // direct wake-now cannot succeed until the cron job returns and clears
+        // it (#50773). Other retryable busy reasons can clear while this job is
+        // still active, so let the bounded retry loop observe a real heartbeat
+        // run before recording recurring jobs as successful (#75964).
         state.deps.requestHeartbeatNow({
           reason,
           agentId: job.agentId,
