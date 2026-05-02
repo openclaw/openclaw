@@ -59,12 +59,19 @@ afterEach(() => {
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
-  const buildContext = async (message: Record<string, unknown>) =>
+  const buildContext = async (
+    message: Record<string, unknown>,
+    params?: Pick<
+      Parameters<typeof buildTelegramMessageContextForTest>[0],
+      "resolveTelegramGroupConfig"
+    >,
+  ) =>
     await buildTelegramMessageContextForTest({
       message,
+      ...params,
     });
 
-  it("uses thread session key for dm topics", async () => {
+  it("keeps incidental dm message_thread_id on the main session by default", async () => {
     const ctx = await buildContext({
       message_id: 1,
       chat: { id: 1234, type: "private" },
@@ -73,6 +80,29 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
       message_thread_id: 42,
       from: { id: 42, first_name: "Alice" },
     });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+  });
+
+  it("uses thread session key for configured dm topics", async () => {
+    const ctx = await buildContext(
+      {
+        message_id: 3,
+        chat: { id: 1234, type: "private" },
+        date: 1700000002,
+        text: "hello",
+        message_thread_id: 42,
+        from: { id: 42, first_name: "Alice" },
+      },
+      {
+        resolveTelegramGroupConfig: () => ({
+          groupConfig: { requireTopic: true },
+          topicConfig: undefined,
+        }),
+      },
+    );
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
