@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing } from "../test-api.js";
+import { createBraveWebSearchProvider as createBraveWebSearchContractProvider } from "../web-search-contract-api.js";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
 const braveManifest = JSON.parse(
@@ -38,6 +39,15 @@ describe("brave web search provider", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
+  });
+
+  it("points provider metadata at the canonical Brave docs page", () => {
+    expect(createBraveWebSearchProvider().docsUrl).toBe(
+      "https://docs.openclaw.ai/tools/brave-search",
+    );
+    expect(createBraveWebSearchContractProvider().docsUrl).toBe(
+      "https://docs.openclaw.ai/tools/brave-search",
+    );
   });
 
   it("points missing-key users to fetch/browser alternatives", async () => {

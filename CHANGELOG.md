@@ -42,6 +42,7 @@ Docs: https://docs.openclaw.ai
 - Web search: point missing-key errors to `web_fetch` for known URLs and the browser tool for interactive pages. Thanks @zhaoyang97.
 - Web search: late-bind managed agent `web_search` calls to the current runtime config snapshot, so existing sessions do not keep stale unresolved SecretRefs after secrets reload. Fixes #75420. Thanks @richardmqq.
 - Web search: honor `baseUrl` overrides for Gemini, Grok, and x_search provider-owned config, so proxy-backed search tools no longer dial hardcoded public endpoints. Supersedes #61972. Thanks @Lanfei.
+- Web search/Brave: point Brave provider metadata at the canonical `/tools/brave-search` docs page. Fixes #65870 and supersedes #65892. Thanks @Magicray1217 and @Jah-yee.
 - Web search/Brave: allow `freshness` and bounded date ranges in `llm-context` mode, matching Brave's documented LLM Context API support. Supersedes #51005. Thanks @remusao.
 - Web fetch: resolve external plugin `webFetchProviders` for non-sandboxed `web_fetch`, while keeping sandboxed fetches limited to bundled providers. Fixes #74915. Thanks @ultrahighsuper and @mingmingtsao.
 - Heartbeat: strip legacy `[TOOL_CALL]...[/TOOL_CALL]` and `[TOOL_RESULT]...[/TOOL_RESULT]` pseudo-call blocks from heartbeat replies before channel delivery. Fixes #54138. Thanks @Deniable9570.
