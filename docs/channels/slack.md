@@ -596,6 +596,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
 ## Threading, sessions, and reply tags
 
 - DMs route as `direct`; channels as `channel`; MPIMs as `group`.
+- Slack route bindings accept raw peer IDs plus Slack target forms such as `channel:C12345678`, `user:U12345678`, and `<@U12345678>`.
 - With default `session.dmScope=main`, Slack DMs collapse to agent main session.
 - Channel sessions: `agent:<agentId>:slack:channel:<channelId>`.
 - Thread replies can create thread session suffixes (`:thread:<threadTs>`) when applicable.

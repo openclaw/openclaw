@@ -695,6 +695,58 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.From).toBe("slack:group:G123");
   });
 
+  it("matches route bindings that use Slack target syntax for peers (#41608)", async () => {
+    const cases = [
+      {
+        peer: { kind: "group", id: "channel:C0AJUGWG5L6" },
+        message: createSlackMessage({
+          channel: "C0AJUGWG5L6",
+          channel_type: "channel",
+          text: "strategy ping",
+        }),
+        expectedSessionKey: "agent:strategist:slack:channel:c0ajugwg5l6",
+      },
+      {
+        peer: { kind: "direct", id: "user:U0ROUTE42" },
+        message: createSlackMessage({
+          channel: "D0ROUTE42",
+          channel_type: "im",
+          user: "U0ROUTE42",
+          text: "dm ping",
+        }),
+        expectedSessionKey: "agent:strategist:direct:u0route42",
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          session: { dmScope: "per-peer" },
+          agents: {
+            list: [{ id: "main", default: true }, { id: "strategist" }],
+          },
+          bindings: [
+            {
+              agentId: "strategist",
+              match: { channel: "slack", peer: testCase.peer },
+            },
+          ],
+          channels: { slack: { enabled: true, groupPolicy: "open" } },
+        } as OpenClawConfig,
+        defaultRequireMention: false,
+      });
+      slackCtx.resolveChannelName = async () => ({ name: "strategy", type: "channel" });
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+      const prepared = await prepareMessageWith(slackCtx, createSlackAccount(), testCase.message);
+
+      expect(prepared).toBeTruthy();
+      expect(prepared!.route.agentId).toBe("strategist");
+      expect(prepared!.route.matchedBy).toBe("binding.peer");
+      expect(prepared!.ctxPayload.SessionKey).toBe(testCase.expectedSessionKey);
+    }
+  });
+
   it("respects replyToModeByChatType.direct override for DMs", async () => {
     const prepared = await prepareMessageWith(
       createReplyToAllSlackCtx(),
