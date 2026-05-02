@@ -15,6 +15,7 @@ import {
   emitAgentEvent,
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
+  withAgentEventToolRawResult,
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -920,18 +921,23 @@ export async function handleToolExecutionEnd(
     }
   }
 
-  emitAgentEvent({
-    runId: ctx.params.runId,
-    stream: "tool",
-    data: {
-      phase: "result",
-      name: toolName,
-      toolCallId,
-      meta,
-      isError: isToolError,
-      result: sanitizedResult,
-    },
-  });
+  emitAgentEvent(
+    withAgentEventToolRawResult(
+      {
+        runId: ctx.params.runId,
+        stream: "tool",
+        data: {
+          phase: "result",
+          name: toolName,
+          toolCallId,
+          meta,
+          isError: isToolError,
+          result: sanitizedResult,
+        },
+      },
+      result,
+    ),
+  );
   const endedAt = Date.now();
   const itemId = buildToolItemId(toolCallId);
   const itemData: AgentItemEventData = {

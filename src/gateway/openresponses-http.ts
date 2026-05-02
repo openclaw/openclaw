@@ -15,7 +15,7 @@ import { createDefaultDeps } from "../cli/deps.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { agentCommandFromIngress } from "../commands/agent.js";
 import type { GatewayHttpResponsesConfig } from "../config/types.gateway.js";
-import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEvent, getAgentEventToolRawResult, onAgentEvent } from "../infra/agent-events.js";
 import { logWarn } from "../logger.js";
 import { renderFileContextBlock } from "../media/file-context.js";
 import {
@@ -357,6 +357,92 @@ function extractUsageFromResult(result: unknown): Usage {
   );
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringifyToolOutput(value: unknown): string {
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+
+  const seen = new WeakSet<object>();
+  try {
+    const json = JSON.stringify(value, (_key, nested) => {
+      if (typeof nested === "bigint") {
+        return nested.toString();
+      }
+      if (nested && typeof nested === "object") {
+        if (seen.has(nested)) {
+          return "[Circular]";
+        }
+        seen.add(nested);
+      }
+      return nested;
+    });
+    return json ?? "";
+  } catch {
+    return "[Unserializable tool result]";
+  }
+}
+
+function normalizeOpenResponsesCompatBody(body: unknown): unknown {
+  if (!isRecord(body) || !Array.isArray(body.input)) {
+    return body;
+  }
+
+  return {
+    ...body,
+    input: body.input.map((item) => {
+      if (!isRecord(item)) {
+        return item;
+      }
+
+      if (item.type === "function_call") {
+        const normalized: Record<string, unknown> = {
+          type: "function_call",
+          name: item.name,
+          arguments: item.arguments,
+        };
+        if (typeof item.id === "string") {
+          normalized.id = item.id;
+        }
+        if (typeof item.call_id === "string") {
+          normalized.call_id = item.call_id;
+        }
+        return normalized;
+      }
+
+      if (item.type === "function_call_output") {
+        return {
+          type: "function_call_output",
+          call_id: item.call_id,
+          output: item.output,
+        };
+      }
+
+      if (!("role" in item) || !("content" in item)) {
+        return item;
+      }
+
+      const normalized: Record<string, unknown> = {
+        type: typeof item.type === "string" ? item.type : "message",
+        role: item.role,
+        content: item.content,
+      };
+
+      if (item.role === "assistant" && typeof item.phase === "string") {
+        normalized.phase = item.phase;
+      }
+
+      return normalized;
+    }),
+  };
+}
+
 type PendingToolCall = { id: string; name: string; arguments: string };
 
 function resolveStopReasonAndPendingToolCalls(meta: unknown): {
@@ -460,7 +546,9 @@ export async function handleOpenResponsesHttpRequest(
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
 
   // Validate request body with Zod
-  const parseResult = CreateResponseBodySchema.safeParse(handled.body);
+  const parseResult = CreateResponseBodySchema.safeParse(
+    normalizeOpenResponsesCompatBody(handled.body),
+  );
   if (!parseResult.success) {
     const issue = parseResult.error.issues[0];
     const message = issue ? `${issue.path.join(".")}: ${issue.message}` : "Invalid request body";
@@ -819,6 +907,13 @@ export async function handleOpenResponsesHttpRequest(
   let stopWatchingDisconnect = () => {};
   let finalUsage: Usage | undefined;
   let finalizeRequested: { status: ResponseResource["status"]; text: string } | null = null;
+  let nextOutputIndex = 1;
+  const toolCallMeta = new Map<string, { outputIndex: number; argsStr: string }>();
+  const streamedOutputItems = new Map<number, OutputItem>();
+  const orderedStreamedOutputItems = () =>
+    Array.from(streamedOutputItems)
+      .toSorted(([a], [b]) => a - b)
+      .map(([, item]) => item);
 
   const maybeFinalize = () => {
     if (closed) {
@@ -869,7 +964,7 @@ export async function handleOpenResponsesHttpRequest(
       id: responseId,
       model,
       status: finalizeRequested.status,
-      output: [completedItem],
+      output: [completedItem, ...orderedStreamedOutputItems()],
       usage,
     });
 
@@ -952,6 +1047,95 @@ export async function handleOpenResponsesHttpRequest(
       return;
     }
 
+    if (evt.stream === "tool") {
+      const phase = evt.data?.phase as string | undefined;
+      const toolName = evt.data?.name as string | undefined;
+      const toolCallId = evt.data?.toolCallId as string | undefined;
+
+      if (!toolName || !toolCallId) {
+        return;
+      }
+
+      if (phase === "start") {
+        const args = evt.data?.args;
+        const argsStr = args === undefined ? "{}" : stringifyToolOutput(args);
+        const callItemId = `fc_${toolCallId}`;
+        const outputIndex = nextOutputIndex++;
+        toolCallMeta.set(toolCallId, { outputIndex, argsStr });
+
+        // Emit function_call output item (what the model asked for)
+        const functionCallItem: OutputItem = {
+          type: "function_call",
+          id: callItemId,
+          call_id: toolCallId,
+          name: toolName,
+          arguments: argsStr,
+          status: "in_progress",
+        };
+
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: outputIndex,
+          item: functionCallItem,
+        });
+        streamedOutputItems.set(outputIndex, functionCallItem);
+        return;
+      }
+
+      if (phase === "result") {
+        const isError = evt.data?.isError as boolean | undefined;
+        const rawResult = getAgentEventToolRawResult(evt);
+        const result = rawResult !== undefined ? rawResult : evt.data?.result;
+        const resultStr = stringifyToolOutput(result);
+        const callItemId = `fc_${toolCallId}`;
+        const resultItemId = `fco_${toolCallId}`;
+        const meta = toolCallMeta.get(toolCallId);
+        const doneIndex = meta?.outputIndex ?? nextOutputIndex++;
+        const argsStr = meta?.argsStr ?? "{}";
+        toolCallMeta.delete(toolCallId);
+
+        // Complete the function_call item
+        const completedCallItem: OutputItem = {
+          type: "function_call",
+          id: callItemId,
+          call_id: toolCallId,
+          name: toolName,
+          arguments: argsStr,
+          status: "completed",
+        };
+
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: doneIndex,
+          item: completedCallItem,
+        });
+        streamedOutputItems.set(doneIndex, completedCallItem);
+
+        // Emit function_call_output item (the tool result)
+        const resultOutputIndex = nextOutputIndex++;
+        const resultItem: OutputItem = {
+          type: "function_call_output",
+          id: resultItemId,
+          call_id: toolCallId,
+          output: resultStr,
+          status: isError ? "failed" : "completed",
+        };
+
+        writeSseEvent(res, {
+          type: "response.output_item.added",
+          output_index: resultOutputIndex,
+          item: resultItem,
+        });
+
+        writeSseEvent(res, {
+          type: "response.output_item.done",
+          output_index: resultOutputIndex,
+          item: resultItem,
+        });
+        streamedOutputItems.set(resultOutputIndex, resultItem);
+        return;
+      }
+    }
     if (evt.stream === "lifecycle") {
       const phase = evt.data?.phase;
       if (phase === "end" || phase === "error") {
@@ -1043,9 +1227,10 @@ export async function handleOpenResponsesHttpRequest(
           name: functionCall.name,
           arguments: functionCall.arguments,
         });
+        const functionCallOutputIndex = nextOutputIndex++;
         writeSseEvent(res, {
           type: "response.output_item.added",
-          output_index: 1,
+          output_index: functionCallOutputIndex,
           item: functionCallItem,
         });
         const completedFunctionCallItem = createFunctionCallOutputItem({
@@ -1057,7 +1242,7 @@ export async function handleOpenResponsesHttpRequest(
         });
         writeSseEvent(res, {
           type: "response.output_item.done",
-          output_index: 1,
+          output_index: functionCallOutputIndex,
           item: completedFunctionCallItem,
         });
 
@@ -1065,7 +1250,7 @@ export async function handleOpenResponsesHttpRequest(
           id: responseId,
           model,
           status: "incomplete",
-          output: [completedItem, functionCallItem],
+          output: [completedItem, ...orderedStreamedOutputItems(), completedFunctionCallItem],
           usage,
         });
         closed = true;

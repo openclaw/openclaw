@@ -2,12 +2,15 @@ import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   clearAgentRunContext,
   emitAgentEvent,
+  getAgentEventToolRawResult,
   getAgentRunContext,
   onAgentEvent,
   registerAgentRunContext,
   resetAgentEventsForTest,
   resetAgentRunContextForTest,
   sweepStaleRunContexts,
+  type AgentEventPayload,
+  withAgentEventToolRawResult,
 } from "./agent-events.js";
 
 type AgentEventsModule = typeof import("./agent-events.js");
@@ -47,6 +50,32 @@ describe("agent-events sequencing", () => {
 
     expect(seen["run-1"]).toEqual([1, 2, 3]);
     expect(seen["run-2"]).toEqual([1]);
+  });
+
+  test("keeps raw tool results off enumerable event payloads", async () => {
+    let seen: AgentEventPayload | undefined;
+    const stop = onAgentEvent((evt) => {
+      seen = evt;
+    });
+    emitAgentEvent(
+      withAgentEventToolRawResult(
+        {
+          runId: "run-raw",
+          stream: "tool",
+          data: {
+            phase: "result",
+            result: "[sanitized]",
+          },
+        },
+        { secret: "full tool payload" },
+      ),
+    );
+    stop();
+
+    expect(seen).toBeTruthy();
+    expect(seen?.data).toEqual({ phase: "result", result: "[sanitized]" });
+    expect(JSON.stringify(seen)).not.toContain("full tool payload");
+    expect(getAgentEventToolRawResult(seen!)).toEqual({ secret: "full tool payload" });
   });
 
   test("preserves compaction ordering on the event bus", async () => {
