@@ -145,6 +145,33 @@ describe("agent defaults schema", () => {
     });
   });
 
+  it("accepts per-agent elevatedDefault through config validation", () => {
+    const agent = AgentEntrySchema.parse({
+      id: "link",
+      elevatedDefault: "full",
+    });
+    const result = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "link",
+            elevatedDefault: "full",
+          },
+        ],
+      },
+    });
+
+    expect(agent.elevatedDefault).toBe("full");
+    expect(result).toMatchObject({
+      ok: true,
+      config: {
+        agents: {
+          list: [{ elevatedDefault: "full" }],
+        },
+      },
+    });
+  });
+
   it("rejects non-positive contextTokens on agent entries and defaults", () => {
     expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: 0 })).toThrow();
     expect(() => AgentEntrySchema.parse({ id: "ops", contextTokens: -1 })).toThrow();

@@ -5903,6 +5903,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
                 },
+                elevatedDefault: {
+                  type: "string",
+                  enum: ["off", "on", "ask", "full"],
+                  title: "Agent Elevated Default",
+                  description:
+                    "Optional per-agent default elevated exec level (off|on|ask|full). Applies only when elevated access is enabled and allowed for the message origin.",
+                },
                 reasoningDefault: {
                   type: "string",
                   enum: ["on", "off", "stream"],
@@ -23597,6 +23604,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.list[].thinkingDefault": {
       label: "Agent Thinking Default",
       help: "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+      tags: ["advanced"],
+    },
+    "agents.list[].elevatedDefault": {
+      label: "Agent Elevated Default",
+      help: "Optional per-agent default elevated exec level (off|on|ask|full). Applies only when elevated access is enabled and allowed for the message origin.",
       tags: ["advanced"],
     },
     "agents.list[].reasoningDefault": {

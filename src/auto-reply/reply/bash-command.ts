@@ -12,6 +12,7 @@ import {
 } from "../../shared/string-coerce.js";
 import { clampInt } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
+import type { ElevatedLevel } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { buildDisabledCommandReply } from "./command-gates.js";
 import { formatElevatedUnavailableMessage } from "./elevated-unavailable.js";
@@ -190,6 +191,7 @@ export async function handleBashChatCommand(params: {
   elevated: {
     enabled: boolean;
     allowed: boolean;
+    defaultLevel?: ElevatedLevel;
     failures: Array<{ gate: string; key: string }>;
   };
 }): Promise<ReplyPayload> {
@@ -357,7 +359,7 @@ export async function handleBashChatCommand(params: {
       elevated: {
         enabled: params.elevated.enabled,
         allowed: params.elevated.allowed,
-        defaultLevel: "on",
+        defaultLevel: params.elevated.defaultLevel ?? "on",
       },
     });
     const result = await execTool.execute("chat-bash", {

@@ -27,7 +27,10 @@ export const handleBashCommand: CommandHandler = async (params, allowTextCommand
     agentId,
     sessionKey: params.sessionKey,
     isGroup: params.isGroup,
-    elevated: params.elevated,
+    elevated: {
+      ...params.elevated,
+      defaultLevel: params.resolvedElevatedLevel ?? "off",
+    },
   });
   return { shouldContinue: false, reply };
 };

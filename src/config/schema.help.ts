@@ -224,6 +224,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent override for the post-compaction AGENTS.md excerpt budget.",
   "agents.list[].thinkingDefault":
     "Optional per-agent default thinking level. Overrides agents.defaults.thinkingDefault for this agent when no per-message or session override is set.",
+  "agents.list[].elevatedDefault":
+    "Optional per-agent default elevated exec level (off|on|ask|full). Applies only when elevated access is enabled and allowed for the message origin.",
   "agents.list[].reasoningDefault":
     "Optional per-agent default reasoning visibility (on|off|stream). Applies when no per-message or session reasoning override is set.",
   "agents.list[].fastModeDefault":

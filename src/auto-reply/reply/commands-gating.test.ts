@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createExecTool } from "../../agents/bash-tools.js";
 import { isCommandFlagEnabled } from "../../config/commands.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleBashChatCommand } from "./bash-command.js";
+import { handleBashCommand } from "./commands-bash.js";
 import { handleConfigCommand, handleDebugCommand } from "./commands-config.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { parseInlineDirectives } from "./directive-handling.parse.js";
@@ -252,6 +254,31 @@ describe("command gating", () => {
       },
     });
     expect(result.text).toContain("elevated is not available");
+  });
+
+  it("passes resolved full elevated level to slash bash execution", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text", text: "done" }],
+      details: { status: "completed", exitCode: 0, aggregated: "done" },
+    }));
+    vi.mocked(createExecTool).mockReturnValue({ execute } as never);
+    const params = buildParams("/bash echo hi", {
+      commands: { bash: true, text: true },
+    } as OpenClawConfig);
+    params.resolvedElevatedLevel = "full";
+
+    const result = await handleBashCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(createExecTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        elevated: expect.objectContaining({
+          enabled: true,
+          allowed: true,
+          defaultLevel: "full",
+        }),
+      }),
+    );
   });
 
   it("blocks disabled config", async () => {
