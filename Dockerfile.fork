@@ -88,6 +88,10 @@ ENV CLOUDSDK_PYTHON=/usr/bin/python3
 # stage; overwrites are safe (same node binary, same corepack).
 COPY --from=source /usr/local /usr/local
 COPY --from=source /usr/lib/google-cloud-sdk /usr/lib/google-cloud-sdk
-COPY --from=source /usr/bin/gcloud /usr/bin/gcloud
-COPY --from=source /usr/bin/gsutil /usr/bin/gsutil
-COPY --from=source /usr/bin/bq /usr/bin/bq
+USER root
+RUN set -eux; \
+    for tool in gcloud gsutil bq; do \
+      printf '#!/bin/sh\nexec /usr/lib/google-cloud-sdk/bin/%s "$@"\n' "$tool" > "/usr/local/bin/$tool"; \
+      chmod 0755 "/usr/local/bin/$tool"; \
+    done
+USER node
