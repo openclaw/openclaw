@@ -1,4 +1,4 @@
-import { resolveAgentConfig } from "../agents/agent-scope.js";
+import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /**
