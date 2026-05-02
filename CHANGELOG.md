@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Control UI/Gateway: avoid full session-list reloads for locally applied message-phase session updates, carry known session keys through transcript-file update events, and defer media provider listing when explicit generation model config is present. Refs #76236, #76203, #76188, #76107, and #76166.
+- Plugins/tools: keep plugin tool descriptor caching stable across session identity changes and config bookkeeping writes, avoiding repeated `core-plugin-tools` prep on each turn. Fixes #76295; refs #76268. Thanks @oreichhart.
 - Gateway: keep directly requested plugin tools invokable under restrictive tool profiles while preserving explicit deny lists and the HTTP safety deny list, preventing catalog/invoke mismatches that surface as "Tool not available". Thanks @BunsDev.
 - Gateway/update: allow beta binaries to refresh gateway services when the config was last written by the matching stable release version, avoiding false newer-config downgrade blocks during beta channel updates.
 - Channels: keep Matrix and Mattermost bundled in the core package instead of advertising external npm installs before those channels are cut over. Thanks @vincentkoc.
