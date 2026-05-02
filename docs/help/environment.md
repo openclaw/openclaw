@@ -61,6 +61,8 @@ Env var equivalents:
 OpenClaw also injects context markers into spawned child processes:
 
 - `OPENCLAW_SHELL=exec`: set for commands run through the `exec` tool.
+- `OPENCLAW_SESSION_KEY`: set for `exec` tool commands when they run from an agent session.
+- `OPENCLAW_SESSION_ID`: set for `exec` tool commands when an ephemeral run session id is available.
 - `OPENCLAW_SHELL=acp`: set for ACP runtime backend process spawns (for example `acpx`).
 - `OPENCLAW_SHELL=acp-client`: set for `openclaw acp client` when it spawns the ACP bridge process.
 - `OPENCLAW_SHELL=tui-local`: set for local TUI `!` shell commands.

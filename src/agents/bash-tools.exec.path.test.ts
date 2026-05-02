@@ -40,7 +40,9 @@ vi.mock("../process/supervisor/index.js", () => ({
     }) => {
       const command = input.argv?.at(-1) ?? "";
       const env = input.env ?? {};
-      if (command.includes("OPENCLAW_SHELL")) {
+      if (command.includes("OPENCLAW_SESSION_KEY") && command.includes("OPENCLAW_SESSION_ID")) {
+        input.onStdout?.(`${env.OPENCLAW_SESSION_KEY ?? ""}:${env.OPENCLAW_SESSION_ID ?? ""}`);
+      } else if (command.includes("OPENCLAW_SHELL")) {
         input.onStdout?.(env.OPENCLAW_SHELL ?? "");
       } else if (command.includes("SSLKEYLOGFILE")) {
         input.onStdout?.(env.SSLKEYLOGFILE ?? "");
@@ -177,6 +179,29 @@ describe("exec PATH login shell merge", () => {
     const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
     expect(value).toBe("exec");
+  });
+
+  it("sets OpenClaw session env for host=gateway commands", async () => {
+    if (isWin) {
+      return;
+    }
+
+    const tool = createExecTool({
+      host: "gateway",
+      security: "full",
+      ask: "off",
+      sessionKey: "agent:main:discord:channel:1500088601525096659",
+      sessionId: "123e4567-e89b-12d3-a456-426614174000",
+    });
+    const result = await tool.execute("call-openclaw-session-env", {
+      command: 'printf "%s:%s" "${OPENCLAW_SESSION_KEY:-}" "${OPENCLAW_SESSION_ID:-}"',
+      yieldMs: FOREGROUND_TEST_YIELD_MS,
+    });
+    const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
+
+    expect(value).toBe(
+      "agent:main:discord:channel:1500088601525096659:123e4567-e89b-12d3-a456-426614174000",
+    );
   });
 
   it("throws security violation when env.PATH is provided", async () => {
