@@ -52,6 +52,7 @@ Docs: https://docs.openclaw.ai
 - Context Engine: gracefully fall back to the legacy engine when a third-party context engine plugin fails at resolution time (unregistered id, factory throw, or contract violation), preventing a full gateway outage on every channel. (#66930) Thanks @openperf.
 - Control UI/chat: keep optimistic user message cards visible during active sends by deferring same-session history reloads until the active run ends, including aborted and errored runs. (#66997) Thanks @scotthuang and @vincentkoc.
 - Media/Slack: allow host-local CSV and Markdown uploads only when the fallback buffer actually decodes as text, so real plain-text files work without letting opaque non-text blobs renamed to `.csv` or `.md` slip past the host-read guard. (#67047) Thanks @Unayung.
+- MiniMax: add `providerAuthAliases` for `minimax-cn` and `minimax-portal-cn` to the plugin manifest so CN endpoint auth resolves correctly instead of silently falling back to other providers. Fixes #63823. Thanks @kamusis.
 
 ## 2026.4.14
 
