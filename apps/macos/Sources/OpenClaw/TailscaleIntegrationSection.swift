@@ -53,6 +53,13 @@ private struct GatewayTailscaleApplyResult {
     var validationMessage: String?
 }
 
+private struct GatewayTailscaleApplyMessages {
+    var statusMessage: String?
+    var validationMessage: String?
+    var shouldRecordSuccess: Bool
+    var shouldRestartGateway: Bool
+}
+
 private typealias GatewayTailscaleSettingsSaver = @MainActor @Sendable (
     GatewayTailscaleSettingsSnapshot,
     AppState.ConnectionMode,
@@ -293,27 +300,18 @@ struct TailscaleIntegrationSection: View {
             connectionMode: self.connectionMode,
             isPaused: self.isPaused,
             saveSettings: TailscaleIntegrationSection.saveTailscaleSettings)
-        guard result.didApply else { return }
-        self.validationMessage = nil
-        self.statusMessage = nil
-
-        if let validationMessage = result.validationMessage {
-            self.validationMessage = validationMessage
-            return
-        }
-
-        if !result.success, let errorMessage = result.errorMessage {
-            self.statusMessage = errorMessage
-            return
-        }
+        let messages = TailscaleIntegrationSection.messages(
+            for: result,
+            connectionMode: self.connectionMode,
+            isPaused: self.isPaused)
+        self.validationMessage = messages.validationMessage
+        self.statusMessage = messages.statusMessage
+        guard messages.shouldRecordSuccess else { return }
 
         self.lastAppliedSettings = currentSettings
-        if self.connectionMode == .local, !self.isPaused {
-            self.statusMessage = "Saved to ~/.openclaw/openclaw.json. Restarting gateway…"
-        } else {
-            self.statusMessage = "Saved to ~/.openclaw/openclaw.json. Restart the gateway to apply."
+        if messages.shouldRestartGateway {
+            self.restartGatewayIfNeeded()
         }
-        self.restartGatewayIfNeeded()
     }
 
     @MainActor
@@ -458,6 +456,47 @@ struct TailscaleIntegrationSection: View {
             validationMessage: nil)
     }
 
+    private static func messages(
+        for result: GatewayTailscaleApplyResult,
+        connectionMode: AppState.ConnectionMode,
+        isPaused: Bool) -> GatewayTailscaleApplyMessages
+    {
+        guard result.didApply else {
+            return GatewayTailscaleApplyMessages(
+                statusMessage: nil,
+                validationMessage: nil,
+                shouldRecordSuccess: false,
+                shouldRestartGateway: false)
+        }
+
+        if let validationMessage = result.validationMessage {
+            return GatewayTailscaleApplyMessages(
+                statusMessage: nil,
+                validationMessage: validationMessage,
+                shouldRecordSuccess: false,
+                shouldRestartGateway: false)
+        }
+
+        if !result.success, let errorMessage = result.errorMessage {
+            return GatewayTailscaleApplyMessages(
+                statusMessage: errorMessage,
+                validationMessage: nil,
+                shouldRecordSuccess: false,
+                shouldRestartGateway: false)
+        }
+
+        let statusMessage = if connectionMode == .local, !isPaused {
+            "Saved to ~/.openclaw/openclaw.json. Restarting gateway…"
+        } else {
+            "Saved to ~/.openclaw/openclaw.json. Restart the gateway to apply."
+        }
+        return GatewayTailscaleApplyMessages(
+            statusMessage: statusMessage,
+            validationMessage: nil,
+            shouldRecordSuccess: true,
+            shouldRestartGateway: true)
+    }
+
     @MainActor
     private static func saveTailscaleSettings(
         settings: GatewayTailscaleSettingsSnapshot,
@@ -527,6 +566,34 @@ extension TailscaleIntegrationSection {
                 saveRoot(nextRoot)
                 return (true, nil)
             })
+    }
+
+    static func messagesForTesting(
+        didApply: Bool,
+        success: Bool,
+        errorMessage: String? = nil,
+        validationMessage: String? = nil,
+        connectionMode: AppState.ConnectionMode,
+        isPaused: Bool) -> (
+            statusMessage: String?,
+            validationMessage: String?,
+            shouldRecordSuccess: Bool,
+            shouldRestartGateway: Bool
+        )
+    {
+        let messages = self.messages(
+            for: GatewayTailscaleApplyResult(
+                didApply: didApply,
+                success: success,
+                errorMessage: errorMessage,
+                validationMessage: validationMessage),
+            connectionMode: connectionMode,
+            isPaused: isPaused)
+        return (
+            statusMessage: messages.statusMessage,
+            validationMessage: messages.validationMessage,
+            shouldRecordSuccess: messages.shouldRecordSuccess,
+            shouldRestartGateway: messages.shouldRestartGateway)
     }
 }
 #endif

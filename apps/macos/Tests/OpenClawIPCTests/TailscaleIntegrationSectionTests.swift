@@ -115,4 +115,17 @@ struct TailscaleIntegrationSectionTests {
             #expect(wizard["lastRunVersion"] as? String == "2026.3.24")
         }
     }
+
+    @Test func `unchanged tailscale apply clears stale messages`() {
+        let messages = TailscaleIntegrationSection.messagesForTesting(
+            didApply: false,
+            success: true,
+            connectionMode: .local,
+            isPaused: false)
+
+        #expect(messages.statusMessage == nil)
+        #expect(messages.validationMessage == nil)
+        #expect(messages.shouldRecordSuccess == false)
+        #expect(messages.shouldRestartGateway == false)
+    }
 }
