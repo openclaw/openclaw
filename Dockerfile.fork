@@ -3,8 +3,8 @@
 # Fork-specific overlay on top of the upstream OpenClaw runtime image.
 # Multi-stage build:
 #   1. source — start from BASE_IMAGE and install our extras (gh, lark-cli,
-#      gcloud), including all the apt scaffolding (gpg keys, sources lists,
-#      package indexes) needed to fetch them.
+#      pm2, gcloud), including all the apt scaffolding (gpg keys, sources
+#      lists, package indexes) needed to fetch them.
 #   2. final — start from BASE_IMAGE again and COPY only the installed
 #      artifacts from stage 1. Apt indexes, gpg keyrings, and any other
 #      install-time debris stay in stage 1 and never reach the final image.
@@ -25,13 +25,14 @@
 
 ARG BASE_IMAGE="ghcr.io/openclaw/openclaw:2026.5.2-slim"
 
-# ── Stage 1: source — install gh, lark-cli, gcloud ──────────────
+# ── Stage 1: source — install gh, lark-cli, pm2, gcloud ─────────
 FROM ${BASE_IMAGE} AS source
 
 USER root
 
 ARG OPENCLAW_GH_VERSION="2.92.0"
 ARG OPENCLAW_LARK_CLI_VERSION="1.0.21"
+ARG OPENCLAW_PM2_VERSION="7.0.0"
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends ca-certificates gnupg; \
@@ -48,7 +49,8 @@ RUN set -eux; \
     install -m 0755 "$tmp/gh_${OPENCLAW_GH_VERSION}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh; \
     rm -rf "$tmp"; \
     npm install -g --no-audit --no-fund --omit=optional \
-      "@larksuite/cli@${OPENCLAW_LARK_CLI_VERSION}"; \
+      "@larksuite/cli@${OPENCLAW_LARK_CLI_VERSION}" \
+      "pm2@${OPENCLAW_PM2_VERSION}"; \
     npm cache clean --force; \
     install -m 0755 -d /usr/share/keyrings; \
     curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
@@ -66,7 +68,7 @@ FROM ${BASE_IMAGE}
 
 LABEL org.opencontainers.image.source="https://github.com/1aboveio/openclaw" \
   org.opencontainers.image.title="openclaw-fork" \
-  org.opencontainers.image.description="OpenClaw fork image with gh, lark-cli, and gcloud baked in."
+  org.opencontainers.image.description="OpenClaw fork image with gh, lark-cli, pm2, and gcloud baked in."
 
 # Upstream's slim variant ships curl/openssl but not ca-certificates, so any
 # HTTPS call from the final image (gh, gcloud, openclaw runtime) fails with
