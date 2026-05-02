@@ -1,0 +1,45 @@
+{
+  "id": "lobstah",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["lobstah"],
+  "providerRequest": {
+    "providers": {
+      "lobstah": {
+        "family": "lobstah",
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
+  "modelPricing": {
+    "providers": {
+      "lobstah": {
+        "external": false
+      }
+    }
+  },
+  "providerAuthEnvVars": {
+    "lobstah": ["LOBSTAH_ROUTER_URL"]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "lobstah",
+      "method": "custom",
+      "choiceId": "lobstah",
+      "choiceLabel": "Lobstah grid",
+      "choiceHint": "Federated P2P inference across Mac mini workers",
+      "groupId": "lobstah",
+      "groupLabel": "Lobstah",
+      "groupHint": "Distributed compute grid (the lobster way)"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

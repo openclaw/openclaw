@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/Lobstah: bundle the new Lobstah distributed-inference grid as a model provider plugin. Routes OpenAI-compatible chat (streaming or non-streaming) to peer Mac mini workers, with Ed25519-signed federated receipts as a credit ledger so contributing compute earns balance and consuming compute spends it. Includes model-aware multi-peer routing with failover, replay protection (per-receipt nonce + freshness window), and an opt-in public discovery tracker (`@lobstah/tracker`) plus onboarding-wizard prompts that default both contribute-side and consume-side opt-ins to no. Adds `extensions/lobstah` plus seven core packages (`@lobstah/protocol`, `ledger`, `engine-ollama`, `worker`, `router`, `tracker`, `cli`).
 - Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
 - Plugins/update: on the beta OpenClaw update channel, default-line npm and ClawHub plugin updates try `@beta` first and fall back to default/latest when no plugin beta release exists.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
