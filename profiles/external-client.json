@@ -1,0 +1,24 @@
+{
+  "schema": "zekebot.profile.v1",
+  "profile": "external-client",
+  "metadata": {
+    "consumer": "External client baseline",
+    "source": "OCL-FORK-001 external-client isolation boundary",
+    "change_rule": "External clients get no internal native Zeke adapters unless a later approved brief grants one explicitly."
+  },
+  "tools": {
+    "allow": ["session_status", "sessions_list", "sessions_history", "web_search"],
+    "deny": [
+      "ask_zeke_context",
+      "search_zeke_context",
+      "explain_zeke_context_route",
+      "read_zeke_source",
+      "read_repo_file",
+      "grep_repo",
+      "glob_repo",
+      "propose_signal",
+      "create_signal",
+      "sessions_spawn"
+    ]
+  }
+}

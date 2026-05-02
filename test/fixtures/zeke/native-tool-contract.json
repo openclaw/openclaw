@@ -1,7 +1,6 @@
 {
   "schema": "zekebot.native-tool-contract.v1",
-  "mode": "pending-s9",
-  "pendingUntilStory": "OCL-FORK-001/S9",
+  "mode": "required",
   "initialNativeTools": [
     "ask_zeke_context",
     "search_zeke_context",
@@ -12,9 +11,7 @@
     "glob_repo",
     "propose_signal"
   ],
-  "backendOnlyTools": [
-    "create_signal"
-  ],
+  "backendOnlyTools": ["create_signal"],
   "profileExpectations": {
     "sprout": [
       "ask_zeke_context",
@@ -40,12 +37,7 @@
       "sessions_list",
       "sessions_history"
     ],
-    "external-client": [
-      "session_status",
-      "sessions_list",
-      "sessions_history",
-      "web_search"
-    ]
+    "external-client": ["session_status", "sessions_list", "sessions_history", "web_search"]
   },
   "notes": "S3 enforces stock Sprout config and hook compatibility. S9 flips mode to required and enforces native ZekeBot tool/profile catalogs."
 }

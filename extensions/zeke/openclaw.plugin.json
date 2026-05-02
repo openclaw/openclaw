@@ -1,0 +1,66 @@
+{
+  "id": "zeke",
+  "activation": {
+    "onStartup": false
+  },
+  "contracts": {
+    "tools": [
+      "ask_zeke_context",
+      "search_zeke_context",
+      "explain_zeke_context_route",
+      "read_zeke_source",
+      "read_repo_file",
+      "grep_repo",
+      "glob_repo",
+      "propose_signal"
+    ]
+  },
+  "providerAuthEnvVars": {
+    "zeke": [
+      "ZEKEFLOW_OPENCLAW_SPROUT_TOOL_TOKEN",
+      "ZEKEFLOW_OPENCLAW_RAMBO_TOOL_TOKEN",
+      "ZEKEFLOW_OPENCLAW_EXTERNAL_CLIENT_TOOL_TOKEN",
+      "ZEKEFLOW_OPENCLAW_OPERATOR_SIGNING_KEY"
+    ]
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "ZekeFlow Authority URL",
+      "help": "Base URL for ZekeFlow internal OpenClaw tool authority."
+    },
+    "tokenEnv": {
+      "label": "Authority Token Env",
+      "help": "Environment variable containing the ZekeFlow authority bearer token."
+    },
+    "profile": {
+      "label": "Zeke Tool Profile",
+      "help": "Server-side Zeke tool profile: sprout, rambo, or external-client."
+    },
+    "operatorSigningKeyEnv": {
+      "label": "Operator Signing Key Env",
+      "help": "Environment variable containing the HMAC key used for same-chat approval replies."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "tokenEnv": {
+        "type": "string"
+      },
+      "profile": {
+        "type": "string",
+        "enum": ["sprout", "rambo", "external-client"]
+      },
+      "operatorId": {
+        "type": "string"
+      },
+      "operatorSigningKeyEnv": {
+        "type": "string"
+      }
+    }
+  }
+}

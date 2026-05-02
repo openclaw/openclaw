@@ -1,0 +1,61 @@
+{
+  "schema": "zekebot.profile.v1",
+  "profile": "sprout",
+  "metadata": {
+    "consumer": "Sprout internal OpenClaw runtime",
+    "source": "snapshot:zeke-repo/entities/sprout/openclaw/config/openclaw.json",
+    "change_rule": "Keep synced with the canonical Sprout OpenClaw config when Sprout's tool surface changes."
+  },
+  "plugins": {
+    "zeke": {
+      "enabled": true,
+      "config": {
+        "baseUrl": "http://host.docker.internal:3747",
+        "tokenEnv": "ZEKEFLOW_OPENCLAW_SPROUT_TOOL_TOKEN",
+        "profile": "sprout",
+        "operatorId": "openclaw:ross",
+        "operatorSigningKeyEnv": "ZEKEFLOW_OPENCLAW_OPERATOR_SIGNING_KEY"
+      }
+    }
+  },
+  "tools": {
+    "allow": [
+      "ask_zeke_context",
+      "search_zeke_context",
+      "explain_zeke_context_route",
+      "read_zeke_source",
+      "read_repo_file",
+      "grep_repo",
+      "glob_repo",
+      "propose_signal",
+      "session_status",
+      "sessions_list",
+      "sessions_history",
+      "sessions_spawn",
+      "web_search"
+    ],
+    "deny": [
+      "create_signal",
+      "sessions_send",
+      "memory",
+      "web_fetch",
+      "browser",
+      "x_search",
+      "tavily_search",
+      "tavily_extract",
+      "group:web",
+      "group:fs",
+      "canvas",
+      "read",
+      "grep",
+      "glob",
+      "write",
+      "edit",
+      "apply_patch",
+      "exec",
+      "process",
+      "package-install",
+      "docker"
+    ]
+  }
+}

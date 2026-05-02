@@ -17,6 +17,17 @@ const REQUIRED_STOCK_TOOLS = [
   "web_search",
 ];
 
+const REQUIRED_SPROUT_NATIVE_TOOLS = [
+  "ask_zeke_context",
+  "search_zeke_context",
+  "explain_zeke_context_route",
+  "read_zeke_source",
+  "read_repo_file",
+  "grep_repo",
+  "glob_repo",
+  "propose_signal",
+];
+
 const DENIED_STOCK_TOOLS = [
   "sessions_send",
   "memory",
@@ -82,13 +93,15 @@ if (!contractOnly) {
   await runContainerSmoke(image, configDir);
 }
 
-console.log(JSON.stringify({
-  ok: true,
-  image: image || null,
-  contractOnly,
-  nativeContractMode: nativeContract.mode,
-  requiredStockTools: REQUIRED_STOCK_TOOLS,
-}));
+console.log(
+  JSON.stringify({
+    ok: true,
+    image: image || null,
+    contractOnly,
+    nativeContractMode: nativeContract.mode,
+    requiredStockTools: REQUIRED_STOCK_TOOLS,
+  }),
+);
 
 function parseArgs(argv) {
   const parsed = {};
@@ -136,10 +149,18 @@ async function scanPathForSecrets(target) {
 }
 
 function assertNoJsonSecretAssignments(body, file) {
-  const secretAssignment = /"([^"]*(?:token|secret|api[_-]?key|password|credential)[^"]*)"\s*:\s*"([^"]*)"/gi;
+  const secretAssignment =
+    /"([^"]*(?:token|secret|api[_-]?key|password|credential)[^"]*)"\s*:\s*"([^"]*)"/gi;
   for (const match of body.matchAll(secretAssignment)) {
     const value = match[2] ?? "";
-    if (!value || value === "not-needed" || value.startsWith("${") || value.startsWith("fixture-")) {
+    const key = match[1] ?? "";
+    if (
+      !value ||
+      key === "tokenEnv" ||
+      value === "not-needed" ||
+      value.startsWith("${") ||
+      value.startsWith("fixture-")
+    ) {
       continue;
     }
     if (value.length >= 8) {
@@ -154,7 +175,7 @@ async function listFiles(root) {
     const full = path.join(root, name);
     const info = await stat(full);
     if (info.isDirectory()) {
-      result.push(...await listFiles(full));
+      result.push(...(await listFiles(full)));
     } else if (info.isFile()) {
       result.push(full);
     }
@@ -175,10 +196,20 @@ function assertSproutConfig(cfg) {
   for (const tool of REQUIRED_STOCK_TOOLS) {
     assert.ok(allow.has(tool), `sprout stock tool must be allowed: ${tool}`);
   }
+  for (const tool of REQUIRED_SPROUT_NATIVE_TOOLS) {
+    assert.ok(allow.has(tool), `sprout native Zeke tool must be allowed: ${tool}`);
+  }
   for (const tool of DENIED_STOCK_TOOLS) {
     assert.ok(deny.has(tool), `sprout denied tool must remain denied: ${tool}`);
   }
   assert.equal(allow.has("create_signal"), false, "create_signal must not be model-facing");
+  assert.equal(cfg.plugins?.entries?.zeke?.enabled, true, "zeke plugin must be enabled");
+  assert.equal(cfg.plugins?.entries?.zeke?.config?.profile, "sprout");
+  assert.equal(cfg.plugins?.entries?.zeke?.config?.tokenEnv, "ZEKEFLOW_OPENCLAW_SPROUT_TOOL_TOKEN");
+  assert.equal(
+    cfg.plugins?.entries?.zeke?.config?.operatorSigningKeyEnv,
+    "ZEKEFLOW_OPENCLAW_OPERATOR_SIGNING_KEY",
+  );
   assert.deepEqual(sprout.subagents ?? cfg.agents?.defaults?.subagents ?? {}, {
     maxConcurrent: 2,
     requireAgentId: true,
@@ -190,12 +221,18 @@ function assertSproutConfig(cfg) {
   assert.equal(cfg.gateway?.auth?.token, "${OPENCLAW_GATEWAY_TOKEN}");
   assert.equal(cfg.hooks?.enabled, true);
   assert.equal(cfg.hooks?.token, "${SPROUT_OPENCLAW_HOOK_TOKEN}");
-  assert.equal(cfg.hooks?.internal?.load?.extraDirs?.includes("/home/node/.openclaw/hooks/sprout-spr-ocl-002"), true);
+  assert.equal(
+    cfg.hooks?.internal?.load?.extraDirs?.includes("/home/node/.openclaw/hooks/sprout-spr-ocl-002"),
+    true,
+  );
 }
 
 function assertNativeContract(contract, catalogPath) {
   assert.equal(contract.schema, "zekebot.native-tool-contract.v1");
-  assert.ok(["pending-s9", "required"].includes(contract.mode), "native contract mode must be valid");
+  assert.ok(
+    ["pending-s9", "required"].includes(contract.mode),
+    "native contract mode must be valid",
+  );
   assert.deepEqual(contract.initialNativeTools, [
     "ask_zeke_context",
     "search_zeke_context",
@@ -206,7 +243,10 @@ function assertNativeContract(contract, catalogPath) {
     "glob_repo",
     "propose_signal",
   ]);
-  assert.ok(contract.backendOnlyTools?.includes("create_signal"), "create_signal must be backend-only");
+  assert.ok(
+    contract.backendOnlyTools?.includes("create_signal"),
+    "create_signal must be backend-only",
+  );
   for (const profileName of ["sprout", "rambo", "external-client"]) {
     assert.ok(Array.isArray(contract.profileExpectations?.[profileName]));
   }
@@ -227,7 +267,11 @@ function assertNativeContract(contract, catalogPath) {
       assert.ok(actualTools.has(tool), `runtime profile ${profileName} missing ${tool}`);
     }
     for (const backendOnly of contract.backendOnlyTools ?? []) {
-      assert.equal(actualTools.has(backendOnly), false, `runtime profile ${profileName} exposes ${backendOnly}`);
+      assert.equal(
+        actualTools.has(backendOnly),
+        false,
+        `runtime profile ${profileName} exposes ${backendOnly}`,
+      );
     }
   }
 }
@@ -357,9 +401,13 @@ async function runContainerSmoke(candidateImage, sourceConfigDir) {
     await cp(sourceConfigDir, tmpHome, { recursive: true });
     await mkdir(path.join(tmpHome, "workspace"), { recursive: true });
     await mkdir(path.join(tmpHome, "hooks", "sprout-spr-ocl-002"), { recursive: true });
-    await cp(path.join(sourceConfigDir, "hooks"), path.join(tmpHome, "hooks", "sprout-spr-ocl-002"), {
-      recursive: true,
-    });
+    await cp(
+      path.join(sourceConfigDir, "hooks"),
+      path.join(tmpHome, "hooks", "sprout-spr-ocl-002"),
+      {
+        recursive: true,
+      },
+    );
     docker("pull", candidateImage);
     docker(
       "run",
@@ -380,6 +428,10 @@ async function runContainerSmoke(candidateImage, sourceConfigDir) {
       "-e",
       "ZEKEFLOW_EVENTS_WRITE_TOKEN=fixture-events-token",
       "-e",
+      "ZEKEFLOW_OPENCLAW_SPROUT_TOOL_TOKEN=fixture-sprout-tool-token",
+      "-e",
+      "ZEKEFLOW_OPENCLAW_OPERATOR_SIGNING_KEY=fixture-operator-signing-key",
+      "-e",
       "ANTHROPIC_OAUTH_TOKEN=fixture-anthropic-token",
       "-e",
       "TAVILY_API_KEY=fixture-tavily-token",
@@ -387,7 +439,9 @@ async function runContainerSmoke(candidateImage, sourceConfigDir) {
     );
     try {
       await waitForEndpoint(`http://127.0.0.1:${hostPort}/healthz`, "healthz");
-      await waitForEndpoint(`http://127.0.0.1:${hostPort}/readyz`, "readyz", { allowUnavailable: true });
+      await waitForEndpoint(`http://127.0.0.1:${hostPort}/readyz`, "readyz", {
+        allowUnavailable: true,
+      });
     } catch (err) {
       try {
         console.error(docker("logs", "--tail", "120", containerName));
@@ -400,14 +454,69 @@ async function runContainerSmoke(candidateImage, sourceConfigDir) {
       ["/home/node/.openclaw"],
       "stock smoke must mount only OpenClaw home",
     );
+    const runtimeCatalog = gatewayCall(containerName, "tools.catalog", { includePlugins: true });
+    assertRuntimeCatalogTools(runtimeCatalog, REQUIRED_SPROUT_NATIVE_TOOLS);
+    assertRuntimeCatalogTools(runtimeCatalog, REQUIRED_STOCK_TOOLS);
+    assertRuntimeCatalogMissing(runtimeCatalog, ["create_signal"]);
   } finally {
     spawnSync("docker", ["rm", "-f", containerName], { stdio: "ignore" });
     rmSync(tmpHome, { recursive: true, force: true });
   }
 }
 
+function gatewayCall(containerName, method, params) {
+  const raw = docker(
+    "exec",
+    containerName,
+    "openclaw",
+    "gateway",
+    "call",
+    method,
+    "--url",
+    "ws://127.0.0.1:18789",
+    "--token",
+    "fixture-gateway-token",
+    "--timeout",
+    "10000",
+    "--json",
+    "--params",
+    JSON.stringify(params ?? {}),
+  );
+  const line = raw
+    .split(/\r?\n/u)
+    .toReversed()
+    .find((entry) => entry.trim().startsWith("{"));
+  if (!line) {
+    throw new Error(`gateway call ${method} returned no JSON payload:\n${raw}`);
+  }
+  const parsed = JSON.parse(line);
+  return parsed?.payload ?? parsed?.result ?? parsed;
+}
+
+function catalogToolNames(catalog) {
+  const tools = Array.isArray(catalog?.tools) ? catalog.tools : [];
+  return new Set(tools.map((tool) => tool?.name).filter(Boolean));
+}
+
+function assertRuntimeCatalogTools(catalog, names) {
+  const actual = catalogToolNames(catalog);
+  for (const name of names) {
+    assert.ok(actual.has(name), `runtime tools.catalog missing ${name}`);
+  }
+}
+
+function assertRuntimeCatalogMissing(catalog, names) {
+  const actual = catalogToolNames(catalog);
+  for (const name of names) {
+    assert.equal(actual.has(name), false, `runtime tools.catalog exposes blocked tool ${name}`);
+  }
+}
+
 function docker(...dockerArgs) {
-  return execFileSync("docker", dockerArgs, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  return execFileSync("docker", dockerArgs, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  }).trim();
 }
 
 async function waitForEndpoint(url, label, options = {}) {

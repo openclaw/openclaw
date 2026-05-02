@@ -1,0 +1,36 @@
+{
+  "schema": "zekebot.runtime-tool-catalog.v1",
+  "profiles": {
+    "sprout": {
+      "tools": [
+        "ask_zeke_context",
+        "search_zeke_context",
+        "explain_zeke_context_route",
+        "read_zeke_source",
+        "read_repo_file",
+        "grep_repo",
+        "glob_repo",
+        "propose_signal",
+        "session_status",
+        "sessions_list",
+        "sessions_history",
+        "sessions_spawn",
+        "web_search"
+      ]
+    },
+    "rambo": {
+      "tools": [
+        "ask_zeke_context",
+        "search_zeke_context",
+        "explain_zeke_context_route",
+        "read_zeke_source",
+        "session_status",
+        "sessions_list",
+        "sessions_history"
+      ]
+    },
+    "external-client": {
+      "tools": ["session_status", "sessions_list", "sessions_history", "web_search"]
+    }
+  }
+}

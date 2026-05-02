@@ -212,7 +212,8 @@ jobs:
           node scripts/zekebot/stock-equivalence-smoke.mjs \
             --image "${{ needs.resolve-candidate.outputs.gateway_digest_ref }}" \
             --config test/fixtures/zeke/sprout-openclaw \
-            --native-contract test/fixtures/zeke/native-tool-contract.json
+            --native-contract test/fixtures/zeke/native-tool-contract.json \
+            --runtime-catalog test/fixtures/zeke/runtime-tool-catalog.json
 
   promote-latest:
     name: Promote latest

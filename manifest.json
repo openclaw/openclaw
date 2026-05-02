@@ -28,6 +28,18 @@
       "file": "Dockerfile",
       "summary": "Declares /home/node/.openclaw as a Docker volume while preserving digest-pinned Node base images.",
       "docs": "docs/zekebot-vs-upstream.md"
+    },
+    {
+      "story": "OCL-FORK-001/S9",
+      "file": "extensions/zeke",
+      "summary": "Adds native OpenClaw Zeke tools backed by the ZekeFlow authority API, with profile-specific catalog tests and backend-only create_signal enforcement.",
+      "docs": "test/fixtures/zeke/native-tool-contract.json"
+    },
+    {
+      "story": "OCL-FORK-001/S9",
+      "file": "profiles",
+      "summary": "Adds Sprout, Rambo internal, and external-client profile templates that preserve native Zeke tool visibility boundaries.",
+      "docs": "profiles/sprout.json"
     }
   ]
 }

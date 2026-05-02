@@ -1,0 +1,40 @@
+{
+  "schema": "zekebot.profile.v1",
+  "profile": "rambo",
+  "metadata": {
+    "consumer": "Rambo internal OpenClaw runtime",
+    "source": "snapshot:zeke-repo/entities/rambo/openclaw/config/openclaw.json",
+    "change_rule": "Rambo may use context-native Zeke tools only; Sprout-only repo readers and approvals stay denied."
+  },
+  "plugins": {
+    "zeke": {
+      "enabled": true,
+      "config": {
+        "baseUrl": "http://host.docker.internal:3747",
+        "tokenEnv": "ZEKEFLOW_OPENCLAW_RAMBO_TOOL_TOKEN",
+        "profile": "rambo",
+        "operatorId": "openclaw:ross",
+        "operatorSigningKeyEnv": "ZEKEFLOW_OPENCLAW_OPERATOR_SIGNING_KEY"
+      }
+    }
+  },
+  "tools": {
+    "allow": [
+      "ask_zeke_context",
+      "search_zeke_context",
+      "explain_zeke_context_route",
+      "read_zeke_source",
+      "session_status",
+      "sessions_list",
+      "sessions_history"
+    ],
+    "deny": [
+      "propose_signal",
+      "create_signal",
+      "sessions_spawn",
+      "read_repo_file",
+      "grep_repo",
+      "glob_repo"
+    ]
+  }
+}

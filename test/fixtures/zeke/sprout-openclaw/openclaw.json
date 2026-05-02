@@ -15,9 +15,7 @@
             "id": "claude-opus-4-7",
             "name": "Claude Opus 4.7 via Claude Max API Proxy",
             "reasoning": true,
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "contextWindow": 200000,
             "maxTokens": 32000
           }
@@ -31,18 +29,14 @@
             "id": "claude-opus-4-7",
             "name": "Claude Opus 4.7",
             "reasoning": true,
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "contextWindow": 200000,
             "maxTokens": 32000
           },
           {
             "id": "claude-haiku-4-5-20251001",
             "name": "Claude Haiku 4.5",
-            "input": [
-              "text"
-            ],
+            "input": ["text"],
             "contextWindow": 200000,
             "maxTokens": 8192
           }
@@ -54,9 +48,7 @@
     "defaults": {
       "model": {
         "primary": "openai/claude-opus-4-7",
-        "fallbacks": [
-          "openai-codex/gpt-5.5"
-        ]
+        "fallbacks": ["openai-codex/gpt-5.5"]
       },
       "compaction": {
         "mode": "safeguard",
@@ -79,9 +71,7 @@
       "subagents": {
         "maxConcurrent": 2,
         "requireAgentId": true,
-        "allowAgents": [
-          "sprout-investigator"
-        ]
+        "allowAgents": ["sprout-investigator"]
       }
     },
     "list": [
@@ -96,7 +86,15 @@
             "sessions_list",
             "sessions_history",
             "sessions_spawn",
-            "web_search"
+            "web_search",
+            "ask_zeke_context",
+            "search_zeke_context",
+            "explain_zeke_context_route",
+            "read_zeke_source",
+            "read_repo_file",
+            "grep_repo",
+            "glob_repo",
+            "propose_signal"
           ],
           "deny": [
             "sessions_send",
@@ -131,10 +129,7 @@
           "requireAgentId": true
         },
         "tools": {
-          "allow": [
-            "session_status",
-            "sessions_history"
-          ],
+          "allow": ["session_status", "sessions_history"],
           "deny": [
             "sessions_spawn",
             "sessions_send",
@@ -179,15 +174,11 @@
     "token": "${SPROUT_OPENCLAW_HOOK_TOKEN}",
     "defaultSessionKey": "hook:sprout",
     "allowRequestSessionKey": false,
-    "allowedAgentIds": [
-      "sprout"
-    ],
+    "allowedAgentIds": ["sprout"],
     "internal": {
       "enabled": true,
       "load": {
-        "extraDirs": [
-          "/home/node/.openclaw/hooks/sprout-spr-ocl-002"
-        ]
+        "extraDirs": ["/home/node/.openclaw/hooks/sprout-spr-ocl-002"]
       },
       "entries": {
         "sprout-message-memory": {
@@ -242,6 +233,16 @@
           "webSearch": {
             "baseUrl": "https://api.tavily.com"
           }
+        }
+      },
+      "zeke": {
+        "enabled": true,
+        "config": {
+          "baseUrl": "http://host.docker.internal:3747",
+          "tokenEnv": "ZEKEFLOW_OPENCLAW_SPROUT_TOOL_TOKEN",
+          "profile": "sprout",
+          "operatorId": "openclaw:ross",
+          "operatorSigningKeyEnv": "ZEKEFLOW_OPENCLAW_OPERATOR_SIGNING_KEY"
         }
       }
     }
