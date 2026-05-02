@@ -8,7 +8,7 @@ type TestModelProviderConfig = NonNullable<
 >[string];
 
 function installGeminiFetch() {
-  const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+  const mockFetch = vi.fn((_input?: RequestInfo | URL, _init?: RequestInit) =>
     Promise.resolve({
       ok: true,
       json: () =>
@@ -41,6 +41,29 @@ function createGoogleModelProviderConfig(
 function getFetchHeaders(mockFetch: ReturnType<typeof installGeminiFetch>): Record<string, string> {
   const init = mockFetch.mock.calls[0]?.[1] as { headers?: Record<string, string> } | undefined;
   return init?.headers ?? {};
+}
+
+function getGeminiFetchUrl(mockFetch: ReturnType<typeof installGeminiFetch>): string | undefined {
+  const input = mockFetch.mock.calls[0]?.[0];
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  return input?.url;
+}
+
+function parseGeminiFetchBody(mockFetch: ReturnType<typeof installGeminiFetch>): {
+  tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
+} {
+  const body = mockFetch.mock.calls[0]?.[1]?.body;
+  if (typeof body !== "string") {
+    throw new Error("Expected Gemini fetch body string");
+  }
+  return JSON.parse(body) as {
+    tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
+  };
 }
 
 afterEach(() => {
@@ -124,7 +147,7 @@ describe("google web search provider", () => {
 
     await tool?.execute({ query: "OpenClaw docs" });
 
-    expect(String(mockFetch.mock.calls[0]?.[0])).toBe(
+    expect(getGeminiFetchUrl(mockFetch)).toBe(
       "https://generativelanguage.googleapis.com/proxy/v1beta/models/gemini-2.5-flash:generateContent",
     );
   });
@@ -205,7 +228,7 @@ describe("google web search provider", () => {
 
     await tool?.execute({ query: "OpenClaw provider baseUrl fallback" });
 
-    expect(String(mockFetch.mock.calls[0]?.[0])).toBe(
+    expect(getGeminiFetchUrl(mockFetch)).toBe(
       "https://generativelanguage.googleapis.com/provider/v1beta/models/gemini-2.5-flash:generateContent",
     );
   });
@@ -240,7 +263,7 @@ describe("google web search provider", () => {
 
     await tool?.execute({ query: "OpenClaw plugin baseUrl precedence" });
 
-    expect(String(mockFetch.mock.calls[0]?.[0])).toBe(
+    expect(getGeminiFetchUrl(mockFetch)).toBe(
       "https://generativelanguage.googleapis.com/plugin/v1beta/models/gemini-2.5-flash:generateContent",
     );
   });
@@ -269,10 +292,7 @@ describe("google web search provider", () => {
 
     await tool?.execute({ query: "latest ai news", freshness: "week" });
 
-    const init = mockFetch.mock.calls[0]?.[1] as { body?: unknown } | undefined;
-    const body = JSON.parse(String(init?.body)) as {
-      tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
-    };
+    const body = parseGeminiFetchBody(mockFetch);
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
       startTime: "2026-04-08T12:00:00.000Z",
       endTime: "2026-04-15T12:00:00.000Z",
@@ -305,10 +325,7 @@ describe("google web search provider", () => {
       date_before: "2026-04-30",
     });
 
-    const init = mockFetch.mock.calls[0]?.[1] as { body?: unknown } | undefined;
-    const body = JSON.parse(String(init?.body)) as {
-      tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
-    };
+    const body = parseGeminiFetchBody(mockFetch);
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
       startTime: "2026-04-01T00:00:00Z",
       endTime: "2026-05-01T00:00:00.000Z",
