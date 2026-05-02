@@ -37,6 +37,8 @@ import {
   type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
+  type PluginPackageChannel,
+  type PluginPackageInstall,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
@@ -96,6 +98,9 @@ export type PluginManifestRecord = {
   name?: string;
   description?: string;
   version?: string;
+  packageName?: string;
+  packageVersion?: string;
+  packageDescription?: string;
   enabledByDefault?: boolean;
   autoEnableWhenConfiguredProviders?: string[];
   legacyPluginIds?: string[];
@@ -122,6 +127,9 @@ export type PluginManifestRecord = {
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
+  packageManifest?: OpenClawPackageManifest;
+  packageChannel?: PluginPackageChannel;
+  packageInstall?: PluginPackageInstall;
   qaRunners?: PluginManifestQaRunner[];
   skills: string[];
   settingsFiles?: string[];
@@ -269,6 +277,9 @@ function buildRecord(params: {
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
+    packageName: params.candidate.packageName,
+    packageVersion: params.candidate.packageVersion,
+    packageDescription: params.candidate.packageDescription,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
     autoEnableWhenConfiguredProviders: params.manifest.autoEnableWhenConfiguredProviders,
     legacyPluginIds: params.manifest.legacyPluginIds,
@@ -298,6 +309,9 @@ function buildRecord(params: {
     providerAuthChoices: params.manifest.providerAuthChoices,
     activation: params.manifest.activation,
     setup: params.manifest.setup,
+    packageManifest: params.candidate.packageManifest,
+    packageChannel: params.candidate.packageManifest?.channel,
+    packageInstall: params.candidate.packageManifest?.install,
     qaRunners: params.manifest.qaRunners,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
@@ -357,6 +371,12 @@ function buildBundleRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.idHint,
     description: normalizeOptionalString(params.manifest.description),
     version: normalizeOptionalString(params.manifest.version),
+    packageName: params.candidate.packageName,
+    packageVersion: params.candidate.packageVersion,
+    packageDescription: params.candidate.packageDescription,
+    packageManifest: params.candidate.packageManifest,
+    packageChannel: params.candidate.packageManifest?.channel,
+    packageInstall: params.candidate.packageManifest?.install,
     format: "bundle",
     bundleFormat: params.candidate.bundleFormat,
     bundleCapabilities: params.manifest.capabilities,
