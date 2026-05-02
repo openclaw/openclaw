@@ -229,6 +229,36 @@ export function resolveStableSessionEndTranscript(params: {
   return {};
 }
 
+export async function findLatestResetArchiveAsync(
+  candidatePaths: readonly string[],
+): Promise<string | null> {
+  let latest: { path: string; timestamp: number } | null = null;
+  const seenDirs = new Set<string>();
+  for (const candidate of candidatePaths) {
+    const dir = path.dirname(candidate);
+    const baseName = path.basename(candidate);
+    const dirKey = `${dir}\0${baseName}`;
+    if (seenDirs.has(dirKey)) {
+      continue;
+    }
+    seenDirs.add(dirKey);
+    const entries = await fs.promises.readdir(dir).catch(() => [] as string[]);
+    for (const entry of entries) {
+      if (!entry.startsWith(`${baseName}.`)) {
+        continue;
+      }
+      const timestamp = parseSessionArchiveTimestamp(entry, "reset");
+      if (timestamp == null) {
+        continue;
+      }
+      if (!latest || timestamp > latest.timestamp) {
+        latest = { path: path.join(dir, entry), timestamp };
+      }
+    }
+  }
+  return latest?.path ?? null;
+}
+
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   olderThanMs: number;

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { clearSessionTranscriptIndexCache } from "./session-transcript-index.fs.js";
 import {
@@ -24,6 +25,7 @@ import {
   readSessionMessagesAsync,
   readSessionMessages,
   readSessionTitleFieldsFromTranscript,
+  readSessionTitleFieldsFromTranscriptAsync,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
 } from "./session-utils.fs.js";
@@ -1577,6 +1579,291 @@ describe("resolveSessionTranscriptCandidates safety", () => {
       path.resolve("/tmp/openclaw/agents/main/sessions/11111111-1111-4111-8111-111111111111.jsonl"),
     );
     expect(candidates).toContain(path.resolve(staleSessionFile));
+  });
+});
+
+describe("async archive fallback (missing-primary auto-fallback)", () => {
+  let tmpDir: string;
+  let storePath: string;
+
+  registerTempSessionStore("openclaw-async-archive-fallback-", (nextTmpDir, nextStorePath) => {
+    tmpDir = nextTmpDir;
+    storePath = nextStorePath;
+  });
+
+  afterEach(() => {
+    clearSessionTranscriptIndexCache();
+  });
+
+  function writeJsonlLines(filePath: string, lines: unknown[]): void {
+    fs.writeFileSync(filePath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
+  }
+
+  function archivePath(primaryPath: string, atMs: number): string {
+    return `${primaryPath}.reset.${formatSessionArchiveTimestamp(atMs)}`;
+  }
+
+  test("readRecentSessionMessagesAsync prefers active over archive when both exist", async () => {
+    const sessionId = "fallback-recent-active-priority";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(primaryPath, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "active" } },
+      { message: { role: "assistant", content: "active reply" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived" } },
+    ]);
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    expect(out).toEqual([
+      expect.objectContaining({ role: "user", content: "active" }),
+      expect.objectContaining({ role: "assistant", content: "active reply" }),
+    ]);
+  });
+
+  test("readRecentSessionMessagesAsync falls back to archive when primary is missing", async () => {
+    const sessionId = "fallback-recent-archive-only";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived only" } },
+      { message: { role: "assistant", content: "archived reply" } },
+    ]);
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    expect(out).toEqual([
+      expect.objectContaining({ role: "user", content: "archived only" }),
+      expect.objectContaining({ role: "assistant", content: "archived reply" }),
+    ]);
+  });
+
+  test("readRecentSessionMessagesAsync returns latest archive when multiple archives exist", async () => {
+    const sessionId = "fallback-recent-latest-archive";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "older archive" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-05-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "newer archive" } },
+    ]);
+
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+
+    expect(out).toEqual([expect.objectContaining({ role: "user", content: "newer archive" })]);
+    expect(JSON.stringify(out)).not.toContain("older archive");
+  });
+
+  test("readRecentSessionMessagesAsync returns [] when neither active nor archive exists", async () => {
+    const sessionId = "fallback-recent-both-missing";
+    const out = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
+      maxMessages: 10,
+    });
+    expect(out).toEqual([]);
+  });
+
+  test("readSessionMessagesAsync (mode=full) prefers active over archive when both exist", async () => {
+    const sessionId = "fallback-full-active-priority";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(primaryPath, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "active full" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived full" } },
+    ]);
+
+    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test active priority full",
+    });
+
+    expect(out).toEqual([expect.objectContaining({ role: "user", content: "active full" })]);
+  });
+
+  test("readSessionMessagesAsync (mode=full) falls back to archive when primary is missing", async () => {
+    const sessionId = "fallback-full-archive-only";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived full only" } },
+      { message: { role: "assistant", content: "archived full reply" } },
+    ]);
+
+    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test archive fallback full",
+    });
+
+    expect(out).toEqual([
+      expect.objectContaining({ role: "user", content: "archived full only" }),
+      expect.objectContaining({ role: "assistant", content: "archived full reply" }),
+    ]);
+  });
+
+  test("readSessionMessagesAsync (mode=full) returns latest archive only (no chain aggregation)", async () => {
+    const sessionId = "fallback-full-latest-archive-only";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "older fragment" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-05-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "newer fragment" } },
+    ]);
+
+    const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+      mode: "full",
+      reason: "test latest archive only",
+    });
+
+    expect(out).toEqual([expect.objectContaining({ role: "user", content: "newer fragment" })]);
+    expect(JSON.stringify(out)).not.toContain("older fragment");
+  });
+
+  test("readSessionTitleFieldsFromTranscriptAsync prefers active over archive", async () => {
+    const sessionId = "fallback-title-active-priority";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(primaryPath, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "active first user" } },
+      { message: { role: "assistant", content: "active last preview" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived first user" } },
+    ]);
+
+    const out = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+    expect(out).toEqual({
+      firstUserMessage: "active first user",
+      lastMessagePreview: "active last preview",
+    });
+  });
+
+  test("readSessionTitleFieldsFromTranscriptAsync falls back to archive title fields when primary is missing", async () => {
+    const sessionId = "fallback-title-archive-only";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived first user" } },
+      { message: { role: "assistant", content: "archived last preview" } },
+    ]);
+
+    const out = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+    expect(out).toEqual({
+      firstUserMessage: "archived first user",
+      lastMessagePreview: "archived last preview",
+    });
+  });
+
+  test("readSessionTitleFieldsFromTranscriptAsync returns null fields when neither active nor archive exists", async () => {
+    const sessionId = "fallback-title-both-missing";
+    const out = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
+    expect(out).toEqual({ firstUserMessage: null, lastMessagePreview: null });
+  });
+
+  test("readSessionMessageCountAsync returns archive count when primary is missing", async () => {
+    const sessionId = "fallback-count-archive-only";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "u1" } },
+      { message: { role: "assistant", content: "a1" } },
+      { message: { role: "user", content: "u2" } },
+      { message: { role: "assistant", content: "a2" } },
+      { message: { role: "user", content: "u3" } },
+    ]);
+
+    expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(5);
+  });
+
+  test("readSessionMessageCountAsync prefers active count when both exist", async () => {
+    const sessionId = "fallback-count-active-priority";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(primaryPath, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "active 1" } },
+      { message: { role: "assistant", content: "active 2" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived 1" } },
+      { message: { role: "assistant", content: "archived 2" } },
+      { message: { role: "user", content: "archived 3" } },
+      { message: { role: "assistant", content: "archived 4" } },
+    ]);
+
+    expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2);
+  });
+
+  test("readRecentSessionMessagesWithStatsAsync reports archive totals and consistent seq for archive-only transcripts", async () => {
+    const sessionId = "fallback-stats-archive-only";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "u1" } },
+      { message: { role: "assistant", content: "a1" } },
+      { message: { role: "user", content: "u2" } },
+      { message: { role: "assistant", content: "a2" } },
+      { message: { role: "user", content: "u3" } },
+    ]);
+
+    const result = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+      maxMessages: 2,
+    });
+
+    expect(result.totalMessages).toBe(5);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages.map((m) => (m as { content?: unknown }).content)).toEqual(["a2", "u3"]);
+    expect(
+      result.messages.map((m) => (m as { __openclaw?: { seq?: number } }).__openclaw?.seq),
+    ).toEqual([4, 5]);
+  });
+
+  test("readRecentSessionMessagesWithStatsAsync prefers active totals + seq when active exists", async () => {
+    const sessionId = "fallback-stats-active-priority";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(primaryPath, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "active u1" } },
+      { message: { role: "assistant", content: "active a1" } },
+      { message: { role: "user", content: "active u2" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived u1" } },
+      { message: { role: "assistant", content: "archived a1" } },
+      { message: { role: "user", content: "archived u2" } },
+      { message: { role: "assistant", content: "archived a2" } },
+      { message: { role: "user", content: "archived u3" } },
+    ]);
+
+    const result = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+      maxMessages: 2,
+    });
+
+    expect(result.totalMessages).toBe(3);
+    expect(result.messages.map((m) => (m as { content?: unknown }).content)).toEqual([
+      "active a1",
+      "active u2",
+    ]);
+    expect(
+      result.messages.map((m) => (m as { __openclaw?: { seq?: number } }).__openclaw?.seq),
+    ).toEqual([2, 3]);
   });
 });
 

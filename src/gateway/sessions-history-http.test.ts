@@ -7,6 +7,7 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
+import { archiveSessionTranscripts } from "./session-utils.js";
 import { testState } from "./test-helpers.runtime-state.js";
 import {
   connectReq,
@@ -387,6 +388,71 @@ describe("session history HTTP endpoints", () => {
         hasMore?: boolean;
       };
       expect(firstBody.sessionKey).toBe("agent:main:main");
+      expect(firstBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
+        "second message",
+        "third message",
+      ]);
+      expect(firstBody.messages?.map((message) => message.__openclaw?.seq)).toEqual([2, 3]);
+      expect(firstBody.hasMore).toBe(true);
+      expect(firstBody.nextCursor).toBe("2");
+
+      const secondPage = await fetchSessionHistory(harness.port, "agent:main:main", {
+        query: `?limit=2&cursor=${encodeURIComponent(firstBody.nextCursor ?? "")}`,
+      });
+      expect(secondPage.status).toBe(200);
+      const secondBody = (await secondPage.json()) as {
+        items?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextCursor?: string;
+        hasMore?: boolean;
+      };
+      expect(secondBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
+        "first message",
+      ]);
+      expect(secondBody.messages?.map((message) => message.__openclaw?.seq)).toEqual([1]);
+      expect(secondBody.hasMore).toBe(false);
+      expect(secondBody.nextCursor).toBeUndefined();
+    });
+  });
+
+  test("paginates archive-only transcripts without skipping middle pages on nextCursor", async () => {
+    const { storePath } = await seedSession({ text: "first message" });
+    const second = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:main",
+      text: "second message",
+      storePath,
+    });
+    expect(second.ok).toBe(true);
+    const third = await appendAssistantMessageToSessionTranscript({
+      sessionKey: "agent:main:main",
+      text: "third message",
+      storePath,
+    });
+    expect(third.ok).toBe(true);
+
+    // Reset rotates the active <id>.jsonl into a sibling <id>.jsonl.reset.<ts>
+    // archive and leaves no active file. Without the missing-active async
+    // fallback the bounded first page would compute totalMessages from the
+    // missing active and assign cursor sequence numbers that skip the middle
+    // archive page when the client follows nextCursor.
+    const archived = archiveSessionTranscripts({
+      sessionId: "sess-main",
+      storePath,
+      reason: "reset",
+    });
+    expect(archived).toHaveLength(1);
+
+    await withGatewayHarness(async (harness) => {
+      const firstPage = await fetchSessionHistory(harness.port, "agent:main:main", {
+        query: "?limit=2",
+      });
+      expect(firstPage.status).toBe(200);
+      const firstBody = (await firstPage.json()) as {
+        items?: Array<{ content?: Array<{ text?: string }>; __openclaw?: { seq?: number } }>;
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextCursor?: string;
+        hasMore?: boolean;
+      };
       expect(firstBody.items?.map((message) => message.content?.[0]?.text)).toEqual([
         "second message",
         "third message",
