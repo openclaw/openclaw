@@ -165,6 +165,41 @@ describe("RequestClient", () => {
     );
   });
 
+  it("drains same-bucket requests when the active request finishes without polling", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () =>
+      fetchSpy.mock.calls.length === 1
+        ? await firstResponse.promise
+        : createJsonResponse({ id: "second" }),
+    );
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: { maxConcurrency: 2 },
+    });
+
+    const first = client.get("/channels/c1/messages");
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+
+    const second = client.get("/channels/c1/messages");
+    await Promise.resolve();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(1);
+
+    firstResponse.resolve(createJsonResponse({ id: "first" }));
+
+    await expect(first).resolves.toEqual({ id: "first" });
+    await expect(second).resolves.toEqual({ id: "second" });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("runs independent route buckets concurrently", async () => {
     const channelResponse = createDeferred<Response>();
     const guildResponse = createDeferred<Response>();

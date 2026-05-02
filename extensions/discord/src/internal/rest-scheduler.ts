@@ -408,7 +408,6 @@ export class RestScheduler<TData> {
           continue;
         }
         if (bucket.active > 0) {
-          nextDelayMs = Math.min(nextDelayMs ?? 5, 5);
           continue;
         }
         const waitMs = this.getBucketWaitMs(bucket, now);
