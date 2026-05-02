@@ -298,7 +298,10 @@ describe("session-compaction-checkpoints", () => {
     expect(forkedEntries[2]?.id).toEqual(expect.any(String));
 
     const messages = SessionManager.open(forked!.sessionFile, dir).buildSessionContext().messages;
-    expect(messages.map((message) => message.content)).toEqual(["legacy first", "legacy second"]);
+    expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
+      "legacy first",
+      "legacy second",
+    ]);
   });
 
   test("persist trims old checkpoint metadata and removes trimmed snapshot files", async () => {
