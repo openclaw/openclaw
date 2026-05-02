@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
 type SlashCommandsModule = typeof import("./slash-commands.js");
-const browserImportPath = "./slash-commands.ts?browser-import";
+const browserImportPath: string = "./slash-commands.ts?browser-import";
 
 describe("slash command browser import", () => {
   it("builds fallback commands from the browser-safe shared registry", async () => {
