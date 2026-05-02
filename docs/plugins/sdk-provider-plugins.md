@@ -244,6 +244,12 @@ API key auth, and dynamic model resolution.
     only for bundled provider plugins, with an empty config, empty env, and no
     agent/workspace paths.
 
+    Provider auth defaults are additive. A provider can register models, aliases,
+    and provider config from auth setup, but existing `agents.defaults.model`
+    primary/fallback selection is kept unless the user runs an explicit default
+    model command such as `openclaw models auth login --set-default` or
+    `openclaw models set`.
+
     If your auth flow also needs to patch `models.providers.*`, aliases, and
     the agent default model during onboarding, use the preset helpers from
     `openclaw/plugin-sdk/provider-onboard`. The narrowest helpers are
