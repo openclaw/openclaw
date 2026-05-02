@@ -15315,6 +15315,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         enabled: {
           type: "boolean",
         },
+        readOnly: {
+          type: "boolean",
+        },
         capabilities: {
           type: "array",
           items: {
@@ -15604,6 +15607,9 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             type: "object",
             properties: {
               enabled: {
+                type: "boolean",
+              },
+              readOnly: {
                 type: "boolean",
               },
               capabilities: {

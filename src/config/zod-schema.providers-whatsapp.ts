@@ -63,6 +63,7 @@ function stripDeprecatedWhatsAppNoopKeys(value: unknown): unknown {
 function buildWhatsAppCommonShape(params: { useDefaults: boolean }) {
   return {
     enabled: z.boolean().optional(),
+    readOnly: z.boolean().optional(),
     capabilities: z.array(z.string()).optional(),
     markdown: MarkdownConfigSchema,
     configWrites: z.boolean().optional(),
