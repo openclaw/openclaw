@@ -438,7 +438,7 @@ export async function reconcileWorkspaceBootstrapCompletion(
     bootstrapPath,
     statePath,
     state,
-    hookRunner: getGlobalHookRunner(),
+    hookRunner: getGlobalHookRunner() ?? undefined,
   });
 }
 
