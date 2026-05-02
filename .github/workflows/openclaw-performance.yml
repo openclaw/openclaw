@@ -272,7 +272,11 @@ jobs:
             report_url="https://github.com/openclaw/clawgrit-reports/tree/main/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
           fi
           summary_path="$SUMMARY_DIR/${LANE_ID}.md"
-          node scripts/kova-ci-summary.mjs --report "$report_json" --output "$summary_path" --lane "$LANE_ID" --report-url "$report_url"
+          summary_args=(node scripts/kova-ci-summary.mjs --report "$report_json" --output "$summary_path" --lane "$LANE_ID")
+          if [[ -n "$report_url" ]]; then
+            summary_args+=(--report-url "$report_url")
+          fi
+          "${summary_args[@]}"
           cat "$summary_path" >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "$FAIL_ON_REGRESSION" == "true" && "$status" != "0" ]]; then
