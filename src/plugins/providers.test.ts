@@ -593,6 +593,75 @@ describe("resolvePluginProviders", () => {
     ).toEqual(["legacy-auth-owner"]);
   });
 
+  it("filters bundled provider plugins by allowlist when bundledMode is respect-allow", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "kilocode",
+        providerIds: ["kilocode"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "moonshot",
+        providerIds: ["moonshot"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "openrouter",
+        providerIds: ["openrouter"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+    ]);
+
+    const discovered = resolveDiscoveredProviderPluginIds({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+          bundledMode: "respect-allow",
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(discovered).toEqual(["openrouter"]);
+  });
+
+  it("returns all bundled provider plugins in compat mode (default)", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "kilocode",
+        providerIds: ["kilocode"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "moonshot",
+        providerIds: ["moonshot"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+      createManifestProviderPlugin({
+        id: "openrouter",
+        providerIds: ["openrouter"],
+        origin: "bundled",
+        enabledByDefault: true,
+      }),
+    ]);
+
+    const discovered = resolveDiscoveredProviderPluginIds({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      env: {} as NodeJS.ProcessEnv,
+    });
+
+    expect(discovered).toEqual(["kilocode", "moonshot", "openrouter"]);
+  });
+
   it("treats explicit empty provider scopes as scoped-empty in provider helpers", () => {
     expect(
       resolveEnabledProviderPluginIds({

@@ -255,6 +255,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledMode === "respect-allow";
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
   return listRegistryPluginIds(registry, (plugin) => {
     if (
@@ -268,6 +269,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
     return isProviderPluginEligibleForSetupDiscovery({
       plugin,
       shouldFilterUntrustedWorkspacePlugins,
+      shouldFilterBundledByAllowlist,
       normalizedConfig,
       rootConfig: params.config,
     });
@@ -277,10 +279,15 @@ export function resolveDiscoveredProviderPluginIds(params: {
 function isProviderPluginEligibleForSetupDiscovery(params: {
   plugin: PluginRegistryRecord;
   shouldFilterUntrustedWorkspacePlugins: boolean;
+  shouldFilterBundledByAllowlist: boolean;
   normalizedConfig: NormalizedPluginsConfig;
   rootConfig?: PluginLoadOptions["config"];
 }): boolean {
-  if (!params.shouldFilterUntrustedWorkspacePlugins || params.plugin.origin !== "workspace") {
+  if (params.plugin.origin === "workspace") {
+    if (!params.shouldFilterUntrustedWorkspacePlugins) {
+      return true;
+    }
+  } else if (!params.shouldFilterBundledByAllowlist) {
     return true;
   }
   if (
@@ -306,12 +313,14 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
   const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledMode === "respect-allow";
   return resolveProviderOwnerPluginIds({
     ...params,
     isEligible: (plugin, normalizedConfig) =>
       isProviderPluginEligibleForSetupDiscovery({
         plugin,
         shouldFilterUntrustedWorkspacePlugins,
+        shouldFilterBundledByAllowlist,
         normalizedConfig,
         rootConfig: params.config,
       }),
