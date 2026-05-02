@@ -1480,6 +1480,7 @@ export async function runEmbeddedPiAgent(
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    config: params.config,
                   });
                 }
               } catch (compactErr) {
@@ -1513,6 +1514,7 @@ export async function runEmbeddedPiAgent(
                     }),
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    config: params.config,
                   });
                   if (truncResult.truncated) {
                     log.info(
@@ -1564,6 +1566,7 @@ export async function runEmbeddedPiAgent(
                   maxCharsOverride: toolResultMaxChars,
                   sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
+                  config: params.config,
                 });
                 if (truncResult.truncated) {
                   log.info(

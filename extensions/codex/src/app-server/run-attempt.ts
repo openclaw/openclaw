@@ -430,6 +430,7 @@ export async function runCodexAppServerAttempt(
         tokenBudget: params.contextTokenBudget,
       }),
       runMaintenance: runHarnessContextEngineMaintenance,
+      config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
     });
     historyMessages =
@@ -1178,6 +1179,7 @@ export async function runCodexAppServerAttempt(
           promptCache: result.promptCache,
         }),
         runMaintenance: runHarnessContextEngineMaintenance,
+        config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),
       });
     }
@@ -1638,6 +1640,7 @@ async function mirrorTranscriptBestEffort(params: {
       sessionKey: params.sessionKey,
       messages: params.result.messagesSnapshot,
       idempotencyScope: `codex-app-server:${params.threadId}:${params.turnId}`,
+      config: params.params.config,
     });
   } catch (error) {
     embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });

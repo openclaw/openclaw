@@ -327,6 +327,7 @@ describe("rewriteTranscriptEntriesInSessionFile", () => {
       expect(result.changed).toBe(true);
       expect(acquireSessionWriteLockMock).toHaveBeenCalledWith({
         sessionFile,
+        timeoutMs: 60_000,
       });
       expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({ sessionFile });

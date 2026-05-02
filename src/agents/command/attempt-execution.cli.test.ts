@@ -387,6 +387,7 @@ describe("CLI attempt execution", () => {
       storePath,
       sessionAgentId: "main",
       sessionCwd: tmpDir,
+      config: {},
     });
 
     const sessionFile = updatedEntry?.sessionFile;
@@ -443,6 +444,7 @@ describe("CLI attempt execution", () => {
       storePath,
       sessionAgentId: "main",
       sessionCwd: tmpDir,
+      config: {},
     });
 
     const messages = await readSessionMessages(updatedEntry?.sessionFile ?? "");
