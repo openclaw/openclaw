@@ -249,6 +249,83 @@ describe("provider install catalog", () => {
     });
   });
 
+  it("preserves durable ClawHub install records for provider setup reinstall hints", () => {
+    loadPluginRegistrySnapshot.mockReturnValue({
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {
+        vllm: {
+          source: "clawhub",
+          spec: "clawhub:openclaw/vllm@2026.5.2",
+          integrity: "sha256-clawpack",
+          clawhubPackage: "openclaw/vllm",
+        },
+      },
+      plugins: [
+        {
+          pluginId: "vllm",
+          origin: "global",
+          manifestPath: "/Users/test/.openclaw/plugins/vllm/openclaw.plugin.json",
+          manifestHash: "hash",
+          rootDir: "/Users/test/.openclaw/plugins/vllm",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
+          packageName: "@openclaw/vllm",
+          packageInstall: {
+            npm: {
+              spec: "@openclaw/vllm-fork@1.0.0",
+              packageName: "@openclaw/vllm-fork",
+              selector: "1.0.0",
+              selectorKind: "exact-version",
+              exactVersion: true,
+              expectedIntegrity: "sha512-old",
+              pinState: "exact-with-integrity",
+            },
+            warnings: [],
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "vllm",
+        providerId: "vllm",
+        methodId: "server",
+        choiceId: "vllm",
+        choiceLabel: "vLLM",
+        groupLabel: "vLLM",
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntry("vllm")).toMatchObject({
+      install: {
+        clawhubSpec: "clawhub:openclaw/vllm@2026.5.2",
+        defaultChoice: "clawhub",
+      },
+      installSource: {
+        defaultChoice: "clawhub",
+        clawhub: {
+          spec: "clawhub:openclaw/vllm@2026.5.2",
+          packageName: "openclaw/vllm",
+          version: "2026.5.2",
+          exactVersion: true,
+        },
+        warnings: [],
+      },
+    });
+  });
+
   it("does not expose untrusted global package install intent without an install record", () => {
     loadPluginRegistrySnapshot.mockReturnValue({
       version: 1,
@@ -411,6 +488,74 @@ describe("provider install catalog", () => {
           spec: "@openclaw/plugin-moonshot@1.2.3",
           packageName: "@openclaw/plugin-moonshot",
           selector: "1.2.3",
+          selectorKind: "exact-version",
+          exactVersion: true,
+          expectedIntegrity: "sha512-moonshot",
+          pinState: "exact-with-integrity",
+        },
+        warnings: [],
+      },
+    });
+  });
+
+  it("surfaces provider-index ClawHub install metadata as the preferred source", () => {
+    loadOpenClawProviderIndex.mockReturnValue({
+      version: 1,
+      providers: {
+        moonshot: {
+          id: "moonshot",
+          name: "Moonshot AI",
+          plugin: {
+            id: "moonshot",
+            package: "@openclaw/plugin-moonshot",
+            install: {
+              clawhubSpec: "clawhub:openclaw/moonshot@2026.5.2",
+              npmSpec: "@openclaw/plugin-moonshot@2026.5.2",
+              defaultChoice: "clawhub",
+              expectedIntegrity: "sha512-moonshot",
+            },
+          },
+          authChoices: [
+            {
+              method: "api-key",
+              choiceId: "moonshot-api-key",
+              choiceLabel: "Moonshot API key",
+              groupId: "moonshot",
+              groupLabel: "Moonshot AI",
+            },
+          ],
+        },
+      },
+    });
+
+    expect(resolveProviderInstallCatalogEntry("moonshot-api-key")).toEqual({
+      pluginId: "moonshot",
+      providerId: "moonshot",
+      methodId: "api-key",
+      choiceId: "moonshot-api-key",
+      choiceLabel: "Moonshot API key",
+      groupId: "moonshot",
+      groupLabel: "Moonshot AI",
+      label: "Moonshot AI",
+      origin: "bundled",
+      install: {
+        clawhubSpec: "clawhub:openclaw/moonshot@2026.5.2",
+        npmSpec: "@openclaw/plugin-moonshot@2026.5.2",
+        defaultChoice: "clawhub",
+        expectedIntegrity: "sha512-moonshot",
+      },
+      installSource: {
+        defaultChoice: "clawhub",
+        clawhub: {
+          spec: "clawhub:openclaw/moonshot@2026.5.2",
+          packageName: "openclaw/moonshot",
+          version: "2026.5.2",
+          exactVersion: true,
+        },
+        npm: {
+          spec: "@openclaw/plugin-moonshot@2026.5.2",
+          packageName: "@openclaw/plugin-moonshot",
+          selector: "2026.5.2",
           selectorKind: "exact-version",
           exactVersion: true,
           expectedIntegrity: "sha512-moonshot",
