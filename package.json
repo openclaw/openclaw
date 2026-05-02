@@ -40,7 +40,6 @@
     "!dist/extensions/diagnostics-otel/**",
     "!dist/extensions/diagnostics-prometheus/**",
     "!dist/extensions/diffs/**",
-    "!dist/extensions/discord/**",
     "!dist/extensions/feishu/**",
     "!dist/extensions/google-meet/**",
     "!dist/extensions/googlechat/**",
