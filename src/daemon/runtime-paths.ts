@@ -6,6 +6,7 @@ import { isSupportedNodeVersion } from "../infra/runtime-guard.js";
 import { resolveStableNodePath } from "../infra/stable-node-path.js";
 import { getWindowsProgramFilesRoots } from "../infra/windows-install-roots.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolveGatewayStateDir } from "./paths.js";
 
 const VERSION_MANAGER_MARKERS = [
   "/.nvm/",
@@ -84,6 +85,69 @@ type SystemNodeInfo = {
   version: string | null;
   supported: boolean;
 };
+
+function parseBundledNodeVersionDir(dirname: string): number[] | null {
+  const match = /^node-v(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:$|[-+])/.exec(dirname);
+  if (!match) {
+    return null;
+  }
+  return [match[1], match[2] ?? "0", match[3] ?? "0"].map((part) => Number.parseInt(part, 10));
+}
+
+function compareBundledNodeVersionDirs(left: string, right: string): number {
+  const leftVersion = parseBundledNodeVersionDir(left) ?? [];
+  const rightVersion = parseBundledNodeVersionDir(right) ?? [];
+  for (let index = 0; index < Math.max(leftVersion.length, rightVersion.length); index += 1) {
+    const diff = (rightVersion[index] ?? 0) - (leftVersion[index] ?? 0);
+    if (diff !== 0) {
+      return diff;
+    }
+  }
+  return left.localeCompare(right);
+}
+
+async function resolveBundledNodePath(params: {
+  env: Record<string, string | undefined>;
+  platform: NodeJS.Platform;
+  execFile: ExecFileAsync;
+}): Promise<string | null> {
+  let toolsDir: string;
+  try {
+    toolsDir = path.join(resolveGatewayStateDir(params.env), "tools");
+  } catch {
+    return null;
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(toolsDir);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(entries)) {
+    return null;
+  }
+
+  const executableName = params.platform === "win32" ? "node.exe" : "node";
+  const candidates = entries
+    .filter((entry) => parseBundledNodeVersionDir(entry) !== null)
+    .toSorted(compareBundledNodeVersionDirs)
+    .map((entry) => path.join(toolsDir, entry, "bin", executableName));
+
+  for (const candidate of candidates) {
+    try {
+      await fs.access(candidate);
+    } catch {
+      continue;
+    }
+    const version = await resolveNodeVersion(candidate, params.execFile);
+    if (isSupportedNodeVersion(version)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
 
 export function isVersionManagedNodePath(
   nodePath: string,
@@ -165,12 +229,21 @@ export async function resolvePreferredNodePath(params: {
     return undefined;
   }
 
+  const platform = params.platform ?? process.platform;
+  const execFileImpl = params.execFile ?? execFileAsync;
+  const bundledNode = await resolveBundledNodePath({
+    env: params.env ?? process.env,
+    platform,
+    execFile: execFileImpl,
+  });
+  if (bundledNode) {
+    return bundledNode;
+  }
+
   // Prefer the node that is currently running `openclaw gateway install`.
   // This respects the user's active version manager (fnm/nvm/volta/etc.).
-  const platform = params.platform ?? process.platform;
   const currentExecPath = params.execPath ?? process.execPath;
   if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
-    const execFileImpl = params.execFile ?? execFileAsync;
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {
       return resolveStableNodePath(currentExecPath);

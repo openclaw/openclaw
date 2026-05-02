@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const fsMocks = vi.hoisted(() => ({
   access: vi.fn(),
+  readdir: vi.fn(),
 }));
 
 vi.mock("node:fs/promises", async () => {
@@ -11,8 +12,10 @@ vi.mock("node:fs/promises", async () => {
     default: {
       ...actual,
       access: fsMocks.access,
+      readdir: fsMocks.readdir,
     },
     access: fsMocks.access,
+    readdir: fsMocks.readdir,
   };
 });
 
@@ -40,8 +43,32 @@ describe("resolvePreferredNodePath", () => {
   const darwinNode = "/opt/homebrew/bin/node";
   const fnmNode = "/Users/test/.fnm/node-versions/v24.11.1/installation/bin/node";
 
+  it("prefers an installed bundled state-dir node over the current PATH node", async () => {
+    const bundledNode = "/Users/test/.openclaw/tools/node-v22.22.0/bin/node";
+    const pathNode = "/Users/test/.local/bin/node";
+    mockNodePathPresent(bundledNode, darwinNode);
+    fsMocks.readdir.mockResolvedValue(["node-v22.22.0"]);
+
+    const execFile = vi.fn().mockResolvedValueOnce({ stdout: "22.22.0\n", stderr: "" });
+
+    const result = await resolvePreferredNodePath({
+      env: { HOME: "/Users/test" },
+      runtime: "node",
+      platform: "darwin",
+      execFile,
+      execPath: pathNode,
+    });
+
+    expect(result).toBe(bundledNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledWith(bundledNode, ["-p", "process.versions.node"], {
+      encoding: "utf8",
+    });
+  });
+
   it("prefers execPath (version manager node) over system node", async () => {
     mockNodePathPresent(darwinNode);
+    fsMocks.readdir.mockRejectedValue(new Error("missing"));
 
     const execFile = vi.fn().mockResolvedValue({ stdout: "24.11.1\n", stderr: "" });
 
