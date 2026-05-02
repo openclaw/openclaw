@@ -312,4 +312,18 @@ other: top-level
       { name: "only", interval: "5m", prompt: "ping" },
     ]);
   });
+  it("treats a flush-left unknown field as the end of the tasks block", () => {
+    const content = `tasks:
+  - name: only
+    interval: 5m
+    prompt: ping
+notes: a flush-left annotation outside the tasks block
+  - name: should-not-appear
+    interval: 1h
+    prompt: nope
+`;
+    expect(parseHeartbeatTasks(content)).toEqual([
+      { name: "only", interval: "5m", prompt: "ping" },
+    ]);
+  });
 });

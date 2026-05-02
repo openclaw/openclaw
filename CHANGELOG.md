@@ -28,6 +28,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Heartbeat/parser: keep parsing later `tasks:` entries when a task contains an unrecognized indented field (e.g. `notes:`), so silent task drops no longer occur after the first non-`name`/`interval`/`prompt` field. (#74320) Thanks @BSG2000.
+
 - Agents/sessions: emit a terminal lifecycle backstop when embedded timeout/error turns return without `agent_end`, so Gateway sessions no longer stay stuck in `running` after failover surfaces a timeout. Fixes #74607. Thanks @millerc79.
 - Gateway/diagnostics: include stuck-session reason hints and recovery skip causes in warnings, so operators can tell whether a lane is waiting on active work, queued work, or stale bookkeeping. Thanks @vincentkoc.
 - Agents/Codex: bound embedded-run cleanup, trajectory flushing, and command-lane task timeouts after runtime failures, so Discord and other chat sessions return to idle instead of staying stuck in processing. Thanks @vincentkoc.
