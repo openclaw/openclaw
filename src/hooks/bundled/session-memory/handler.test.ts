@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { writeWorkspaceFile } from "../../../test-helpers/workspace.js";
-import { withEnvAsync } from "../../../test-utils/env.js";
 import { createHookEvent } from "../../hooks.js";
 import {
   findPreviousSessionFile,
@@ -261,22 +260,29 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Captured before reset");
   });
 
-  it("uses local timezone date and fallback time in memory filenames and headers", async () => {
-    await withEnvAsync({ TZ: "America/New_York" }, async () => {
-      const tempDir = await createCaseWorkspace("workspace");
-
-      const { files, memoryContent } = await runNewWithPreviousSessionEntry({
-        tempDir,
-        eventTimestamp: new Date("2026-01-01T04:30:15.000Z"),
-        previousSessionEntry: {
-          sessionId: "local-time-session",
+  it("uses configured userTimezone date and fallback time in memory filenames and headers", async () => {
+    const tempDir = await createCaseWorkspace("workspace");
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: tempDir,
+          userTimezone: "America/New_York",
         },
-      });
+      },
+    } as OpenClawConfig;
 
-      expect(files).toEqual(["2025-12-31-2330.md"]);
-      expect(memoryContent).toMatch(/^# Session: 2025-12-31 23:30:15(?: EST| GMT-5)?/);
-      expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
+    const { files, memoryContent } = await runNewWithPreviousSessionEntry({
+      tempDir,
+      cfg,
+      eventTimestamp: new Date("2026-01-01T04:30:15.000Z"),
+      previousSessionEntry: {
+        sessionId: "local-time-session",
+      },
     });
+
+    expect(files).toEqual(["2025-12-31-2330.md"]);
+    expect(memoryContent).toContain("# Session: 2025-12-31 23:30:15 (America/New_York)");
+    expect(memoryContent).not.toContain("# Session: 2026-01-01 04:30:15 UTC");
   });
 
   it("prefers workspaceDir from hook context when sessionKey points at main", async () => {

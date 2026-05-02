@@ -91,7 +91,12 @@ function getSessionSnapshotForTest(
     }),
   });
   const freshness = entry
-    ? evaluateSessionFreshness({ updatedAt: entry.updatedAt, now: Date.now(), policy: resetPolicy, cfg })
+    ? evaluateSessionFreshness({
+        updatedAt: entry.updatedAt,
+        now: Date.now(),
+        policy: resetPolicy,
+        cfg,
+      })
     : { fresh: false };
 
   return {
@@ -370,9 +375,9 @@ describe("getSessionSnapshot", () => {
             store: storePath,
             reset: { mode: "daily", atHour: 4 },
           },
-        } as Parameters<typeof getSessionSnapshot>[0];
+        } as OpenClawConfig;
 
-        const snapshot = getSessionSnapshot(cfg, "whatsapp:+15550001111", true, {
+        const snapshot = getSessionSnapshotForTest(cfg, "whatsapp:+15550001111", {
           sessionKey,
         });
 
