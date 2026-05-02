@@ -86,6 +86,19 @@ function shouldSeedProviderConfigModels(providerMeta) {
   );
 }
 
+function buildReleaseProviderConfigOverride(providerMeta) {
+  if (!shouldSeedProviderConfigModels(providerMeta)) {
+    return null;
+  }
+  return {
+    ...(typeof providerMeta.baseUrl === "string" ? { baseUrl: providerMeta.baseUrl } : {}),
+    models: [],
+    ...(typeof providerMeta.timeoutSeconds === "number"
+      ? { timeoutSeconds: providerMeta.timeoutSeconds }
+      : {}),
+  };
+}
+
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -1848,62 +1861,17 @@ async function runInstalledModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
-  if (shouldSeedProviderConfigModels(params.providerConfig)) {
+  const providerConfigOverride = buildReleaseProviderConfigOverride(params.providerConfig);
+  if (providerConfigOverride) {
     await runInstalledCli({
       cliPath: params.cliPath,
       args: [
         "config",
         "set",
-        `models.providers.${params.providerConfig.extensionId}.models`,
-        "[]",
+        `models.providers.${params.providerConfig.extensionId}`,
+        JSON.stringify(providerConfigOverride),
         "--strict-json",
         "--merge",
-      ],
-      cwd: params.cwd,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: 2 * 60 * 1000,
-    });
-  }
-  if (typeof params.providerConfig.timeoutSeconds === "number") {
-    await runInstalledCli({
-      cliPath: params.cliPath,
-      args: [
-        "config",
-        "set",
-        `models.providers.${params.providerConfig.extensionId}.models`,
-        "[]",
-        "--strict-json",
-      ],
-      cwd: params.cwd,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: 2 * 60 * 1000,
-    });
-    if (typeof params.providerConfig.baseUrl === "string") {
-      await runInstalledCli({
-        cliPath: params.cliPath,
-        args: [
-          "config",
-          "set",
-          `models.providers.${params.providerConfig.extensionId}.baseUrl`,
-          JSON.stringify(params.providerConfig.baseUrl),
-          "--strict-json",
-        ],
-        cwd: params.cwd,
-        env: params.env,
-        logPath: params.logPath,
-        timeoutMs: 2 * 60 * 1000,
-      });
-    }
-    await runInstalledCli({
-      cliPath: params.cliPath,
-      args: [
-        "config",
-        "set",
-        `models.providers.${params.providerConfig.extensionId}.timeoutSeconds`,
-        String(params.providerConfig.timeoutSeconds),
-        "--strict-json",
       ],
       cwd: params.cwd,
       env: params.env,
@@ -2687,60 +2655,18 @@ async function runModelsSet(params) {
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
   });
-  if (shouldSeedProviderConfigModels(params.providerConfig)) {
+  const providerConfigOverride = buildReleaseProviderConfigOverride(params.providerConfig);
+  if (providerConfigOverride) {
     await runOpenClaw({
       lane: params.lane,
       env: params.env,
       args: [
         "config",
         "set",
-        `models.providers.${params.providerConfig.extensionId}.models`,
-        "[]",
+        `models.providers.${params.providerConfig.extensionId}`,
+        JSON.stringify(providerConfigOverride),
         "--strict-json",
         "--merge",
-      ],
-      logPath: params.logPath,
-      timeoutMs: 2 * 60 * 1000,
-    });
-  }
-  if (typeof params.providerConfig.timeoutSeconds === "number") {
-    await runOpenClaw({
-      lane: params.lane,
-      env: params.env,
-      args: [
-        "config",
-        "set",
-        `models.providers.${params.providerConfig.extensionId}.models`,
-        "[]",
-        "--strict-json",
-      ],
-      logPath: params.logPath,
-      timeoutMs: 2 * 60 * 1000,
-    });
-    if (typeof params.providerConfig.baseUrl === "string") {
-      await runOpenClaw({
-        lane: params.lane,
-        env: params.env,
-        args: [
-          "config",
-          "set",
-          `models.providers.${params.providerConfig.extensionId}.baseUrl`,
-          JSON.stringify(params.providerConfig.baseUrl),
-          "--strict-json",
-        ],
-        logPath: params.logPath,
-        timeoutMs: 2 * 60 * 1000,
-      });
-    }
-    await runOpenClaw({
-      lane: params.lane,
-      env: params.env,
-      args: [
-        "config",
-        "set",
-        `models.providers.${params.providerConfig.extensionId}.timeoutSeconds`,
-        String(params.providerConfig.timeoutSeconds),
-        "--strict-json",
       ],
       logPath: params.logPath,
       timeoutMs: 2 * 60 * 1000,

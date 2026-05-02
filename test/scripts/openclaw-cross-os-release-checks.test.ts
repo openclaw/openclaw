@@ -162,18 +162,15 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
 
   it("keeps cross-OS live smoke agent turns on GPT-5.5-safe timeouts and minimal thinking", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
-    const providerModelsSeed = "models.providers.${params.providerConfig.extensionId}.models";
-    const providerBaseUrl = "models.providers.${params.providerConfig.extensionId}.baseUrl";
+    const providerOverride = "models.providers.${params.providerConfig.extensionId}";
 
     expect(source).toContain('"--thinking",\n    "minimal"');
     expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeGreaterThanOrEqual(600);
-    expect(source.indexOf(providerModelsSeed)).toBeGreaterThan(-1);
-    expect(source.indexOf(providerModelsSeed)).toBeLessThan(source.indexOf(providerBaseUrl));
+    expect(source).toContain("buildReleaseProviderConfigOverride");
+    expect(source).toContain("models: []");
     expect(source).toContain('"--merge"');
-    expect(source).toContain(providerBaseUrl);
-    expect(source).toContain(
-      "models.providers.${params.providerConfig.extensionId}.timeoutSeconds",
-    );
+    expect(source).toContain(providerOverride);
+    expect(source).not.toContain("models.providers.${params.providerConfig.extensionId}.baseUrl");
     expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
     expect(source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g)?.length).toBeGreaterThanOrEqual(
       2,
