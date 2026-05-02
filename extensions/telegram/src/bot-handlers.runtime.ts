@@ -27,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
+import { HEARTBEAT_PROMPT } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -984,6 +985,41 @@ export const registerTelegramHandlers = ({
           contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
         });
         logVerbose(`telegram: reaction event enqueued: ${text}`);
+      }
+
+      // Trigger a synthetic heartbeat session so the queued reaction
+      // system events are drained and processed immediately, rather than
+      // waiting for the next scheduled heartbeat or an incoming message.
+      // Without this, approval reactions (e.g. ✅ on a confirmation card)
+      // are silently delayed until the next session start.
+      try {
+        const storeAllowFrom = await loadStoreAllowFrom();
+        const syntheticBase: Message = {
+          message_id: messageId,
+          from: user ?? { id: 0, is_bot: false, first_name: "unknown" },
+          chat: reaction.chat,
+          date: Math.floor(Date.now() / 1000),
+          text: "",
+        };
+        await processMessage(
+          buildSyntheticContext(
+            ctx,
+            buildSyntheticTextMessage({
+              base: syntheticBase,
+              from: user,
+              text: HEARTBEAT_PROMPT,
+            }),
+          ),
+          [],
+          storeAllowFrom,
+          {
+            forceWasMentioned: true,
+            messageIdOverride: `reaction:${chatId}:${messageId}`,
+          },
+        );
+        logVerbose(`telegram: reaction session triggered for sessionKey=${sessionKey}`);
+      } catch (reactionTriggerErr) {
+        logVerbose(`telegram: reaction session trigger failed: ${String(reactionTriggerErr)}`);
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));

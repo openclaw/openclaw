@@ -2887,4 +2887,43 @@ describe("createTelegramBot", () => {
 
     expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
   });
+
+  it("triggers a synthetic session after enqueuing reaction system events", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    replySpy.mockClear();
+    wasSentByBot.mockReturnValue(true);
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"], reactionNotifications: "own" },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: 700 },
+      messageReaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada", username: "ada_bot" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+      },
+      me: { id: 1, is_bot: true, first_name: "Bot" },
+    });
+
+    // Reaction system event must be enqueued.
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(1);
+
+    // A synthetic heartbeat session must have been triggered so the queued
+    // reaction event is drained immediately, without waiting for the next
+    // scheduled heartbeat or an incoming message.
+    expect(replySpy).toHaveBeenCalledTimes(1);
+  });
 });
