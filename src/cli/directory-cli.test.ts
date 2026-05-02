@@ -159,4 +159,78 @@ describe("registerDirectoryCli", () => {
       baseHash: "config-1",
     });
   });
+
+  it("prefers live directory list readers when available", async () => {
+    const listPeers = vi.fn().mockResolvedValue([{ id: "user:config", kind: "user" }]);
+    const listPeersLive = vi.fn().mockResolvedValue([{ id: "user:live", kind: "user" }]);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: {
+        id: "slack",
+        directory: { listPeers, listPeersLive },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(
+      [
+        "directory",
+        "peers",
+        "list",
+        "--channel",
+        "slack",
+        "--query",
+        "ada",
+        "--limit",
+        "5",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(listPeersLive).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        query: "ada",
+        limit: 5,
+      }),
+    );
+    expect(listPeers).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
+      JSON.stringify([{ id: "user:live", kind: "user" }], null, 2),
+    );
+  });
+
+  it("falls back to config-backed directory list readers when live readers are absent", async () => {
+    const listGroups = vi.fn().mockResolvedValue([{ id: "channel:config", kind: "group" }]);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: {
+        id: "slack",
+        directory: { listGroups },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(["directory", "groups", "list", "--channel", "slack", "--json"], {
+      from: "user",
+    });
+
+    expect(listGroups).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+      }),
+    );
+    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
+      JSON.stringify([{ id: "channel:config", kind: "group" }], null, 2),
+    );
+  });
 });

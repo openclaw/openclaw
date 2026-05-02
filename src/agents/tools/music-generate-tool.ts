@@ -501,6 +501,7 @@ export function createMusicGenerateTool(options?: {
       cfg,
       agentDir: options?.agentDir,
       modelConfig: cfg.agents?.defaults?.musicGenerationModel,
+      providers: () => listRuntimeMusicGenerationProviders({ config: cfg }),
       providerKey: "musicGenerationProviders",
     })
   ) {

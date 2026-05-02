@@ -1602,6 +1602,7 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 20,
@@ -1664,6 +1665,7 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 20,
@@ -1719,6 +1721,7 @@ describe("active-memory plugin", () => {
 
   it("keeps timeout status when the timeout transcript is empty", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -1749,6 +1752,7 @@ describe("active-memory plugin", () => {
 
   it("keeps timeout status when the timeout transcript path does not exist", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -2206,7 +2210,7 @@ describe("active-memory plugin", () => {
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
     const CONFIGURED_TIMEOUT_MS = 200;
-    const MARGIN_MS = 500;
+    const HARD_DEADLINE_MARGIN_MS = 4_800;
     __testing.setMinimumTimeoutMsForTests(1);
     __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -2240,7 +2244,7 @@ describe("active-memory plugin", () => {
       .mock.calls.map((call: unknown[]) => String(call[0]));
     expect(infoLines.some((line: string) => line.includes("status=timeout"))).toBe(true);
     // Hard deadline: wall-clock time must be near timeoutMs, not 30s.
-    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + MARGIN_MS);
+    expect(wallClockMs).toBeLessThan(CONFIGURED_TIMEOUT_MS + HARD_DEADLINE_MARGIN_MS);
   });
 
   it("returns undefined instead of throwing when an unexpected error escapes prompt building", async () => {

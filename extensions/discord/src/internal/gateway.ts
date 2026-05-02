@@ -27,8 +27,8 @@ export type Activity = NonNullable<GatewayPresenceUpdateData["activities"]>[numb
 export type UpdatePresenceData = Omit<GatewayPresenceUpdateData, "status"> & {
   status: "online" | "idle" | "dnd" | "invisible" | "offline";
 };
-export type UpdateVoiceStateData = GatewayVoiceStateUpdateData;
-export type RequestGuildMembersData = {
+type UpdateVoiceStateData = GatewayVoiceStateUpdateData;
+type RequestGuildMembersData = {
   guild_id: string;
   query?: string;
   limit: number;
@@ -36,8 +36,6 @@ export type RequestGuildMembersData = {
   user_ids?: string | string[];
   nonce?: string;
 };
-export type GatewayWebSocketLike = ws.WebSocket;
-
 type GatewayPluginOptions = {
   reconnect?: { maxAttempts?: number };
   intents?: number;

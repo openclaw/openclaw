@@ -22,9 +22,13 @@ const fetchGuardMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
-}));
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
+  return {
+    ...actual,
+    fetchWithSsrFGuard: fetchGuardMocks.fetchWithSsrFGuard,
+  };
+});
 
 function captureStdout() {
   let output = "";
@@ -599,7 +603,7 @@ describe("google-meet CLI", () => {
     try {
       await setupCli({
         runtime: {
-          status: () => ({
+          status: async () => ({
             found: true,
             sessions: [
               {
@@ -680,7 +684,7 @@ describe("google-meet CLI", () => {
     try {
       await setupCli({
         runtime: {
-          status: () => ({
+          status: async () => ({
             found: true,
             session: {
               id: "meet_1",
@@ -699,6 +703,11 @@ describe("google-meet CLI", () => {
                 audioBridge: { type: "node-command-pair", provider: "openai" },
                 health: {
                   inCall: true,
+                  captioning: true,
+                  transcriptLines: 2,
+                  lastCaptionAt: "2026-04-25T00:00:03.000Z",
+                  lastCaptionSpeaker: "Alice",
+                  lastCaptionText: "Can everyone hear OpenClaw?",
                   providerConnected: true,
                   realtimeReady: true,
                   audioInputActive: true,
@@ -716,8 +725,53 @@ describe("google-meet CLI", () => {
       expect(stdout.output()).toContain("session: meet_1");
       expect(stdout.output()).toContain("node: node-1");
       expect(stdout.output()).toContain("provider connected: yes");
+      expect(stdout.output()).toContain("captioning: yes");
+      expect(stdout.output()).toContain("transcript lines: 2");
+      expect(stdout.output()).toContain("last caption text: Alice: Can everyone hear OpenClaw?");
       expect(stdout.output()).toContain("audio input active: yes");
       expect(stdout.output()).toContain("audio output active: no");
+    } finally {
+      stdout.restore();
+    }
+  });
+
+  it("prints Twilio session doctor output", async () => {
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        runtime: {
+          status: async () => ({
+            found: true,
+            session: {
+              id: "meet_1",
+              url: "https://meet.google.com/abc-defg-hij",
+              state: "active",
+              transport: "twilio",
+              mode: "realtime",
+              participantIdentity: "Twilio phone participant",
+              createdAt: "2026-04-25T00:00:00.000Z",
+              updatedAt: "2026-04-25T00:00:01.000Z",
+              realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
+              twilio: {
+                dialInNumber: "+15551234567",
+                pinProvided: true,
+                dtmfSequence: "ww123456#",
+                voiceCallId: "call-1",
+                dtmfSent: true,
+                introSent: true,
+              },
+              notes: [],
+            },
+          }),
+        },
+      }).parseAsync(["googlemeet", "doctor", "meet_1"], { from: "user" });
+      expect(stdout.output()).toContain("session: meet_1");
+      expect(stdout.output()).toContain("transport: twilio");
+      expect(stdout.output()).toContain("twilio dial-in: +15551234567");
+      expect(stdout.output()).toContain("voice call id: call-1");
+      expect(stdout.output()).toContain("dtmf sent: yes");
+      expect(stdout.output()).toContain("intro sent: yes");
+      expect(stdout.output()).not.toContain("audio input active:");
     } finally {
       stdout.restore();
     }

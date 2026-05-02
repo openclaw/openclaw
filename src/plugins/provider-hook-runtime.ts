@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -27,7 +28,6 @@ type ProviderRuntimePluginLookupParams = {
   applyAutoEnable?: boolean;
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
-  installBundledRuntimeDeps?: boolean;
 };
 
 function matchesProviderId(provider: ProviderPlugin, providerId: string): boolean {
@@ -46,13 +46,17 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
 function resolveProviderRuntimePluginCacheKey(params: ProviderRuntimePluginLookupParams): string {
   return JSON.stringify({
     provider: normalizeLowercaseStringOrEmpty(params.provider),
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+    }),
     plugins: params.config?.plugins,
     models: params.config?.models?.providers,
     workspaceDir: params.workspaceDir ?? "",
     applyAutoEnable: params.applyAutoEnable ?? null,
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? null,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? null,
   });
 }
 
@@ -84,7 +88,6 @@ export function resolveProviderPluginsForHooks(params: {
   applyAutoEnable?: boolean;
   bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
-  installBundledRuntimeDeps?: boolean;
 }): ProviderPlugin[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
@@ -97,7 +100,6 @@ export function resolveProviderPluginsForHooks(params: {
       applyAutoEnable: params.applyAutoEnable,
       bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
       bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
-      installBundledRuntimeDeps: params.installBundledRuntimeDeps,
     })
   ) {
     return [];
@@ -110,7 +112,6 @@ export function resolveProviderPluginsForHooks(params: {
     applyAutoEnable: params.applyAutoEnable,
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? true,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? true,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   });
   return resolved;
 }
@@ -135,7 +136,6 @@ export function resolveProviderRuntimePlugin(
     applyAutoEnable: params.applyAutoEnable,
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps,
   }).find((plugin) => {
     if (apiOwnerHint) {
       return (

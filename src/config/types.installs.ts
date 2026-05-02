@@ -1,5 +1,5 @@
 export type InstallRecordBase = {
-  source: "npm" | "archive" | "path" | "clawhub";
+  source: "npm" | "archive" | "path" | "clawhub" | "git";
   spec?: string;
   sourcePath?: string;
   installPath?: string;
@@ -15,4 +15,11 @@ export type InstallRecordBase = {
   clawhubPackage?: string;
   clawhubFamily?: "code-plugin" | "bundle-plugin";
   clawhubChannel?: "official" | "community" | "private";
+  clawpackSha256?: string;
+  clawpackSpecVersion?: number;
+  clawpackManifestSha256?: string;
+  clawpackSize?: number;
+  gitUrl?: string;
+  gitRef?: string;
+  gitCommit?: string;
 };

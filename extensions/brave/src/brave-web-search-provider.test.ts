@@ -18,6 +18,22 @@ describe("brave web search provider", () => {
     global.fetch = priorFetch;
   });
 
+  it("points missing-key users to fetch/browser alternatives", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({ config: {}, searchConfig: {} });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({ query: "OpenClaw docs" });
+
+    expect(result).toMatchObject({
+      error: "missing_brave_api_key",
+      message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
+    });
+  });
+
   it("normalizes brave language parameters and swaps reversed ui/search inputs", () => {
     expect(
       __testing.normalizeBraveLanguageParams({

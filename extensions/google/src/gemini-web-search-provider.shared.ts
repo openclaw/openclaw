@@ -1,7 +1,10 @@
-export const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-2.5-flash";
+import { normalizeGoogleApiBaseUrl } from "../api.js";
+
+const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-2.5-flash";
 
 export type GeminiConfig = {
   apiKey?: unknown;
+  baseUrl?: unknown;
   model?: unknown;
 };
 
@@ -27,4 +30,8 @@ export function resolveGeminiApiKey(
 
 export function resolveGeminiModel(gemini?: GeminiConfig): string {
   return trimToUndefined(gemini?.model) ?? DEFAULT_GEMINI_WEB_SEARCH_MODEL;
+}
+
+export function resolveGeminiBaseUrl(gemini?: GeminiConfig): string {
+  return normalizeGoogleApiBaseUrl(trimToUndefined(gemini?.baseUrl));
 }

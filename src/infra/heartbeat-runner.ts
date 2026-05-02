@@ -17,6 +17,11 @@ import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.j
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
+  getHeartbeatToolNotificationText,
+  resolveHeartbeatToolResponseFromReplyResult,
+  type HeartbeatToolResponse,
+} from "../auto-reply/heartbeat-tool-response.js";
+import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   isHeartbeatContentEffectivelyEmpty,
   isTaskDue,
@@ -277,6 +282,15 @@ function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
 
 export function resolveHeartbeatPrompt(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
   return resolveHeartbeatPromptText(heartbeat?.prompt ?? cfg.agents?.defaults?.heartbeat?.prompt);
+}
+
+const HEARTBEAT_RESPONSE_TOOL_PROMPT =
+  "If the heartbeat_respond tool is available, call it to record the heartbeat outcome. Use notify=false for quiet/no-change outcomes. Use notify=true with notificationText for a concise user-visible alert.";
+
+function appendHeartbeatResponseToolPrompt(prompt: string): string {
+  return prompt.includes("heartbeat_respond")
+    ? prompt
+    : `${prompt}\n\n${HEARTBEAT_RESPONSE_TOOL_PROMPT}`;
 }
 
 function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, heartbeat?: HeartbeatConfig) {
@@ -580,6 +594,17 @@ function normalizeHeartbeatReply(
   return { shouldSkip: false, text: finalText, hasMedia };
 }
 
+function normalizeHeartbeatToolNotification(
+  response: HeartbeatToolResponse,
+  responsePrefix: string | undefined,
+) {
+  let finalText = getHeartbeatToolNotificationText(response);
+  if (responsePrefix && finalText && !finalText.startsWith(responsePrefix)) {
+    finalText = `${responsePrefix} ${finalText}`;
+  }
+  return { shouldSkip: false, text: finalText, hasMedia: false };
+}
+
 type HeartbeatReasonFlags = {
   isExecEventReason: boolean;
   isCronEventReason: boolean;
@@ -716,8 +741,7 @@ async function resolveHeartbeatPreflight(params: {
     reasonFlags.isExecEventReason ||
     reasonFlags.isCronEventReason ||
     reasonFlags.isWakeReason ||
-    hasTaggedCronEvents ||
-    dueCommitments.length > 0;
+    hasTaggedCronEvents;
   const basePreflight = {
     ...reasonFlags,
     session,
@@ -738,7 +762,11 @@ async function resolveHeartbeatPreflight(params: {
   try {
     heartbeatFileContent = await fs.readFile(heartbeatFilePath, "utf-8");
     const tasks = parseHeartbeatTasks(heartbeatFileContent);
-    if (isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) && tasks.length === 0) {
+    if (
+      isHeartbeatContentEffectivelyEmpty(heartbeatFileContent) &&
+      tasks.length === 0 &&
+      dueCommitments.length === 0
+    ) {
       return {
         ...basePreflight,
         skipReason: "empty-heartbeat-file",
@@ -772,6 +800,23 @@ type HeartbeatPromptResolution = {
   hasCronEvents: boolean;
   hasDueCommitments: boolean;
 };
+
+function resolveDueHeartbeatTasks(
+  preflight: Pick<HeartbeatPreflight, "session" | "tasks">,
+  startedAt: number,
+): HeartbeatTask[] {
+  const tasks = preflight.tasks;
+  if (!tasks || tasks.length === 0) {
+    return [];
+  }
+  return tasks.filter((task) =>
+    isTaskDue(
+      (preflight.session.entry?.heartbeatTaskState as Record<string, number>)?.[task.name],
+      task.interval,
+      startedAt,
+    ),
+  );
+}
 
 function appendHeartbeatWorkspacePathHint(prompt: string, workspaceDir: string): string {
   if (!/heartbeat\.md/i.test(prompt)) {
@@ -821,6 +866,7 @@ function resolveHeartbeatRunPrompt(params: {
   canRelayToUser: boolean;
   workspaceDir: string;
   startedAt: number;
+  dueTasks: HeartbeatTask[];
   heartbeatFileContent?: string;
 }): HeartbeatPromptResolution {
   const pendingEventEntries = params.preflight.pendingEventEntries;
@@ -844,14 +890,7 @@ function resolveHeartbeatRunPrompt(params: {
   const hasDueCommitments = Boolean(commitmentPrompt);
 
   if (params.preflight.tasks && params.preflight.tasks.length > 0) {
-    const tasks = params.preflight.tasks;
-    const dueTasks = tasks.filter((task) =>
-      isTaskDue(
-        (params.preflight.session.entry?.heartbeatTaskState as Record<string, number>)?.[task.name],
-        task.interval,
-        params.startedAt,
-      ),
-    );
+    const dueTasks = params.dueTasks;
 
     if (dueTasks.length > 0) {
       const taskList = dueTasks.map((task) => `- ${task.name}: ${task.prompt}`).join("\n");
@@ -867,15 +906,12 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
           prompt += `\n\nAdditional context from HEARTBEAT.md:\n${directives}`;
         }
       }
-      if (commitmentPrompt) {
-        prompt += `\n\n${commitmentPrompt}`;
-      }
       return {
         prompt,
         hasExecCompletion: false,
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
-        hasDueCommitments,
+        hasDueCommitments: false,
       };
     }
     if (commitmentPrompt) {
@@ -1002,6 +1038,7 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const previousUpdatedAt = entry?.updatedAt;
+  const dueHeartbeatTasks = resolveDueHeartbeatTasks(preflight, startedAt);
 
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
@@ -1009,9 +1046,10 @@ export async function runHeartbeatOnce(opts: {
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
   const useIsolatedSession = heartbeat?.isolatedSession === true;
-  const firstDueCommitment = canHeartbeatDeliverCommitments(heartbeat)
-    ? preflight.dueCommitments[0]
-    : undefined;
+  const firstDueCommitment =
+    canHeartbeatDeliverCommitments(heartbeat) && dueHeartbeatTasks.length === 0
+      ? preflight.dueCommitments[0]
+      : undefined;
   const commitmentDeliveryContext = firstDueCommitment
     ? {
         channel: firstDueCommitment.channel,
@@ -1083,6 +1121,7 @@ export async function runHeartbeatOnce(opts: {
     canRelayToUser,
     workspaceDir,
     startedAt,
+    dueTasks: dueHeartbeatTasks,
     heartbeatFileContent: preflight.heartbeatFileContent,
   });
   const dueCommitmentIds = hasDueCommitments
@@ -1207,8 +1246,9 @@ export async function runHeartbeatOnce(opts: {
     consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
   };
 
+  const promptWithHeartbeatTool = appendHeartbeatResponseToolPrompt(prompt);
   const ctx = {
-    Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
+    Body: appendCronStyleCurrentTimeLine(promptWithHeartbeatTool, cfg, startedAt),
     From: sender,
     To: sender,
     OriginatingChannel:
@@ -1330,13 +1370,45 @@ export async function runHeartbeatOnce(opts: {
     const getReplyFromConfig =
       opts.deps?.getReplyFromConfig ?? (await loadHeartbeatRunnerRuntime()).getReplyFromConfig;
     const replyResult = await getReplyFromConfig(ctx, replyOpts, cfg);
+    const heartbeatToolResponse = resolveHeartbeatToolResponseFromReplyResult(replyResult);
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning = heartbeat?.includeReasoning === true;
     const reasoningPayloads = includeReasoning
       ? resolveHeartbeatReasoningPayloads(replyResult).filter((payload) => payload !== replyPayload)
       : [];
+    const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
+    const responsePrefix = resolveHeartbeatResponsePrefix();
 
-    if (!replyPayload || !hasOutboundReplyContent(replyPayload)) {
+    if (heartbeatToolResponse && !heartbeatToolResponse.notify) {
+      await restoreHeartbeatUpdatedAt({
+        storePath,
+        sessionKey,
+        updatedAt: previousUpdatedAt,
+      });
+
+      const okSent = await maybeSendHeartbeatOk();
+      emitHeartbeatEvent({
+        status: "ok-token",
+        reason: opts.reason,
+        preview: heartbeatToolResponse.summary.slice(0, 200),
+        durationMs: Date.now() - startedAt,
+        channel: delivery.channel !== "none" ? delivery.channel : undefined,
+        accountId: delivery.accountId,
+        silent: !okSent,
+        indicatorType: visibility.useIndicator ? resolveIndicatorType("ok-token") : undefined,
+      });
+      await markCommitmentsStatus({
+        cfg,
+        ids: dueCommitmentIds,
+        status: "dismissed",
+        nowMs: startedAt,
+      });
+      await updateTaskTimestamps();
+      consumeInspectedSystemEvents();
+      return { status: "ran", durationMs: Date.now() - startedAt };
+    }
+
+    if (!heartbeatToolResponse && (!replyPayload || !hasOutboundReplyContent(replyPayload))) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -1364,15 +1436,20 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const ackMaxChars = resolveHeartbeatAckMaxChars(cfg, heartbeat);
-    const responsePrefix = resolveHeartbeatResponsePrefix();
-    const normalized = normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars);
+    const normalized = heartbeatToolResponse
+      ? normalizeHeartbeatToolNotification(heartbeatToolResponse, responsePrefix)
+      : replyPayload
+        ? normalizeHeartbeatReply(replyPayload, responsePrefix, ackMaxChars)
+        : { shouldSkip: true, text: "", hasMedia: false };
     // For exec completion events, don't skip even if the response looks like HEARTBEAT_OK.
     // The model should be responding with exec results, not ack tokens.
     // Also, if normalized.text is empty due to token stripping but we have exec completion,
     // fall back to the original reply text.
     const execFallbackText =
-      hasRelayableExecCompletion && !normalized.text.trim() && replyPayload.text?.trim()
+      !heartbeatToolResponse &&
+      hasRelayableExecCompletion &&
+      !normalized.text.trim() &&
+      replyPayload?.text?.trim()
         ? replyPayload.text.trim()
         : null;
     if (execFallbackText) {
@@ -1409,7 +1486,10 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const mediaUrls = resolveSendableOutboundReplyParts(replyPayload).mediaUrls;
+    const mediaUrls =
+      heartbeatToolResponse || !replyPayload
+        ? []
+        : resolveSendableOutboundReplyParts(replyPayload).mediaUrls;
 
     // Suppress duplicate heartbeats (same payload) within a short window.
     // This prevents "nagging" when nothing changed but the model repeats the same items.

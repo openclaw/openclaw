@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -36,6 +35,7 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import {
@@ -44,7 +44,11 @@ import {
 } from "./client-factory.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
-import { resolveCodexAppServerRuntimeOptions } from "./config.js";
+import {
+  readCodexPluginConfig,
+  resolveCodexAppServerRuntimeOptions,
+  type CodexPluginConfig,
+} from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -69,6 +73,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClient } from "./shared-client.js";
 import {
   buildDeveloperInstructions,
@@ -89,6 +94,16 @@ const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
+const CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES = [
+  "read",
+  "write",
+  "edit",
+  "apply_patch",
+  "exec",
+  "process",
+  "update_plan",
+] as const;
+const LOG_FIELD_MAX_LENGTH = 160;
 
 type OpenClawCodingToolsOptions = NonNullable<
   Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
@@ -130,6 +145,93 @@ type CodexSteeringQueueOptions = {
   steeringMode?: "all" | "one-at-a-time";
   debounceMs?: number;
 };
+
+type DynamicToolTimeoutDetails = {
+  responseMessage: string;
+  consoleMessage: string;
+  meta: Record<string, unknown>;
+};
+
+function normalizeLogField(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value
+    .replaceAll(String.fromCharCode(27), " ")
+    .replaceAll("\r", " ")
+    .replaceAll("\n", " ")
+    .replaceAll("\t", " ")
+    .trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.length > LOG_FIELD_MAX_LENGTH
+    ? `${normalized.slice(0, LOG_FIELD_MAX_LENGTH - 3)}...`
+    : normalized;
+}
+
+function readNumericTimeoutMs(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.max(0, Math.floor(value));
+  }
+  if (typeof value === "string") {
+    const parsed = Number.parseInt(value.trim(), 10);
+    if (Number.isFinite(parsed)) {
+      return Math.max(0, Math.floor(parsed));
+    }
+  }
+  return undefined;
+}
+
+function formatDynamicToolTimeoutDetails(params: {
+  call: CodexDynamicToolCallParams;
+  timeoutMs: number;
+}): DynamicToolTimeoutDetails {
+  const tool = normalizeLogField(params.call.tool) ?? "unknown";
+  const baseMeta: Record<string, unknown> = {
+    tool: params.call.tool,
+    toolCallId: params.call.callId,
+    threadId: params.call.threadId,
+    turnId: params.call.turnId,
+    timeoutMs: params.timeoutMs,
+    timeoutKind: "codex_dynamic_tool_rpc",
+  };
+
+  if (tool !== "process" || !isJsonObject(params.call.arguments)) {
+    return {
+      responseMessage: `OpenClaw dynamic tool call timed out after ${params.timeoutMs}ms while running tool ${tool}.`,
+      consoleMessage: `codex dynamic tool timeout: tool=${tool} toolTimeoutMs=${params.timeoutMs}; per-tool-call watchdog, not session idle`,
+      meta: baseMeta,
+    };
+  }
+
+  const action = normalizeLogField(params.call.arguments.action);
+  const sessionId = normalizeLogField(params.call.arguments.sessionId);
+  const requestedTimeoutMs = readNumericTimeoutMs(params.call.arguments.timeout);
+  const actionPart = action ? ` action=${action}` : "";
+  const sessionPart = sessionId ? ` sessionId=${sessionId}` : "";
+  const requestedPart =
+    requestedTimeoutMs === undefined ? "" : ` requestedWaitMs=${requestedTimeoutMs}`;
+  const retryHint =
+    action === "poll"
+      ? "; repeated lines usually mean process-poll retry churn, not model progress"
+      : "";
+  const responseTarget =
+    action || sessionId
+      ? ` while waiting for process${actionPart}${sessionPart}`
+      : " while waiting for the process tool";
+
+  return {
+    responseMessage: `OpenClaw dynamic tool call timed out after ${params.timeoutMs}ms${responseTarget}. This is a tool RPC timeout, not a session idle timeout.`,
+    consoleMessage: `codex process tool timeout:${actionPart}${sessionPart} toolTimeoutMs=${params.timeoutMs}${requestedPart}; per-tool-call watchdog, not session idle${retryHint}`,
+    meta: {
+      ...baseMeta,
+      processAction: action,
+      processSessionId: sessionId,
+      processRequestedTimeoutMs: requestedTimeoutMs,
+    },
+  };
+}
 
 function createCodexSteeringQueue(params: {
   client: CodexAppServerClient;
@@ -231,7 +333,8 @@ export async function runCodexAppServerAttempt(
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig: options.pluginConfig });
+  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
@@ -281,6 +384,7 @@ export async function runCodexAppServerAttempt(
     sandbox,
     runAbortController,
     sessionAgentId,
+    pluginConfig,
     onYieldDetected: () => {
       yieldDetected = true;
     },
@@ -296,9 +400,7 @@ export async function runCodexAppServerAttempt(
     },
   });
   const hadSessionFile = await fileExists(params.sessionFile);
-  const sessionManager = SessionManager.open(params.sessionFile);
-  let historyMessages =
-    readMirroredSessionHistoryMessages(params.sessionFile, sessionManager) ?? [];
+  let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
@@ -316,7 +418,6 @@ export async function runCodexAppServerAttempt(
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       sessionFile: params.sessionFile,
-      sessionManager,
       runtimeContext: buildHarnessContextEngineRuntimeContext({
         attempt: runtimeParams,
         workspaceDir: effectiveWorkspace,
@@ -326,7 +427,8 @@ export async function runCodexAppServerAttempt(
       runMaintenance: runHarnessContextEngineMaintenance,
       warn: (message) => embeddedAgentLog.warn(message),
     });
-    historyMessages = readMirroredSessionHistoryMessages(params.sessionFile) ?? historyMessages;
+    historyMessages =
+      (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
   let promptText = params.prompt;
@@ -605,6 +707,13 @@ export async function runCodexAppServerAttempt(
   const touchTurnCompletionActivity = (reason: string, options?: { arm?: boolean }) => {
     turnCompletionLastActivityAt = Date.now();
     turnCompletionLastActivityReason = reason;
+    emitTrustedDiagnosticEvent({
+      type: "run.progress",
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      reason: `codex_app_server:${reason}`,
+    });
     if (options?.arm) {
       turnCompletionIdleWatchArmed = true;
     }
@@ -986,7 +1095,7 @@ export async function runCodexAppServerAttempt(
     }
     if (activeContextEngine) {
       const finalMessages =
-        readMirroredSessionHistoryMessages(params.sessionFile) ??
+        (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
         historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
@@ -1008,7 +1117,6 @@ export async function runCodexAppServerAttempt(
           promptCache: result.promptCache,
         }),
         runMaintenance: runHarnessContextEngineMaintenance,
-        sessionManager,
         warn: (message) => embeddedAgentLog.warn(message),
       });
     }
@@ -1112,17 +1220,14 @@ async function handleDynamicToolCallWithTimeout(params: {
     const timeoutMs = Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_TIMEOUT_MS, params.timeoutMs));
     timeout = setTimeout(() => {
       timedOut = true;
-      const message = `OpenClaw dynamic tool call timed out after ${timeoutMs}ms.`;
-      controller.abort(new Error(message));
+      const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
+      controller.abort(new Error(timeoutDetails.responseMessage));
       params.onTimeout?.();
       embeddedAgentLog.warn("codex dynamic tool call timed out", {
-        tool: params.call.tool,
-        toolCallId: params.call.callId,
-        threadId: params.call.threadId,
-        turnId: params.call.turnId,
-        timeoutMs,
+        ...timeoutDetails.meta,
+        consoleMessage: timeoutDetails.consoleMessage,
       });
-      resolve(failedDynamicToolResponse(message));
+      resolve(failedDynamicToolResponse(timeoutDetails.responseMessage));
     }, timeoutMs);
     timeout.unref?.();
   });
@@ -1232,6 +1337,7 @@ type DynamicToolBuildParams = {
   sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
   runAbortController: AbortController;
   sessionAgentId: string | undefined;
+  pluginConfig: CodexPluginConfig;
   onYieldDetected: () => void;
 };
 
@@ -1287,6 +1393,7 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
       workspaceDir: input.effectiveWorkspace,
     }),
+    suppressManagedWebSearch: false,
     currentChannelId: params.currentChannelId,
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
@@ -1296,6 +1403,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     requireExplicitMessageTarget:
       params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
     disableMessageTool: params.disableMessageTool,
+    enableHeartbeatTool: params.trigger === "heartbeat",
+    forceHeartbeatTool: params.trigger === "heartbeat",
     onYield: (message) => {
       input.onYieldDetected();
       emitCodexAppServerEvent(params, {
@@ -1305,7 +1414,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const visionFilteredTools = filterToolsForVisionInputs(allTools, {
+  const profiledTools = applyCodexDynamicToolProfile(allTools, input.pluginConfig);
+  const visionFilteredTools = filterToolsForVisionInputs(profiledTools, {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
@@ -1324,6 +1434,26 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
     modelApi: params.model.api,
     model: params.model,
   });
+}
+
+function applyCodexDynamicToolProfile<T extends { name: string }>(
+  tools: T[],
+  config: CodexPluginConfig,
+): T[] {
+  const excludes = new Set<string>();
+  const profile = config.codexDynamicToolsProfile ?? "native-first";
+  if (profile === "native-first") {
+    for (const name of CODEX_NATIVE_FIRST_DYNAMIC_TOOL_EXCLUDES) {
+      excludes.add(name);
+    }
+  }
+  for (const name of config.codexDynamicToolsExclude ?? []) {
+    const trimmed = name.trim();
+    if (trimmed) {
+      excludes.add(trimmed);
+    }
+  }
+  return excludes.size === 0 ? tools : tools.filter((tool) => !excludes.has(tool.name));
 }
 
 async function withCodexStartupTimeout<T>(params: {
@@ -1420,19 +1550,16 @@ function readString(record: JsonObject, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function readMirroredSessionHistoryMessages(
+async function readMirroredSessionHistoryMessages(
   sessionFile: string,
-  sessionManager?: SessionManager,
-): AgentMessage[] | undefined {
-  try {
-    return (sessionManager ?? SessionManager.open(sessionFile)).buildSessionContext().messages;
-  } catch (error) {
+): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
+  if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      error,
       sessionFile,
     });
-    return undefined;
   }
+  return messages;
 }
 
 async function mirrorTranscriptBestEffort(params: {
@@ -1499,6 +1626,7 @@ export const __testing = {
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
+  applyCodexDynamicToolProfile,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
   ...createCodexAppServerClientFactoryTestHooks((factory) => {

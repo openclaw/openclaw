@@ -23,7 +23,7 @@ export async function bootstrapHarnessContextEngine(params: {
   sessionId: string;
   sessionKey?: string;
   sessionFile: string;
-  sessionManager: unknown;
+  sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   warn: (message: string) => void;
@@ -101,7 +101,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
   tokenBudget?: number;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
-  sessionManager: unknown;
+  sessionManager?: unknown;
   warn: (message: string) => void;
 }) {
   if (!params.contextEngine) {

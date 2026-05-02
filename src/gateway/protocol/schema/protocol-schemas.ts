@@ -48,6 +48,9 @@ import {
   ToolsEffectiveGroupSchema,
   ToolsEffectiveParamsSchema,
   ToolsEffectiveResultSchema,
+  ToolsInvokeErrorSchema,
+  ToolsInvokeParamsSchema,
+  ToolsInvokeResultSchema,
 } from "./agents-models-skills.js";
 import {
   ArtifactSummarySchema,
@@ -60,6 +63,7 @@ import {
 } from "./artifacts.js";
 import {
   ChannelsStartParamsSchema,
+  ChannelsStopParamsSchema,
   ChannelsLogoutParamsSchema,
   TalkConfigParamsSchema,
   TalkConfigResultSchema,
@@ -325,6 +329,7 @@ export const ProtocolSchemas = {
   ChannelsStatusParams: ChannelsStatusParamsSchema,
   ChannelsStatusResult: ChannelsStatusResultSchema,
   ChannelsStartParams: ChannelsStartParamsSchema,
+  ChannelsStopParams: ChannelsStopParamsSchema,
   ChannelsLogoutParams: ChannelsLogoutParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,
@@ -367,6 +372,9 @@ export const ProtocolSchemas = {
   ToolsEffectiveEntry: ToolsEffectiveEntrySchema,
   ToolsEffectiveGroup: ToolsEffectiveGroupSchema,
   ToolsEffectiveResult: ToolsEffectiveResultSchema,
+  ToolsInvokeParams: ToolsInvokeParamsSchema,
+  ToolsInvokeError: ToolsInvokeErrorSchema,
+  ToolsInvokeResult: ToolsInvokeResultSchema,
   SkillsBinsParams: SkillsBinsParamsSchema,
   SkillsBinsResult: SkillsBinsResultSchema,
   SkillsSearchParams: SkillsSearchParamsSchema,

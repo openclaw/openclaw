@@ -27,7 +27,7 @@ export {
 };
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 
-export type GatewayReloadSettings = {
+type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
 };
@@ -154,7 +154,7 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
   return { mode, debounceMs };
 }
 
-export type GatewayConfigReloader = {
+type GatewayConfigReloader = {
   stop: () => Promise<void>;
 };
 

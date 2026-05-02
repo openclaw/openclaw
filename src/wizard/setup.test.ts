@@ -455,7 +455,6 @@ describe("runSetupWizard", () => {
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
   });
-
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
     replaceConfigFile.mockClear();
@@ -492,6 +491,7 @@ describe("runSetupWizard", () => {
             }),
           }),
         }),
+        writeOptions: expect.objectContaining({ allowConfigSizeDrop: true }),
       }),
     );
     expect(ensureWorkspaceAndSessions).toHaveBeenCalledWith(
