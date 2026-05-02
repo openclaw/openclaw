@@ -463,6 +463,77 @@ describe("installPluginFromClawHub", () => {
     );
   });
 
+  it("falls back to version metadata when the ClawHub artifact resolver route is missing", async () => {
+    fetchClawHubPackageArtifactMock.mockRejectedValueOnce(
+      new ClawHubRequestError({
+        path: "/api/v1/packages/demo/versions/2026.3.22/artifact",
+        status: 404,
+        body: "Not Found",
+      }),
+    );
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+      },
+      version: {
+        version: "2026.3.22",
+        createdAt: 0,
+        changelog: "",
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
+          sha256: DEMO_CLAWPACK_SHA256,
+          size: 4096,
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+        },
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
+      integrity: DEMO_CLAWPACK_INTEGRITY,
+      sha256Hex: DEMO_CLAWPACK_SHA256,
+      artifact: "clawpack",
+      clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "1".repeat(40),
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      clawhub: {
+        artifactKind: "npm-pack",
+        npmIntegrity: "sha512-clawpack",
+        clawpackSha256: DEMO_CLAWPACK_SHA256,
+      },
+    });
+    expect(fetchClawHubPackageVersionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifact: "clawpack",
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+  });
+
   it("installs ClawPack artifacts when version metadata has no legacy archive hash", async () => {
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {

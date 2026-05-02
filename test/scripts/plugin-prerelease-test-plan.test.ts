@@ -173,6 +173,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(assertionsScript).toContain('node_modules", "openclaw');
     expect(fixtureServer).toContain('"is-number": "7.0.0"');
     expect(fixtureServer).toContain('openclaw: ">=2026.4.11"');
+    expect(fixtureServer).toContain("/versions/${fixture.version}/artifact");
   });
 
   it("wires the full plugin prerelease plan into its release workflow", () => {
