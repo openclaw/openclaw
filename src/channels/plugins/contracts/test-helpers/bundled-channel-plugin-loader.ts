@@ -1,7 +1,4 @@
-import {
-  loadBundledPluginPublicSurface,
-  loadBundledPluginPublicSurfaceSync,
-} from "../../../../test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginPublicSurface } from "../../../../test-utils/bundled-plugin-public-surface.js";
 import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../bundled-ids.js";
 import type { ChannelId } from "../../channel-id.types.js";
 import type { ChannelPlugin } from "../../types.js";
@@ -23,20 +20,6 @@ function isChannelPlugin(value: unknown): value is ChannelPlugin {
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listCatalogBundledChannelPluginIds() as ChannelId[];
-}
-
-export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
-  if (channelPluginCache.has(id)) {
-    return channelPluginCache.get(id) ?? undefined;
-  }
-
-  const loaded = loadBundledPluginPublicSurfaceSync<ChannelPluginApiModule>({
-    pluginId: id,
-    artifactBasename: "channel-plugin-api.js",
-  });
-  const plugin = Object.values(loaded).find(isChannelPlugin) ?? null;
-  channelPluginCache.set(id, plugin);
-  return plugin ?? undefined;
 }
 
 export async function getBundledChannelPluginAsync(
@@ -65,11 +48,4 @@ export async function getBundledChannelPluginAsync(
     });
   channelPluginPromiseCache.set(id, loading);
   return (await loading) ?? undefined;
-}
-
-export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
-  return listBundledChannelPluginIds().flatMap((id) => {
-    const plugin = getBundledChannelPlugin(id);
-    return plugin ? [plugin] : [];
-  });
 }

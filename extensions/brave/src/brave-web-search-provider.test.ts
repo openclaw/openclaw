@@ -33,6 +33,14 @@ function installBraveLlmContextFetch() {
   return mockFetch;
 }
 
+function readHeader(init: unknown, name: string): string | null {
+  const headers = (init as { headers?: HeadersInit } | undefined)?.headers;
+  if (!headers) {
+    return null;
+  }
+  return new Headers(headers).get(name);
+}
+
 describe("brave web search provider", () => {
   const priorFetch = global.fetch;
 
@@ -228,6 +236,59 @@ describe("brave web search provider", () => {
     const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
     expect(requestUrl.pathname).toBe("/res/v1/llm/context");
     expect(requestUrl.searchParams.get("freshness")).toBe("pw");
+  });
+
+  it("sends Brave web auth in the X-Subscription-Token header", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "web" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "latest ai news" });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.searchParams.get("apikey")).toBeNull();
+    expect(requestUrl.searchParams.get("key")).toBeNull();
+    expect(readHeader(mockFetch.mock.calls[0]?.[1], "X-Subscription-Token")).toBe("brave-test-key");
+  });
+
+  it("sends Brave llm-context auth in the X-Subscription-Token header", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = installBraveLlmContextFetch();
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "latest ai news" });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.searchParams.get("apikey")).toBeNull();
+    expect(requestUrl.searchParams.get("key")).toBeNull();
+    expect(readHeader(mockFetch.mock.calls[0]?.[1], "X-Subscription-Token")).toBe("brave-test-key");
   });
 
   it("passes bounded date ranges to Brave llm-context endpoint", async () => {

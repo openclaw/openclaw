@@ -5,6 +5,9 @@
     "onStartup": true,
     "onCommands": ["voicecall"]
   },
+  "contracts": {
+    "tools": ["voice_call"]
+  },
   "channelEnvVars": {
     "voice-call": [
       "TELNYX_API_KEY",

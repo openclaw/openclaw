@@ -207,6 +207,7 @@ type PackageInstallCommonParams = InstallSafetyOverrides & {
 type FileInstallCommonParams = Pick<
   PackageInstallCommonParams,
   | "dangerouslyForceUnsafeInstall"
+  | "trustedSourceLinkedOfficialInstall"
   | "extensionsDir"
   | "logger"
   | "mode"
@@ -219,6 +220,7 @@ function pickPackageInstallCommonParams(
 ): PackageInstallCommonParams {
   return {
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     extensionsDir: params.extensionsDir,
     npmDir: params.npmDir,
     timeoutMs: params.timeoutMs,
@@ -567,6 +569,7 @@ async function validatePackagePluginInstallSource(params: {
   expectedPluginId?: string;
   requirePluginManifest?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
+  trustedSourceLinkedOfficialInstall?: boolean;
   installPolicyRequest?: PluginInstallPolicyRequest;
   logger: PluginInstallLogger;
   mode: "install" | "update";
@@ -691,6 +694,7 @@ async function validatePackagePluginInstallSource(params: {
     scan: async () =>
       await params.runtime.scanPackageInstallSource({
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
         packageDir: params.packageDir,
         pluginId,
         logger: params.logger,
@@ -762,6 +766,7 @@ export async function installPluginFromInstalledPackageDir(
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     installPolicyRequest: params.installPolicyRequest,
     logger,
     mode: params.mode ?? "install",
@@ -823,6 +828,7 @@ async function installPluginFromPackageDir(
     expectedPluginId: params.expectedPluginId,
     requirePluginManifest: params.requirePluginManifest,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     installPolicyRequest: params.installPolicyRequest,
     logger,
     mode,
@@ -900,6 +906,7 @@ export async function installPluginFromArchive(
           mode,
           dryRun: params.dryRun,
           expectedPluginId: params.expectedPluginId,
+          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           requirePluginManifest: true,
           installPolicyRequest,
         }),

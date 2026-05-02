@@ -148,6 +148,27 @@ describe("createMusicGenerateTool", () => {
     ).not.toBeNull();
   });
 
+  it("does not load runtime providers while registering an explicitly configured tool", () => {
+    const listProviders = vi
+      .spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders")
+      .mockImplementation(() => {
+        throw new Error("runtime provider list should not run during tool registration");
+      });
+
+    expect(
+      createMusicGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+            },
+          },
+        }),
+      }),
+    ).not.toBeNull();
+    expect(listProviders).not.toHaveBeenCalled();
+  });
+
   it("generates tracks, saves them, and emits MEDIA paths without a session-backed detach", async () => {
     taskExecutorMocks.createRunningTaskRun.mockReturnValue({
       taskId: "task-123",

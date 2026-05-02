@@ -235,8 +235,21 @@ Validation` or from the `main`/release workflow ref so workflow logic and
 ## Release test boxes
 
 `Full Release Validation` is how operators kick off all pre-release tests from
-one entrypoint. Run it from the trusted `main` workflow ref and pass the release
-branch, tag, or full commit SHA as `ref`:
+one entrypoint. For a pinned commit proof on a fast-moving branch, use the
+helper so every child workflow runs from a temporary branch fixed at the target
+SHA:
+
+```bash
+pnpm ci:full-release --sha <full-sha>
+```
+
+The helper pushes `release-ci/<sha>-...`, dispatches `Full Release Validation`
+from that branch with `ref=<sha>`, verifies every child workflow `headSha`
+matches the target, then deletes the temporary branch. This avoids proving a
+newer `main` child run by accident.
+
+For release branch or tag validation, run it from the trusted `main` workflow
+ref and pass the release branch or tag as `ref`:
 
 ```bash
 gh workflow run full-release-validation.yml \
@@ -268,6 +281,9 @@ Child workflows are dispatched from the trusted ref that runs `Full Release
 Validation`, normally `--ref main`, even when the target `ref` points at an
 older release branch or tag. There is no separate Full Release Validation
 workflow-ref input; choose the trusted harness by choosing the workflow run ref.
+Do not use `--ref main -f ref=<sha>` for exact commit proof on moving `main`;
+raw commit SHAs cannot be workflow dispatch refs, so use
+`pnpm ci:full-release --sha <sha>` to create the pinned temporary branch.
 
 Use `release_profile` to select live/provider breadth:
 

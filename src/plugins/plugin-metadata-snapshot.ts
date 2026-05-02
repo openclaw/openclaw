@@ -7,7 +7,7 @@ import {
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { resolvePluginMetadataSnapshotConfigFingerprint } from "./plugin-metadata-config-fingerprint.js";
+import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import type {
   LoadPluginMetadataSnapshotParams,
   PluginMetadataSnapshot,
@@ -22,6 +22,15 @@ export type {
   PluginMetadataSnapshotOwnerMaps,
   PluginMetadataSnapshotRegistryDiagnostic,
 } from "./plugin-metadata-snapshot.types.js";
+
+function resolvePluginMetadataControlPlaneFingerprint(
+  params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env" | "workspaceDir"> & {
+    index?: InstalledPluginIndex;
+    policyHash?: string;
+  },
+): string {
+  return resolvePluginControlPlaneFingerprint(params);
+}
 
 function indexesMatch(
   left: InstalledPluginIndex | undefined,
@@ -51,7 +60,8 @@ export function isPluginMetadataSnapshotCompatible(params: {
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
-        resolvePluginMetadataSnapshotConfigFingerprint(params.config, {
+        resolvePluginMetadataControlPlaneFingerprint({
+          config: params.config,
           env,
           index: params.index ?? params.snapshot.index,
           policyHash: params.snapshot.policyHash,
@@ -185,7 +195,8 @@ function loadPluginMetadataSnapshotImpl(
 
   return {
     policyHash: index.policyHash,
-    configFingerprint: resolvePluginMetadataSnapshotConfigFingerprint(params.config, {
+    configFingerprint: resolvePluginMetadataControlPlaneFingerprint({
+      config: params.config,
       env: params.env,
       index,
       policyHash: index.policyHash,

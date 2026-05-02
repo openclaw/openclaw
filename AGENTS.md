@@ -74,6 +74,7 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - PR review answer must explicitly cover: what bug/behavior we are trying to fix; PR/issue URL(s) and affected endpoint/surface; whether this is the best possible fix, with high-certainty evidence from code, tests, CI, and shipped/current behavior.
 - When working on an issue or PR, always end the user-facing final answer with the full GitHub URL.
 - CI polling: exact SHA, needed fields only. Example: `gh api repos/<owner>/<repo>/actions/runs/<id> --jq '{status,conclusion,head_sha,updated_at,name,path}'`.
+- Full Release Validation exact-SHA proof: use `pnpm ci:full-release --sha <sha>`; do not dispatch `--ref main -f ref=<sha>` on moving `main`. GitHub dispatch refs cannot be raw SHAs, so the helper uses a temporary pinned branch and verifies child `headSha`.
 - Post-land wait: minimal. Exact landed SHA only. If superseded on `main`, same-branch `cancel-in-progress` cancellations are expected; stop once local touched-surface proof exists. Never wait for newer unrelated `main` unless asked.
 - Wait matrix:
   - never: `Auto response`, `Labeler`, `Docs Sync Publish Repo`, `Docs Agent`, `Test Performance Agent`, `Stale`.

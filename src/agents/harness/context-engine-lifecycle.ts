@@ -1,16 +1,11 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
-import type {
-  ContextEngine,
-  ContextEnginePromptCacheInfo,
-  ContextEngineRuntimeContext,
-} from "../../context-engine/types.js";
+import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
 import { runContextEngineMaintenance } from "../pi-embedded-runner/context-engine-maintenance.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
 } from "../pi-embedded-runner/run/attempt.prompt-helpers.js";
-import type { EmbeddedRunAttemptParams } from "../pi-embedded-runner/run/types.js";
 
 export type HarnessContextEngine = ContextEngine;
 
@@ -229,7 +224,3 @@ export function isActiveHarnessContextEngine(
 ): contextEngine is ContextEngine {
   return Boolean(contextEngine && contextEngine.info.id !== "legacy");
 }
-
-export type HarnessContextEnginePromptCacheInfo = ContextEnginePromptCacheInfo;
-export type HarnessContextEngineRuntimeContext = ContextEngineRuntimeContext;
-export type HarnessEmbeddedRunAttemptParams = EmbeddedRunAttemptParams;

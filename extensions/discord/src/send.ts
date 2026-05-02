@@ -29,6 +29,7 @@ export {
 export {
   createThreadDiscord,
   deleteMessageDiscord,
+  DiscordThreadInitialMessageError,
   editMessageDiscord,
   fetchMessageDiscord,
   listPinsDiscord,

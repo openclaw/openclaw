@@ -13,9 +13,11 @@ const hoisted = await vi.hoisted(async () => {
       injectedFiles: [],
       sandboxRuntime: { sandboxed: false, mode: "off" },
     })),
-    writeFileSyncMock: vi.fn(),
-    mkdirSyncMock: vi.fn(),
-    existsSyncMock: vi.fn(() => true),
+    writeFileMock: vi.fn(
+      async (_filePath: string, _data: string, _encoding?: BufferEncoding) => undefined,
+    ),
+    mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
+    accessMock: vi.fn(async (_filePath: string) => undefined),
     exportHtmlTemplateContents: new Map<string, string>(),
   };
 });
@@ -38,9 +40,6 @@ vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const mockedFs = {
     ...actual,
-    existsSync: hoisted.existsSyncMock,
-    mkdirSync: hoisted.mkdirSyncMock,
-    writeFileSync: hoisted.writeFileSyncMock,
     readFileSync: vi.fn((filePath: string) => {
       for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
         if (filePath.endsWith(suffix)) {
@@ -63,9 +62,17 @@ vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const mockedFsPromises = {
     ...actual,
+    access: hoisted.accessMock,
+    mkdir: hoisted.mkdirMock,
+    writeFile: hoisted.writeFileMock,
     readFile: vi.fn(async (filePath: string, encoding?: BufferEncoding) => {
       if (filePath === "/tmp/target-store/session.jsonl") {
         return "";
+      }
+      for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
+        if (filePath.endsWith(suffix)) {
+          return contents;
+        }
       }
       return actual.readFile(filePath, encoding);
     }),
@@ -133,7 +140,7 @@ describe("buildExportSessionReply", () => {
       injectedFiles: [],
       sandboxRuntime: { sandboxed: false, mode: "off" },
     });
-    hoisted.existsSyncMock.mockReturnValue(true);
+    hoisted.accessMock.mockResolvedValue(undefined);
     hoisted.exportHtmlTemplateContents.clear();
   });
 
@@ -202,7 +209,7 @@ describe("buildExportSessionReply", () => {
 
     await buildExportSessionReply(makeParams());
 
-    const html = hoisted.writeFileSyncMock.mock.calls[0]?.[1];
+    const html = hoisted.writeFileMock.mock.calls[0]?.[1];
     expect(typeof html).toBe("string");
     expect(html).not.toContain("{{CSS}}");
     expect(html).not.toContain("{{JS}}");
@@ -246,7 +253,7 @@ describe("buildExportSessionReply", () => {
 
     await buildExportSessionReply(makeParams());
 
-    const html = hoisted.writeFileSyncMock.mock.calls[0]?.[1];
+    const html = hoisted.writeFileMock.mock.calls[0]?.[1];
     expect(html).toContain("$&$1");
     expect(html).toContain("const marker = '$&$1';");
     expect(html).toContain("const markedMarker = '$&$1';");

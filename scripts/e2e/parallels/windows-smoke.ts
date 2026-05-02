@@ -440,6 +440,7 @@ class WindowsSmoke {
     } else {
       this.status.upgradePrecheck = "latest-ref-fail";
     }
+    await this.phase("upgrade.gateway-stop-before-update", 420, () => this.gatewayAction("stop"));
     await this.phase(
       "upgrade.update-dev",
       Number(process.env.OPENCLAW_PARALLELS_WINDOWS_UPDATE_TIMEOUT_S || 1200),
