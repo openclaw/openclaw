@@ -213,6 +213,27 @@ function assertClawHubExternalInstallContract(installPath) {
   }
 }
 
+function assertClawHubArtifactMetadata(record) {
+  if (record.artifactKind === "legacy-zip") {
+    if (record.artifactFormat !== "zip") {
+      throw new Error(
+        `missing kitchen-sink legacy ZIP artifact metadata: ${JSON.stringify(record)}`,
+      );
+    }
+    return;
+  }
+
+  if (record.artifactKind !== "npm-pack" || record.artifactFormat !== "tgz") {
+    throw new Error(`missing kitchen-sink ClawHub artifact metadata: ${JSON.stringify(record)}`);
+  }
+  if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
+    throw new Error(`missing kitchen-sink ClawPack metadata: ${JSON.stringify(record)}`);
+  }
+  if (!record.npmIntegrity || !record.npmShasum || !record.npmTarballName) {
+    throw new Error(`missing kitchen-sink npm artifact metadata: ${JSON.stringify(record)}`);
+  }
+}
+
 function inferInstallSource(spec) {
   if (spec?.startsWith("npm:")) {
     return "npm";
@@ -389,15 +410,7 @@ function assertInstalled() {
     if (!record.version || !record.integrity || !record.resolvedAt) {
       throw new Error(`missing ClawHub resolution metadata: ${JSON.stringify(record)}`);
     }
-    if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
-      throw new Error(`missing kitchen-sink ClawPack metadata: ${JSON.stringify(record)}`);
-    }
-    if (record.artifactKind !== "npm-pack" || record.artifactFormat !== "tgz") {
-      throw new Error(`missing kitchen-sink ClawHub artifact metadata: ${JSON.stringify(record)}`);
-    }
-    if (!record.npmIntegrity || !record.npmShasum || !record.npmTarballName) {
-      throw new Error(`missing kitchen-sink npm artifact metadata: ${JSON.stringify(record)}`);
-    }
+    assertClawHubArtifactMetadata(record);
   }
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
     throw new Error("missing kitchen-sink install path");
@@ -406,7 +419,7 @@ function assertInstalled() {
   if (!fs.existsSync(installPath)) {
     throw new Error(`kitchen-sink install path missing: ${record.installPath}`);
   }
-  if (source === "clawhub") {
+  if (source === "clawhub" && record.artifactKind === "npm-pack") {
     assertClawHubExternalInstallContract(installPath);
   }
   fs.writeFileSync(`/tmp/kitchen-sink-${label}-install-path.txt`, installPath, "utf8");
