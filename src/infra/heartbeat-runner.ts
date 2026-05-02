@@ -84,6 +84,7 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/t
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
@@ -92,7 +93,6 @@ import {
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
-import { resolveHeartbeatReasonKind } from "./heartbeat-reason.js";
 import {
   computeNextHeartbeatPhaseDueMs,
   resolveHeartbeatPhaseMs,
@@ -113,9 +113,11 @@ import {
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatRunResult,
   type HeartbeatWakeHandler,
+  type HeartbeatWakeIntent,
   type HeartbeatWakeRequest,
+  type HeartbeatWakeSource,
   isRetryableHeartbeatBusySkipReason,
-  requestHeartbeatNow,
+  requestHeartbeat,
   setHeartbeatsEnabled,
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
@@ -213,6 +215,12 @@ type HeartbeatAgentState = {
   intervalMs: number;
   phaseMs: number;
   nextDueMs: number;
+  /** Wall-clock start time of the most recent run for this agent. */
+  lastRunStartedAtMs?: number;
+  /** Bounded ring buffer of recent run-start timestamps for flood detection. */
+  recentRunStarts: number[];
+  /** Set true after a flood-defer is logged to avoid log spam. Reset when a run actually fires. */
+  floodLoggedSinceLastRun: boolean;
 };
 
 export type HeartbeatRunner = {
@@ -602,10 +610,10 @@ function normalizeHeartbeatToolNotification(
   return { shouldSkip: false, text: finalText, hasMedia: false };
 }
 
-type HeartbeatReasonFlags = {
-  isExecEventReason: boolean;
-  isCronEventReason: boolean;
-  isWakeReason: boolean;
+type HeartbeatWakePayloadFlags = {
+  isExecEventWake: boolean;
+  isCronWake: boolean;
+  isWakePayload: boolean;
 };
 
 type HeartbeatSkipReason = "empty-heartbeat-file";
@@ -661,7 +669,7 @@ Commitments:
 ${JSON.stringify(items, null, 2)}`;
 }
 
-type HeartbeatPreflight = HeartbeatReasonFlags & {
+type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSession>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
@@ -673,12 +681,33 @@ type HeartbeatPreflight = HeartbeatReasonFlags & {
   heartbeatFileContent?: string;
 };
 
-function resolveHeartbeatReasonFlags(reason?: string): HeartbeatReasonFlags {
-  const reasonKind = resolveHeartbeatReasonKind(reason);
+function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSource | undefined {
+  const trimmed = (reason ?? "").trim();
+  if (trimmed === "exec-event") {
+    return "exec-event";
+  }
+  if (trimmed.startsWith("cron:")) {
+    return "cron";
+  }
+  if (trimmed === "wake" || trimmed.startsWith("hook:")) {
+    return "hook";
+  }
+  if (trimmed.startsWith("acp:spawn:")) {
+    return "acp-spawn";
+  }
+  return undefined;
+}
+
+function resolveHeartbeatWakePayloadFlags(params: {
+  source?: HeartbeatWakeSource;
+  reason?: string;
+}): HeartbeatWakePayloadFlags {
+  const source = params.source ?? inferHeartbeatWakeSourceFromReason(params.reason);
+  const reason = (params.reason ?? "").trim();
   return {
-    isExecEventReason: reasonKind === "exec-event",
-    isCronEventReason: reasonKind === "cron",
-    isWakeReason: reasonKind === "wake" || reasonKind === "hook",
+    isExecEventWake: source === "exec-event",
+    isCronWake: source === "cron",
+    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
   };
 }
 
@@ -688,9 +717,13 @@ async function resolveHeartbeatPreflight(params: {
   heartbeat?: HeartbeatConfig;
   forcedSessionKey?: string;
   reason?: string;
+  source?: HeartbeatWakeSource;
   nowMs?: number;
 }): Promise<HeartbeatPreflight> {
-  const reasonFlags = resolveHeartbeatReasonFlags(params.reason);
+  const wakeFlags = resolveHeartbeatWakePayloadFlags({
+    source: params.source,
+    reason: params.reason,
+  });
   const session = resolveHeartbeatSession(
     params.cfg,
     params.agentId,
@@ -715,7 +748,7 @@ async function resolveHeartbeatPreflight(params: {
   // Wake-triggered runs should only inspect pending events when preflight peeks
   // the same queue that the run itself will execute/drain.
   const shouldInspectWakePendingEvents = (() => {
-    if (!reasonFlags.isWakeReason) {
+    if (!wakeFlags.isWakePayload) {
       return false;
     }
     if (params.heartbeat?.isolatedSession !== true) {
@@ -730,17 +763,17 @@ async function resolveHeartbeatPreflight(params: {
     return isolatedSessionKey === session.sessionKey;
   })();
   const shouldInspectPendingEvents =
-    reasonFlags.isExecEventReason ||
-    reasonFlags.isCronEventReason ||
+    wakeFlags.isExecEventWake ||
+    wakeFlags.isCronWake ||
     shouldInspectWakePendingEvents ||
     hasTaggedCronEvents;
   const shouldBypassFileGates =
-    reasonFlags.isExecEventReason ||
-    reasonFlags.isCronEventReason ||
-    reasonFlags.isWakeReason ||
+    wakeFlags.isExecEventWake ||
+    wakeFlags.isCronWake ||
+    wakeFlags.isWakePayload ||
     hasTaggedCronEvents;
   const basePreflight = {
-    ...reasonFlags,
+    ...wakeFlags,
     session,
     pendingEventEntries,
     turnSourceDeliveryContext,
@@ -870,7 +903,7 @@ function resolveHeartbeatRunPrompt(params: {
   const cronEvents = pendingEventEntries
     .filter(
       (event) =>
-        (params.preflight.isCronEventReason || event.contextKey?.startsWith("cron:")) &&
+        (params.preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
     )
     .map((event) => event.text);
@@ -962,7 +995,7 @@ function selectSystemEventsConsumedByHeartbeat(params: {
   if (params.hasCronEvents) {
     return preflight.pendingEventEntries.filter(
       (event) =>
-        (preflight.isCronEventReason || event.contextKey?.startsWith("cron:")) &&
+        (preflight.isCronWake || event.contextKey?.startsWith("cron:")) &&
         isCronSystemEvent(event.text),
     );
   }
@@ -974,6 +1007,8 @@ export async function runHeartbeatOnce(opts: {
   agentId?: string;
   sessionKey?: string;
   heartbeat?: HeartbeatConfig;
+  source?: HeartbeatWakeSource;
+  intent?: HeartbeatWakeIntent;
   reason?: string;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
@@ -1030,6 +1065,7 @@ export async function runHeartbeatOnce(opts: {
     agentId,
     heartbeat,
     forcedSessionKey: opts.sessionKey,
+    source: opts.source,
     reason: opts.reason,
     nowMs: startedAt,
   });
@@ -1157,7 +1193,7 @@ export async function runHeartbeatOnce(opts: {
     // Wake-triggered events should stay queued when the run short-circuits:
     // no reply turn ran, so there is nothing that actually consumed that wake payload.
     const shouldConsumeInspectedEvents =
-      !preflight.isWakeReason && preflight.shouldInspectPendingEvents;
+      !preflight.isWakePayload && preflight.shouldInspectPendingEvents;
     if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
       consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
     }
@@ -1756,6 +1792,45 @@ export function startHeartbeatRunner(opts: {
           now + agent.intervalMs;
   };
 
+  // Centralized cooldown gate. Both targeted and broadcast dispatch branches
+  // call this before invoking `runOnce`. Manual wakes are never deferred.
+  // Everything else respects `nextDueMs`, the min-spacing floor, and the flood
+  // guard — see `heartbeat-cooldown.ts` for rationale and #75436.
+  const evaluateWakeDeferral = (
+    agent: HeartbeatAgentState,
+    now: number,
+    reason?: string,
+    intent: HeartbeatWakeIntent = "event",
+  ): DeferDecision => {
+    const decision = shouldDeferWake({
+      intent,
+      reason,
+      now,
+      nextDueMs: agent.nextDueMs,
+      lastRunStartedAtMs: agent.lastRunStartedAtMs,
+      recentRunStarts: agent.recentRunStarts,
+    });
+    if (decision.defer && decision.reason === "flood") {
+      if (!agent.floodLoggedSinceLastRun) {
+        log.warn("heartbeat: flood guard tripped, deferring wake", {
+          agentId: agent.agentId,
+          reason: reason ?? "(none)",
+          recentRunCount: agent.recentRunStarts.length,
+        });
+        agent.floodLoggedSinceLastRun = true;
+      }
+    }
+    return decision;
+  };
+
+  // Called immediately before `runOnce` actually executes. Updates the
+  // bookkeeping that the cooldown gate consults on the next wake.
+  const recordRunBookkeeping = (agent: HeartbeatAgentState, now: number) => {
+    agent.lastRunStartedAtMs = now;
+    recordRunStart(agent.recentRunStarts, now);
+    agent.floodLoggedSinceLastRun = false;
+  };
+
   const scheduleNext = () => {
     if (state.stopped) {
       return;
@@ -1788,7 +1863,12 @@ export function startHeartbeatRunner(opts: {
     const delay = resolveSafeTimeoutDelayMs(rawDelay, { minMs: 0 });
     state.timer = setTimeout(() => {
       state.timer = null;
-      requestHeartbeatNow({ reason: "interval", coalesceMs: 0 });
+      requestHeartbeat({
+        source: "interval",
+        intent: "scheduled",
+        reason: "interval",
+        coalesceMs: 0,
+      });
     }, delay);
     state.timer.unref?.();
   };
@@ -1821,6 +1901,9 @@ export function startHeartbeatRunner(opts: {
         intervalMs,
         phaseMs,
         nextDueMs,
+        lastRunStartedAtMs: prevState?.lastRunStartedAtMs,
+        recentRunStarts: prevState?.recentRunStarts ?? [],
+        floodLoggedSinceLastRun: prevState?.floodLoggedSinceLastRun ?? false,
       });
     }
 
@@ -1866,6 +1949,7 @@ export function startHeartbeatRunner(opts: {
     }
 
     const reason = params?.reason;
+    const intent = params.intent;
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const requestedHeartbeat = params?.heartbeat;
@@ -1886,19 +1970,32 @@ export function startHeartbeatRunner(opts: {
         if (!targetAgent) {
           return { status: "skipped", reason: "disabled" };
         }
+        const deferral = evaluateWakeDeferral(targetAgent, now, reason, intent);
+        if (deferral.defer) {
+          return { status: "skipped", reason: deferral.reason };
+        }
         try {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
             heartbeat: resolveRequestedHeartbeat(targetAgent.heartbeat),
+            source: params.source,
+            intent,
             reason,
             sessionKey: requestedSessionKey,
             deps: { runtime: state.runtime },
           });
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+            // Retryable busy — do NOT record run bookkeeping. The wake layer
+            // retries the same reason shortly; if we recorded `lastRunStartedAtMs`
+            // here, the retry would falsely defer with `not-due`/`min-spacing`
+            // because the cooldown would treat this skipped attempt as a real run.
             retryableBusySkip = true;
             return res;
           }
+          // Non-retryable outcome (ran, disabled, failed-but-not-busy). Record
+          // bookkeeping so subsequent wakes within the cooldown window defer.
+          recordRunBookkeeping(targetAgent, now);
           if (res.status !== "skipped" || res.reason !== "disabled") {
             advanceAgentSchedule(targetAgent, now, reason);
           }
@@ -1908,13 +2005,18 @@ export function startHeartbeatRunner(opts: {
           log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
             error: errMsg,
           });
+          // Throw counts as a non-retryable terminal attempt for cooldown
+          // purposes — record bookkeeping so the wake layer doesn't tight-loop
+          // on the same reason.
+          recordRunBookkeeping(targetAgent, now);
           advanceAgentSchedule(targetAgent, now, reason);
           return { status: "failed", reason: errMsg };
         }
       }
 
       for (const agent of state.agents.values()) {
-        if (isInterval && now < agent.nextDueMs) {
+        const deferral = evaluateWakeDeferral(agent, now, reason, intent);
+        if (deferral.defer) {
           continue;
         }
 
@@ -1924,23 +2026,30 @@ export function startHeartbeatRunner(opts: {
             cfg: state.cfg,
             agentId: agent.agentId,
             heartbeat: agent.heartbeat,
+            source: params.source,
+            intent,
             reason,
             deps: { runtime: state.runtime },
           });
         } catch (err) {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
+          // Throw counts as a non-retryable terminal attempt — see comment in
+          // targeted branch above.
+          recordRunBookkeeping(agent, now);
           advanceAgentSchedule(agent, now, reason);
           continue;
         }
         if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
-          // Do not advance the schedule — the main lane is busy and the wake
-          // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
-          // scheduleNext() here would register a 0 ms timer that races with
-          // the wake layer's 1 s retry and wins, bypassing the cooldown.
+          // Do not advance the schedule or record run bookkeeping — the main
+          // lane is busy and the wake layer will retry the same reason shortly
+          // (DEFAULT_RETRY_MS = 1 s). Recording here would convert the retry
+          // into a false `not-due`/`min-spacing` defer.
           retryableBusySkip = true;
           return res;
         }
+        // Non-retryable outcome — record bookkeeping for cooldown gates.
+        recordRunBookkeeping(agent, now);
         if (res.status !== "skipped" || res.reason !== "disabled") {
           advanceAgentSchedule(agent, now, reason);
         }
@@ -2014,6 +2123,8 @@ export function startHeartbeatRunner(opts: {
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       heartbeat: params.heartbeat,
+      source: params.source,
+      intent: params.intent,
     });
   const disposeWakeHandler = setHeartbeatWakeHandler(wakeHandler);
   updateConfig(state.cfg);

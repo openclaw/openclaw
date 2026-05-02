@@ -8,7 +8,7 @@ import {
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -344,8 +344,13 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
     deliveryContext: session.notifyDeliveryContext,
     trusted: false,
   });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+  requestHeartbeat(
+    scopedHeartbeatWakeOptions(sessionKey, {
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 0,
+    }),
   );
 }
 
@@ -422,8 +427,13 @@ export function emitExecSystemEvent(
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
   });
-  requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+  requestHeartbeat(
+    scopedHeartbeatWakeOptions(sessionKey, {
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      coalesceMs: 0,
+    }),
   );
 }
 

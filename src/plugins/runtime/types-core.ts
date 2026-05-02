@@ -10,6 +10,16 @@ import type { PluginRuntimeTaskFlows, PluginRuntimeTaskRuns } from "./runtime-ta
 
 export type { HeartbeatRunResult };
 
+export type RuntimeRequestHeartbeatOptions = Parameters<
+  typeof import("../../infra/heartbeat-wake.js").requestHeartbeat
+>[0];
+
+export type RuntimeRequestHeartbeatNowOptions = Omit<
+  RuntimeRequestHeartbeatOptions,
+  "source" | "intent"
+> &
+  Partial<Pick<RuntimeRequestHeartbeatOptions, "source" | "intent">>;
+
 type RuntimeWriteConfigOptions = {
   envSnapshotForRestore?: Record<string, string | undefined>;
   expectedConfigPath?: string;
@@ -154,7 +164,12 @@ export type PluginRuntimeCore = {
   };
   system: {
     enqueueSystemEvent: typeof import("../../infra/system-events.js").enqueueSystemEvent;
-    requestHeartbeatNow: typeof import("../../infra/heartbeat-wake.js").requestHeartbeatNow;
+    requestHeartbeat: typeof import("../../infra/heartbeat-wake.js").requestHeartbeat;
+    /**
+     * @deprecated Use `requestHeartbeat({ source, intent, reason })` so wake producers declare
+     * scheduler intent explicitly.
+     */
+    requestHeartbeatNow: (opts?: RuntimeRequestHeartbeatNowOptions) => void;
     /**
      * Run a single heartbeat cycle immediately (bypassing the coalesce timer).
      * Accepts an optional `heartbeat` config override so callers can force
