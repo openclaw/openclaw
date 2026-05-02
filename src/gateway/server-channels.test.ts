@@ -129,15 +129,18 @@ function createManager(options?: {
   getRuntimeConfig?: () => Record<string, unknown>;
   channelIds?: ChannelId[];
   startupTrace?: { measure: <T>(name: string, run: () => T | Promise<T>) => Promise<T> };
+  fillChannelDependencies?: boolean;
 }) {
   const log = createSubsystemLogger("gateway/server-channels-test");
   const channelLogs = { discord: log } as Record<ChannelId, SubsystemLogger>;
   const runtime = runtimeForLogger(log);
   const channelRuntimeEnvs = { discord: runtime } as unknown as Record<ChannelId, RuntimeEnv>;
   const channelIds = options?.channelIds ?? ["discord"];
-  for (const channelId of channelIds) {
-    channelLogs[channelId] ??= log.child(channelId);
-    channelRuntimeEnvs[channelId] ??= runtime;
+  if (options?.fillChannelDependencies !== false) {
+    for (const channelId of channelIds) {
+      channelLogs[channelId] ??= log.child(channelId);
+      channelRuntimeEnvs[channelId] ??= runtime;
+    }
   }
   return createChannelManager({
     getRuntimeConfig: () => options?.getRuntimeConfig?.() ?? {},
@@ -574,6 +577,21 @@ describe("server-channels auto restart", () => {
 
     expect(failingStart).toHaveBeenCalledTimes(1);
     expect(succeedingStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses fallback logger and runtime when a channel is missing startup wiring", async () => {
+    const startAccount = vi.fn(async () => {
+      throw new Error("invalid_auth");
+    });
+    installTestRegistry(createTestPlugin({ id: "slack", startAccount }));
+    const manager = createManager({ channelIds: ["slack"], fillChannelDependencies: false });
+
+    await manager.startChannels();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    const account = manager.getRuntimeSnapshot().channelAccounts.slack?.[DEFAULT_ACCOUNT_ID];
+    expect(account?.lastError).toBe("invalid_auth");
   });
 
   it("emits startup trace spans for channel preflight and handoff", async () => {

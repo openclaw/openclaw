@@ -56,7 +56,7 @@ const DEFAULT_MODEL =
 // The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
 // so the outer test budget needs enough headroom to finish those retries.
 const CLI_BACKEND_LIVE_TIMEOUT_MS = 20 * 60_000;
-const CLI_BACKEND_REQUEST_TIMEOUT_MS = 240_000;
+const CLI_BACKEND_REQUEST_TIMEOUT_MS = 600_000;
 const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
   1,
   Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
