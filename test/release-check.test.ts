@@ -84,7 +84,11 @@ describe("packed CLI smoke", () => {
   });
 
   it("repairs bundled runtime deps before the read-only plugin doctor smoke", () => {
-    expect(PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS).toEqual(["plugins", "deps", "--repair"]);
+    expect(PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS).toEqual([
+      "doctor",
+      "--repair",
+      "--non-interactive",
+    ]);
   });
 
   it("keeps packed completion smoke scoped to one shell cache", () => {
