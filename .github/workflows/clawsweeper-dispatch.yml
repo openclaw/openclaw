@@ -85,7 +85,7 @@ jobs:
               repo: $target_repo,
               action: $source_action,
               actor: $actor,
-              subject:
+              subject: (
                 if .pull_request then {
                   kind: "pull_request",
                   number: .pull_request.number,
@@ -105,7 +105,7 @@ jobs:
                   state: .ref
                 } else {
                   kind: $event_name
-                } end,
+                } end),
               comment: (if .comment then {
                 id: .comment.id,
                 url: .comment.html_url,
