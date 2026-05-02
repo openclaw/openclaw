@@ -1,11 +1,8 @@
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 function getPathModule(platform: NodeJS.Platform) {
   return platform === "win32" ? path.win32 : path.posix;
-}
-
-function normalizeLowercaseStringOrEmpty(value: string | undefined): string {
-  return value?.trim().toLowerCase() ?? "";
 }
 
 export function normalizeServicePathEntry(entry: string, platform: NodeJS.Platform): string {
