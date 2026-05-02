@@ -23,15 +23,17 @@ describe("poll params", () => {
     },
   );
 
-  it("treats non-zero finite numeric poll params as poll creation intent", () => {
-    expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "60" })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "1e3" })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationHours: -1 })).toBe(true);
-    expect(hasPollCreationParams({ pollDurationSeconds: "-5" })).toBe(true);
+  it("treats non-zero finite numeric poll params as poll creation intent only when question or options are present", () => {
+    // Duration alone is insufficient — GPT-5.4/5.5 sends pollDurationHours:24 on every call.
+    // A question or option list is required to distinguish genuine poll intent (#52757).
+    expect(hasPollCreationParams({ pollDurationSeconds: 60 })).toBe(false);
+    expect(hasPollCreationParams({ pollDurationHours: -1 })).toBe(false);
     expect(hasPollCreationParams({ pollDurationHours: Number.NaN })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: Infinity })).toBe(false);
     expect(hasPollCreationParams({ pollDurationSeconds: "60abc" })).toBe(false);
+    // Duration together with a real question IS poll intent
+    expect(hasPollCreationParams({ pollDurationSeconds: 60, pollQuestion: "Lunch?" })).toBe(true);
+    expect(hasPollCreationParams({ pollDurationHours: 24, pollOption: ["Yes", "No"] })).toBe(true);
   });
 
   it("does not treat zero-valued numeric poll params as poll creation intent", () => {
@@ -44,9 +46,12 @@ describe("poll params", () => {
     expect(hasPollCreationParams({ poll_duration_hours: "0" })).toBe(false);
   });
 
-  it("treats string-encoded boolean poll params as poll creation intent when true", () => {
-    expect(hasPollCreationParams({ pollPublic: "true" })).toBe(true);
+  it("treats string-encoded boolean poll params as poll creation intent only when question or options are present", () => {
+    // Boolean-only params (pollPublic, pollMulti) without a question are not poll intent (#52757).
+    expect(hasPollCreationParams({ pollPublic: "true" })).toBe(false);
     expect(hasPollCreationParams({ pollAnonymous: "false" })).toBe(false);
+    // Boolean together with a question IS poll intent
+    expect(hasPollCreationParams({ pollPublic: "true", pollQuestion: "Should we go?" })).toBe(true);
   });
 
   it("treats string poll options as poll creation intent", () => {
@@ -56,8 +61,10 @@ describe("poll params", () => {
   it("detects snake_case poll fields as poll creation intent", () => {
     expect(hasPollCreationParams({ poll_question: "Lunch?" })).toBe(true);
     expect(hasPollCreationParams({ poll_option: ["Pizza", "Sushi"] })).toBe(true);
-    expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(true);
-    expect(hasPollCreationParams({ poll_public: "true" })).toBe(true);
+    // snake_case duration and boolean alone are no longer sufficient — question/options required
+    expect(hasPollCreationParams({ poll_duration_seconds: "60" })).toBe(false);
+    expect(hasPollCreationParams({ poll_public: "true" })).toBe(false);
+    expect(hasPollCreationParams({ poll_duration_seconds: "60", poll_question: "Ready?" })).toBe(true);
   });
 
   it("ignores poll vote params when deciding whether send should become poll", () => {
