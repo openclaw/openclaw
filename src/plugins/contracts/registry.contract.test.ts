@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
 import { loadPluginManifestRegistry, type PluginManifestRecord } from "../manifest-registry.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
+import { BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS } from "./inventory/bundled-capability-metadata.js";
 import {
   pluginRegistrationContractRegistry,
   providerContractLoadError,
@@ -11,34 +10,6 @@ import {
 } from "./registry.js";
 
 describe("plugin contract registry", () => {
-  function collectExcludedPackagedExtensionDirs(): ReadonlySet<string> {
-    const packageJson = JSON.parse(
-      fs.readFileSync(path.join(process.cwd(), "package.json"), "utf-8"),
-    ) as {
-      files?: unknown;
-    };
-    if (!Array.isArray(packageJson.files)) {
-      return new Set();
-    }
-    const excluded = new Set<string>();
-    for (const entry of packageJson.files) {
-      if (typeof entry !== "string") {
-        continue;
-      }
-      const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-      if (match?.[1]) {
-        excluded.add(match[1]);
-      }
-    }
-    return excluded;
-  }
-
-  const excludedPackagedExtensionDirs = collectExcludedPackagedExtensionDirs();
-
-  function isPackagedCorePluginId(pluginId: string): boolean {
-    return !excludedPackagedExtensionDirs.has(pluginId);
-  }
-
   function expectUniqueIds(ids: readonly string[]) {
     expect(ids).toEqual([...new Set(ids)]);
   }
@@ -53,8 +24,11 @@ describe("plugin contract registry", () => {
   }
 
   function resolveBundledManifestPluginIds(predicate: (plugin: PluginManifestRecord) => boolean) {
+    const snapshotPluginIds = new Set(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
+    );
     return loadPluginManifestRegistry({})
-      .plugins.filter((plugin) => isPackagedCorePluginId(plugin.id) && predicate(plugin))
+      .plugins.filter((plugin) => snapshotPluginIds.has(plugin.id) && predicate(plugin))
       .map((plugin) => plugin.id)
       .toSorted((left, right) => left.localeCompare(right));
   }
@@ -203,10 +177,13 @@ describe("plugin contract registry", () => {
   });
 
   it("covers every bundled web search plugin from the shared resolver", () => {
+    const snapshotPluginIds = new Set(
+      BUNDLED_PLUGIN_CONTRACT_SNAPSHOTS.map((entry) => entry.pluginId),
+    );
     const bundledWebSearchPluginIds = resolveManifestContractPluginIds({
       contract: "webSearchProviders",
       origin: "bundled",
-    }).filter(isPackagedCorePluginId);
+    }).filter((pluginId) => snapshotPluginIds.has(pluginId));
 
     expect(
       uniqueSortedStrings(

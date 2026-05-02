@@ -13,34 +13,12 @@ import { pluginTestRepoRoot as repoRoot } from "./generated-plugin-test-helpers.
 import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginManifest } from "./manifest.js";
 
-function collectExcludedPackagedExtensionDirs(): ReadonlySet<string> {
-  const packageJson = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf-8")) as {
-    files?: unknown;
-  };
-  if (!Array.isArray(packageJson.files)) {
-    return new Set();
-  }
-  const excluded = new Set<string>();
-  for (const entry of packageJson.files) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
-      excluded.add(match[1]);
-    }
-  }
-  return excluded;
-}
-
 function readManifestRecords(): PluginManifest[] {
   const extensionsDir = path.join(repoRoot, "extensions");
-  const excludedDirs = collectExcludedPackagedExtensionDirs();
   return fs
     .readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
     .map((entry) => path.join(extensionsDir, entry.name))
-    .filter((pluginDir) => !excludedDirs.has(path.basename(pluginDir)))
     .filter((pluginDir) => {
       const packagePath = path.join(pluginDir, "package.json");
       if (!fs.existsSync(packagePath)) {
