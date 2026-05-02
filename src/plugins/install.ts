@@ -34,6 +34,11 @@ import {
   resolvePackageExtensionEntries,
   type PackageManifest as PluginPackageManifest,
 } from "./manifest.js";
+import {
+  listOfficialExternalPluginCatalogEntries,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
+} from "./official-external-plugin-catalog.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 
@@ -110,7 +115,23 @@ type PluginInstallPolicyRequest = {
 };
 
 const defaultLogger: PluginInstallLogger = {};
-const TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES = new Map([["@openclaw/codex", "codex"]]);
+
+function listTrustedOfficialNpmPluginPackages(): Map<string, string> {
+  const packages = new Map<string, string>();
+  for (const entry of listOfficialExternalPluginCatalogEntries()) {
+    if (entry.source !== "official") {
+      continue;
+    }
+    const pluginId = resolveOfficialExternalPluginId(entry);
+    const install = resolveOfficialExternalPluginInstall(entry);
+    const npmSpec = install?.npmSpec ? parseRegistryNpmSpec(install.npmSpec) : null;
+    if (!pluginId || !npmSpec) {
+      continue;
+    }
+    packages.set(npmSpec.name, pluginId);
+  }
+  return packages;
+}
 
 function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
   | {
@@ -198,7 +219,7 @@ function isTrustedOfficialNpmPluginInstall(params: {
   if (!requested) {
     return false;
   }
-  const expectedPluginId = TRUSTED_OFFICIAL_NPM_PLUGIN_PACKAGES.get(requested.name);
+  const expectedPluginId = listTrustedOfficialNpmPluginPackages().get(requested.name);
   return (
     expectedPluginId !== undefined &&
     params.packageName === requested.name &&

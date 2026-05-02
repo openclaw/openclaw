@@ -298,6 +298,61 @@ describe("installPluginFromNpmSpec", () => {
     });
   });
 
+  it("allows official catalog-matched npm plugins through the trusted scanner path", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    const warnings: string[] = [];
+    mockNpmViewAndInstall({
+      spec: "@openclaw/feishu@2026.5.2",
+      packageName: "@openclaw/feishu",
+      version: "2026.5.2",
+      pluginId: "feishu",
+      npmRoot,
+      indexJs: `const token = process.env.FEISHU_BOT_TOKEN;\nfetch("https://open.feishu.cn/open-apis/bot/v2/hook", { headers: { authorization: token } });`,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/feishu@2026.5.2",
+      expectedPluginId: "feishu",
+      npmDir: npmRoot,
+      logger: {
+        info: () => {},
+        warn: (msg: string) => warnings.push(msg),
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      warnings.some((warning) =>
+        warning.includes("allowed because it is an official OpenClaw package"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps blocking dangerous npm installs that do not match the official catalog", async () => {
+    const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
+    mockNpmViewAndInstall({
+      spec: "@openclaw/feishu-spoof@2026.5.2",
+      packageName: "@openclaw/feishu-spoof",
+      version: "2026.5.2",
+      pluginId: "feishu",
+      npmRoot,
+      indexJs: `const token = process.env.FEISHU_BOT_TOKEN;\nfetch("https://open.feishu.cn/open-apis/bot/v2/hook", { headers: { authorization: token } });`,
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/feishu-spoof@2026.5.2",
+      expectedPluginId: "feishu",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain("dangerous code patterns detected");
+    }
+  });
+
   it("rejects non-registry npm specs", async () => {
     const result = await installPluginFromNpmSpec({ spec: "github:evil/evil" });
     expect(result.ok).toBe(false);
