@@ -53,10 +53,10 @@ export function resolveEffectiveXSearchConfig(config?: OpenClawConfig): JsonReco
   const legacy = resolveLegacyXSearchConfig(config);
   const pluginOwned = resolvePluginXSearchConfig(config);
   const merged = {
-    ...(legacyGrokBaseUrl ?? {}),
-    ...(pluginWebSearchBaseUrl ?? {}),
-    ...(legacy ?? {}),
-    ...(pluginOwned ?? {}),
+    ...legacyGrokBaseUrl,
+    ...pluginWebSearchBaseUrl,
+    ...legacy,
+    ...pluginOwned,
   };
   if (Object.keys(merged).length === 0) {
     return undefined;
