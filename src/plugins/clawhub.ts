@@ -160,6 +160,15 @@ function normalizeClawHubClawPackInstallFields(
   };
 }
 
+function resolveClawHubClawPackArtifactSha256(
+  clawpack: ClawHubPackageClawPackSummary | null | undefined,
+): string | null {
+  if (clawpack?.available !== true || typeof clawpack.sha256 !== "string") {
+    return null;
+  }
+  return normalizeClawHubSha256Hex(clawpack.sha256);
+}
+
 export function formatClawHubSpecifier(params: { name: string; version?: string }): string {
   return `clawhub:${params.name}${params.version ? `@${params.version}` : ""}`;
 }
@@ -677,13 +686,24 @@ async function resolveCompatiblePackageVersion(params: {
       clawpack: versionDetail.version?.clawpack ?? null,
     };
   }
+  const clawpack = versionDetail.version?.clawpack ?? null;
   const verificationState = resolveClawHubArchiveVerification(
     versionDetail,
     params.detail.package?.name ?? "unknown",
     resolvedVersion,
   );
   if (!verificationState.ok) {
-    return verificationState;
+    if (!resolveClawHubClawPackArtifactSha256(clawpack)) {
+      return verificationState;
+    }
+    return {
+      ok: true,
+      version: resolvedVersion,
+      compatibility:
+        versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
+      verification: null,
+      clawpack,
+    };
   }
   return {
     ok: true,
@@ -691,7 +711,7 @@ async function resolveCompatiblePackageVersion(params: {
     compatibility:
       versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
     verification: verificationState.verification,
-    clawpack: versionDetail.version?.clawpack ?? null,
+    clawpack,
   };
 }
 
@@ -846,7 +866,8 @@ export async function installPluginFromClawHub(
   if (validationFailure) {
     return validationFailure;
   }
-  if (!versionState.verification) {
+  const expectedClawPackSha256 = resolveClawHubClawPackArtifactSha256(versionState.clawpack);
+  if (!versionState.verification && !expectedClawPackSha256) {
     return buildClawHubInstallFailure(
       `ClawHub version metadata for "${parsed.name}@${versionState.version}" is missing sha256hash and usable files[] metadata for fallback archive verification.`,
       CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
@@ -865,6 +886,7 @@ export async function installPluginFromClawHub(
     archive = await downloadClawHubPackageArchive({
       name: parsed.name,
       version: versionState.version,
+      artifact: expectedClawPackSha256 ? "clawpack" : "archive",
       baseUrl: params.baseUrl,
       token: params.token,
       timeoutMs: params.timeoutMs,
@@ -873,14 +895,27 @@ export async function installPluginFromClawHub(
     return buildClawHubInstallFailure(formatErrorMessage(error));
   }
   try {
-    if (versionState.verification.kind === "archive-integrity") {
+    if (expectedClawPackSha256) {
+      const expectedIntegrity = normalizeClawHubSha256Integrity(expectedClawPackSha256);
+      if (
+        archive.artifact !== "clawpack" ||
+        archive.clawpackHeaderSha256 !== expectedClawPackSha256 ||
+        archive.sha256Hex !== expectedClawPackSha256 ||
+        archive.integrity !== expectedIntegrity
+      ) {
+        return buildClawHubInstallFailure(
+          `ClawHub ClawPack integrity mismatch for "${parsed.name}@${versionState.version}": expected ${expectedClawPackSha256}, got ${archive.sha256Hex}.`,
+          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+        );
+      }
+    } else if (versionState.verification?.kind === "archive-integrity") {
       if (archive.integrity !== versionState.verification.integrity) {
         return buildClawHubInstallFailure(
           `ClawHub archive integrity mismatch for "${parsed.name}@${versionState.version}": expected ${versionState.verification.integrity}, got ${archive.integrity}.`,
           CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
         );
       }
-    } else {
+    } else if (versionState.verification) {
       const validatedPaths = versionState.verification.files
         .map((file) => file.path)
         .toSorted()
