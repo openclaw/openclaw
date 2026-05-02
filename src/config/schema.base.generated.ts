@@ -20816,6 +20816,23 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             description:
               "Controls cross-session send permissions using allow/deny rules evaluated against channel, chatType, and key prefixes. Use this to fence where session tools can deliver messages in complex environments.",
           },
+          writeLock: {
+            type: "object",
+            properties: {
+              acquireTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+                title: "Session Write Lock Acquire Timeout",
+                description:
+                  "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+              },
+            },
+            additionalProperties: false,
+            title: "Session Write Lock",
+            description:
+              "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+          },
           agentToAgent: {
             type: "object",
             properties: {
@@ -27898,6 +27915,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Session Send Rule Raw Key Prefix",
       help: "Matches the raw, unnormalized session-key prefix for exact full-key policy targeting. Use this when normalized keyPrefix is too broad and you need agent-prefixed or transport-specific precision.",
       tags: ["access", "storage"],
+    },
+    "session.writeLock": {
+      label: "Session Write Lock",
+      help: "Groups session transcript write-lock acquisition controls. Tune only when legitimate transcript prep, cleanup, compaction, or mirror work contends longer than the default wait.",
+      tags: ["storage"],
+    },
+    "session.writeLock.acquireTimeoutMs": {
+      label: "Session Write Lock Acquire Timeout",
+      help: "Milliseconds to wait while acquiring a session transcript write lock before reporting the session as busy. Default: 60000; raise for slow disks or long prep/cleanup, lower only when quick failure is preferred.",
+      tags: ["performance", "storage"],
     },
     "session.agentToAgent": {
       label: "Session Agent-to-Agent",

@@ -354,6 +354,7 @@ vi.mock("../session-manager-init.js", () => ({
 vi.mock("../../session-write-lock.js", () => ({
   acquireSessionWriteLock: (params: Parameters<AcquireSessionWriteLockFn>[0]) =>
     hoisted.acquireSessionWriteLockMock(params),
+  resolveSessionWriteLockAcquireTimeoutMs: () => 60000,
   resolveSessionLockMaxHoldFromTimeout: () => 1,
 }));
 
