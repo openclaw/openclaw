@@ -28,6 +28,7 @@ const {
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
+  deleteMessageTelegram,
   editForumTopicTelegram,
   editMessageTelegram,
   pinMessageTelegram,
@@ -2050,6 +2051,43 @@ describe("reactMessageTelegram", () => {
         resolvedChatId: "-100123",
       }),
     );
+  });
+});
+
+describe("deleteMessageTelegram", () => {
+  it.each([
+    "400: Bad Request: message to delete not found",
+    "400: Bad Request: message can't be deleted",
+    "MESSAGE_ID_INVALID",
+    "MESSAGE_DELETE_FORBIDDEN",
+  ] as const)("returns a warning for benign delete no-op error: %s", async (message) => {
+    const deleteMessage = vi.fn().mockRejectedValue(new Error(message));
+    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+
+    const result = await deleteMessageTelegram("123", 456, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+    });
+
+    expect(deleteMessage).toHaveBeenCalledWith("123", 456);
+    expect(result).toMatchObject({
+      ok: false,
+      warning: expect.stringContaining(message),
+    });
+  });
+
+  it("throws non-benign delete errors", async () => {
+    const deleteMessage = vi.fn().mockRejectedValue(new Error("500: Internal Server Error"));
+    const api = { deleteMessage } as unknown as { deleteMessage: typeof deleteMessage };
+
+    await expect(
+      deleteMessageTelegram("123", 456, {
+        cfg: TELEGRAM_TEST_CFG,
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/Internal Server Error/);
   });
 });
 

@@ -22,6 +22,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Config: log the "newer OpenClaw" version warning once per process instead of once per config snapshot read. (#75927) Thanks @romneyda.
+- Telegram/message actions: treat benign delete-message 400s as no-op warnings instead of runtime errors, so stale or already-removed messages do not create noisy delete failures. Fixes #73726. Thanks @Avicennasis.
 - Gateway/chat history: merge Claude CLI transcript imports for Anthropic-routed sessions that still have a Claude CLI binding, so local chat history does not hide CLI JSONL turns. Fixes #75850. Thanks @alfredjbclaw.
 - Media: trim serialized JSON suffixes after local `MEDIA:` directive file extensions, so generated-image metadata cannot pollute the parsed media path and cause false `ENOENT` delivery failures. Fixes #75182. Thanks @TnzGit and @hclsys.
 - Cron: make scheduler reload schedule comparison tolerate malformed persisted jobs, so one bad cron entry no longer aborts the whole tick. Fixes #75886. Thanks @samfox-ai.
