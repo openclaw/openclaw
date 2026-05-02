@@ -980,7 +980,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
-  it("falls back to run model when preserveRuntimeModel is true but entry has no prior runtime model", async () => {
+  it("does not set runtime model when preserveRuntimeModel is true and entry has no prior runtime model", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
       const sessionKey = "agent:main:explicit:test-heartbeat-new-session";
@@ -1017,10 +1017,60 @@ describe("updateSessionStoreAfterAgentRun", () => {
         preserveRuntimeModel: true,
       });
 
-      // No prior runtime model, so falls back to the run's model
-      expect(sessionStore[sessionKey]?.model).toBe("llama3.2:1b");
-      expect(sessionStore[sessionKey]?.modelProvider).toBe("ollama");
-      expect(sessionStore[sessionKey]?.contextTokens).toBe(128_000);
+      // Heartbeat should NOT establish initial model state on an empty session
+      expect(sessionStore[sessionKey]?.model).toBeUndefined();
+      expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
+      expect(sessionStore[sessionKey]?.contextTokens).toBeUndefined();
+    });
+  });
+
+  it("preserves model without borrowing heartbeat provider when entry has model but no modelProvider", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-heartbeat-model-no-provider";
+      const sessionId = "test-heartbeat-model-no-provider-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          model: "claude-opus-4-6",
+          // modelProvider intentionally missing
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      // Heartbeat turn uses a different provider
+      const result: EmbeddedPiRunResult = {
+        meta: {
+          durationMs: 500,
+          agentMeta: {
+            sessionId,
+            provider: "ollama",
+            model: "llama3.2:1b",
+            contextTokens: 128_000,
+          },
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-6",
+        result,
+        preserveRuntimeModel: true,
+      });
+
+      // Model preserved, provider NOT borrowed from heartbeat
+      expect(sessionStore[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(sessionStore[sessionKey]?.modelProvider).toBeUndefined();
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.model).toBe("claude-opus-4-6");
+      expect(persisted[sessionKey]?.modelProvider).toBeUndefined();
     });
   });
 

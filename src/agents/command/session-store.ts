@@ -125,14 +125,19 @@ export async function updateSessionStoreAfterAgentRun(params: {
       // leave contextTokens unset rather than falling back to the heartbeat
       // run's context window; status derives it from the preserved model.
       next.contextTokens = entry.contextTokens;
-    } else {
-      // No prior runtime model: heartbeat establishes initial state.
-      next.contextTokens = entry.contextTokens ?? contextTokens;
+      if (entry.modelProvider) {
+        setSessionRuntimeModel(next, {
+          provider: entry.modelProvider,
+          model: entry.model,
+        });
+      } else {
+        // Retain the model-only entry without borrowing the heartbeat provider
+        // to avoid invalid cross-provider pairs (e.g. ollama/claude-opus-4-6).
+        next.model = entry.model;
+      }
     }
-    setSessionRuntimeModel(next, {
-      provider: entry.modelProvider ?? providerUsed,
-      model: entry.model ?? modelUsed,
-    });
+    // When there is no prior runtime model, do nothing: a heartbeat turn
+    // should not establish initial model state on an empty session.
   } else {
     setSessionRuntimeModel(next, {
       provider: providerUsed,
