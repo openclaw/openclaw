@@ -36,6 +36,37 @@ changing config.
 | Image generation or editing                          | `openai/gpt-image-2`                             | Works with either `OPENAI_API_KEY` or OpenAI Codex OAuth.                 |
 | Transparent-background images                        | `openai/gpt-image-1.5`                           | Use `outputFormat=png` or `webp` and `openai.background=transparent`.     |
 
+## Coding executor patterns
+
+When you want OpenAI to handle coding or tool-heavy execution, say **Codex**,
+not generic **OpenAI**. Generic `openai/*` usually means direct OpenAI Platform
+API-key traffic unless you also select the native Codex runtime.
+
+A common split is to keep orchestration on your preferred default model and
+route mechanical coding work to a subscription-backed coding executor. Use
+Claude CLI as an explicit writing or second-review lane when you want that
+model's taste or critique, not as an implied orchestration default:
+
+| Pattern                    | Orchestrator / reviewer                                               | Coding executor                                  | Billing/auth path                                      |
+| -------------------------- | --------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------ |
+| Codex-default agent        | `openai/gpt-5.5` with `agentRuntime.id: "codex"`                      | `agentRuntime.id: "codex"`                       | ChatGPT/Codex sign-in                                  |
+| Claude review, Codex codes | `anthropic/claude-*` using API key or `agentRuntime.id: "claude-cli"` | `openai/gpt-5.5` with `agentRuntime.id: "codex"` | Claude for review; ChatGPT/Codex sign-in for execution |
+| PI runner with Codex OAuth | Any orchestrator                                                      | `openai-codex/gpt-5.5`                           | ChatGPT/Codex OAuth through PI                         |
+
+Use the native Codex runtime for repo edits, shell work, debugging, and agentic
+coding sessions when you want subscription-backed Codex behavior. Use
+`openai-codex/*` only when you intentionally want Codex OAuth through the normal
+OpenClaw PI runner. Use direct `openai/*` without the Codex runtime only when
+you want OpenAI Platform API-key billing.
+
+<Note>
+Claude CLI and Codex OAuth are both subscription-style routes, but they are not
+the same product or runtime. Claude CLI is a Claude execution backend;
+OpenAI Codex OAuth/native Codex runtime is the OpenAI coding executor path.
+Pick either for coding if it matches your subscription and reliability needs,
+but keep the model prefix, auth route, and runtime label explicit in config.
+</Note>
+
 ## Naming map
 
 The names are similar but not interchangeable:
