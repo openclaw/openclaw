@@ -9,7 +9,10 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
-import { normalizePluginsConfigWithResolver } from "./config-policy.js";
+import {
+  normalizePluginsConfigWithResolver,
+  type NormalizedPluginsConfig,
+} from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
@@ -436,8 +439,12 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
+  normalized?: NormalizedPluginsConfig;
 }): void {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
+    return;
+  }
+  if (params.normalized?.entries[params.record.id]?.enabled === false) {
     return;
   }
   const declaredChannels = params.record.channels
@@ -465,9 +472,11 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
 function pushManifestCompatibilityDiagnostics(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
+  normalized?: NormalizedPluginsConfig;
 }): void {
-  pushProviderAuthEnvVarsCompatDiagnostic(params);
-  pushNonBundledChannelConfigDescriptorDiagnostic(params);
+  const base = { record: params.record, diagnostics: params.diagnostics };
+  pushProviderAuthEnvVarsCompatDiagnostic(base);
+  pushNonBundledChannelConfigDescriptorDiagnostic({ ...base, normalized: params.normalized });
 }
 
 function matchesInstalledPluginRecord(params: {
@@ -710,7 +719,7 @@ export function loadPluginManifestRegistry(
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-          pushManifestCompatibilityDiagnostics({ record, diagnostics });
+          // Compatibility diagnostics already pushed for the first occurrence of this plugin.
         }
         continue;
       }
@@ -735,7 +744,7 @@ export function loadPluginManifestRegistry(
       if (candidateWins) {
         records[existing.recordIndex] = record;
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-        pushManifestCompatibilityDiagnostics({ record, diagnostics });
+        pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
       }
       if (
         isIntentionalInstalledBundledDuplicate({
@@ -763,7 +772,7 @@ export function loadPluginManifestRegistry(
 
     seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     records.push(record);
-    pushManifestCompatibilityDiagnostics({ record, diagnostics });
+    pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
   const registry = { plugins: records, diagnostics };

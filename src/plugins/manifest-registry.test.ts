@@ -1089,6 +1089,55 @@ describe("loadPluginManifestRegistry", () => {
     });
   });
 
+  it("suppresses channelConfigs warning for explicitly disabled plugins", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadPluginManifestRegistry({
+      candidates: [
+        createPluginCandidate({
+          idHint: "external-chat",
+          rootDir: dir,
+          origin: "global",
+        }),
+      ],
+      config: {
+        plugins: {
+          entries: { "external-chat": { enabled: false } },
+        },
+      },
+    });
+
+    expect(
+      registry.diagnostics.some((d) => d.message.includes("without channelConfigs metadata")),
+    ).toBe(false);
+  });
+
+  it("emits channelConfigs warning exactly once for a same-path duplicate", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "external-chat",
+      channels: ["external-chat"],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadPluginManifestRegistry({
+      candidates: [
+        createPluginCandidate({ idHint: "external-chat", rootDir: dir, origin: "global" }),
+        createPluginCandidate({ idHint: "external-chat", rootDir: dir, origin: "global" }),
+      ],
+    });
+
+    const warnings = registry.diagnostics.filter((d) =>
+      d.message.includes("without channelConfigs metadata"),
+    );
+    expect(warnings).toHaveLength(1);
+  });
+
   it("falls back providerDiscoverySource from .ts to emitted .js files", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
