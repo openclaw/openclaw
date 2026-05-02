@@ -184,6 +184,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "cron.run",
     "sessions.patch",
     "sessions.pluginPatch",
+    "sessions.cleanup",
     "sessions.reset",
     "sessions.delete",
     "sessions.compact",

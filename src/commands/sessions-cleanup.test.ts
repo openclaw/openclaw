@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   capEntryCount: vi.fn(),
   updateSessionStore: vi.fn(),
   enforceSessionDiskBudget: vi.fn(),
+  callGateway: vi.fn(),
+  isGatewayTransportError: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -35,6 +37,11 @@ vi.mock("../config/sessions.js", () => ({
   capEntryCount: mocks.capEntryCount,
   updateSessionStore: mocks.updateSessionStore,
   enforceSessionDiskBudget: mocks.enforceSessionDiskBudget,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
+  isGatewayTransportError: mocks.isGatewayTransportError,
 }));
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
@@ -97,6 +104,8 @@ describe("sessionsCleanupCommand", () => {
     );
     mocks.capEntryCount.mockImplementation(() => 0);
     mocks.updateSessionStore.mockResolvedValue(0);
+    mocks.callGateway.mockResolvedValue(null);
+    mocks.isGatewayTransportError.mockReturnValue(true);
     mocks.enforceSessionDiskBudget.mockResolvedValue({
       totalBytesBefore: 1000,
       totalBytesAfter: 700,
@@ -110,6 +119,9 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
+    mocks.callGateway.mockRejectedValue(
+      Object.assign(new Error("closed"), { name: "GatewayTransportError" }),
+    );
     mocks.loadSessionStore
       .mockReturnValueOnce({
         stale: { sessionId: "stale", updatedAt: 1 },
@@ -188,6 +200,43 @@ describe("sessionsCleanupCommand", () => {
         onMaintenanceApplied: expect.any(Function),
       }),
     );
+  });
+
+  it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
+    mocks.callGateway.mockResolvedValue({
+      agentId: "main",
+      storePath: "/resolved/sessions.json",
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 1,
+      missing: 0,
+      pruned: 2,
+      capped: 0,
+      diskBudget: null,
+      wouldMutate: true,
+      applied: true,
+      appliedCount: 1,
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        enforce: true,
+      },
+      runtime,
+    );
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.cleanup",
+        params: expect.objectContaining({ enforce: true }),
+        requiredMethods: ["sessions.cleanup"],
+      }),
+    );
+    expect(mocks.updateSessionStore).not.toHaveBeenCalled();
+    expect(JSON.parse(logs[0] ?? "{}")).toEqual(expect.objectContaining({ appliedCount: 1 }));
   });
 
   it("returns dry-run JSON without mutating the store", async () => {
