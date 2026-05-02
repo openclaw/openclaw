@@ -56,12 +56,15 @@ function normalizeDocPath(value) {
   return value.replace(/\.mdx?$/u, "");
 }
 
-function docLink(label, href) {
+function docLink({ label, href }) {
   return `[${label}](${href})`;
 }
 
-function pushUnique(values, value) {
-  if (value && !values.includes(value)) {
+function pushUniqueDocLink(values, value) {
+  if (
+    value &&
+    !values.some((existing) => existing.label === value.label && existing.href === value.href)
+  ) {
     values.push(value);
   }
 }
@@ -70,12 +73,15 @@ function resolveDocs({ dirName, manifest, packageJson }) {
   const links = [];
   const pluginAlias = PLUGIN_DOC_ALIASES.get(manifest.id) ?? PLUGIN_DOC_ALIASES.get(dirName);
   if (pluginAlias) {
-    pushUnique(links, docLink(manifest.id ?? dirName, pluginAlias));
+    pushUniqueDocLink(links, { href: pluginAlias, label: manifest.id ?? dirName });
   }
 
   const channelDoc = normalizeDocPath(packageJson.openclaw?.channel?.docsPath);
   if (channelDoc) {
-    pushUnique(links, docLink(channelDoc.replace(/^\/channels\//u, ""), channelDoc));
+    pushUniqueDocLink(links, {
+      href: channelDoc,
+      label: channelDoc.replace(/^\/channels\//u, ""),
+    });
   }
 
   for (const channel of manifest.channels ?? []) {
@@ -84,7 +90,7 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
     const relativePath = `docs/channels/${channel}.md`;
     if (fileExists(relativePath)) {
-      pushUnique(links, docLink(channel, `/channels/${channel}`));
+      pushUniqueDocLink(links, { href: `/channels/${channel}`, label: channel });
     }
   }
 
@@ -94,12 +100,12 @@ function resolveDocs({ dirName, manifest, packageJson }) {
     }
     const alias = PROVIDER_DOC_ALIASES.get(provider);
     if (alias) {
-      pushUnique(links, docLink(provider, alias));
+      pushUniqueDocLink(links, { href: alias, label: provider });
       continue;
     }
     const relativePath = `docs/providers/${provider}.md`;
     if (fileExists(relativePath)) {
-      pushUnique(links, docLink(provider, `/providers/${provider}`));
+      pushUniqueDocLink(links, { href: `/providers/${provider}`, label: provider });
     }
   }
 
@@ -108,17 +114,17 @@ function resolveDocs({ dirName, manifest, packageJson }) {
       continue;
     }
     if (fileExists(`docs/channels/${candidate}.md`)) {
-      pushUnique(links, docLink(candidate, `/channels/${candidate}`));
+      pushUniqueDocLink(links, { href: `/channels/${candidate}`, label: candidate });
     }
     if (fileExists(`docs/providers/${candidate}.md`)) {
-      pushUnique(links, docLink(candidate, `/providers/${candidate}`));
+      pushUniqueDocLink(links, { href: `/providers/${candidate}`, label: candidate });
     }
     if (fileExists(`docs/plugins/${candidate}.md`)) {
-      pushUnique(links, docLink(candidate, `/plugins/${candidate}`));
+      pushUniqueDocLink(links, { href: `/plugins/${candidate}`, label: candidate });
     }
   }
 
-  return links.length > 0 ? links.join(", ") : "-";
+  return links;
 }
 
 function resolveSurface(manifest) {
@@ -185,12 +191,13 @@ function escapeCell(value) {
 
 function renderTable(records) {
   const rows = [
-    ["Plugin", "Package", "Surface", "Docs", "Install"],
+    ["Plugin", "Package", "Surface", "Install"],
     ...records.map((record) => [
-      escapeCell(record.id),
+      record.docs.length > 0
+        ? docLink({ href: record.docs[0].href, label: escapeCell(record.id) })
+        : escapeCell(record.id),
       `\`${escapeCell(record.packageName)}\``,
       escapeCell(record.surface),
-      escapeCell(record.docs),
       escapeCell(record.install),
     ]),
   ];
