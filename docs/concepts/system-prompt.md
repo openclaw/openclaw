@@ -111,8 +111,8 @@ in both the global system prompt and channel context.
 
 ## Prompt snapshots
 
-OpenClaw keeps committed happy-path prompt snapshots for the Codex/message-tool
-runtime under `test/fixtures/agents/prompt-snapshots/happy-path/`. They render
+OpenClaw keeps committed prompt snapshots for the Codex runtime happy path under
+`test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path/`. They render
 selected app-server thread/turn params plus a reconstructed model-bound prompt
 layer stack for Telegram direct, Discord group, and heartbeat turns. That stack
 includes a pinned Codex `gpt-5.5` model prompt fixture generated from Codex's

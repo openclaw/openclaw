@@ -23,7 +23,8 @@ import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harnes
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
-export const HAPPY_PATH_PROMPT_SNAPSHOT_DIR = "test/fixtures/agents/prompt-snapshots/happy-path";
+export const CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR =
+  "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path";
 export const CODEX_MODEL_PROMPT_FIXTURE_DIR =
   "test/fixtures/agents/prompt-snapshots/codex-model-catalog";
 
@@ -697,8 +698,14 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "Codex model prompt fixtures:",
     "",
-    `- ${path.relative(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, CODEX_MODEL_PROMPT_FIXTURE_PATH)}`,
-    `- ${path.relative(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, CODEX_MODEL_PROMPT_SOURCE_PATH)}`,
+    `- ${path.relative(
+      CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+      CODEX_MODEL_PROMPT_FIXTURE_PATH,
+    )}`,
+    `- ${path.relative(
+      CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+      CODEX_MODEL_PROMPT_SOURCE_PATH,
+    )}`,
     "",
   ].join("\n");
 }
@@ -707,15 +714,15 @@ export function createHappyPathPromptSnapshotFiles(): PromptSnapshotFile[] {
   const scenarios = createScenarios();
   return [
     {
-      path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
+      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "README.md"),
       content: renderReadme(scenarios),
     },
     ...scenarios.map((scenario) => ({
-      path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
+      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, `${scenario.id}.md`),
       content: renderScenarioSnapshot(scenario),
     })),
     ...scenarios.map((scenario) => ({
-      path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
+      path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, scenario.toolSnapshotFile),
       content: stableJson(scenario.dynamicTools),
     })),
   ].map((file) => ({

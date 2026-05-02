@@ -14,7 +14,7 @@ import {
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
-  HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
 } from "../helpers/agents/happy-path-prompt-snapshots.js";
 
 describe("happy path prompt snapshots", () => {
@@ -25,22 +25,25 @@ describe("happy path prompt snapshots", () => {
       expect(fs.readFileSync(file.path, "utf8"), file.path).toBe(file.content);
     }
     const committed = fs
-      .readdirSync(HAPPY_PATH_PROMPT_SNAPSHOT_DIR)
+      .readdirSync(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR)
       .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
-      .map((entry) => path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry));
+      .map((entry) => path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry));
     expect(committed.toSorted()).toEqual([...expectedPaths].toSorted());
   });
 
   it("deletes stale generated snapshot artifacts", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prompt-snapshot-stale-"));
     try {
-      const snapshotDir = path.join(root, HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
+      const snapshotDir = path.join(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
       fs.mkdirSync(snapshotDir, { recursive: true });
-      const stalePath = path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "stale-snapshot.md");
+      const stalePath = path.join(
+        CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+        "stale-snapshot.md",
+      );
       fs.writeFileSync(path.join(root, stalePath), "stale\n");
 
       const deleted = await deleteStalePromptSnapshotFiles(root, [
-        { path: path.join(HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "current.md") },
+        { path: path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, "current.md") },
       ]);
 
       expect(deleted).toEqual([stalePath]);
