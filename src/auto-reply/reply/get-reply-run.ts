@@ -23,6 +23,7 @@ import {
   isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
@@ -237,34 +238,32 @@ export function buildExecOverridePromptHint(params: {
     .join("\n");
 }
 
-let piEmbeddedRuntimePromise: Promise<typeof import("../../agents/pi-embedded.runtime.js")> | null =
-  null;
-let agentRunnerRuntimePromise: Promise<typeof import("./agent-runner.runtime.js")> | null = null;
-let sessionUpdatesRuntimePromise: Promise<typeof import("./session-updates.runtime.js")> | null =
-  null;
-let sessionStoreRuntimePromise: Promise<
-  typeof import("../../config/sessions/store.runtime.js")
-> | null = null;
+const piEmbeddedRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/pi-embedded.runtime.js"),
+);
+const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner.runtime.js"));
+const sessionUpdatesRuntimeLoader = createLazyImportLoader(
+  () => import("./session-updates.runtime.js"),
+);
+const sessionStoreRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/store.runtime.js"),
+);
 const UNTRUSTED_SYSTEM_EVENT_LINE_RE = /^System \(untrusted\):/m;
 
 function loadPiEmbeddedRuntime() {
-  piEmbeddedRuntimePromise ??= import("../../agents/pi-embedded.runtime.js");
-  return piEmbeddedRuntimePromise;
+  return piEmbeddedRuntimeLoader.load();
 }
 
 function loadAgentRunnerRuntime() {
-  agentRunnerRuntimePromise ??= import("./agent-runner.runtime.js");
-  return agentRunnerRuntimePromise;
+  return agentRunnerRuntimeLoader.load();
 }
 
 function loadSessionUpdatesRuntime() {
-  sessionUpdatesRuntimePromise ??= import("./session-updates.runtime.js");
-  return sessionUpdatesRuntimePromise;
+  return sessionUpdatesRuntimeLoader.load();
 }
 
 function loadSessionStoreRuntime() {
-  sessionStoreRuntimePromise ??= import("../../config/sessions/store.runtime.js");
-  return sessionStoreRuntimePromise;
+  return sessionStoreRuntimeLoader.load();
 }
 
 function stripPromptThinkingDirectives(body: string): string {

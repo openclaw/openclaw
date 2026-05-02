@@ -820,6 +820,34 @@ describe("sendChatMessage", () => {
     expect(state.chatMessages).toHaveLength(1);
   });
 
+  it("passes the backing session id from history when sending after reconnect", async () => {
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({
+        sessionId: "session-before-reconnect",
+        messages: [],
+      })
+      .mockResolvedValueOnce({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await loadChatHistory(state);
+    const result = await sendChatMessage(state, "continue");
+
+    expect(result).toEqual(expect.any(String));
+    expect(state.currentSessionId).toBe("session-before-reconnect");
+    expect(request).toHaveBeenLastCalledWith(
+      "chat.send",
+      expect.objectContaining({
+        sessionKey: "main",
+        sessionId: "session-before-reconnect",
+        message: "continue",
+      }),
+    );
+  });
+
   it("serializes non-image chat attachments as files", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({

@@ -5,6 +5,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -13,17 +14,15 @@ import { deriveSessionTotalTokens, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
 
-let usageFormatModulePromise: Promise<typeof import("../../utils/usage-format.js")> | undefined;
-let contextModulePromise: Promise<typeof import("../context.js")> | undefined;
+const usageFormatModuleLoader = createLazyImportLoader(() => import("../../utils/usage-format.js"));
+const contextModuleLoader = createLazyImportLoader(() => import("../context.js"));
 
 async function getUsageFormatModule() {
-  usageFormatModulePromise ??= import("../../utils/usage-format.js");
-  return await usageFormatModulePromise;
+  return await usageFormatModuleLoader.load();
 }
 
 async function getContextModule() {
-  contextModulePromise ??= import("../context.js");
-  return await contextModulePromise;
+  return await contextModuleLoader.load();
 }
 
 function resolveNonNegativeNumber(value: number | undefined): number | undefined {
@@ -50,6 +49,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
   fallbackModel?: string;
   result: RunResult;
   touchInteraction?: boolean;
+  /**
+   * When true, preserve the pre-existing runtime model fields (model,
+   * modelProvider, contextTokens) on the session entry instead of overwriting
+   * them with the model used by this run. Used for heartbeat turns so the
+   * heartbeat model does not "bleed" into the main session's perceived state.
+   */
+  preserveRuntimeModel?: boolean;
 }) {
   const {
     cfg,
@@ -92,6 +98,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
             allowAsyncLoad: false,
           }) ?? DEFAULT_CONTEXT_TOKENS);
 
+  const preserveRuntimeModel = params.preserveRuntimeModel === true;
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
     updatedAt: now,
@@ -103,12 +110,40 @@ export async function updateSessionStoreAfterAgentRun(params: {
     updatedAt: now,
     sessionStartedAt: entry.sessionId === sessionId ? (entry.sessionStartedAt ?? now) : now,
     lastInteractionAt: touchInteraction ? now : entry.lastInteractionAt,
-    contextTokens,
+    ...(preserveRuntimeModel
+      ? {}
+      : {
+          contextTokens,
+        }),
   };
-  setSessionRuntimeModel(next, {
-    provider: providerUsed,
-    model: modelUsed,
-  });
+  if (preserveRuntimeModel) {
+    // Keep the pre-existing runtime model and context window so a background
+    // heartbeat turn using a different model does not bleed into the main
+    // session's perceived state.
+    if (entry.model) {
+      // Prior runtime model exists: preserve its contextTokens. When missing,
+      // leave contextTokens unset rather than falling back to the heartbeat
+      // run's context window; status derives it from the preserved model.
+      next.contextTokens = entry.contextTokens;
+      if (entry.modelProvider) {
+        setSessionRuntimeModel(next, {
+          provider: entry.modelProvider,
+          model: entry.model,
+        });
+      } else {
+        // Retain the model-only entry without borrowing the heartbeat provider
+        // to avoid invalid cross-provider pairs (e.g. ollama/claude-opus-4-6).
+        next.model = entry.model;
+      }
+    }
+    // When there is no prior runtime model, do nothing: a heartbeat turn
+    // should not establish initial model state on an empty session.
+  } else {
+    setSessionRuntimeModel(next, {
+      provider: providerUsed,
+      model: modelUsed,
+    });
+  }
   if (agentHarnessId) {
     next.agentHarnessId = agentHarnessId;
   } else if (result.meta.executionTrace?.runner === "cli") {

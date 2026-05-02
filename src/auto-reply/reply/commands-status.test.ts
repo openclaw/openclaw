@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -24,6 +24,17 @@ import {
   buildCommandTestParams,
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
+
+vi.mock("../../agents/harness/builtin-pi.js", () => ({
+  createPiAgentHarness: () => ({
+    id: "pi",
+    label: "OpenClaw Pi",
+    supports: () => ({ supported: true, priority: 0 }),
+    runAttempt: async () => {
+      throw new Error("not used in status tests");
+    },
+  }),
+}));
 
 const baseCfg = baseCommandTestConfig;
 

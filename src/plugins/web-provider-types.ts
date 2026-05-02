@@ -85,13 +85,15 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
-  onboardingScopes?: Array<"text-inference">;
+  onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
   credentialLabel?: string;
   envVars: string[];
   placeholder: string;
   signupUrl: string;
   docsUrl?: string;
+  /** Optional note shown before credential collection for provider-specific prerequisites. */
+  credentialNote?: string;
   autoDetectOrder?: number;
   credentialPath: string;
   inactiveSecretPaths?: string[];

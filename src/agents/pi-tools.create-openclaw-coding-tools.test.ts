@@ -180,6 +180,40 @@ describe("createOpenClawCodingTools", () => {
     );
   });
 
+  it("records core tool-prep stages for hot-path diagnostics", () => {
+    const stages: string[] = [];
+
+    createOpenClawCodingTools({
+      config: testConfig,
+      recordToolPrepStage: (name) => stages.push(name),
+      senderIsOwner: true,
+    });
+
+    expect(stages).toEqual(
+      expect.arrayContaining([
+        "tool-policy",
+        "workspace-policy",
+        "base-coding-tools",
+        "shell-tools",
+        "openclaw-tools:test-helper",
+        "openclaw-tools",
+        "message-provider-policy",
+        "model-provider-policy",
+        "authorization-policy",
+        "schema-normalization",
+        "tool-hooks",
+        "abort-wrappers",
+        "deferred-followup-descriptions",
+      ]),
+    );
+    expect(stages.indexOf("tool-policy")).toBeLessThan(stages.indexOf("workspace-policy"));
+    expect(stages.indexOf("workspace-policy")).toBeLessThan(stages.indexOf("base-coding-tools"));
+    expect(stages.indexOf("openclaw-tools:test-helper")).toBeLessThan(
+      stages.indexOf("openclaw-tools"),
+    );
+    expect(stages.indexOf("schema-normalization")).toBeLessThan(stages.indexOf("tool-hooks"));
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const defaultTools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     const toolNames = ["canvas", "nodes", "cron", "gateway", "message"];

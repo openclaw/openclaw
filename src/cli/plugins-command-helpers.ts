@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { CLAWHUB_INSTALL_ERROR_CODE } from "../plugins/clawhub.js";
 import type { PluginKind } from "../plugins/plugin-kind.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import type { PluginLogger } from "../plugins/types.js";
@@ -59,13 +59,12 @@ function buildSlotSelectionRegistry(
   config: OpenClawConfig,
   pluginId: string,
 ): SlotSelectionRegistry {
-  const registry = loadPluginManifestRegistryForPluginRegistry({
+  const plugins = loadPluginMetadataSnapshot({
     config,
-    includeDisabled: true,
-    pluginIds: [pluginId],
-  });
+    env: process.env,
+  }).plugins.filter((plugin) => plugin.id === pluginId);
   return {
-    plugins: registry.plugins.map((plugin) => ({
+    plugins: plugins.map((plugin) => ({
       id: plugin.id,
       kind: plugin.kind,
     })),
@@ -220,7 +219,7 @@ export function parseNpmPrefixSpec(raw: string): string | null {
   return trimmed.slice("npm:".length).trim();
 }
 
-export const PREFERRED_CLAWHUB_FALLBACK_DECISION = {
+const PREFERRED_CLAWHUB_FALLBACK_DECISION = {
   FALLBACK_TO_NPM: "fallback_to_npm",
   STOP: "stop",
 } as const;

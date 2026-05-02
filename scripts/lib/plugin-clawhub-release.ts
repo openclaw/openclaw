@@ -7,30 +7,17 @@ import {
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
   parsePluginReleaseArgs,
-  parsePluginReleaseSelection,
-  parsePluginReleaseSelectionMode,
   resolvePublishablePluginVersion,
   resolveGitCommitSha,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type GitRangeSelection,
-  type ParsedPluginReleaseArgs,
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
 
-export {
-  collectChangedExtensionIdsFromPaths,
-  parsePluginReleaseArgs,
-  parsePluginReleaseSelection,
-  parsePluginReleaseSelectionMode,
-  resolveChangedPublishablePluginPackages,
-  resolveSelectedPublishablePluginPackages,
-  type GitRangeSelection,
-  type ParsedPluginReleaseArgs,
-  type PluginReleaseSelectionMode,
-};
+export { parsePluginReleaseArgs };
 
-export type PluginPackageJson = {
+type PluginPackageJson = {
   name?: string;
   version?: string;
   private?: boolean;
@@ -59,21 +46,21 @@ export type PublishablePluginPackage = {
   packageDir: string;
   packageName: string;
   version: string;
-  channel: "stable" | "beta";
-  publishTag: "latest" | "beta";
+  channel: "stable" | "alpha" | "beta";
+  publishTag: "latest" | "alpha" | "beta";
 };
 
-export type PluginReleasePlanItem = PublishablePluginPackage & {
+type PluginReleasePlanItem = PublishablePluginPackage & {
   alreadyPublished: boolean;
 };
 
-export type PluginReleasePlan = {
+type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
   candidates: PluginReleasePlanItem[];
   skippedPublished: PluginReleasePlanItem[];
 };
 
-export type ClawHubPublishablePluginPackageFilters = {
+type ClawHubPublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
   packageNames?: readonly string[];
 };
@@ -167,7 +154,12 @@ export function collectClawHubPublishablePluginPackages(
       packageName,
       version,
       channel: parsedVersion.channel,
-      publishTag: parsedVersion.channel === "beta" ? "beta" : "latest",
+      publishTag:
+        parsedVersion.channel === "alpha"
+          ? "alpha"
+          : parsedVersion.channel === "beta"
+            ? "beta"
+            : "latest",
     });
   }
 
@@ -319,7 +311,7 @@ export function collectClawHubVersionGateErrors(params: {
   return errors;
 }
 
-export async function isPluginVersionPublishedOnClawHub(
+async function isPluginVersionPublishedOnClawHub(
   packageName: string,
   version: string,
   options: {

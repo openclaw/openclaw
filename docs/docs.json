@@ -1154,6 +1154,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/parallel-specialist-lanes",
                   "concepts/presence",
                   "concepts/delegate-architecture"
                 ]
@@ -1182,6 +1183,8 @@
                 "pages": [
                   "tools/plugin",
                   "plugins/community",
+                  "plugins/plugin-inventory",
+                  "plugins/reference",
                   "plugins/bundles",
                   "plugins/dependency-resolution",
                   "plugins/codex-harness",

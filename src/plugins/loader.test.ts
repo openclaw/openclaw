@@ -73,11 +73,9 @@ import {
   listActiveMemoryPublicArtifacts,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
   resolveMemoryFlushPlan,
 } from "./memory-state.js";
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
@@ -142,6 +140,12 @@ const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
 
 function simplePluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, register() {} };`;
+}
+
+function updatePluginManifest(plugin: Pick<TempPlugin, "dir">, patch: Record<string, unknown>) {
+  const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
+  const raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...raw, ...patch }, null, 2), "utf-8");
 }
 
 function memoryPluginBody(id: string) {
@@ -2382,16 +2386,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       search: async () => [],
       get: async () => null,
     });
-    registerMemoryPromptSection(() => ["active memory section"]);
     registerMemoryPromptSupplement("memory-wiki", () => ["active wiki supplement"]);
-    registerMemoryFlushPlanResolver(() => ({
-      softThresholdTokens: 1,
-      forceFlushTranscriptBytes: 2,
-      reserveTokensFloor: 3,
-      prompt: "active",
-      systemPrompt: "active",
-      relativePath: "memory/active.md",
-    }));
     const activeRuntime = {
       async getMemorySearchManager() {
         return { manager: null, error: "active" };
@@ -2400,7 +2395,18 @@ module.exports = { id: "throws-after-import", register() {} };`,
         return { backend: "builtin" as const };
       },
     };
-    registerMemoryRuntime(activeRuntime);
+    registerMemoryCapability("memory-core", {
+      promptBuilder: () => ["active memory section"],
+      flushPlanResolver: () => ({
+        softThresholdTokens: 1,
+        forceFlushTranscriptBytes: 2,
+        reserveTokensFloor: 3,
+        prompt: "active",
+        systemPrompt: "active",
+        relativePath: "memory/active.md",
+      }),
+      runtime: activeRuntime,
+    });
     const plugin = writePlugin({
       id: "snapshot-memory",
       filename: "snapshot-memory.cjs",
@@ -2907,6 +2913,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       };`,
     });
+    updatePluginManifest(plugin, { contracts: { tools: ["discovery_tool"] } });
     const config = {
       plugins: {
         load: { paths: [plugin.file] },
@@ -2931,6 +2938,89 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
     expect((globalThis as Record<string, unknown>)[marker]).toEqual(["discovery", "full"]);
     delete (globalThis as Record<string, unknown>)[marker];
+  });
+
+  it("rejects plugin tool registration without manifest tool ownership", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "undeclared-tool-owner",
+      filename: "undeclared-tool-owner.cjs",
+      body: `module.exports = {
+        id: "undeclared-tool-owner",
+        register(api) {
+          api.registerTool({
+            name: "undeclared_tool",
+            description: "Undeclared tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["undeclared-tool-owner"],
+        },
+      },
+    });
+
+    expect(registry.tools).toEqual([]);
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "undeclared-tool-owner",
+          message: "plugin must declare contracts.tools before registering agent tools",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects plugin tool names outside the manifest tool contract", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "wrong-tool-owner",
+      filename: "wrong-tool-owner.cjs",
+      body: `module.exports = {
+        id: "wrong-tool-owner",
+        register(api) {
+          api.registerTool({
+            name: "runtime_tool",
+            description: "Runtime tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { contracts: { tools: ["manifest_tool"] } });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["wrong-tool-owner"],
+        },
+      },
+    });
+
+    expect(registry.tools).toEqual([]);
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "wrong-tool-owner",
+          message: "plugin must declare contracts.tools for: runtime_tool",
+        }),
+      ]),
+    );
   });
 
   it("caches non-activating snapshots without restoring global side effects", () => {
@@ -3025,6 +3115,45 @@ module.exports = { id: "throws-after-import", register() {} };`,
       config,
     });
 
+    expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
+    delete (globalThis as Record<string, unknown>)[marker];
+  });
+
+  it("reuses a gateway-bindable cache entry for later default-mode loads", () => {
+    useNoBundledPlugins();
+    const marker = "__openclawGatewayBindableCacheRegisterCount";
+    const plugin = writePlugin({
+      id: "gateway-bindable-cache",
+      filename: "gateway-bindable-cache.cjs",
+      body: `module.exports = {
+        id: "gateway-bindable-cache",
+        register() {
+          globalThis.${marker} = (globalThis.${marker} || 0) + 1;
+        },
+      };`,
+    });
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["gateway-bindable-cache"],
+          entries: {
+            "gateway-bindable-cache": { enabled: true },
+          },
+        },
+      },
+    };
+
+    const gatewayBindable = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    const defaultMode = loadOpenClawPlugins(options);
+
+    expect(defaultMode).toBe(gatewayBindable);
     expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
     delete (globalThis as Record<string, unknown>)[marker];
   });
@@ -5078,6 +5207,64 @@ module.exports = {
         preferSetupRuntimeForChannelPlugins: true,
       }),
     ).toBe(true);
+  });
+
+  it("prefers built bundled plugin artifacts over source TS when requested", () => {
+    const repoRoot = makeTempDir();
+    const sourceDir = path.join(repoRoot, "extensions", "startup-artifact-test");
+    const runtimeDir = path.join(repoRoot, "dist-runtime", "extensions", "startup-artifact-test");
+    mkdirSafe(sourceDir);
+    mkdirSafe(runtimeDir);
+    fs.writeFileSync(
+      path.join(sourceDir, "openclaw.plugin.json"),
+      JSON.stringify(
+        {
+          id: "startup-artifact-test",
+          configSchema: EMPTY_PLUGIN_SCHEMA,
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(sourceDir, "index.ts"),
+      'throw new Error("source TS should not load during gateway startup");\n',
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(runtimeDir, "index.js"),
+      'module.exports = { id: "startup-artifact-test", register() {} };\n',
+      "utf-8",
+    );
+
+    const registry = withEnv(
+      {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(repoRoot, "extensions"),
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      },
+      () =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferBuiltPluginArtifacts: true,
+          onlyPluginIds: ["startup-artifact-test"],
+          config: {
+            plugins: {
+              allow: ["startup-artifact-test"],
+              entries: {
+                "startup-artifact-test": {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        }),
+    );
+
+    expect(registry.plugins.find((entry) => entry.id === "startup-artifact-test")?.status).toBe(
+      "loaded",
+    );
   });
 
   it("blocks before_prompt_build but preserves legacy model overrides when prompt injection is disabled", async () => {

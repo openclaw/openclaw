@@ -420,6 +420,18 @@ describe("gateway bonjour advertiser", () => {
       expect.stringContaining("suppressing ciao netmask assertion"),
     );
 
+    logger.warn.mockClear();
+    expect(
+      handler?.(
+        new Error(
+          "Can't probe for a service which is announced already. Received announcing for service OpenClaw Gateway._openclaw._tcp.local.",
+        ),
+      ),
+    ).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("suppressing ciao self-probe race"),
+    );
+
     await started.stop();
   });
 

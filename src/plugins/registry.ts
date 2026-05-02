@@ -92,10 +92,10 @@ import {
 import {
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryFlushPlanResolver,
+  registerMemoryFlushPlanResolverForPlugin,
   registerMemoryPromptSupplement,
-  registerMemoryPromptSection,
-  registerMemoryRuntime,
+  registerMemoryPromptSectionForPlugin,
+  registerMemoryRuntimeForPlugin,
 } from "./memory-state.js";
 import { normalizeRegisteredProvider } from "./provider-validation.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -126,6 +126,11 @@ import type {
 import { withPluginRuntimePluginIdScope } from "./runtime/gateway-request-scope.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { defaultSlotIdForKey, hasKind } from "./slots.js";
+import {
+  findUndeclaredPluginToolNames,
+  normalizePluginToolContractNames,
+  normalizePluginToolNames,
+} from "./tool-contracts.js";
 import {
   isConversationHookName,
   isPluginHookName,
@@ -448,7 +453,17 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     if (pluginsWithChannelRegistrationConflict.has(record.id)) {
       return;
     }
-    const names = opts?.names ?? (opts?.name ? [opts.name] : []);
+    const declaredNames = normalizePluginToolContractNames(record.contracts);
+    if (declaredNames.length === 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "plugin must declare contracts.tools before registering agent tools",
+      });
+      return;
+    }
+    const names = [...(opts?.names ?? []), ...(opts?.name ? [opts.name] : [])];
     const optional = opts?.optional === true;
     const factory: OpenClawPluginToolFactory =
       typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
@@ -457,7 +472,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       names.push(tool.name);
     }
 
-    const normalized = names.map((name) => name.trim()).filter(Boolean);
+    const normalized = normalizePluginToolNames(names);
+    const undeclared = findUndeclaredPluginToolNames({
+      declaredNames,
+      toolNames: normalized,
+    });
+    if (undeclared.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+      });
+      return;
+    }
     if (normalized.length > 0) {
       record.toolNames.push(...normalized);
     }
@@ -466,6 +494,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       pluginName: record.name,
       factory,
       names: normalized,
+      declaredNames,
       optional,
       source: record.source,
       rootDir: record.rootDir,
@@ -1628,6 +1657,20 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
+    const declaredNames = normalizePluginToolContractNames(record.contracts);
+    const undeclared = findUndeclaredPluginToolNames({
+      declaredNames,
+      toolNames: [toolName],
+    });
+    if (undeclared.length > 0) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.tools for tool metadata: ${undeclared.join(", ")}`,
+      });
+      return;
+    }
     // Uniqueness is scoped to (pluginId + toolName): different plugins may each
     // register metadata under the same toolName for their own tools, but a given
     // plugin may not register the same toolName twice. At projection time
@@ -2337,7 +2380,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryPromptSection(builder);
+                registerMemoryPromptSectionForPlugin(record.id, builder);
               },
               registerMemoryPromptSupplement: (builder) => {
                 if (typeof builder !== "function") {
@@ -2372,7 +2415,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryFlushPlanResolver(resolver);
+                registerMemoryFlushPlanResolverForPlugin(record.id, resolver);
               },
               registerMemoryRuntime: (runtime) => {
                 if (!hasKind(record.kind, "memory")) {
@@ -2392,7 +2435,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   });
                   return;
                 }
-                registerMemoryRuntime(runtime);
+                registerMemoryRuntimeForPlugin(record.id, runtime);
               },
               registerMemoryEmbeddingProvider: (adapter) => {
                 if (hasKind(record.kind, "memory")) {

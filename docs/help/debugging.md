@@ -246,11 +246,30 @@ Disable auto-attach while keeping tmux management:
 OPENCLAW_GATEWAY_WATCH_ATTACH=0 pnpm gateway:watch
 ```
 
+Profile watched Gateway CPU time when debugging startup/runtime hotspots:
+
+```bash
+pnpm gateway:watch --benchmark
+```
+
+The watch wrapper consumes `--benchmark` before invoking the Gateway and writes
+one V8 `.cpuprofile` per Gateway child exit under
+`.artifacts/gateway-watch-profiles/`. Stop or restart the watched gateway to
+flush the current profile, then open it with Chrome DevTools or Speedscope:
+
+```bash
+npx speedscope .artifacts/gateway-watch-profiles/*.cpuprofile
+```
+
+Use `--benchmark-dir <path>` when you want profiles somewhere else.
+
 The tmux wrapper carries common non-secret runtime selectors such as
 `OPENCLAW_PROFILE`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_STATE_DIR`,
 `OPENCLAW_GATEWAY_PORT`, and `OPENCLAW_SKIP_CHANNELS` into the pane. Put
 provider credentials in your normal profile/config, or use raw foreground mode
 for one-off ephemeral secrets.
+The managed tmux pane also defaults to colored Gateway logs for readability;
+set `FORCE_COLOR=0` when starting `pnpm gateway:watch` to disable ANSI output.
 
 The watcher restarts on build-relevant files under `src/`, extension source files,
 extension `package.json` and `openclaw.plugin.json` metadata, `tsconfig.json`,

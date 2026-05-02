@@ -5,8 +5,8 @@ import {
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { normalizeProviderId } from "./provider-id.js";
 
 export type ProviderAuthAliasLookupParams = {
@@ -118,15 +118,14 @@ export function resolveProviderAuthAliasMap(
   if (cached) {
     return cached;
   }
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params?.config,
+  const snapshot = loadPluginMetadataSnapshot({
+    config: params?.config ?? {},
     workspaceDir: params?.workspaceDir,
     env,
-    includeDisabled: true,
   });
   const preferredAliases = new Map<string, ProviderAuthAliasCandidate>();
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
-  for (const plugin of registry.plugins) {
+  for (const plugin of snapshot.plugins) {
     if (!shouldUsePluginAuthAliases(plugin, params)) {
       continue;
     }

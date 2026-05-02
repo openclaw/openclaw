@@ -247,6 +247,7 @@ describe("clawhub helpers", () => {
   it("downloads ClawPack package artifacts from the version route and verifies response headers", async () => {
     const bytes = new Uint8Array([7, 8, 9]);
     const sha256Hex = createHash("sha256").update(bytes).digest("hex");
+    const sha1Hex = createHash("sha1").update(bytes).digest("hex");
     let requestedUrl = "";
     const archive = await downloadClawHubPackageArchive({
       name: "demo",
@@ -257,21 +258,23 @@ describe("clawhub helpers", () => {
         return new Response(bytes, {
           status: 200,
           headers: {
-            "content-type": "application/zip",
-            "X-ClawHub-ClawPack-Sha256": sha256Hex,
-            "X-ClawHub-ClawPack-Spec-Version": "1",
+            "content-type": "application/octet-stream",
+            "X-ClawHub-Artifact-Sha256": sha256Hex,
           },
         });
       },
     });
 
     try {
-      expect(new URL(requestedUrl).pathname).toBe("/api/v1/packages/demo/versions/1.2.3/clawpack");
-      expect(path.basename(archive.archivePath)).toBe("demo.clawpack.zip");
+      expect(new URL(requestedUrl).pathname).toBe(
+        "/api/v1/packages/demo/versions/1.2.3/artifact/download",
+      );
+      expect(path.basename(archive.archivePath)).toBe("demo-1.2.3.tgz");
       expect(archive.artifact).toBe("clawpack");
       expect(archive.sha256Hex).toBe(sha256Hex);
       expect(archive.clawpackHeaderSha256).toBe(sha256Hex);
-      expect(archive.clawpackHeaderSpecVersion).toBe(1);
+      expect(archive.npmIntegrity).toMatch(/^sha512-/);
+      expect(archive.npmShasum).toBe(sha1Hex);
       await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from(bytes));
     } finally {
       const archiveDir = path.dirname(archive.archivePath);
@@ -290,8 +293,8 @@ describe("clawhub helpers", () => {
           new Response(new Uint8Array([7, 8, 9]), {
             status: 200,
             headers: {
-              "content-type": "application/zip",
-              "X-ClawHub-ClawPack-Sha256": "0".repeat(64),
+              "content-type": "application/octet-stream",
+              "X-ClawHub-Artifact-Sha256": "0".repeat(64),
             },
           }),
       }),

@@ -1,12 +1,15 @@
 import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
+import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../../../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields } from "../../../plugins/installs.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { asObjectRecord } from "./object.js";
@@ -14,9 +17,25 @@ import { asObjectRecord } from "./object.js";
 type DownloadableInstallCandidate = {
   pluginId: string;
   label: string;
-  npmSpec: string;
+  npmSpec?: string;
+  clawhubSpec?: string;
   expectedIntegrity?: string;
 };
+
+function buildOpenClawClawHubSpec(npmSpec: string): string | undefined {
+  const parsed = parseRegistryNpmSpec(npmSpec);
+  if (!parsed?.name.startsWith("@openclaw/")) {
+    return undefined;
+  }
+  return `clawhub:${parsed.name}${parsed.selector ? `@${parsed.selector}` : ""}`;
+}
+
+function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+  );
+}
 
 function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
@@ -51,9 +70,13 @@ function collectDownloadableInstallCandidates(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   missingPluginIds: ReadonlySet<string>;
+  configuredPluginIds?: ReadonlySet<string>;
+  configuredChannelIds?: ReadonlySet<string>;
+  blockedPluginIds?: ReadonlySet<string>;
 }): DownloadableInstallCandidate[] {
-  const configuredPluginIds = collectConfiguredPluginIds(params.cfg);
-  const configuredChannelIds = collectConfiguredChannelIds(params.cfg);
+  const configuredPluginIds = params.configuredPluginIds ?? collectConfiguredPluginIds(params.cfg);
+  const configuredChannelIds =
+    params.configuredChannelIds ?? collectConfiguredChannelIds(params.cfg);
   const candidates = new Map<string, DownloadableInstallCandidate>();
 
   for (const entry of listChannelPluginCatalogEntries({
@@ -61,6 +84,9 @@ function collectDownloadableInstallCandidates(params: {
     excludeWorkspace: true,
   })) {
     const pluginId = entry.pluginId ?? entry.id;
+    if (params.blockedPluginIds?.has(pluginId)) {
+      continue;
+    }
     if (
       !params.missingPluginIds.has(pluginId) &&
       !configuredPluginIds.has(pluginId) &&
@@ -68,10 +94,18 @@ function collectDownloadableInstallCandidates(params: {
     ) {
       continue;
     }
+    const npmSpec = entry.install.npmSpec?.trim();
+    const clawhubSpec =
+      entry.install.clawhubSpec?.trim() ??
+      (npmSpec ? buildOpenClawClawHubSpec(npmSpec) : undefined);
+    if (!npmSpec && !clawhubSpec) {
+      continue;
+    }
     candidates.set(pluginId, {
       pluginId,
       label: entry.meta.label,
-      npmSpec: entry.install.npmSpec,
+      ...(npmSpec ? { npmSpec } : {}),
+      ...(clawhubSpec ? { clawhubSpec } : {}),
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),
@@ -86,14 +120,21 @@ function collectDownloadableInstallCandidates(params: {
     if (!configuredPluginIds.has(entry.pluginId) && !params.missingPluginIds.has(entry.pluginId)) {
       continue;
     }
+    if (params.blockedPluginIds?.has(entry.pluginId)) {
+      continue;
+    }
     const npmSpec = entry.install.npmSpec?.trim();
-    if (!npmSpec) {
+    const clawhubSpec =
+      entry.install.clawhubSpec?.trim() ??
+      (npmSpec ? buildOpenClawClawHubSpec(npmSpec) : undefined);
+    if (!npmSpec && !clawhubSpec) {
       continue;
     }
     candidates.set(entry.pluginId, {
       pluginId: entry.pluginId,
       label: entry.label,
-      npmSpec,
+      ...(npmSpec ? { npmSpec } : {}),
+      ...(clawhubSpec ? { clawhubSpec } : {}),
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),
@@ -114,9 +155,58 @@ async function installCandidate(params: {
   warnings: string[];
 }> {
   const { candidate } = params;
+  const extensionsDir = resolveDefaultPluginExtensionsDir();
+  const changes: string[] = [];
+  if (candidate.clawhubSpec) {
+    const clawhubResult = await installPluginFromClawHub({
+      spec: candidate.clawhubSpec,
+      extensionsDir,
+      expectedPluginId: candidate.pluginId,
+      mode: "install",
+    });
+    if (clawhubResult.ok) {
+      const pluginId = clawhubResult.pluginId;
+      return {
+        records: {
+          ...params.records,
+          [pluginId]: {
+            ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
+            spec: candidate.clawhubSpec,
+            installPath: clawhubResult.targetDir,
+            installedAt: new Date().toISOString(),
+          },
+        },
+        changes: [
+          `Installed missing configured plugin "${pluginId}" from ${candidate.clawhubSpec}.`,
+        ],
+        warnings: [],
+      };
+    }
+    if (!candidate.npmSpec || !shouldFallbackClawHubToNpm(clawhubResult)) {
+      return {
+        records: params.records,
+        changes: [],
+        warnings: [
+          `Failed to install missing configured plugin "${candidate.pluginId}" from ${candidate.clawhubSpec}: ${clawhubResult.error}`,
+        ],
+      };
+    }
+    changes.push(
+      `ClawHub ${candidate.clawhubSpec} unavailable for "${candidate.pluginId}"; falling back to npm ${candidate.npmSpec}.`,
+    );
+  }
+  if (!candidate.npmSpec) {
+    return {
+      records: params.records,
+      changes: [],
+      warnings: [
+        `Failed to install missing configured plugin "${candidate.pluginId}": missing npm spec.`,
+      ],
+    };
+  }
   const result = await installPluginFromNpmSpec({
     spec: candidate.npmSpec,
-    extensionsDir: resolveDefaultPluginExtensionsDir(),
+    extensionsDir,
     expectedPluginId: candidate.pluginId,
     expectedIntegrity: candidate.expectedIntegrity,
     mode: "install",
@@ -143,7 +233,10 @@ async function installCandidate(params: {
         ...buildNpmResolutionInstallFields(result.npmResolution),
       },
     },
-    changes: [`Installed missing configured plugin "${pluginId}" from ${candidate.npmSpec}.`],
+    changes: [
+      ...changes,
+      `Installed missing configured plugin "${pluginId}" from ${candidate.npmSpec}.`,
+    ],
     warnings: [],
   };
 }
@@ -152,17 +245,57 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: string[] }> {
-  const env = params.env ?? process.env;
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params.cfg,
-    env,
-    includeDisabled: true,
+  return repairMissingPluginInstalls({
+    cfg: params.cfg,
+    env: params.env,
+    pluginIds: collectConfiguredPluginIds(params.cfg),
+    channelIds: collectConfiguredChannelIds(params.cfg),
   });
-  const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
+}
+
+export async function repairMissingPluginInstallsForIds(params: {
+  cfg: OpenClawConfig;
+  pluginIds: Iterable<string>;
+  channelIds?: Iterable<string>;
+  blockedPluginIds?: Iterable<string>;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  return repairMissingPluginInstalls({
+    cfg: params.cfg,
+    env: params.env,
+    pluginIds: new Set(
+      [...params.pluginIds].map((pluginId) => pluginId.trim()).filter((pluginId) => pluginId),
+    ),
+    channelIds: new Set(
+      [...(params.channelIds ?? [])]
+        .map((channelId) => channelId.trim())
+        .filter((channelId) => channelId),
+    ),
+    blockedPluginIds: new Set(
+      [...(params.blockedPluginIds ?? [])]
+        .map((pluginId) => pluginId.trim())
+        .filter((pluginId) => pluginId),
+    ),
+  });
+}
+
+async function repairMissingPluginInstalls(params: {
+  cfg: OpenClawConfig;
+  pluginIds: ReadonlySet<string>;
+  channelIds: ReadonlySet<string>;
+  blockedPluginIds?: ReadonlySet<string>;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{ changes: string[]; warnings: string[] }> {
+  const env = params.env ?? process.env;
+  const knownIds = new Set(
+    loadManifestMetadataSnapshot({
+      config: params.cfg,
+      env,
+    }).plugins.map((plugin) => plugin.id),
+  );
   const records = await loadInstalledPluginIndexInstallRecords({ env });
-  const configuredPluginIds = collectConfiguredPluginIds(params.cfg);
   const missingRecordedPluginIds = Object.keys(records).filter(
-    (pluginId) => configuredPluginIds.has(pluginId) && !knownIds.has(pluginId),
+    (pluginId) => params.pluginIds.has(pluginId) && !knownIds.has(pluginId),
   );
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -194,7 +327,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   }
 
   const missingPluginIds = new Set(
-    [...configuredPluginIds].filter(
+    [...params.pluginIds].filter(
       (pluginId) => !knownIds.has(pluginId) && !Object.hasOwn(nextRecords, pluginId),
     ),
   );
@@ -202,6 +335,9 @@ export async function repairMissingConfiguredPluginInstalls(params: {
     cfg: params.cfg,
     env,
     missingPluginIds,
+    configuredPluginIds: params.pluginIds,
+    configuredChannelIds: params.channelIds,
+    blockedPluginIds: params.blockedPluginIds,
   })) {
     if (knownIds.has(candidate.pluginId) || Object.hasOwn(nextRecords, candidate.pluginId)) {
       continue;
@@ -222,4 +358,5 @@ export const __testing = {
   collectConfiguredChannelIds,
   collectConfiguredPluginIds,
   collectDownloadableInstallCandidates,
+  buildOpenClawClawHubSpec,
 };

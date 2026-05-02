@@ -49,7 +49,10 @@ enum ConfigStore {
     }
 
     @MainActor
-    static func save(_ root: sending [String: Any]) async throws {
+    static func save(
+        _ root: sending [String: Any],
+        allowGatewayAuthMutation: Bool = false) async throws
+    {
         let overrides = await self.overrideStore.overrides
         if await self.isRemoteMode() {
             if let override = overrides.saveRemote {
@@ -68,7 +71,11 @@ enum ConfigStore {
                         self.lastHash = nil
                         throw error
                     }
-                    guard OpenClawConfigFile.saveDict(root) else {
+                    guard OpenClawConfigFile.saveDict(
+                        root,
+                        preserveExistingKeys: true,
+                        allowGatewayAuthMutation: allowGatewayAuthMutation)
+                    else {
                         throw NSError(domain: "ConfigStore", code: 2, userInfo: [
                             NSLocalizedDescriptionKey: "Local config write rejected to protect gateway auth/mode.",
                         ])

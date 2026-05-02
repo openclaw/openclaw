@@ -271,6 +271,53 @@ describe("plugins cli uninstall", () => {
     });
   });
 
+  it("cleans stale policy refs even when plugin is absent from the current registry", async () => {
+    const baseConfig = {
+      plugins: {
+        allow: ["alpha", "beta"],
+        deny: ["alpha"],
+      },
+    } as OpenClawConfig;
+    const nextConfig = {
+      plugins: {
+        allow: ["beta"],
+      },
+    } as OpenClawConfig;
+
+    loadConfig.mockReturnValue(baseConfig);
+    buildPluginSnapshotReport.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    planPluginUninstall.mockReturnValue({
+      ok: true,
+      config: nextConfig,
+      actions: {
+        entry: false,
+        install: false,
+        allowlist: true,
+        denylist: true,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: null,
+    });
+
+    await runPluginsCommand(["plugins", "uninstall", "alpha", "--force"]);
+
+    expect(planPluginUninstall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginId: "alpha",
+        deleteFiles: true,
+      }),
+    );
+    expect(writeConfigFile).toHaveBeenCalledWith(nextConfig);
+    expect(runtimeLogs.at(-2)).toContain('Uninstalled plugin "alpha"');
+  });
+
   it("exits when uninstall target is not managed by plugin install records", async () => {
     loadConfig.mockReturnValue({
       plugins: {
@@ -282,12 +329,16 @@ describe("plugins cli uninstall", () => {
       plugins: [{ id: "alpha", name: "alpha" }],
       diagnostics: [],
     });
+    planPluginUninstall.mockReturnValue({
+      ok: false,
+      error: "Plugin not found: alpha",
+    });
 
     await expect(runPluginsCommand(["plugins", "uninstall", "alpha", "--force"])).rejects.toThrow(
       "__exit__:1",
     );
 
     expect(runtimeErrors.at(-1)).toContain("is not managed by plugins config/install records");
-    expect(planPluginUninstall).not.toHaveBeenCalled();
+    expect(planPluginUninstall).toHaveBeenCalled();
   });
 });

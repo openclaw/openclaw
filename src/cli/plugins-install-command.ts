@@ -7,6 +7,7 @@ import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
+import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
 import { installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
@@ -766,20 +767,9 @@ export async function runPluginInstallCommand(params: {
       snapshot,
       pluginId: result.pluginId,
       install: {
-        source: "clawhub",
+        ...buildClawHubPluginInstallRecordFields(result.clawhub),
         spec: raw,
         installPath: result.targetDir,
-        version: result.version,
-        integrity: result.clawhub.integrity,
-        resolvedAt: result.clawhub.resolvedAt,
-        clawhubUrl: result.clawhub.clawhubUrl,
-        clawhubPackage: result.clawhub.clawhubPackage,
-        clawhubFamily: result.clawhub.clawhubFamily,
-        clawhubChannel: result.clawhub.clawhubChannel,
-        clawpackSha256: result.clawhub.clawpackSha256,
-        clawpackSpecVersion: result.clawhub.clawpackSpecVersion,
-        clawpackManifestSha256: result.clawhub.clawpackManifestSha256,
-        clawpackSize: result.clawhub.clawpackSize,
       },
       runtime,
     });
@@ -800,20 +790,9 @@ export async function runPluginInstallCommand(params: {
         snapshot,
         pluginId: clawhubResult.pluginId,
         install: {
-          source: "clawhub",
+          ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
           spec: preferredClawHubSpec,
           installPath: clawhubResult.targetDir,
-          version: clawhubResult.version,
-          integrity: clawhubResult.clawhub.integrity,
-          resolvedAt: clawhubResult.clawhub.resolvedAt,
-          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-          clawpackSha256: clawhubResult.clawhub.clawpackSha256,
-          clawpackSpecVersion: clawhubResult.clawhub.clawpackSpecVersion,
-          clawpackManifestSha256: clawhubResult.clawhub.clawpackManifestSha256,
-          clawpackSize: clawhubResult.clawhub.clawpackSize,
         },
         runtime,
       });

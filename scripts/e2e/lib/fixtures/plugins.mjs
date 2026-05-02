@@ -1,8 +1,8 @@
 import path from "node:path";
 import { requireArg, write, writeJson } from "./common.mjs";
 
-function writePluginManifest(file, id) {
-  writeJson(file, { id, configSchema: { type: "object", properties: {} } });
+function writePluginManifest(file, id, extra = {}) {
+  writeJson(file, { id, ...extra, configSchema: { type: "object", properties: {} } });
 }
 
 function writeFakeIsNumberPackage(dir) {
@@ -19,7 +19,9 @@ function writePluginDemo([dir]) {
     path.join(requireArg(dir, "dir"), "index.js"),
     'module.exports = { id: "demo-plugin", name: "Demo Plugin", description: "Docker E2E demo plugin", register(api) { api.registerTool(() => null, { name: "demo_tool" }); api.registerGatewayMethod("demo.ping", async () => ({ ok: true })); api.registerCli(() => {}, { commands: ["demo"] }); api.registerService({ id: "demo-service", start: () => {} }); }, };\n',
   );
-  writePluginManifest(path.join(dir, "openclaw.plugin.json"), "demo-plugin");
+  writePluginManifest(path.join(dir, "openclaw.plugin.json"), "demo-plugin", {
+    contracts: { tools: ["demo_tool"] },
+  });
 }
 
 function writePlugin([dir, id, version, method, name]) {

@@ -361,9 +361,8 @@ const SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "src/memory-host-sdk/host/embedding-defaults.ts",
-    ["src/memory-host-sdk/host/embeddings.test.ts"],
+    ["packages/memory-host-sdk/src/host/embeddings.test.ts"],
   ],
-  ["src/memory-host-sdk/host/embeddings.ts", ["src/memory-host-sdk/host/embeddings.test.ts"]],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [

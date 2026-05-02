@@ -57,8 +57,6 @@ const DEMO_CLAWPACK_SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const DEMO_CLAWPACK_INTEGRITY = `sha256-${Buffer.from(DEMO_CLAWPACK_SHA256, "hex").toString(
   "base64",
 )}`;
-const DEMO_CLAWPACK_MANIFEST_SHA256 =
-  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const tempDirs: string[] = [];
 
 function sha256Hex(value: string): string {
@@ -336,29 +334,26 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        clawpack: {
-          available: true,
-          specVersion: 1,
-          format: "clawpack.zip",
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
           sha256: DEMO_CLAWPACK_SHA256,
           size: 4096,
-          fileCount: 7,
-          manifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
-          builtAt: 1774200000000,
-          buildVersion: "2026.3.22",
-          hostTargets: [],
-          environment: null,
-          runtimeBundles: [],
+          npmIntegrity: "sha512-clawpack",
+          npmShasum: "1".repeat(40),
+          npmTarballName: "demo-2026.3.22.tgz",
         },
       },
     });
     downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/clawpack.zip",
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
       integrity: DEMO_CLAWPACK_INTEGRITY,
       sha256Hex: DEMO_CLAWPACK_SHA256,
       artifact: "clawpack",
       clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
-      clawpackHeaderSpecVersion: 1,
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "1".repeat(40),
+      npmTarballName: "demo-2026.3.22.tgz",
       cleanup: archiveCleanupMock,
     });
 
@@ -371,9 +366,12 @@ describe("installPluginFromClawHub", () => {
       ok: true,
       clawhub: {
         integrity: DEMO_CLAWPACK_INTEGRITY,
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "demo-2026.3.22.tgz",
         clawpackSha256: DEMO_CLAWPACK_SHA256,
-        clawpackSpecVersion: 1,
-        clawpackManifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
         clawpackSize: 4096,
       },
     });
@@ -396,23 +394,20 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        clawpack: {
-          available: true,
-          specVersion: 1,
-          format: "clawpack.zip",
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
           sha256: DEMO_CLAWPACK_SHA256,
           size: 4096,
-          manifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
         },
       },
     });
     downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/clawpack.zip",
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
       integrity: DEMO_CLAWPACK_INTEGRITY,
       sha256Hex: DEMO_CLAWPACK_SHA256,
       artifact: "clawpack",
       clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
-      clawpackHeaderSpecVersion: 1,
       cleanup: archiveCleanupMock,
     });
 
@@ -435,7 +430,7 @@ describe("installPluginFromClawHub", () => {
     );
     expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        archivePath: "/tmp/clawhub-demo/clawpack.zip",
+        archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
       }),
     );
   });
@@ -451,16 +446,15 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        clawpack: {
-          available: true,
-          specVersion: 1,
-          format: "clawpack.zip",
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
           sha256: DEMO_CLAWPACK_SHA256,
         },
       },
     });
     downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath: "/tmp/clawhub-demo/clawpack.zip",
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
       integrity: `sha256-${Buffer.from(mismatchedSha256, "hex").toString("base64")}`,
       sha256Hex: mismatchedSha256,
       artifact: "clawpack",
@@ -497,19 +491,11 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        clawpack: {
-          available: true,
-          specVersion: 1,
-          format: "clawpack.zip",
+        artifact: {
+          kind: "npm-pack",
+          format: "tgz",
           sha256: DEMO_CLAWPACK_SHA256,
           size: 4096,
-          fileCount: 7,
-          manifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
-          builtAt: 1774200000000,
-          buildVersion: "2026.3.22",
-          hostTargets: [],
-          environment: null,
-          runtimeBundles: [],
         },
       },
     });

@@ -106,7 +106,11 @@ export {
 export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
 export { resolveSandboxContext } from "../agents/sandbox.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
-export { acquireSessionWriteLock } from "../agents/session-write-lock.js";
+export {
+  acquireSessionWriteLock,
+  resolveSessionWriteLockAcquireTimeoutMs,
+  type SessionWriteLockAcquireTimeoutConfig,
+} from "../agents/session-write-lock.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   isToolWrappedWithBeforeToolCallHook,

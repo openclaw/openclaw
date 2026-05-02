@@ -956,6 +956,7 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   sessionKey: string;
   message: string;
   savedImages: SavedMedia[];
+  cfg: OpenClawConfig;
 }) {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
   if (!("MediaPath" in mediaFields)) {
@@ -990,6 +991,7 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   await rewriteTranscriptEntriesInSessionFile({
     sessionFile: params.transcriptPath,
     sessionKey: params.sessionKey,
+    config: params.cfg,
     request: {
       replacements: [
         {
@@ -1319,6 +1321,7 @@ async function appendAssistantTranscriptMessage(params: {
     origin: AbortOrigin;
     runId: string;
   };
+  cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
   const transcriptPath = resolveTranscriptPath({
     sessionId: params.sessionId,
@@ -1357,6 +1360,7 @@ async function appendAssistantTranscriptMessage(params: {
     content: params.content,
     idempotencyKey: params.idempotencyKey,
     abortMeta: params.abortMeta,
+    config: params.cfg,
   });
 }
 
@@ -1393,7 +1397,7 @@ async function persistAbortedPartials(params: {
   if (params.snapshots.length === 0) {
     return;
   }
-  const { storePath, entry } = loadSessionEntry(params.sessionKey);
+  const { cfg, storePath, entry } = loadSessionEntry(params.sessionKey);
   for (const snapshot of params.snapshots) {
     const sessionId = entry?.sessionId ?? snapshot.sessionId ?? snapshot.runId;
     const appended = await appendAssistantTranscriptMessage({
@@ -1403,6 +1407,7 @@ async function persistAbortedPartials(params: {
       sessionFile: entry?.sessionFile,
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
+      cfg,
       abortMeta: {
         aborted: true,
         origin: snapshot.abortOrigin,
@@ -1830,6 +1835,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const p = params as {
       sessionKey: string;
+      sessionId?: string;
       message: string;
       thinking?: string;
       deliver?: boolean;
@@ -1904,6 +1910,8 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const rawSessionKey = p.sessionKey;
     const { cfg, entry, canonicalKey: sessionKey } = loadSessionEntry(rawSessionKey);
+    const requestedSessionId = normalizeOptionalText(p.sessionId);
+    const backingSessionId = entry?.sessionId ?? requestedSessionId;
     const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, sessionKey);
     if (deletedAgentId !== null) {
       respond(
@@ -2049,7 +2057,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const activeRunAbort = registerChatAbortController({
         chatAbortControllers: context.chatAbortControllers,
         runId: clientRunId,
-        sessionId: entry?.sessionId ?? clientRunId,
+        sessionId: backingSessionId ?? clientRunId,
         sessionKey: rawSessionKey,
         timeoutMs,
         now,
@@ -2167,7 +2175,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         userTranscriptUpdatePromise = (async () => {
           const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-          const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+          const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
           if (!resolvedSessionId) {
             return;
           }
@@ -2199,7 +2207,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const resolvedSessionId = latestEntry?.sessionId ?? entry?.sessionId;
+        const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
         if (!resolvedSessionId) {
           return;
         }
@@ -2218,6 +2226,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           sessionKey,
           message: parsedMessage,
           savedImages: await persistedImagesPromise,
+          cfg,
         });
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
@@ -2226,7 +2235,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
         const transcriptPayload = stripVisibleTextFromTtsSupplement(payload);
         const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
-        const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
         const resolvedTranscriptPath = resolveTranscriptPath({
           sessionId,
           storePath: latestStorePath,
@@ -2262,6 +2271,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
           ? persistedAssistantContent
           : undefined;
+        if (!persistedContentForAppend?.length) {
+          return;
+        }
         const transcriptReply =
           mediaMessage?.transcriptText ??
           extractAssistantDisplayTextFromContent(assistantContent) ??
@@ -2278,6 +2290,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           agentId,
           createIfMissing: true,
           idempotencyKey: `${clientRunId}:assistant-media`,
+          cfg,
         });
         if (appended.ok) {
           if (appended.messageId && assistantContent?.length) {
@@ -2400,7 +2413,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                     .map((entry) => entry.payload);
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
-              const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
+              const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
               const resolvedTranscriptPath = resolveTranscriptPath({
                 sessionId,
                 storePath: latestStorePath,
@@ -2484,6 +2497,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                   sessionFile: latestEntry?.sessionFile,
                   agentId,
                   createIfMissing: true,
+                  cfg,
                 });
                 if (appended.ok) {
                   if (appended.messageId && assistantContent?.length) {
@@ -2640,6 +2654,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionFile: entry?.sessionFile,
       agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
       createIfMissing: true,
+      cfg,
     });
     if (!appended.ok || !appended.messageId || !appended.message) {
       respond(

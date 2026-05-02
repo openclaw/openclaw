@@ -1,3 +1,4 @@
+import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type {
   SearchConfigRecord,
   WebSearchProviderPlugin,
@@ -111,8 +112,10 @@ function resolveBraveMode(searchConfig?: Record<string, unknown>): "web" | "llm-
 
 function createBraveToolDefinition(
   searchConfig?: SearchConfigRecord,
+  config?: Parameters<typeof isDiagnosticFlagEnabled>[1],
 ): WebSearchProviderToolDefinition {
   const braveMode = resolveBraveMode(searchConfig);
+  const diagnosticsEnabled = isDiagnosticFlagEnabled("brave.http", config);
 
   return {
     description:
@@ -122,7 +125,7 @@ function createBraveToolDefinition(
     parameters: BraveSearchSchema,
     execute: async (args) => {
       const { executeBraveSearch } = await loadBraveWebSearchRuntime();
-      return await executeBraveSearch(args, searchConfig);
+      return await executeBraveSearch(args, searchConfig, { diagnosticsEnabled });
     },
   };
 }
@@ -153,6 +156,7 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
           resolveProviderWebSearchPluginConfig(ctx.config, "brave"),
           { mirrorApiKeyToTopLevel: true },
         ),
+        ctx.config,
       ),
   };
 }

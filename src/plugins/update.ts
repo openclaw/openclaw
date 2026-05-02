@@ -11,6 +11,7 @@ import { compareComparableSemver, parseComparableSemver } from "../infra/semver-
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
+import { buildClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "./clawhub.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
@@ -953,20 +954,10 @@ export async function updateNpmInstalledPlugins(params: {
       >;
       next = recordPluginInstall(next, {
         pluginId: resolvedPluginId,
-        source: "clawhub",
+        ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
         spec: effectiveSpec ?? record.spec ?? `clawhub:${record.clawhubPackage!}`,
         installPath: result.targetDir,
         version: nextVersion,
-        integrity: clawhubResult.clawhub.integrity,
-        resolvedAt: clawhubResult.clawhub.resolvedAt,
-        clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-        clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-        clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-        clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-        clawpackSha256: clawhubResult.clawhub.clawpackSha256,
-        clawpackSpecVersion: clawhubResult.clawhub.clawpackSpecVersion,
-        clawpackManifestSha256: clawhubResult.clawhub.clawpackManifestSha256,
-        clawpackSize: clawhubResult.clawhub.clawpackSize,
       });
     } else if (record.source === "git") {
       const gitResult = result as Extract<
@@ -1211,20 +1202,10 @@ export async function syncPluginsForUpdateChannel(params: {
         >;
         next = recordPluginInstall(next, {
           pluginId: resolvedPluginId,
-          source: "clawhub",
+          ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
           spec: installSpec,
           installPath: result.targetDir,
           version: nextVersion,
-          integrity: clawhubResult.clawhub.integrity,
-          resolvedAt: clawhubResult.clawhub.resolvedAt,
-          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-          clawpackSha256: clawhubResult.clawhub.clawpackSha256,
-          clawpackSpecVersion: clawhubResult.clawhub.clawpackSpecVersion,
-          clawpackManifestSha256: clawhubResult.clawhub.clawpackManifestSha256,
-          clawpackSize: clawhubResult.clawhub.clawpackSize,
         });
       } else {
         const npmResult = result as Extract<

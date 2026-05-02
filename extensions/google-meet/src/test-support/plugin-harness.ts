@@ -60,6 +60,7 @@ export function setupGoogleMeetPlugin(
       argv: string[],
       options?: { timeoutMs?: number },
     ) => Promise<CommandResult>;
+    registerPlatform?: NodeJS.Platform;
   } = {},
 ) {
   const methods = new Map<string, unknown>();
@@ -157,7 +158,16 @@ export function setupGoogleMeetPlugin(
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
   });
-  plugin.register(api);
+  const originalPlatform = process.platform;
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    value: options.registerPlatform ?? "darwin",
+  });
+  try {
+    plugin.register(api);
+  } finally {
+    Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+  }
   return {
     cliRegistrations,
     methods,

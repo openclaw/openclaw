@@ -17,6 +17,7 @@ import {
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -38,11 +39,10 @@ import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
 
 export { resolvePluginInstallDir } from "./install-paths.js";
 
-let pluginInstallRuntimePromise: Promise<typeof import("./install.runtime.js")> | undefined;
+const pluginInstallRuntimeLoader = createLazyImportLoader(() => import("./install.runtime.js"));
 
 async function loadPluginInstallRuntime() {
-  pluginInstallRuntimePromise ??= import("./install.runtime.js");
-  return pluginInstallRuntimePromise;
+  return await pluginInstallRuntimeLoader.load();
 }
 
 type PluginInstallLogger = {
@@ -176,6 +176,13 @@ function buildDirectoryInstallResult(params: {
     version: params.version,
     extensions: params.extensions,
   };
+}
+
+function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
+  return (
+    Object.keys(manifest.dependencies ?? {}).length > 0 ||
+    Object.keys(manifest.optionalDependencies ?? {}).length > 0
+  );
 }
 
 function buildBlockedInstallResult(params: {
@@ -560,6 +567,7 @@ type ValidatedPackagePlugin = {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  hasRuntimeDependencies: boolean;
   peerDependencies: Record<string, string>;
 };
 
@@ -719,6 +727,7 @@ async function validatePackagePluginInstallSource(params: {
       manifestName: pkgName || undefined,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
       extensions,
+      hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest),
       peerDependencies: manifest.peerDependencies ?? {},
     },
   };
@@ -841,6 +850,7 @@ async function installPluginFromPackageDir(
   const { plugin } = validated;
 
   preparedTarget = await resolvePreparedTargetForPluginId(plugin.pluginId);
+  const hasBundleManifest = Boolean(runtime.detectBundleManifestFormat(params.packageDir));
 
   return await installPluginDirectoryIntoExtensions({
     sourceDir: params.packageDir,
@@ -855,8 +865,11 @@ async function installPluginFromPackageDir(
     mode: preparedTarget.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps: false,
-    depsLogMessage: "",
+    hasDeps:
+      plugin.hasRuntimeDependencies &&
+      !hasBundleManifest &&
+      params.installPolicyRequest?.kind === "plugin-archive",
+    depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
     afterInstall: async (installedDir) => {
       return await scanAndLinkInstalledPackage({
@@ -906,6 +919,7 @@ export async function installPluginFromArchive(
           mode,
           dryRun: params.dryRun,
           expectedPluginId: params.expectedPluginId,
+          trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
           requirePluginManifest: true,
           installPolicyRequest,
         }),

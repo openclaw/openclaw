@@ -11,6 +11,8 @@ import {
   readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
   readLatestSessionUsageFromTranscriptAsync,
+  readLatestRecentSessionUsageFromTranscriptAsync,
+  readRecentSessionUsageFromTranscriptAsync,
   readRecentSessionUsageFromTranscript,
   readRecentSessionMessagesAsync,
   readRecentSessionMessages,
@@ -786,7 +788,10 @@ describe("readSessionMessages", () => {
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
     try {
-      const messages = await readSessionMessagesAsync(sessionId, storePath);
+      const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+        mode: "full",
+        reason: "test active branch selection",
+      });
       expect(messages.map((message) => (message as { content?: unknown }).content)).toEqual([
         "root",
         "active branch",
@@ -820,6 +825,104 @@ describe("readSessionMessages", () => {
     } finally {
       openSpy.mockRestore();
     }
+  });
+
+  test("shares concurrent async transcript index builds", async () => {
+    const sessionId = "test-session-index-cache-concurrent";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "hello" } },
+      { message: { role: "assistant", content: "hi" } },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const openSpy = vi.spyOn(fs.promises, "open");
+    try {
+      await expect(
+        Promise.all(
+          Array.from({ length: 8 }, () => readSessionMessageCountAsync(sessionId, storePath)),
+        ),
+      ).resolves.toEqual(Array.from({ length: 8 }, () => 2));
+      expect(openSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("readSessionMessagesAsync recent mode honors byte caps", async () => {
+    const sessionId = "test-session-async-recent-mode";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "older" } },
+      { message: { role: "assistant", content: "x".repeat(32 * 1024) } },
+      { message: { role: "user", content: "latest" } },
+    ]);
+    clearSessionTranscriptIndexCache();
+    const openSpy = vi.spyOn(fs.promises, "open");
+
+    try {
+      const messages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
+        mode: "recent",
+        maxMessages: 1,
+        maxBytes: 2048,
+      });
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toMatchObject({ role: "user", content: "latest" });
+      expect(JSON.stringify(messages)).not.toContain("older");
+      expect(openSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
+  test("reads recent session usage asynchronously from the transcript tail", async () => {
+    const sessionId = "test-session-async-recent-usage";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "assistant", content: "older", usage: { input: 10, output: 1 } } },
+      { message: { role: "assistant", content: "x".repeat(32 * 1024) } },
+      { message: { role: "assistant", content: "latest", usage: { input: 42, output: 7 } } },
+    ]);
+
+    const usage = await readRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
+    expect(usage).toMatchObject({
+      inputTokens: 42,
+      outputTokens: 7,
+    });
+  });
+
+  test("reads latest recent session usage separately from tail aggregates", async () => {
+    const sessionId = "test-session-async-latest-recent-usage";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "assistant", content: "older", usage: { input: 50, output: 5 } } },
+      { message: { role: "assistant", content: "latest", usage: { input: 70, output: 9 } } },
+    ]);
+
+    const aggregate = await readRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+    const latest = await readLatestRecentSessionUsageFromTranscriptAsync(
+      sessionId,
+      storePath,
+      undefined,
+      undefined,
+      2048,
+    );
+
+    expect(aggregate).toMatchObject({ inputTokens: 120, outputTokens: 14 });
+    expect(latest).toMatchObject({ inputTokens: 70, outputTokens: 9 });
   });
 
   test("tails transcript lines for manual compaction without loading the whole file", () => {
