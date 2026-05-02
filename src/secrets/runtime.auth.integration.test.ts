@@ -21,6 +21,7 @@ import {
 vi.unmock("../version.js");
 
 vi.mock("./runtime-prepare.runtime.js", () => ({
+  SecretProviderResolutionError: class SecretProviderResolutionError extends Error {},
   createResolverContext: ({
     sourceConfig,
     env,

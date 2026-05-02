@@ -18,6 +18,7 @@ const { resolveRuntimeWebToolsMock, runtimePrepareImportMock } = vi.hoisted(() =
 vi.mock("./runtime-prepare.runtime.js", () => {
   runtimePrepareImportMock();
   return {
+    SecretProviderResolutionError: class SecretProviderResolutionError extends Error {},
     createResolverContext: ({ sourceConfig, env }: { sourceConfig: unknown; env: unknown }) => ({
       sourceConfig,
       env,
