@@ -384,7 +384,7 @@ export function resolveAgentEnvVars(
   const agentEnv = agentCfg?.env;
   const scope = agentEnv?.scope ?? "all";
 
-  const globalVars = collectConfigEnvVars(cfg);
+  const globalVars = collectConfigRuntimeEnvVars(cfg);
   const agentVars = agentEnv?.vars ?? {};
 
   let base: Record<string, string>;
