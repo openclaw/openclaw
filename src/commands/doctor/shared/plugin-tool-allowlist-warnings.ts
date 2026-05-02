@@ -1,3 +1,4 @@
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "../../../agents/pi-bundle-mcp-names.js";
 import { normalizeToolName } from "../../../agents/tool-policy-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
@@ -92,6 +93,25 @@ function collectKnownPluginIds(registry: PluginManifestRegistry): Set<string> {
   return new Set(registry.plugins.map((plugin) => normalizePluginId(plugin.id)));
 }
 
+function collectConfiguredMcpServerNames(cfg: OpenClawConfig): Map<string, string> {
+  const servers = hasRecord(cfg.mcp) && hasRecord(cfg.mcp.servers) ? cfg.mcp.servers : undefined;
+  const result = new Map<string, string>();
+  const usedNames = new Set<string>();
+  for (const serverName of Object.keys(servers ?? {})) {
+    const safeName = sanitizeServerName(serverName, usedNames);
+    result.set(normalizeToolName(safeName), serverName);
+  }
+  return result;
+}
+
+function extractMcpServerPrefix(toolName: string): string | undefined {
+  const separatorIndex = toolName.indexOf(TOOL_NAME_SEPARATOR);
+  if (separatorIndex <= 0) {
+    return undefined;
+  }
+  return toolName.slice(0, separatorIndex);
+}
+
 function formatPluginList(pluginIds: readonly string[]): string {
   if (pluginIds.length === 1) {
     return `"${pluginIds[0]}"`;
@@ -153,8 +173,10 @@ export function collectPluginToolAllowlistWarnings(params: {
     }).manifestRegistry;
   const knownPluginIds = collectKnownPluginIds(registry);
   const toolOwners = collectToolOwners(registry);
+  const configuredMcpServers = collectConfiguredMcpServerNames(params.cfg);
   const missingPluginIssues = new Map<string, Set<string>>();
   const missingToolOwnerIssues = new Map<string, Set<string>>();
+  const mcpServerToolIssues = new Map<string, Set<string>>();
 
   for (const { source, entry } of exactEntries) {
     const pluginId = normalizePluginId(entry);
@@ -168,6 +190,16 @@ export function collectPluginToolAllowlistWarnings(params: {
     );
     if (owners.length > 0 && owners.length === (toolOwners.get(entry) ?? []).length) {
       addIssue(missingToolOwnerIssues, `${entry}\u0000${owners.join("\u0000")}`, source);
+      continue;
+    }
+
+    const mcpServerPrefix = extractMcpServerPrefix(entry);
+    if (mcpServerPrefix && configuredMcpServers.has(mcpServerPrefix)) {
+      addIssue(
+        mcpServerToolIssues,
+        `${entry}\u0000${configuredMcpServers.get(mcpServerPrefix)}`,
+        source,
+      );
     }
   }
 
@@ -188,6 +220,18 @@ export function collectPluginToolAllowlistWarnings(params: {
     }
     warnings.push(
       `- ${formatSourceLabels(issueSources)} references tool "${toolName}", owned by plugin ${formatPluginList(ownerPluginIds)}, but plugins.allow does not include the owning plugin. Add ${formatPluginList(ownerPluginIds)} to plugins.allow or remove plugins.allow.`,
+    );
+  }
+
+  for (const [issueKey, issueSources] of [...mcpServerToolIssues.entries()].toSorted(
+    (left, right) => left[0].localeCompare(right[0]),
+  )) {
+    const [toolName, serverName] = issueKey.split("\u0000");
+    if (!toolName || !serverName) {
+      continue;
+    }
+    warnings.push(
+      `- ${formatSourceLabels(issueSources)} references MCP tool pattern "${toolName}" for configured mcp.servers.${serverName}. If it is unavailable at runtime, make sure bundle MCP is not denied by tool policy and the MCP server starts cleanly.`,
     );
   }
 

@@ -91,6 +91,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Doctor/config: identify allowlisted MCP tool patterns from configured `mcp.servers.*` entries, so restrictive tool policies no longer report them as generic missing plugin tools. Thanks @ecochran76.
 - Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
 - Plugins/ClawHub: use the ClawHub artifact resolver response as the install decision before downloading, keeping legacy ZIP fallback and future ClawPack npm-pack installs on the same explicit resolver path. Thanks @vincentkoc.
 - Plugins/ClawHub: keep bare plugin package specs on npm for the launch cutover and reserve ClawHub resolution for explicit `clawhub:` specs until ClawHub pack readiness is deployed. Thanks @vincentkoc.

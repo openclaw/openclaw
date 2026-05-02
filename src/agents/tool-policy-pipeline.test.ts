@@ -74,6 +74,7 @@ describe("tool-policy-pipeline", () => {
     });
     expect(warnings.length).toBe(1);
     expect(warnings[0]).toContain("unknown entries (wat)");
+    expect(warnings[0]).toContain("plugin or MCP server is enabled and connected");
   });
 
   test("suppresses built-in profile warnings for unavailable gated core tools", () => {
