@@ -16,6 +16,10 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecordsSync: () => ({}),
+}));
+
 export function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }

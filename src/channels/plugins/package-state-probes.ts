@@ -5,6 +5,10 @@ import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
+import {
+  getCachedPluginJitiLoader,
+  type PluginJitiLoaderCache,
+} from "../../plugins/jiti-loader-cache.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
@@ -25,6 +29,29 @@ type ChannelPackageStateMetadata = {
 export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
 const log = createSubsystemLogger("channels");
+const sourcePackageStateLoaderCache: PluginJitiLoaderCache = new Map();
+
+function isSourceModulePath(modulePath: string): boolean {
+  return /\.(?:c|m)?tsx?$/iu.test(modulePath);
+}
+
+function loadChannelPackageStateModule(params: { modulePath: string; rootDir: string }): unknown {
+  try {
+    return loadChannelPluginModule(params);
+  } catch (error) {
+    if (!isSourceModulePath(params.modulePath)) {
+      throw error;
+    }
+    const loader = getCachedPluginJitiLoader({
+      cache: sourcePackageStateLoaderCache,
+      modulePath: params.modulePath,
+      importerUrl: import.meta.url,
+      tryNative: true,
+      cacheScopeKey: "channel-package-state",
+    });
+    return loader(params.modulePath);
+  }
+}
 
 function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) {
@@ -92,7 +119,7 @@ function resolveChannelPackageStateChecker(params: {
   }
 
   try {
-    const moduleExport = loadChannelPluginModule({
+    const moduleExport = loadChannelPackageStateModule({
       modulePath: resolveExistingPluginModulePath(params.entry.rootDir, metadata.specifier!),
       rootDir: params.entry.rootDir,
     }) as Record<string, unknown>;

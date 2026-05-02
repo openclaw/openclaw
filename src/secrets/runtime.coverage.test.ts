@@ -1,11 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginOrigin } from "../plugins/types.js";
 import { getPath, setPathCreateStrict } from "./path-utils.js";
 import { canonicalizeSecretTargetCoverageId } from "./target-registry-test-helpers.js";
+
+vi.mock("../plugins/installed-plugin-index-records.js", () => ({
+  loadInstalledPluginIndexInstallRecordsSync: () => ({}),
+}));
 
 type SecretRegistryEntry = {
   id: string;

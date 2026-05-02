@@ -146,7 +146,10 @@ export function resolvePluginConfigContractsById(params: {
         ((params.fallbackToBundledMetadataForResolvedBundled && existing.origin === "bundled") ||
           fallbackBundledPluginIds.has(pluginId));
       if (shouldHydrateBundledMatch) {
-        const bundled = findBundledPluginMetadataById(pluginId);
+        const bundled = findBundledPluginMetadataById(pluginId, {
+          includeChannelConfigs: false,
+          includeSyntheticChannelConfigs: false,
+        });
         if (bundled?.manifest.configContracts) {
           matches.set(pluginId, {
             origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
@@ -172,7 +175,10 @@ export function resolvePluginConfigContractsById(params: {
       ) {
         continue;
       }
-      const bundled = findBundledPluginMetadataById(pluginId);
+      const bundled = findBundledPluginMetadataById(pluginId, {
+        includeChannelConfigs: false,
+        includeSyntheticChannelConfigs: false,
+      });
       if (!bundled?.manifest.configContracts) {
         continue;
       }
