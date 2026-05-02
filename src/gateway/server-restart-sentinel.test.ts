@@ -500,7 +500,7 @@ describe("scheduleRestartSentinelWake", () => {
           message: "continue",
         },
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
 
     const wakePromise = scheduleRestartSentinelWake({ deps: {} as never });
     await Promise.resolve();
@@ -535,7 +535,7 @@ describe("scheduleRestartSentinelWake", () => {
         } as never,
         threadId: "fresh-thread",
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -796,7 +796,7 @@ describe("scheduleRestartSentinelWake", () => {
           message: "continue",
         },
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
     mocks.deliveryContextFromSession.mockReturnValue({
       channel: "telegram",
       to: "telegram:200482621",
@@ -1048,9 +1048,7 @@ describe("scheduleRestartSentinelWake", () => {
           },
         },
       } as Awaited<ReturnType<typeof mocks.readRestartSentinel>>)
-      .mockResolvedValueOnce(
-        null as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>,
-      );
+      .mockResolvedValueOnce(null);
 
     await scheduleRestartSentinelWake({ deps: {} as never });
     await scheduleRestartSentinelWake({ deps: {} as never });
@@ -1063,7 +1061,7 @@ describe("scheduleRestartSentinelWake", () => {
       payload: {
         message: "restart message",
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
@@ -1083,7 +1081,7 @@ describe("scheduleRestartSentinelWake", () => {
           message: "continue",
         },
       },
-    } as unknown as Awaited<ReturnType<typeof mocks.readRestartSentinel>>);
+    });
 
     await scheduleRestartSentinelWake({ deps: {} as never });
 
