@@ -215,7 +215,7 @@ function expectSetupSnapshotDoesNotScopeToPlugin(params: {
   const firstLoadCall = vi.mocked(loadOpenClawPlugins).mock.calls[0]?.[0] as
     | { onlyPluginIds?: string[] }
     | undefined;
-  expect(firstLoadCall?.onlyPluginIds).toBeUndefined();
+  expect(firstLoadCall?.onlyPluginIds).toEqual([]);
 }
 
 beforeEach(() => {
@@ -729,7 +729,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     });
   });
 
-  it("keeps full reloads when the active plugin registry is already populated", () => {
+  it("does not widen channel reloads when the active plugin registry is already populated", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
     const registry = createEmptyPluginRegistry();
@@ -752,8 +752,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     });
 
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: expect.anything(),
+      expect.objectContaining({
+        onlyPluginIds: [],
       }),
     );
   });
@@ -880,7 +880,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
     expect(getChannelPluginCatalogEntry).toHaveBeenCalledTimes(1);
   });
 
-  it("does not scope by raw channel id when no trusted plugin mapping exists", () => {
+  it("does not widen setup snapshots when no trusted plugin mapping exists", () => {
     const runtime = makeRuntime();
     const cfg: OpenClawConfig = {};
 
@@ -892,8 +892,8 @@ describe("ensureChannelSetupPluginInstalled", () => {
     });
 
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        onlyPluginIds: expect.anything(),
+      expect.objectContaining({
+        onlyPluginIds: [],
       }),
     );
   });
