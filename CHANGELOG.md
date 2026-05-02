@@ -2,6 +2,21 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+- Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
+- Plugins/onboarding: carry ClawHub install metadata through channel setup catalogs so missing channel plugins can install from ClawHub before npm/local fallback. Thanks @vincentkoc.
+
+### Fixes
+
+- Control UI/sessions: bound the default Sessions tab query to recent activity and fewer rows, avoiding expensive full-history loads while keeping filters editable. Fixes #76050. (#76051) Thanks @Neomail2.
+- Gateway/channels: cap startup fanout at four channel/account handoffs and recover from Bonjour ciao self-probe races, reducing Windows startup stalls with many Telegram accounts. Fixes #75687.
+- Gateway/sessions: keep `sessions.list` polling responsive on large session stores by reusing list-safe session cache/indexes and returning a lightweight compaction checkpoint preview instead of heavyweight summaries. Thanks @rolandrscheel.
+- CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
+- Agents/failover: exempt run-level timeouts that fire during tool execution from model fallback, timeout-triggered compaction, and generic timeout payload synthesis. Long `process(poll)`, browser, or `exec` tool calls that exceed `agents.defaults.timeoutSeconds` previously rotated auth profiles, switched to a fallback model, and surfaced a misleading "LLM request timed out" error even though the primary model had already responded. Mirrors the existing `timedOutDuringCompaction` precedent (#46889). Fixes #52147. (#75873) Thanks @simonusa.
+- Docker: copy Bun 1.3.13 from a digest-pinned image and keep CI on the same version. Fixes #74356. Thanks @fede-kamel and @sallyom.
+- Mattermost/slash commands: preserve slash-command activation state across bundled-entry loader and native ESM paths so `/oc_*` callbacks stop getting stuck on `503 "not yet initialized"`. (#68089) Thanks @allenliang2022.
 ## 2026.5.2
 
 ### Highlights
@@ -2557,7 +2572,6 @@ Docs: https://docs.openclaw.ai
 - Memory-core: preserve stored vector dimensions during read-only recovery so memory indexes do not lose vector metadata while repairing read-only state.
 - Reply/block streaming: preserve post-stream incomplete-turn error payloads after block streaming already emitted content, so users get the warning instead of silence. (#67991) Thanks @obviyus.
 - Telegram/streaming: clear the compaction replay guard after visible non-final boundaries so a post-tool assistant reply rotates to a fresh preview instead of editing the pre-compaction message. (#67993) Thanks @obviyus.
-- Mattermost/slash commands: preserve slash-command activation state across bundled-entry loader and native ESM paths so `/oc_*` callbacks stop getting stuck on `503 "not yet initialized"`. (#68089) Thanks @allenliang2022.
 - Matrix: fix `sessions_spawn --thread` subagent session spawning — thread binding creation, cleanup on session end, and completion-message delivery target resolution now work end-to-end. (#67643) Thanks @eejohnso-ops and @gumadeiras.
 - Slack/streaming: resolve native streaming recipient teams from the inbound user when available, with a monitor-team fallback, so DM and shared-workspace streams target the right recipient more reliably.
 - macOS/webchat: enable Undo and Redo in the composer text input by turning on the native `NSTextView` undo manager. (#34962) Thanks @tylerbittner.
