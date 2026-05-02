@@ -372,8 +372,12 @@ function mergeDiscoveryResult(
     target.candidates.push(candidate);
   }
   for (const diag of source.diagnostics) {
-    const key = `${diag.pluginId ?? ""}::${diag.message}`;
-    if (!target.diagnostics.some((d) => `${d.pluginId ?? ""}::${d.message}` === key)) {
+    const key = `${diag.pluginId ?? ""}::${diag.source ?? ""}::${diag.message}`;
+    if (
+      !target.diagnostics.some(
+        (d) => `${d.pluginId ?? ""}::${d.source ?? ""}::${d.message}` === key,
+      )
+    ) {
       target.diagnostics.push(diag);
     }
   }
