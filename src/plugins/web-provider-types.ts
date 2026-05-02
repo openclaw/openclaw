@@ -92,6 +92,8 @@ export type WebSearchProviderPlugin = {
   placeholder: string;
   signupUrl: string;
   docsUrl?: string;
+  /** Optional note shown before credential collection for provider-specific prerequisites. */
+  credentialNote?: string;
   autoDetectOrder?: number;
   credentialPath: string;
   inactiveSecretPaths?: string[];
