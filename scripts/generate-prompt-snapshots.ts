@@ -40,7 +40,7 @@ async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
 
 async function formatSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   const filePaths = files
-    .filter((file) => file.path.endsWith(".json"))
+    .filter((file) => file.path.endsWith(".md") || file.path.endsWith(".json"))
     .map((file) => path.resolve(root, file.path));
   if (filePaths.length === 0) {
     return;
