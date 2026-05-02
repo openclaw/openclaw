@@ -11,7 +11,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getPlatformAdapter } from "../adapter/index.js";
 import { formatErrorMessage } from "./format.js";
-import { debugWarn } from "./log.js";
+import { debugLog, debugWarn } from "./log.js";
 
 /**
  * Resolve the current user's home directory safely across platforms.
