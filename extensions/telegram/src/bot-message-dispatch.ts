@@ -229,7 +229,9 @@ function resolveTelegramReasoningLevel(params: {
       return level;
     }
   } catch {
-    // Fall through to default.
+    // Fail closed: if the session store is unreadable we cannot confirm a
+    // stored "off" override is absent, so don't enable reasoning.
+    return "off";
   }
   return configDefault;
 }

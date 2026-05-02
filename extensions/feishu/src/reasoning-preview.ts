@@ -24,8 +24,11 @@ export function resolveFeishuReasoningPreviewEnabled(params: {
       return level === "stream";
     }
   } catch {
-    // Fall through to config default.
+    // Fail closed: if the session store is unreadable we cannot confirm a
+    // stored "off" override is absent, so don't expose reasoning previews.
+    return false;
   }
+  // No persisted level found — fall back to config default.
   // Feishu preview only supports the "stream" variant; "on" (block-mode) has no preview equivalent.
   return configDefault === "stream";
 }
