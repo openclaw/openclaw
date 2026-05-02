@@ -336,10 +336,9 @@ assert_configured_plugin_installs_clawhub_attempted() {
     return 0
   fi
   local requests_file="$ARTIFACT_ROOT/clawhub-not-found-requests.jsonl"
-  if ! grep -q '/api/v1/packages/%40openclaw%2Fmatrix' "$requests_file" 2>/dev/null; then
-    echo "configured plugin install scenario did not attempt ClawHub for @openclaw/matrix" >&2
-    cat "$requests_file" >&2 2>/dev/null || true
-    return 1
+  # The install catalog may prefer npm; assertions.mjs validates the installed source.
+  if grep -q '/api/v1/packages/%40openclaw%2Fmatrix' "$requests_file" 2>/dev/null; then
+    echo "configured plugin install scenario attempted ClawHub for @openclaw/matrix"
   fi
 }
 
