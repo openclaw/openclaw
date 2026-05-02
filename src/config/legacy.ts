@@ -17,7 +17,7 @@ export function findLegacyConfigIssues(
   raw: unknown,
   sourceRaw?: unknown,
   extraRules: LegacyConfigRule[] = [],
-  touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
+  _touchedPaths?: ReadonlyArray<ReadonlyArray<string>>,
 ): LegacyConfigIssue[] {
   if (!raw || typeof raw !== "object") {
     return [];
