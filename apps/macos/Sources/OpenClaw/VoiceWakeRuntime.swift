@@ -187,7 +187,7 @@ actor VoiceWakeRuntime {
             }
             input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak request] buffer, _ in
-                request?.append(buffer)
+                request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
                 guard let rms = Self.rmsLevel(buffer: buffer) else { return }
                 Task.detached { [weak self] in
                     await self?.noteAudioLevel(rms: rms)
