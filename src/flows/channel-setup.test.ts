@@ -181,7 +181,7 @@ vi.mock("./channel-setup.status.js", () => ({
   findBundledSourceForCatalogChannel: vi.fn(() => undefined),
   noteChannelPrimer: vi.fn(),
   noteChannelStatus: vi.fn(),
-  resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
+  resolveCatalogChannelSelectionHint: vi.fn(() => "remote install from npm: <npm>"),
   resolveChannelSelectionNoteLines: vi.fn(() => []),
   resolveChannelSetupSelectionContributions: vi.fn(() => []),
   resolveQuickstartDefault: vi.fn(() => undefined),

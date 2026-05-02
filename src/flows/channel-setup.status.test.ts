@@ -76,6 +76,7 @@ vi.mock("../plugins/bundled-sources.js", () => ({
 import {
   collectChannelStatus,
   noteChannelPrimer,
+  resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
 } from "./channel-setup.status.js";
@@ -156,6 +157,25 @@ describe("resolveChannelSetupSelectionContributions", () => {
         label: "Zalo (Bot API)",
       },
     ]);
+  });
+
+  it("describes installable catalog choices as remote npm installs", () => {
+    expect(
+      resolveCatalogChannelSelectionHint({
+        install: { npmSpec: "@openclaw/googlechat" },
+      }),
+    ).toBe("remote install from npm: @openclaw/googlechat");
+  });
+
+  it("suppresses remote install hints for bundled channels", () => {
+    expect(
+      resolveCatalogChannelSelectionHint(
+        {
+          install: { npmSpec: "@openclaw/googlechat" },
+        },
+        { bundledLocalPath: "extensions/googlechat" },
+      ),
+    ).toBe("");
   });
 
   it("combines real status and disabled hints when available", () => {
