@@ -1,4 +1,5 @@
 import path from "node:path";
+import { clearCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { type PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginSetupRegistryCache } from "../plugins/setup-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
@@ -6,6 +7,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-help
 const tempDirs: string[] = [];
 
 export function resetPluginAutoEnableTestState(): void {
+  clearCurrentPluginMetadataSnapshot();
   clearPluginSetupRegistryCache();
   cleanupTrackedTempDirs(tempDirs);
 }

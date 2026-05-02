@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyPluginAutoEnable,
   materializePluginAutoEnableCandidates,
@@ -38,6 +38,10 @@ function applyWithBluebubblesImessageConfig(extra?: {
     env: makeIsolatedEnv(),
   });
 }
+
+beforeEach(() => {
+  resetPluginAutoEnableTestState();
+});
 
 afterEach(() => {
   resetPluginAutoEnableTestState();
