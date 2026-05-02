@@ -155,13 +155,7 @@ function isPdftoppmAvailable(): boolean {
   }
 }
 
-const FS = /* #__PURE__ */ (() => {
-  try {
-    return require("node:fs");
-  } catch {
-    return require("fs");
-  }
-})();
+const FS = require("node:fs");
 
 function renderPageWithPdftoppm(
   pdfPath: string,
