@@ -532,6 +532,8 @@ export const DiscordAccountSchema = z
     applicationId: DiscordIdSchema.optional(),
     proxy: z.string().optional(),
     gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    gatewayRuntimeReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),

@@ -806,6 +806,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           exclusiveMinimum: 0,
           maximum: 120000,
         },
+        gatewayReadyTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 120000,
+        },
+        gatewayRuntimeReadyTimeoutMs: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 120000,
+        },
         allowBots: {
           anyOf: [
             {
@@ -2178,6 +2188,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "string",
               },
               gatewayInfoTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 120000,
+              },
+              gatewayReadyTimeoutMs: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 120000,
+              },
+              gatewayRuntimeReadyTimeoutMs: {
                 type: "integer",
                 exclusiveMinimum: 0,
                 maximum: 120000,
@@ -3572,6 +3592,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       gatewayInfoTimeoutMs: {
         label: "Discord Gateway Metadata Timeout (ms)",
         help: "Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default is 30000; OPENCLAW_DISCORD_GATEWAY_INFO_TIMEOUT_MS can override when config is unset.",
+      },
+      gatewayReadyTimeoutMs: {
+        label: "Discord Gateway READY Timeout (ms)",
+        help: "Startup wait for the Discord gateway READY event before restarting the socket. Default is 15000; OPENCLAW_DISCORD_READY_TIMEOUT_MS can override when config is unset.",
+      },
+      gatewayRuntimeReadyTimeoutMs: {
+        label: "Discord Gateway Runtime READY Timeout (ms)",
+        help: "Runtime reconnect wait for the Discord gateway READY event before force-stopping the lifecycle. Default is 30000; OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS can override when config is unset.",
       },
       "voice.enabled": {
         label: "Discord Voice Enabled",

@@ -251,6 +251,10 @@ export type DiscordAccountConfig = {
   proxy?: string;
   /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
   gatewayInfoTimeoutMs?: number;
+  /** Startup wait for the gateway READY event before restarting the socket. Default: 15000. */
+  gatewayReadyTimeoutMs?: number;
+  /** Runtime reconnect wait for the gateway READY event before force-stopping the lifecycle. Default: 30000. */
+  gatewayRuntimeReadyTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**

@@ -382,6 +382,33 @@ describe("monitorDiscordProvider", () => {
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
   });
 
+  it("passes configured gateway READY timeouts to the lifecycle monitor", async () => {
+    resolveDiscordAccountMock.mockReturnValueOnce({
+      accountId: "default",
+      token: "cfg-token",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+        gatewayReadyTimeoutMs: 90_000,
+        gatewayRuntimeReadyTimeoutMs: 120_000,
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(monitorLifecycleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayReadyTimeoutMs: 90_000,
+        gatewayRuntimeReadyTimeoutMs: 120_000,
+      }),
+    );
+  });
+
   it("does not load the Discord voice runtime when voice is disabled", async () => {
     await monitorDiscordProvider({
       config: baseConfig(),
