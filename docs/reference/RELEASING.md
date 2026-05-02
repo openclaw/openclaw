@@ -59,10 +59,12 @@ the maintainer-only release runbook.
    intentionally carried.
 4. Create `release/YYYY.M.D` from current `main`; do not do normal release work
    directly on `main`.
-5. Bump every required version location for the intended tag, then run the
-   local deterministic preflight:
+5. Bump every required version location for the intended tag, run
+   `pnpm plugins:sync` so publishable plugin packages share the release
+   version and compatibility metadata, then run the local deterministic preflight:
    `pnpm check:test-types`, `pnpm check:architecture`,
-   `pnpm build && pnpm ui:build`, and `pnpm release:check`.
+   `pnpm build && pnpm ui:build`, `pnpm plugins:sync:check`, and
+   `pnpm release:check`.
 6. Run `OpenClaw NPM Release` with `preflight_only=true`. Before a tag exists,
    a full 40-character release-branch SHA is allowed for validation-only
    preflight. Save the successful `preflight_run_id`.
@@ -73,15 +75,19 @@ the maintainer-only release runbook.
    file, lane, workflow job, package profile, provider, or model allowlist that
    proves the fix. Rerun the full umbrella only when the changed surface makes
    prior evidence stale.
-9. For beta, tag `vYYYY.M.D-beta.N`, publish with npm dist-tag `beta`, then run
-   post-publish package acceptance against the published `openclaw@YYYY.M.D-beta.N`
-   or `openclaw@beta` package. If a pushed or published beta needs a fix, cut
-   the next `-beta.N`; do not delete or rewrite the old beta.
+9. For beta, tag `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
+   the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
+   publishes all publishable plugin packages to npm first, publishes the same
+   set to ClawHub second, and then promotes the prepared OpenClaw npm preflight
+   artifact with dist-tag `beta`. After publish, run post-publish package
+   acceptance against the published `openclaw@YYYY.M.D-beta.N` or `openclaw@beta`
+   package. If a pushed or published beta needs a fix, cut the next `-beta.N`;
+   do not delete or rewrite the old beta.
 10. For stable, continue only after the vetted beta or release candidate has the
-    required validation evidence. Stable npm publish reuses the successful
-    preflight artifact via `preflight_run_id`; stable macOS release readiness
-    also requires the packaged `.zip`, `.dmg`, `.dSYM.zip`, and updated
-    `appcast.xml` on `main`.
+    required validation evidence. Stable npm publish also goes through
+    `OpenClaw Release Publish`, reusing the successful preflight artifact via
+    `preflight_run_id`; stable macOS release readiness also requires the
+    packaged `.zip`, `.dmg`, `.dSYM.zip`, and updated `appcast.xml` on `main`.
 11. After publish, run the npm post-publish verifier, optional standalone
     published-npm Telegram E2E when you need post-publish channel proof,
     dist-tag promotion when needed, GitHub release/prerelease notes from the
@@ -143,6 +149,14 @@ the maintainer-only release runbook.
   span names, bounded attributes, and content/identifier redaction without
   requiring Opik, Langfuse, or another external collector.
 - Run `pnpm release:check` before every tagged release
+- Run `OpenClaw Release Publish` for the mutating publish sequence after the
+  tag exists. Dispatch it from `release/YYYY.M.D` (or `main` when publishing a
+  main-reachable tag), pass the release tag and successful OpenClaw npm
+  `preflight_run_id`, and keep the default plugin publish scope
+  `all-publishable` unless you are deliberately running a focused repair. The
+  workflow serializes plugin npm publish, plugin ClawHub publish, and OpenClaw
+  npm publish so the core package is not published before its externalized
+  plugins.
 - Release checks now run in a separate manual workflow:
   `OpenClaw Release Checks`
 - `OpenClaw Release Checks` also runs the QA Lab mock parity gate plus the fast
