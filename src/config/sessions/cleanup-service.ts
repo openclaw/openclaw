@@ -17,6 +17,7 @@ import {
   pruneStaleEntries,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
+import { runExclusiveSessionStoreWrite } from "./store-writer.js";
 import {
   loadSessionStore,
   updateSessionStore,
@@ -288,14 +289,20 @@ export async function runSessionsCleanup(params: {
           },
         },
       );
+      // Sweep orphaned artifacts inside the writer lock so a concurrent session write
+      // cannot create a new transcript between our snapshot and the directory scan.
+      const appliedOrphanedArtifacts = await runExclusiveSessionStoreWrite(
+        target.storePath,
+        async () => {
+          const freshStore = loadSessionStore(target.storePath, { skipCache: true });
+          return sweepOrphanedSessionArtifacts({
+            store: freshStore,
+            storePath: target.storePath,
+            dryRun: false,
+          });
+        },
+      );
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
-      // Sweep orphaned artifacts against the post-maintenance store so entries pruned
-      // during this run are already excluded from the "referenced" set.
-      const appliedOrphanedArtifacts = await sweepOrphanedSessionArtifacts({
-        store: afterStore,
-        storePath: target.storePath,
-        dryRun: false,
-      });
       const preview = previewResults.find(
         (result) => result.summary.storePath === target.storePath,
       );
