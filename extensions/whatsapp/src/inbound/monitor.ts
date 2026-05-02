@@ -856,6 +856,7 @@ export async function attachWebInboxToSocket(
       },
     },
     defaultAccountId: options.accountId,
+    authDir: options.authDir,
   });
 
   return {
