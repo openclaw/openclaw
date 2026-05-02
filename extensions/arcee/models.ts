@@ -1,6 +1,7 @@
-import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { ARCEE_BASE_URL, ARCEE_TRINITY_LARGE_THINKING_COMPAT } from "./provider-policy.js";
 
-export const ARCEE_BASE_URL = "https://api.arcee.ai/api/v1";
+export { ARCEE_BASE_URL, ARCEE_TRINITY_LARGE_THINKING_COMPAT };
 
 export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
@@ -44,9 +45,7 @@ export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
       cacheRead: 0.25,
       cacheWrite: 0.25,
     },
-    compat: {
-      supportsReasoningEffort: false,
-    },
+    compat: ARCEE_TRINITY_LARGE_THINKING_COMPAT,
   },
 ];
 
