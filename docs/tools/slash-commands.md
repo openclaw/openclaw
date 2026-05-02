@@ -422,7 +422,8 @@ Examples:
 
 On Telegram, opening `/messaging_window` as a native command shows quick-pick
 buttons for common global windows and current-channel overrides. Writes are
-owner-only and honor channel `configWrites` policy.
+owner-only, require `commands.config: true`, and honor channel `configWrites`
+policy.
 
 ## MCP updates
 

@@ -61,7 +61,8 @@ You can also manage these settings from an authorized chat with
 three-second window, `/messaging_window current 5s` to wait for a five-second
 burst on the current channel, or `/messaging_window telegram 5s` to target a
 named channel. Telegram native commands also expose quick-pick buttons for
-common global windows and current-channel overrides.
+common global windows and current-channel overrides. Chat-based writes are
+owner-only and require `commands.config: true`.
 
 Notes:
 

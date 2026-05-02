@@ -1,4 +1,4 @@
-import { resolveConfigWriteTargetFromPath } from "../../channels/plugins/config-writes.js";
+import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
 import { normalizeChannelId } from "../../channels/registry.js";
 import {
   getConfigValueAtPath,
@@ -16,6 +16,7 @@ import { resolveChannelAccountId } from "./channel-context.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
+  requireCommandFlagEnabled,
   requireGatewayClientScopeForInternalChannel,
 } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
@@ -123,6 +124,14 @@ export const handleMessagingWindowCommand: CommandHandler = async (params, allow
     return nonOwner;
   }
 
+  const disabled = requireCommandFlagEnabled(params.cfg, {
+    label: "/messaging_window",
+    configKey: "config",
+  });
+  if (disabled) {
+    return disabled;
+  }
+
   const missingAdminScope = requireGatewayClientScopeForInternalChannel(params, {
     label: "/messaging_window",
     allowedScopes: ["operator.admin"],
@@ -142,6 +151,10 @@ export const handleMessagingWindowCommand: CommandHandler = async (params, allow
   }
 
   const path = command.scope === "global" ? GLOBAL_PATH : [...CHANNEL_PATH_PREFIX, channel ?? ""];
+  const configWriteTarget =
+    command.scope === "global"
+      ? ({ kind: "global" } as const)
+      : resolveExplicitConfigWriteTarget({ channelId: channel });
   const deniedText = resolveConfigWriteDeniedText({
     cfg: params.cfg,
     channel: params.command.channel,
@@ -152,7 +165,7 @@ export const handleMessagingWindowCommand: CommandHandler = async (params, allow
       command: params.command,
     }),
     gatewayClientScopes: params.ctx.GatewayClientScopes,
-    target: resolveConfigWriteTargetFromPath(path),
+    target: configWriteTarget,
   });
   if (deniedText) {
     return { shouldContinue: false, reply: { text: deniedText } };

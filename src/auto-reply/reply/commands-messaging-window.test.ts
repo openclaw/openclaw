@@ -28,7 +28,7 @@ const { handleMessagingWindowCommand } = await import("./commands-messaging-wind
 
 function buildParams(
   commandBody: string,
-  cfg: OpenClawConfig = {},
+  cfg: OpenClawConfig = { commands: { config: true } },
 ): ReturnType<typeof buildCommandTestParams> {
   const params = buildCommandTestParams(commandBody, cfg);
   params.command.senderIsOwner = true;
@@ -128,10 +128,27 @@ describe("handleMessagingWindowCommand", () => {
     );
 
     expect(result?.reply?.text).toContain("telegram set to 5s");
+    expect(resolveConfigWriteDeniedTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "channel", scope: { channelId: "telegram" } },
+      }),
+    );
     expect(replaceConfigFileMock).toHaveBeenCalledWith({
       nextConfig: { messages: { inbound: { byChannel: { telegram: 5000 } } } },
       afterWrite: { mode: "auto" },
     });
+  });
+
+  it("requires commands.config before writing the messaging window", async () => {
+    const result = await handleMessagingWindowCommand(
+      buildParams("/messaging_window global 3s", {}),
+      true,
+    );
+
+    expect(result?.reply?.text).toContain("/messaging_window is disabled");
+    expect(result?.reply?.text).toContain("commands.config=true");
+    expect(resolveConfigWriteDeniedTextMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
   });
 
   it("resets a channel override without touching the global window", async () => {
