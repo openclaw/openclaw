@@ -35,6 +35,14 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   loadPluginManifestRegistry: mockLoadPluginManifestRegistry,
 }));
 
+vi.mock("../plugins/plugin-registry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-registry.js")>();
+  return {
+    ...actual,
+    loadPluginManifestRegistryForPluginRegistry: mockLoadPluginManifestRegistry,
+  };
+});
+
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
   return {
@@ -804,7 +812,7 @@ describe("config io write", () => {
     });
   });
 
-  it("preserves parsed source config when snapshot validation throws", async () => {
+  it("preserves parsed source config when snapshot validation fails", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
@@ -814,10 +822,6 @@ describe("config io write", () => {
       };
       const originalRaw = `${JSON.stringify(original, null, 2)}\n`;
       await fs.writeFile(configPath, originalRaw, "utf-8");
-      mockLoadPluginManifestRegistry.mockImplementationOnce(() => {
-        throw new Error("manifest registry unavailable");
-      });
-
       const io = createFastConfigIO(home);
 
       const snapshot = await io.readConfigFileSnapshot();
@@ -827,7 +831,7 @@ describe("config io write", () => {
       expect(snapshot.parsed).toEqual(original);
       expect(snapshot.sourceConfig).toEqual(original);
       expect(snapshot.config).toEqual(original);
-      expect(snapshot.issues[0]?.message).toContain("manifest registry unavailable");
+      expect(snapshot.issues[0]?.message).toContain("unknown channel id: test-plugin-channel");
     });
   });
 

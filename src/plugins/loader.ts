@@ -1178,8 +1178,22 @@ function activatePluginRegistry(
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
   const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
   const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
-  if (options.activate === false && requestedOnlyPluginIdSet?.size === 0) {
-    return createEmptyPluginRegistry();
+  if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
+    const emptyRegistry = createEmptyPluginRegistry();
+    if (options.activate !== false) {
+      clearAgentHarnesses();
+      clearPluginCommands();
+      clearPluginInteractiveHandlers();
+      clearDetachedTaskLifecycleRuntimeRegistration();
+      clearMemoryPluginState();
+      activatePluginRegistry(
+        emptyRegistry,
+        `empty-plugin-scope::${resolveRuntimeSubagentMode(options.runtimeOptions)}::${options.workspaceDir ?? ""}`,
+        resolveRuntimeSubagentMode(options.runtimeOptions),
+        options.workspaceDir,
+      );
+    }
+    return emptyRegistry;
   }
 
   const {
@@ -1202,19 +1216,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
-
-  if (onlyPluginIdSet && onlyPluginIdSet.size === 0) {
-    const emptyRegistry = createEmptyPluginRegistry();
-    if (shouldActivate) {
-      clearAgentHarnesses();
-      clearPluginCommands();
-      clearPluginInteractiveHandlers();
-      clearDetachedTaskLifecycleRuntimeRegistration();
-      clearMemoryPluginState();
-      activatePluginRegistry(emptyRegistry, cacheKey, runtimeSubagentMode, options.workspaceDir);
-    }
-    return emptyRegistry;
-  }
 
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {

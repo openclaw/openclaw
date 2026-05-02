@@ -155,7 +155,7 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries.minimax?.enabled).toBe(false);
   });
 
-  it("reuses the plugin alias discovery during one config normalization", async () => {
+  it("normalizes unknown plugin ids without loading discovery", async () => {
     vi.resetModules();
     const discovery = await import("./discovery.js");
     const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins");
@@ -176,10 +176,10 @@ describe("normalizePluginsConfig", () => {
     expect(result.allow).toEqual(["unknown-plugin-one", "unknown-plugin-two"]);
     expect(result.deny).toEqual(["unknown-plugin-three"]);
     expect(result.entries["unknown-plugin-four"]?.enabled).toBe(true);
-    expect(discoverPlugins).toHaveBeenCalledTimes(1);
+    expect(discoverPlugins).not.toHaveBeenCalled();
   });
 
-  it("keeps alias lookup limited to bundled plugin manifests", async () => {
+  it("does not load discovery or manifests for alias lookup", async () => {
     vi.resetModules();
     const discovery = await import("./discovery.js");
     const manifest = await import("./manifest.js");
@@ -224,7 +224,7 @@ describe("normalizePluginsConfig", () => {
     });
 
     expect(result.deny).toEqual(["anthropic"]);
-    expect(discoverPlugins).toHaveBeenCalledTimes(1);
+    expect(discoverPlugins).not.toHaveBeenCalled();
     expect(loadManifest).not.toHaveBeenCalled();
   });
 });
