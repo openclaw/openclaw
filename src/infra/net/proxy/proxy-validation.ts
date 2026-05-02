@@ -6,7 +6,7 @@ import { createHttp1ProxyAgent } from "../undici-runtime.js";
 
 export const DEFAULT_PROXY_VALIDATION_ALLOWED_URLS = ["https://example.com/"] as const;
 
-export const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
+const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
 const DENIED_CANARY_HEADER = "x-openclaw-proxy-validation-canary";
 
 export type ProxyValidationConfigSource = "override" | "config" | "env" | "missing" | "disabled";

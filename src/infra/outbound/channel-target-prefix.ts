@@ -39,7 +39,7 @@ function resolvePluginTargetPrefix(prefix: string): string | undefined {
   return undefined;
 }
 
-export function resolveChannelTargetProviderPrefix(
+function resolveChannelTargetProviderPrefix(
   raw?: string | null,
 ): ChannelTargetProviderPrefix | undefined {
   const match = /^\s*([a-z][a-z0-9_-]*):/i.exec(raw ?? "");
