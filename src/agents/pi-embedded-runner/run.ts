@@ -2515,7 +2515,7 @@ export async function runEmbeddedPiAgent(
                 attempt,
                 incompleteTurnText: null,
               });
-          const stopReason = attempt.clientToolCall
+          const stopReason = attempt.clientToolCalls
             ? "tool_calls"
             : attempt.yieldDetected
               ? "end_turn"
@@ -2553,15 +2553,11 @@ export async function runEmbeddedPiAgent(
               // Propagate the LLM stop reason so callers (lifecycle events,
               // ACP bridge) can distinguish end_turn from max_tokens.
               stopReason,
-              pendingToolCalls: attempt.clientToolCall
-                ? [
-                    {
-                      id: randomBytes(5).toString("hex").slice(0, 9),
-                      name: attempt.clientToolCall.name,
-                      arguments: JSON.stringify(attempt.clientToolCall.params),
-                    },
-                  ]
-                : undefined,
+              pendingToolCalls: attempt.clientToolCalls?.map((call) => ({
+                id: randomBytes(5).toString("hex").slice(0, 9),
+                name: call.name,
+                arguments: JSON.stringify(call.params),
+              })),
               executionTrace: {
                 winnerProvider: reportedModelRef.provider,
                 winnerModel: reportedModelRef.model,
