@@ -86,8 +86,7 @@ describe("api.resetSession validation", () => {
   it("returns structured failure for non-string key", async () => {
     const reg = createRegistryWithSessionReset();
     const api = registerAndCapture(reg);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await api.resetSession!(42 as any);
+    const result = await api.resetSession!(42 as unknown as string);
     expect(result).toEqual({
       ok: false,
       key: "",
