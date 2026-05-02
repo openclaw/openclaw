@@ -36,14 +36,10 @@ Prove the touched surface first. Do not reflexively run the whole suite.
 - Prefer GitHub Actions for release/Docker proof when the workflow already has the prepared image and secrets.
 - Use `scripts/committer "<msg>" <paths...>` when committing; stage only your files.
 - If deps are missing, run `pnpm install`, retry once, then report the first actionable error.
-- For Blacksmith Testbox proof, reuse only an id warmed and claimed in this
-  operator session. `blacksmith testbox list` is diagnostics only; a listed id
-  can have a local key and still carry stale rsync state from another lane.
-  After warmup, run `pnpm testbox:claim --id <id>`, then prefer
-  `pnpm testbox:run --id <id> -- "<command>"` for OpenClaw gates so stale
-  org-visible ids fail fast before syncing. Claims older than 12 hours are
-  stale unless `OPENCLAW_TESTBOX_CLAIM_TTL_MINUTES` is explicitly set for long
-  work.
+- For broad remote proof, prefer Crabbox. Use `provider: blacksmith-testbox`
+  when the backend should be Blacksmith, then reuse the returned id or slug for
+  the whole task. Raw `blacksmith testbox list` is diagnostics only; listed
+  boxes can be stale for the current local agent lane.
 
 ## Local Test Shortcuts
 

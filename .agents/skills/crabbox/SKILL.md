@@ -1,21 +1,22 @@
 ---
 name: crabbox
-description: Use Crabbox for OpenClaw remote Linux validation, warmed reusable boxes, GitHub Actions hydration, sync timing, logs, results, caches, and lease cleanup.
+description: Use Crabbox as the primary OpenClaw remote validation path, including Blacksmith-backed workers, warmed reusable boxes, GitHub Actions hydration, sync timing, logs, results, caches, and lease cleanup.
 ---
 
 # Crabbox
 
-Use Crabbox when OpenClaw needs remote Linux proof on owned capacity, a large
-runner class, reusable warm state, or a Blacksmith alternative.
+Use Crabbox when OpenClaw needs remote Linux proof. Crabbox is the default
+front door for broad maintainer validation and can run on owned AWS/Hetzner
+capacity or delegate to Blacksmith workers with `provider: blacksmith-testbox`.
 
 ## Before Running
 
 - Run from the repo root. Crabbox sync mirrors the current checkout.
 - Prefer local targeted tests for tight edit loops.
-- Prefer Blacksmith Testbox when the task explicitly asks for Blacksmith or a
-  Blacksmith-specific CI comparison.
-- Use Crabbox for broad OpenClaw gates when owned AWS/Hetzner capacity is the
-  right remote lane.
+- Prefer Crabbox for broad OpenClaw gates. Use `provider: blacksmith-testbox`
+  when the desired backend is Blacksmith.
+- Use the Blacksmith Testbox skill only for raw CLI fallback, auth details, or
+  Blacksmith-specific comparison/debugging.
 - Check `.crabbox.yaml` for repo defaults before adding flags.
 - Install with `brew install openclaw/tap/crabbox`; auth is required before use:
   `printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login --url https://crabbox-coordinator.steipete.workers.dev --provider aws --token-stdin`.
@@ -23,6 +24,13 @@ runner class, reusable warm state, or a Blacksmith alternative.
   it must include `broker.url`, `broker.token`, and usually `provider: aws`.
 
 ## OpenClaw Flow
+
+For Blacksmith-backed workers, either set `provider: blacksmith-testbox` in
+`.crabbox.yaml` or pass it on the command line:
+
+```sh
+pnpm crabbox:warmup -- --provider blacksmith-testbox --blacksmith-workflow .github/workflows/ci-check-testbox.yml --blacksmith-ref main --idle-timeout 90m
+```
 
 Warm a reusable box:
 
@@ -41,6 +49,12 @@ Run broad proof:
 ```sh
 pnpm crabbox:run -- --id <cbx_id-or-slug> --shell "OPENCLAW_TESTBOX=1 pnpm check:changed"
 pnpm crabbox:run -- --id <cbx_id-or-slug> --shell "corepack enable && pnpm install --frozen-lockfile && pnpm test"
+```
+
+For a Blacksmith-backed full suite:
+
+```sh
+pnpm crabbox:run -- --provider blacksmith-testbox --id <tbx_id-or-slug> --shell "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test"
 ```
 
 Stop boxes you created before handoff:

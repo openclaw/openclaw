@@ -92,10 +92,11 @@ barrels, package-boundary tests, or extension suites.
    - runtime capture should be quiet and config-tolerant.
    - command output should include wall time, exit code, and peak RSS when
      available.
-4. For broad or package-heavy plugin proof, use Blacksmith Testbox by default on
-   maintainer machines. Warm once and reuse the same box:
-   - `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90`
-   - `blacksmith testbox run --id <ID> "OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>"`
+4. For broad or package-heavy plugin proof, use Crabbox by default on
+   maintainer machines. Use `provider: blacksmith-testbox` when the backend
+   should be Blacksmith. Warm once and reuse the same box:
+   - `pnpm crabbox:warmup -- --provider blacksmith-testbox --blacksmith-workflow .github/workflows/ci-check-testbox.yml --blacksmith-ref main --idle-timeout 90m`
+   - `pnpm crabbox:run -- --provider blacksmith-testbox --id <ID-or-slug> --shell "OPENCLAW_TESTBOX=1 pnpm test:extensions:batch <ids>"`
    - stop the box when done.
 5. If plugin performance is package-artifact sensitive, switch to
    `openclaw-pre-release-plugin-testing` and Package Acceptance rather than
@@ -104,7 +105,7 @@ barrels, package-boundary tests, or extension suites.
 ## Metric Collection
 
 Collect at least one stable metric before and after. Prefer the same machine and
-same command. For Testbox comparisons, use the same `tbx_...` id when possible.
+same command. For remote comparisons, use the same Crabbox id or slug when possible.
 
 | Metric          | Use for                            | Preferred source                                                            |
 | --------------- | ---------------------------------- | --------------------------------------------------------------------------- |
@@ -229,7 +230,7 @@ pnpm test:perf:groups --report <vitest-json> \
 
 - Always run the targeted test surface that proves the change.
 - For source changes, run `pnpm check:changed` before push; in maintainer
-  Testbox mode run it in the warmed Testbox.
+  remote mode run it in the warmed Crabbox.
 - For test-only changes, run `pnpm test:changed` or the exact edited tests.
 - Run `pnpm build` when touching lazy-loading, bundled artifacts, package
   boundaries, dynamic imports, build output, or public surfaces.

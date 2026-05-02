@@ -55,10 +55,10 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Formatting: use `oxfmt`, not Prettier. Prefer `pnpm format:check` / `pnpm format`; for targeted files use `pnpm exec oxfmt --check --threads=1 <files...>` or `pnpm exec oxfmt --write --threads=1 <files...>`.
 - Linting: use repo wrappers (`pnpm lint:*`, `scripts/run-oxlint.mjs`); do not invoke generic JS formatters/lints unless a repo script uses them.
 - Heavy checks: `OPENCLAW_LOCAL_CHECK=1`, mode `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`; CI/shared use `OPENCLAW_LOCAL_CHECK=0`.
-- Blacksmith/Testbox: on maintainer machines with Blacksmith access, broad/shared validation defaults to Testbox. This includes `pnpm check`, `pnpm check:changed`, `pnpm test`, `pnpm test:changed`, Docker/E2E/live/package/build gates, and any command likely to fan out across many Vitest projects. Do not start those broad gates locally unless the user explicitly asks for local proof or sets `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`.
-- Local validation: targeted edit loops only, such as `pnpm test <specific-file>`, targeted formatter checks, and small lint/type probes. If a local command expands beyond targeted proof, stop it and move the broad gate to Testbox.
-- Testbox use: run from repo root, pre-warm early with `blacksmith testbox warmup ci-check-testbox.yml --ref main --idle-timeout 90`, reuse the returned `tbx_...` id for all `run`/`download` commands, and stop boxes you created before handoff. Timeout bins: `90` minutes default, `240` multi-hour, `720` all-day, `1440` overnight; anything above `1440` needs explicit approval and cleanup.
-- Testbox full-suite profile: `blacksmith testbox run --id <ID> "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test"`. For installable package proof, prefer the GitHub `Package Acceptance` workflow over ad hoc Testbox commands.
+- Crabbox/Testbox: on maintainer machines, broad/shared validation defaults to Crabbox. This includes `pnpm check`, `pnpm check:changed`, `pnpm test`, `pnpm test:changed`, Docker/E2E/live/package/build gates, and any command likely to fan out across many Vitest projects. Do not start those broad gates locally unless the user explicitly asks for local proof or sets `OPENCLAW_LOCAL_CHECK_MODE=throttled|full`.
+- Local validation: targeted edit loops only, such as `pnpm test <specific-file>`, targeted formatter checks, and small lint/type probes. If a local command expands beyond targeted proof, stop it and move the broad gate to Crabbox.
+- Crabbox use: run from repo root, pre-warm early with `pnpm crabbox:warmup -- --provider blacksmith-testbox --blacksmith-workflow .github/workflows/ci-check-testbox.yml --blacksmith-ref main --idle-timeout 90m` when Blacksmith workers are desired, reuse the returned `tbx_...` id or slug for all `run`/`status` commands, and stop boxes you created before handoff. Timeout bins: `90m` default, `240m` multi-hour, `720m` all-day, `1440m` overnight; anything above `1440m` needs explicit approval and cleanup.
+- Crabbox full-suite profile: `pnpm crabbox:run -- --id <ID-or-slug> --shell "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 pnpm test"`. For installable package proof, prefer the GitHub `Package Acceptance` workflow over ad hoc Testbox commands.
 
 ## GitHub / CI
 
@@ -93,8 +93,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
   - extension tests: extension test typecheck/tests
   - public SDK/plugin contract: extension prod/test too
   - unknown root/config: all lanes
-- Before handoff/push for code/test/runtime/config changes: run `pnpm check:changed` in Testbox by default on maintainer machines. Tests-only: run `pnpm test:changed` in Testbox by default. Full prod sweep: run `pnpm check` in Testbox. Use local only for narrow targeted proof or when explicitly requested.
-- If `pnpm test:changed` or `pnpm check:changed` selects broad/shared lanes, it belongs in Testbox; do not let it continue locally after it fans out.
+- Before handoff/push for code/test/runtime/config changes: run `pnpm check:changed` in Crabbox by default on maintainer machines. Tests-only: run `pnpm test:changed` in Crabbox by default. Full prod sweep: run `pnpm check` in Crabbox. Use local only for narrow targeted proof or when explicitly requested.
+- If `pnpm test:changed` or `pnpm check:changed` selects broad/shared lanes, it belongs in Crabbox; do not let it continue locally after it fans out.
 - Docs/changelog-only and CI/workflow metadata-only changes are not changed-gate work by default. Use `git diff --check` plus the relevant formatter/docs/workflow sanity check; escalate to `pnpm check:changed` only when scripts, test config, generated docs/API, package metadata, or runtime/build behavior changed.
 - Rebase sanity: after a green `pnpm check:changed`, a clean rebase onto current
   `origin/main` does not require rerunning the full changed gate when the rebase
