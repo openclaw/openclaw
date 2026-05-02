@@ -5,9 +5,9 @@
   "description": "OpenClaw Anthropic Vertex provider plugin",
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/vertex-sdk": "^0.16.0",
     "@mariozechner/pi-agent-core": "0.71.1",
-    "@mariozechner/pi-ai": "0.71.1"
+    "@mariozechner/pi-ai": "0.71.1",
+    "google-auth-library": "10.6.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

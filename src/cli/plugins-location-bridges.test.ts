@@ -59,7 +59,7 @@ function makeRegistry(pluginId: string): PluginManifestRegistry {
         hooks: [],
         configContracts: [],
         activation: {},
-        startup: {},
+        startup: startupInfo,
         packageInstall: {
           clawhubSpec: `clawhub:@openclaw/${pluginId}`,
           npmSpec: `@openclaw/${pluginId}`,

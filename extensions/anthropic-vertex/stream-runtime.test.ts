@@ -1,4 +1,5 @@
 import { createAssistantMessageEventStream, type Model } from "@mariozechner/pi-ai";
+import type { AuthClient } from "google-auth-library";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
 
@@ -30,6 +31,7 @@ function createStreamDeps(): {
 
 let createAnthropicVertexStreamFn: typeof import("./stream-runtime.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./stream-runtime.js").createAnthropicVertexStreamFnForModel;
+let streamRuntimeTesting: typeof import("./stream-runtime.js").__testing;
 
 function makeModel(params: { id: string; maxTokens?: number }): Model<"anthropic-messages"> {
   return {
@@ -101,8 +103,9 @@ function buildExpectedCacheBoundaryPayload(messageText: string) {
 
 describe("createAnthropicVertexStreamFn", () => {
   beforeAll(async () => {
-    ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } =
-      await import("./stream-runtime.js"));
+    const runtime = await import("./stream-runtime.js");
+    ({ createAnthropicVertexStreamFn, createAnthropicVertexStreamFnForModel } = runtime);
+    streamRuntimeTesting = runtime.__testing;
   });
 
   it("omits projectId when ADC credentials are used without an explicit project", () => {
@@ -132,6 +135,61 @@ describe("createAnthropicVertexStreamFn", () => {
       region: "us-east5",
       baseURL: "https://proxy.example.test/vertex/v1",
     });
+  });
+
+  it("preserves SDK-built header containers when adding ADC auth headers", async () => {
+    const capturedHeaders: Headers[] = [];
+    const authClient = {
+      projectId: "vertex-project",
+      getRequestHeaders: async () =>
+        new Headers([
+          ["authorization", "Bearer adc-token"],
+          ["x-goog-user-project", "quota-project"],
+        ]),
+    } as unknown as AuthClient;
+    const client = new streamRuntimeTesting.AnthropicVertexClient({
+      region: "us-east5",
+      authClient,
+      maxRetries: 0,
+      fetch: async (_input, init) => {
+        capturedHeaders.push(new Headers(init?.headers));
+        return new Response(
+          JSON.stringify({
+            id: "msg_test",
+            type: "message",
+            role: "assistant",
+            model: "claude-sonnet-4-6",
+            content: [],
+            stop_reason: "end_turn",
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+    });
+
+    await client.messages.create(
+      {
+        model: "claude-sonnet-4-6",
+        max_tokens: 1,
+        messages: [{ role: "user", content: "Hello" }],
+      },
+      {
+        headers: { "x-sdk-container-test": "kept" },
+      },
+    );
+
+    expect(capturedHeaders).toHaveLength(1);
+    const headers = capturedHeaders[0];
+    expect(headers?.get("authorization")).toBe("Bearer adc-token");
+    expect(headers?.get("x-goog-user-project")).toBe("quota-project");
+    expect(headers?.get("x-sdk-container-test")).toBe("kept");
+    expect(headers?.has("values")).toBe(false);
+    expect(headers?.has("nulls")).toBe(false);
   });
 
   it("defaults maxTokens to the model limit instead of the old 32000 cap", () => {
