@@ -520,7 +520,7 @@ export async function performGatewaySessionReset(params: {
 }
 
 async function performGatewaySessionResetInner(ctx: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   params: { key: string; reason: "new" | "reset"; commandSource: string };
