@@ -846,6 +846,7 @@ export async function runEmbeddedAttempt(
                 runAbortController.abort("sessions_yield");
                 abortSessionForYield?.();
               },
+              skillsSnapshot: params.skillsSnapshot,
             });
             return applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow);
           })();

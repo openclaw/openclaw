@@ -23728,6 +23728,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
               type: "string",
             },
           },
+          promptMode: {
+            type: "string",
+            enum: ["legacy", "compact", "view", "search"],
+          },
           load: {
             type: "object",
             properties: {

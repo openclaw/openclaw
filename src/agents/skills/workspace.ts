@@ -2,6 +2,7 @@ import fs, { type Dirent } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SkillsPromptDisclosureMode } from "../../config/types.skills.js";
 import { resolveOsHomeDir } from "../../infra/home-dir.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -19,7 +20,11 @@ import { resolveOpenClawMetadata, resolveSkillInvocationPolicy } from "./frontma
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
-import { formatSkillsForPrompt, type Skill } from "./skill-contract.js";
+import {
+  formatSkillsForPrompt,
+  formatSkillsProgressiveIndex,
+  type Skill,
+} from "./skill-contract.js";
 import type {
   ParsedSkillFrontmatter,
   SkillEligibilityContext,
@@ -762,6 +767,11 @@ export function formatSkillsCompact(skills: Skill[]): string {
 // Budget reserved for the compact-mode warning line prepended by the caller.
 const COMPACT_WARNING_OVERHEAD = 150;
 
+function resolveSkillsPromptMode(config?: OpenClawConfig): SkillsPromptDisclosureMode {
+  const mode = config?.skills?.promptMode;
+  return mode === "compact" || mode === "view" || mode === "search" ? mode : "legacy";
+}
+
 function applySkillsPromptLimits(params: {
   skills: Skill[];
   config?: OpenClawConfig;
@@ -812,6 +822,45 @@ function applySkillsPromptLimits(params: {
   }
 
   return { skillsForPrompt, truncated, compact };
+}
+
+function applyProgressiveSkillsPromptLimits(params: {
+  skills: Skill[];
+  config?: OpenClawConfig;
+  agentId?: string;
+  mode: Exclude<SkillsPromptDisclosureMode, "legacy">;
+}): {
+  skillsForPrompt: Skill[];
+  truncated: boolean;
+} {
+  const limits = resolveSkillsLimits(params.config, params.agentId);
+  const total = params.skills.length;
+  let skillsForPrompt = params.skills.slice(0, Math.max(0, limits.maxSkillsInPrompt));
+  let truncated = total > skillsForPrompt.length;
+  const initialBudget = truncated
+    ? limits.maxSkillsPromptChars - COMPACT_WARNING_OVERHEAD
+    : limits.maxSkillsPromptChars;
+
+  const fitsProgressive = (skills: Skill[], budget = initialBudget): boolean =>
+    formatSkillsProgressiveIndex(skills, params.mode).length <= budget;
+
+  if (!fitsProgressive(skillsForPrompt)) {
+    const truncatedBudget = limits.maxSkillsPromptChars - COMPACT_WARNING_OVERHEAD;
+    let lo = 0;
+    let hi = skillsForPrompt.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (fitsProgressive(skillsForPrompt.slice(0, mid), truncatedBudget)) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    skillsForPrompt = skillsForPrompt.slice(0, lo);
+    truncated = true;
+  }
+
+  return { skillsForPrompt, truncated };
 }
 
 export function buildWorkspaceSkillSnapshot(
@@ -889,23 +938,52 @@ function resolveWorkspaceSkillPromptState(
   const promptSkills = compactSkillPaths(resolvedSkills)
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, "en"));
-  const { skillsForPrompt, truncated, compact } = applySkillsPromptLimits({
-    skills: promptSkills,
-    config: opts?.config,
-    agentId: opts?.agentId,
-  });
-  const truncationNote = truncated
-    ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
-    : compact
-      ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
+  const promptMode = resolveSkillsPromptMode(opts?.config);
+  let skillsForPrompt: Skill[];
+  let truncated: boolean;
+  let promptBlock: string;
+  let promptModeNote = "";
+
+  if (promptMode === "legacy") {
+    const limited = applySkillsPromptLimits({
+      skills: promptSkills,
+      config: opts?.config,
+      agentId: opts?.agentId,
+    });
+    skillsForPrompt = limited.skillsForPrompt;
+    truncated = limited.truncated;
+    promptModeNote = truncated
+      ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length}${limited.compact ? " (compact format, descriptions omitted)" : ""}. Run \`openclaw skills check\` to audit.`
+      : limited.compact
+        ? `⚠️ Skills catalog using compact format (descriptions omitted). Run \`openclaw skills check\` to audit.`
+        : "";
+    promptBlock = limited.compact
+      ? formatSkillsCompact(skillsForPrompt)
+      : formatSkillsForPrompt(skillsForPrompt);
+  } else {
+    const limited = applyProgressiveSkillsPromptLimits({
+      skills: promptSkills,
+      config: opts?.config,
+      agentId: opts?.agentId,
+      mode: promptMode,
+    });
+    skillsForPrompt = limited.skillsForPrompt;
+    truncated = limited.truncated;
+    promptModeNote = truncated
+      ? `⚠️ Skills truncated: included ${skillsForPrompt.length} of ${resolvedSkills.length} (progressive ${promptMode} mode). Run \`openclaw skills check\` to audit.`
       : "";
-  const prompt = [
-    remoteNote,
-    truncationNote,
-    compact ? formatSkillsCompact(skillsForPrompt) : formatSkillsForPrompt(skillsForPrompt),
-  ]
-    .filter(Boolean)
-    .join("\n");
+    promptBlock = formatSkillsProgressiveIndex(skillsForPrompt, promptMode);
+  }
+  const prompt = [remoteNote, promptModeNote, promptBlock].filter(Boolean).join("\n");
+  skillsLogger.info("skills_prompt", {
+    mode: promptMode,
+    agentId: opts?.agentId,
+    eligibleCount: eligible.length,
+    resolvedSkillCount: resolvedSkills.length,
+    promptSkillCount: skillsForPrompt.length,
+    truncated,
+    promptChars: prompt.length,
+  });
   return { eligible, prompt, resolvedSkills };
 }
 
