@@ -262,7 +262,9 @@ function mergeServicePath(
     }
   };
   addPath(nextPath);
-  addPath(existingPath, { preserve: true });
+  if (platform !== "darwin") {
+    addPath(existingPath, { preserve: true });
+  }
   return segments.length > 0 ? segments.join(path.delimiter) : undefined;
 }
 

@@ -123,18 +123,10 @@ describe("auditGatewayServiceConfig", () => {
     ).toBe(false);
   });
 
-  it("does not require missing unconfigured user-bin defaults in gateway service PATH", async () => {
+  it("accepts canonical macOS gateway service PATH without user-bin defaults", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
     try {
-      const localBin = path.join(home, ".local/bin");
-      await fs.mkdir(localBin, { recursive: true });
-      const servicePath = [
-        localBin,
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        "/usr/bin",
-        "/bin",
-      ].join(":");
+      const servicePath = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
 
       const audit = await auditGatewayServiceConfig({
         env: { HOME: home },
