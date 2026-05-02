@@ -142,7 +142,10 @@ export {
   hasInterSessionUserProvenance,
   hasInternalSystemUserProvenance,
 } from "../../../../src/sessions/input-provenance.js";
-export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
+export {
+  extractCronRunIdFromSessionKey,
+  isCronRunSessionKey,
+} from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 export { formatDocsLink } from "../../../../src/terminal/links.js";
 export { colorize, isRich, theme } from "../../../../src/terminal/theme.js";

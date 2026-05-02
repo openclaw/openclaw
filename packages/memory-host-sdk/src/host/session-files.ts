@@ -6,6 +6,7 @@ import { createSubsystemLogger, redactSensitiveText } from "./openclaw-runtime-i
 import {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
+  extractCronRunIdFromSessionKey,
   hasInternalSystemUserProvenance,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,
@@ -211,6 +212,18 @@ export function loadSessionTranscriptClassificationForSessionsDir(
       }
       if (sessionId) {
         cronRunSessionIds.add(sessionId);
+      }
+      // Cron runs may produce a "mirror" transcript whose basename equals the
+      // runId embedded in the sessionKey rather than entry.sessionId. Index that
+      // runId so reverse lookups (`isCronRunTranscriptPath`,
+      // `lookupSessionKeyForTranscriptPath`) attribute the mirror file back to
+      // this cron sessionKey instead of treating it as an unowned orphan.
+      const runIdFromKey = extractCronRunIdFromSessionKey(sessionKey);
+      if (runIdFromKey && runIdFromKey !== sessionId) {
+        cronRunSessionIds.add(runIdFromKey);
+        if (!sessionIdToSessionKey.has(runIdFromKey)) {
+          sessionIdToSessionKey.set(runIdFromKey, sessionKey);
+        }
       }
     }
   }

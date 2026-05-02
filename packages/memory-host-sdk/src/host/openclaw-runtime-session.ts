@@ -2,6 +2,7 @@ export {
   HEARTBEAT_PROMPT,
   HEARTBEAT_TOKEN,
   SILENT_REPLY_TOKEN,
+  extractCronRunIdFromSessionKey,
   hasInternalSystemUserProvenance,
   hasInterSessionUserProvenance,
   isCompactionCheckpointTranscriptFileName,

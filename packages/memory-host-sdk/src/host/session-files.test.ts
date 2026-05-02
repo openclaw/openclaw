@@ -340,4 +340,75 @@ describe("transcript classification helpers", () => {
       "sessions/bad_name.jsonl",
     );
   });
+
+  it("attributes cron mirror transcripts named after runId back to the cron sessionKey", () => {
+    // Reproduces the leak scenario: cron runs sometimes leave a second
+    // transcript whose basename equals the runId embedded in the sessionKey,
+    // distinct from entry.sessionId. Without runId reverse lookup the mirror
+    // file looks like an unowned orphan and slips into the dreaming corpus.
+    const sessionsDir = path.join(tmpDir, "sessions-mirror");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const cronSessionId = "cron-primary-id";
+    const cronRunId = "cron-mirror-run-id";
+    const primaryPath = path.join(sessionsDir, `${cronSessionId}.jsonl`);
+    const mirrorPath = path.join(sessionsDir, `${cronRunId}.jsonl`);
+    const mirrorRotatedPath = path.join(
+      sessionsDir,
+      `${cronRunId}.jsonl.deleted.2026-04-25T06-33-10.801Z`,
+    );
+    fsSync.writeFileSync(primaryPath, "");
+    fsSync.writeFileSync(mirrorPath, "");
+    fsSync.writeFileSync(mirrorRotatedPath, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        [`agent:main:cron:job-x:run:${cronRunId}`]: {
+          sessionId: cronSessionId,
+          sessionFile: primaryPath,
+        },
+      }),
+      "utf-8",
+    );
+
+    const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    const expectedKey = `agent:main:cron:job-x:run:${cronRunId}`;
+
+    expect(lookupSessionKeyForTranscriptPath(classification, primaryPath)).toBe(expectedKey);
+    expect(lookupSessionKeyForTranscriptPath(classification, mirrorPath)).toBe(expectedKey);
+    expect(lookupSessionKeyForTranscriptPath(classification, mirrorRotatedPath)).toBe(expectedKey);
+    expect(isCronRunTranscriptPath(classification, primaryPath)).toBe(true);
+    expect(isCronRunTranscriptPath(classification, mirrorPath)).toBe(true);
+    expect(isCronRunTranscriptPath(classification, mirrorRotatedPath)).toBe(true);
+  });
+
+  it("does not let runId reverse lookup overwrite a registered sessionId mapping", () => {
+    // Defensive: if some other entry happens to register the same id as its
+    // sessionId, that direct registration must win over the cron-runId fallback.
+    const sessionsDir = path.join(tmpDir, "sessions-mirror-collision");
+    fsSync.mkdirSync(sessionsDir, { recursive: true });
+    const collisionId = "shared-id";
+    const explicitFile = path.join(sessionsDir, `${collisionId}.jsonl`);
+    const cronPrimaryFile = path.join(sessionsDir, "cron-primary.jsonl");
+    fsSync.writeFileSync(explicitFile, "");
+    fsSync.writeFileSync(cronPrimaryFile, "");
+    fsSync.writeFileSync(
+      path.join(sessionsDir, "sessions.json"),
+      JSON.stringify({
+        [`agent:main:explicit:${collisionId}`]: {
+          sessionId: collisionId,
+          sessionFile: explicitFile,
+        },
+        [`agent:main:cron:job-y:run:${collisionId}`]: {
+          sessionId: "cron-primary",
+          sessionFile: cronPrimaryFile,
+        },
+      }),
+      "utf-8",
+    );
+
+    const classification = loadSessionTranscriptClassificationForSessionsDir(sessionsDir);
+    expect(lookupSessionKeyForTranscriptPath(classification, explicitFile)).toBe(
+      `agent:main:explicit:${collisionId}`,
+    );
+  });
 });

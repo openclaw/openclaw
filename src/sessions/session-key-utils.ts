@@ -55,6 +55,31 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
 }
 
+const CRON_RUN_ID_RE = /^cron:[^:]+:run:([^:]+)$/;
+
+/**
+ * Extract the runId from a cron-run sessionKey (`agent:<id>:cron:<jobId>:run:<runId>`).
+ * Returns null when the key is not a cron-run key.
+ *
+ * cron runs may produce a transcript file whose basename equals this runId rather
+ * than the entry's sessionId field; reverse lookups need this id to attribute
+ * those mirror transcripts back to the cron sessionKey.
+ */
+export function extractCronRunIdFromSessionKey(
+  sessionKey: string | undefined | null,
+): string | null {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const match = CRON_RUN_ID_RE.exec(parsed.rest);
+  if (!match) {
+    return null;
+  }
+  const runId = match[1].trim();
+  return runId.length > 0 ? runId : null;
+}
+
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
