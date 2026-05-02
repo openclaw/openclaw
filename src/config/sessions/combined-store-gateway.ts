@@ -43,7 +43,10 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
-export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
+export function loadCombinedSessionStoreForGateway(
+  cfg: OpenClawConfig,
+  opts: { agentId?: string } = {},
+): {
   storePath: string;
   store: Record<string, SessionEntry>;
 } {
@@ -70,7 +73,13 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
     return { storePath, store: combined };
   }
 
-  const targets = resolveAllAgentSessionStoreTargetsSync(cfg);
+  const requestedAgentId =
+    typeof opts.agentId === "string" && opts.agentId.trim()
+      ? normalizeAgentId(opts.agentId)
+      : undefined;
+  const targets = resolveAllAgentSessionStoreTargetsSync(cfg).filter(
+    (target) => !requestedAgentId || normalizeAgentId(target.agentId) === requestedAgentId,
+  );
   const combined: Record<string, SessionEntry> = {};
   for (const target of targets) {
     const agentId = target.agentId;
@@ -93,6 +102,10 @@ export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   }
 
   const storePath =
-    typeof storeConfig === "string" && storeConfig.trim() ? storeConfig.trim() : "(multiple)";
+    targets.length === 1
+      ? targets[0].storePath
+      : typeof storeConfig === "string" && storeConfig.trim()
+        ? storeConfig.trim()
+        : "(multiple)";
   return { storePath, store: combined };
 }
