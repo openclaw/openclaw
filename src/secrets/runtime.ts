@@ -21,7 +21,6 @@ import {
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
-import { SecretProviderResolutionError } from "./resolve.js";
 import { type SecretResolverWarning } from "./runtime-shared.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
@@ -363,6 +362,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     createResolverContext,
     resolveRuntimeWebTools,
     resolveSecretRefValues,
+    SecretProviderResolutionError,
   } = await loadRuntimePrepareHelpers();
   const loadablePluginOrigins =
     params.loadablePluginOrigins ??
