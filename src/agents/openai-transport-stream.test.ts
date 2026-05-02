@@ -1153,6 +1153,36 @@ describe("openai transport stream", () => {
     expect(sanitized).toEqual(payload);
   });
 
+  it("adds required fallback instructions for raw Codex responses probes", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "",
+        messages: [{ role: "user", content: "Reply OK", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        maxTokens: 16,
+        sessionId: "session-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Follow the user request.");
+    expect(params.max_output_tokens).toBeUndefined();
+    expect(params.prompt_cache_retention).toBeUndefined();
+  });
+
   it("adds minimal user input for Codex responses when only the system prompt is present", () => {
     const params = buildOpenAIResponsesParams(
       {

@@ -41,12 +41,23 @@ export function describeEmbeddedAgentStreamStrategy(params: {
   if (params.model.provider === "anthropic-vertex") {
     return "anthropic-vertex";
   }
+  if (shouldPreferBoundaryAwareStreamOverSessionCustom(params.model)) {
+    return createBoundaryAwareStreamFnForModel(params.model)
+      ? `boundary-aware:${params.model.api}`
+      : "session-custom";
+  }
   if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {
     return createBoundaryAwareStreamFnForModel(params.model)
       ? `boundary-aware:${params.model.api}`
       : "stream-simple";
   }
   return "session-custom";
+}
+
+function shouldPreferBoundaryAwareStreamOverSessionCustom(
+  model: EmbeddedRunAttemptParams["model"],
+): boolean {
+  return model.api === "openai-codex-responses";
 }
 
 export async function resolveEmbeddedAgentApiKey(params: {
@@ -102,6 +113,18 @@ export function resolveEmbeddedAgentStreamFn(params: {
 
   if (params.model.provider === "anthropic-vertex") {
     return createAnthropicVertexStreamFnForModel(params.model);
+  }
+
+  if (shouldPreferBoundaryAwareStreamOverSessionCustom(params.model)) {
+    const boundaryAwareStreamFn = createBoundaryAwareStreamFnForModel(params.model);
+    if (boundaryAwareStreamFn) {
+      return wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
+        runSignal: params.signal,
+        resolvedApiKey: params.resolvedApiKey,
+        authStorage: params.authStorage,
+        providerId: params.model.provider,
+      });
+    }
   }
 
   if (params.currentStreamFn === undefined || params.currentStreamFn === streamSimple) {

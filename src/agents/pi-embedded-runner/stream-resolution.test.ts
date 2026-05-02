@@ -84,6 +84,20 @@ describe("describeEmbeddedAgentStreamStrategy", () => {
       }),
     ).toBe("session-custom");
   });
+
+  it("prefers boundary-aware Codex responses over custom session streams", () => {
+    expect(
+      describeEmbeddedAgentStreamStrategy({
+        currentStreamFn: vi.fn() as never,
+        shouldUseWebSocketTransport: false,
+        model: {
+          api: "openai-codex-responses",
+          provider: "openai-codex",
+          id: "gpt-5.5",
+        } as never,
+      }),
+    ).toBe("boundary-aware:openai-codex-responses");
+  });
 });
 
 describe("resolveEmbeddedAgentStreamFn", () => {
@@ -244,6 +258,29 @@ describe("resolveEmbeddedAgentStreamFn", () => {
       streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
     ).resolves.toMatchObject({ apiKey: "oauth-bearer-token" });
     expect(innerStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes custom Codex responses streams through boundary-aware transports", async () => {
+    const sessionStreamFn = vi.fn(async (_model, _context, options) => options);
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: sessionStreamFn as never,
+      shouldUseWebSocketTransport: false,
+      sessionId: "session-1",
+      model: {
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        id: "gpt-5.5",
+      } as never,
+      resolvedApiKey: "oauth-bearer-token",
+    });
+
+    await expect(
+      streamFn({ provider: "openai-codex", id: "gpt-5.5" } as never, {} as never, {}),
+    ).resolves.toMatchObject({ apiKey: "oauth-bearer-token" });
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
+    expect(sessionStreamFn).not.toHaveBeenCalled();
   });
 
   it("falls back to authStorage when no resolved api key is available for boundary-aware fallback", async () => {
