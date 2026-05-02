@@ -31,6 +31,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - fix(infra): block workspace state-directory env override [AI]. (#75940) Thanks @pgondhi987.
+- MCP/OpenAI: normalize parameter-free tool schemas whose top-level object `properties` is missing, null, or invalid before sending tools to OpenAI, so MCP tools without params stay usable. Fixes #75362. Thanks @tolkonepiu and @SymbolStar.
 - TTS: honor explicit short `[[tts:text]]...[[/tts:text]]` blocks while keeping untagged short auto-TTS suppressed, so tagged voice replies are synthesized instead of being dropped as empty voice-only payloads. Fixes #73758. Thanks @yfge.
 - Proxy/audio: convert standard `FormData` bodies before proxy-backed undici fetches, so audio transcription and multipart uploads no longer send `[object FormData]` when `HTTP_PROXY` or `HTTPS_PROXY` is configured. Fixes #48554. Thanks @dco5.
 - Gateway/diagnostics: include a bounded redacted startup error message in stability bundles, so crash-loop reports identify the failing plugin or contract without exposing secrets. Refs #75797. Thanks @ymebosma.
@@ -200,7 +201,6 @@ Docs: https://docs.openclaw.ai
 - Plugins/hooks: derive hook `ctx.channelId` from the conversation target instead of the provider name, so Discord and other channel plugins can keep per-channel state isolated. Fixes #59881. Thanks @bradfreels.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
-- Agents/OpenAI: normalize parameter-free MCP tool schemas whose `properties` value is null or undefined, so OpenAI no longer rejects MCP tools without parameters. Fixes #75362. (#75401) Thanks @SymbolStar.
 - Gateway/agents: avoid rebuilding core tools for plugin-only allowlists and keep the full plugin registry cache warm across scoped plugin loads, reducing per-turn latency spikes. Fixes #75882, #75907, #75906, #75887, and #75851. (#75922) Thanks @obviyus.
 
 ## 2026.4.30
