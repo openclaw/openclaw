@@ -93,6 +93,12 @@ Bundled plugin manifests must not request dependency staging. Large or optional
 plugin functionality should be packaged as a normal plugin and installed through
 the same npm/git/ClawHub path as third-party plugins.
 
+In source checkouts, OpenClaw treats the repository as a pnpm monorepo. After
+`pnpm install`, bundled plugins load from `extensions/<id>` so package-local
+workspace dependencies are available and edits are picked up directly. Source
+checkout development is pnpm-only; plain `npm install` at the repository root is
+not a supported way to prepare bundled plugin dependencies.
+
 ## Legacy cleanup
 
 Older OpenClaw versions generated bundled-plugin dependency roots at startup or

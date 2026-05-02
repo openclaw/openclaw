@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.
 - Plugins/ClawHub: prefer versioned ClawPack artifacts when ClawHub publishes digest metadata, verifying the ClawPack response header and downloaded bytes before installing. Thanks @vincentkoc.
 - Plugins/ClawHub: persist ClawPack digest metadata on ClawHub plugin install and update records so registry refreshes and download verification can reuse stored artifact facts. Thanks @vincentkoc.
 - Providers/OpenAI: add `extraBody`/`extra_body` passthrough for OpenAI-compatible TTS endpoints, so custom speech servers can receive fields such as `lang` in `/audio/speech` requests. Fixes #39900. Thanks @R3NK0R.
@@ -14,6 +15,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/sessions: move hot transcript reads and mirror appends onto async bounded IO with serialized parent-linked writes, keeping large session histories from stalling Gateway requests and channel replies. Fixes #75656. Thanks @DerFlash.
 - Doctor/WhatsApp: warn when Linux crontabs still run the legacy `ensure-whatsapp.sh` health check, which can misreport `Gateway inactive` when cron lacks the systemd user-bus environment. Fixes #60204. Thanks @mySebbe.
 - Slack/setup: print the generated app manifest as plain JSON instead of embedding it inside the framed setup note, so it can be copied into Slack without deleting border characters. Fixes #65751. Thanks @theDanielJLewis.
 - Channels/WhatsApp: route CLI logout through the live Gateway and stop runtime-backed listeners before channel removal, so removing a WhatsApp account does not leave the old socket replying until restart. Fixes #67746. Thanks @123Mismail.
