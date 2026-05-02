@@ -4,6 +4,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import {
   createDeferred,
+  createTelegramGroupCommandContext,
   createNativeCommandTestParams,
   createTelegramPrivateCommandContext,
   createTelegramTopicCommandContext,
@@ -871,6 +872,40 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       "default:-1001234567890:topic:42",
       undefined,
     );
+  });
+
+  it("routes Telegram native commands through bound top-level group sessions", async () => {
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "default:-1001234567890",
+      targetSessionKey: "agent:codex-acp:session-group",
+    });
+
+    const { handler } = registerAndResolveStatusHandler({
+      cfg: {},
+      allowFrom: ["200"],
+      groupAllowFrom: ["200"],
+    });
+    await handler(createTelegramGroupCommandContext());
+
+    expect(sessionBindingMocks.resolveByConversation).toHaveBeenCalledWith({
+      channel: "telegram",
+      accountId: "default",
+      conversationId: "-1001234567890",
+    });
+    const dispatchCall = (
+      replyMocks.dispatchReplyWithBufferedBlockDispatcher.mock.calls as unknown as Array<
+        [{ ctx?: { CommandTargetSessionKey?: string; OriginatingTo?: string } }]
+      >
+    )[0]?.[0];
+    expect(dispatchCall?.ctx?.CommandTargetSessionKey).toBe("agent:codex-acp:session-group");
+    expect(dispatchCall?.ctx?.OriginatingTo).toBe("telegram:-1001234567890");
+    const sessionMetaCall = (
+      sessionMocks.recordSessionMetaFromInbound.mock.calls as unknown as Array<
+        [{ sessionKey?: string }]
+      >
+    )[0]?.[0];
+    expect(sessionMetaCall?.sessionKey).toBe("agent:codex-acp:session-group");
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("default:-1001234567890", undefined);
   });
 
   it.each(["new", "reset"] as const)(
