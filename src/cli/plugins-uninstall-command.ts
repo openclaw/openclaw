@@ -167,6 +167,9 @@ export async function runPluginUninstallCommand(
         nextInstallRecords,
         nextConfig,
         ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
+        writeOptions: {
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
       }),
     { command: "uninstall" },
   );

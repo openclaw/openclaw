@@ -424,7 +424,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     return {
       shouldContinue: false,
       reply: {
-        text: `🔌 Installed plugin "${installed.pluginId}". Restart the gateway to load plugins.`,
+        text: `🔌 Installed plugin "${installed.pluginId}". Gateway restart will load the new plugin source.`,
       },
     };
   }
@@ -531,7 +531,7 @@ export const handlePluginsCommand: CommandHandler = async (params, allowTextComm
     shouldContinue: false,
     reply: {
       text:
-        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Restart the gateway to apply.` +
+        `🔌 Plugin "${plugin.id}" ${pluginsCommand.action}d in ${loaded.path}. Gateway reload will apply it to new agent turns.` +
         (registryWarning ? `\n${registryWarning}` : ""),
     },
   };

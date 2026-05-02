@@ -66,6 +66,7 @@ export const buildPluginDiagnosticsReport: UnknownMock = vi.fn();
 const buildPluginCompatibilityNotices: UnknownMock = vi.fn();
 export const inspectPluginRegistry: AsyncUnknownMock = vi.fn();
 export const refreshPluginRegistry: AsyncUnknownMock = vi.fn();
+export const clearPluginRegistryLoadCache: UnknownMock = vi.fn();
 export const applyExclusiveSlotSelection: UnknownMock = vi.fn();
 export const planPluginUninstall: UnknownMock = vi.fn();
 export const applyPluginUninstallDirectoryRemoval: AsyncUnknownMock = vi.fn();
@@ -353,6 +354,13 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     )) as (typeof import("../plugins/plugin-registry.js"))["refreshPluginRegistry"],
 }));
 
+vi.mock("../plugins/loader.js", () => ({
+  clearPluginRegistryLoadCache: ((...args: unknown[]) =>
+    invokeMock<unknown[], unknown>(clearPluginRegistryLoadCache, ...args)) as (
+    ...args: unknown[]
+  ) => unknown,
+}));
+
 vi.mock("../plugins/slots.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/slots.js")>();
   return {
@@ -599,6 +607,7 @@ export function resetPluginsCliTestState() {
   buildPluginCompatibilityNotices.mockReset();
   inspectPluginRegistry.mockReset();
   refreshPluginRegistry.mockReset();
+  clearPluginRegistryLoadCache.mockReset();
   applyExclusiveSlotSelection.mockReset();
   planPluginUninstall.mockReset();
   applyPluginUninstallDirectoryRemoval.mockReset();

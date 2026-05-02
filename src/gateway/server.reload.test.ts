@@ -890,6 +890,40 @@ describe("gateway hot reload", () => {
     });
   });
 
+  it("reloads plugin runtime surfaces and disposes MCP runtimes on plugin config hot reloads", async () => {
+    await withNonMinimalGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+
+      await onHotReload?.(
+        {
+          changedPaths: ["plugins.entries.discord.enabled"],
+          restartGateway: false,
+          restartReasons: [],
+          hotReasons: ["plugins.entries.discord.enabled"],
+          reloadHooks: false,
+          restartGmailWatcher: false,
+          restartCron: false,
+          restartHeartbeat: false,
+          restartHealthMonitor: false,
+          reloadPlugins: true,
+          restartChannels: new Set(),
+          disposeMcpRuntimes: true,
+          noopPaths: [],
+        },
+        {
+          plugins: {
+            entries: {
+              discord: { enabled: false },
+            },
+          },
+        },
+      );
+
+      expect(hoisted.disposeAllSessionMcpRuntimes).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it("serves secrets.reload immediately after startup without race failures", async () => {
     await writeEnvRefConfig();
     process.env.OPENAI_API_KEY = "sk-startup"; // pragma: allowlist secret

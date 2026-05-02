@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
 import {
   __testing,
   clearPluginLoaderCache,
+  clearPluginRegistryLoadCache,
   loadOpenClawPlugins,
   resolveRuntimePluginRegistry,
 } from "./loader.js";
@@ -622,5 +624,55 @@ describe("clearPluginLoaderCache", () => {
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
+  });
+});
+
+describe("loadOpenClawPlugins active runtime clearing", () => {
+  it("clears plugin-owned global providers before activating a new registry", () => {
+    registerCompactionProvider({
+      id: "stale-compaction",
+      label: "Stale Compaction",
+      summarize: async () => "stale",
+    });
+    registerMemoryEmbeddingProvider({
+      id: "stale-memory",
+      create: async () => ({ provider: null }),
+    });
+
+    loadOpenClawPlugins({ onlyPluginIds: [] });
+
+    expect(getCompactionProvider("stale-compaction")).toBeUndefined();
+    expect(getMemoryEmbeddingProvider("stale-memory")).toBeUndefined();
+  });
+});
+
+describe("clearPluginRegistryLoadCache", () => {
+  it("preserves plugin-owned runtime registries while invalidating load snapshots", () => {
+    registerMemoryEmbeddingProvider({
+      id: "still-live",
+      create: async () => ({ provider: null }),
+    });
+    registerMemoryPromptSection(() => ["still live"]);
+
+    clearPluginRegistryLoadCache();
+
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual(["still live"]);
+    expect(getMemoryEmbeddingProvider("still-live")).toBeDefined();
+  });
+
+  it("invalidates full-workspace load snapshots", () => {
+    const loadOptions = {
+      config: {
+        plugins: {
+          allow: ["demo"],
+        },
+      },
+      workspaceDir: "/tmp/workspace-a",
+    };
+    const registry = loadOpenClawPlugins(loadOptions);
+
+    clearPluginRegistryLoadCache();
+
+    expect(loadOpenClawPlugins(loadOptions)).not.toBe(registry);
   });
 });
