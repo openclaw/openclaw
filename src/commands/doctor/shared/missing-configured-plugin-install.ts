@@ -20,6 +20,7 @@ import {
   resolveOfficialExternalPluginInstall,
   resolveOfficialExternalPluginLabel,
 } from "../../../plugins/official-external-plugin-catalog.js";
+import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
@@ -47,6 +48,8 @@ const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[]
     npmSpec: "@openclaw/codex",
   },
 ];
+
+const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 
 function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
   return (
@@ -264,6 +267,29 @@ function collectDownloadableInstallCandidates(params: {
   );
 }
 
+function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
+  snapshot: PluginMetadataSnapshot;
+  configuredPluginIds: ReadonlySet<string>;
+  configuredChannelIds: ReadonlySet<string>;
+}): Set<string> {
+  const stalePluginIds = new Set<string>();
+  const pluginsById = new Map(params.snapshot.plugins.map((plugin) => [plugin.id, plugin]));
+  for (const diagnostic of params.snapshot.diagnostics) {
+    const pluginId = diagnostic.pluginId?.trim();
+    if (!pluginId || !diagnostic.message.includes(MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC)) {
+      continue;
+    }
+    const plugin = pluginsById.get(pluginId);
+    const ownsConfiguredChannel = plugin?.channels.some((channelId) =>
+      params.configuredChannelIds.has(channelId),
+    );
+    if (params.configuredPluginIds.has(pluginId) || ownsConfiguredChannel) {
+      stalePluginIds.add(pluginId);
+    }
+  }
+  return stalePluginIds;
+}
+
 async function installCandidate(params: {
   candidate: DownloadableInstallCandidate;
   records: Record<string, PluginInstallRecord>;
@@ -405,15 +431,22 @@ async function repairMissingPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
-  const knownIds = new Set(
-    loadManifestMetadataSnapshot({
-      config: params.cfg,
-      env,
-    }).plugins.map((plugin) => plugin.id),
-  );
+  const snapshot = loadManifestMetadataSnapshot({
+    config: params.cfg,
+    env,
+  });
+  const knownIds = new Set(snapshot.plugins.map((plugin) => plugin.id));
+  const configuredPluginIdsWithStaleDescriptors =
+    collectConfiguredPluginIdsWithMissingChannelConfigDescriptors({
+      snapshot,
+      configuredPluginIds: params.pluginIds,
+      configuredChannelIds: params.channelIds,
+    });
   const records = await loadInstalledPluginIndexInstallRecords({ env });
   const missingRecordedPluginIds = Object.keys(records).filter(
-    (pluginId) => params.pluginIds.has(pluginId) && !knownIds.has(pluginId),
+    (pluginId) =>
+      (params.pluginIds.has(pluginId) && !knownIds.has(pluginId)) ||
+      configuredPluginIdsWithStaleDescriptors.has(pluginId),
   );
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -429,6 +462,7 @@ async function repairMissingPluginInstalls(params: {
         },
       },
       pluginIds: missingRecordedPluginIds,
+      updateChannel: params.cfg.update?.channel,
       logger: {
         warn: (message) => warnings.push(message),
         error: (message) => warnings.push(message),
