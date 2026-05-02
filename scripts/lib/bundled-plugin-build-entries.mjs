@@ -47,6 +47,10 @@ function collectPluginSourceEntries(packageJson) {
   return packageEntries.length > 0 ? packageEntries : ["./index.ts"];
 }
 
+function shouldIncludeBundledPluginInCore(packageJson) {
+  return packageJson?.openclaw?.bundle?.includeInCore !== false;
+}
+
 function collectTopLevelPublicSurfaceEntries(pluginDir) {
   if (!fs.existsSync(pluginDir)) {
     return [];
@@ -109,6 +113,9 @@ export function collectBundledPluginBuildEntries(params = {}) {
       continue;
     }
     if (!shouldBuildBundledCluster(dirent.name, env, { packageJson })) {
+      continue;
+    }
+    if (!shouldIncludeBundledPluginInCore(packageJson)) {
       continue;
     }
 
