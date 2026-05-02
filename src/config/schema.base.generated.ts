@@ -8316,6 +8316,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           exclusiveMinimum: 0,
                           maximum: 9007199254740991,
                         },
+                        consecutiveErrorThreshold: {
+                          type: "integer",
+                          exclusiveMinimum: 0,
+                          maximum: 9007199254740991,
+                        },
                         detectors: {
                           type: "object",
                           properties: {
@@ -18231,6 +18236,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 maximum: 9007199254740991,
                 title: "Tool-loop Global Circuit Breaker Threshold",
                 description: "Global no-progress breaker threshold (default: 30).",
+              },
+              consecutiveErrorThreshold: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
               },
               detectors: {
                 type: "object",
