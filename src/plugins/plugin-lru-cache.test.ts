@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { PluginLruCache } from "./plugin-lru-cache.js";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 describe("PluginLruCache", () => {
   it("evicts the least recently used entry", () => {
