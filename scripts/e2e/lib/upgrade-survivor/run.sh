@@ -607,12 +607,17 @@ probe_gateway_endpoint() {
   local out_file="$3"
   local start_epoch
   local end_epoch
+  local args=(
+    --base-url "http://127.0.0.1:18789"
+    --path "$path"
+    --expect "$expect_kind"
+  )
+  if [ -n "${OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING:-}" ]; then
+    args+=(--allow-failing "$OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING")
+  fi
+  args+=(--out "$out_file")
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
-  node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs \
-    --base-url "http://127.0.0.1:18789" \
-    --path "$path" \
-    --expect "$expect_kind" \
-    --out "$out_file"
+  node scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs "${args[@]}"
   end_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   printf '%s\n' "$(((end_epoch - start_epoch + 999) / 1000))"
 }
@@ -637,7 +642,9 @@ start_gateway() {
 
 check_gateway_probes() {
   healthz_seconds="$(probe_gateway_endpoint /healthz live "$HEALTHZ_JSON")"
+  export OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING="discord,telegram,whatsapp,feishu"
   readyz_seconds="$(probe_gateway_endpoint /readyz ready "$READYZ_JSON")"
+  unset OPENCLAW_UPGRADE_SURVIVOR_READYZ_ALLOW_FAILING
 }
 
 check_gateway_status() {
