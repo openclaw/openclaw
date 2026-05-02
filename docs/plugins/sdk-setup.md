@@ -154,18 +154,19 @@ Example:
 
 `openclaw.install` is package metadata, not manifest metadata.
 
-| Field                        | Type                 | What it means                                                                     |
-| ---------------------------- | -------------------- | --------------------------------------------------------------------------------- |
-| `npmSpec`                    | `string`             | Canonical npm spec for install/update flows.                                      |
-| `localPath`                  | `string`             | Local development or bundled install path.                                        |
-| `defaultChoice`              | `"npm"` \| `"local"` | Preferred install source when both are available.                                 |
-| `minHostVersion`             | `string`             | Minimum supported OpenClaw version in the form `>=x.y.z` or `>=x.y.z-prerelease`. |
-| `expectedIntegrity`          | `string`             | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.    |
-| `allowInvalidConfigRecovery` | `boolean`            | Lets bundled-plugin reinstall flows recover from specific stale-config failures.  |
+| Field                        | Type                                | What it means                                                                     |
+| ---------------------------- | ----------------------------------- | --------------------------------------------------------------------------------- |
+| `clawhubSpec`                | `string`                            | Canonical ClawHub spec for install/update and onboarding install-on-demand flows. |
+| `npmSpec`                    | `string`                            | Canonical npm spec for install/update fallback flows.                             |
+| `localPath`                  | `string`                            | Local development or bundled install path.                                        |
+| `defaultChoice`              | `"clawhub"` \| `"npm"` \| `"local"` | Preferred install source when multiple sources are available.                     |
+| `minHostVersion`             | `string`                            | Minimum supported OpenClaw version in the form `>=x.y.z` or `>=x.y.z-prerelease`. |
+| `expectedIntegrity`          | `string`                            | Expected npm dist integrity string, usually `sha512-...`, for pinned installs.    |
+| `allowInvalidConfigRecovery` | `boolean`                           | Lets bundled-plugin reinstall flows recover from specific stale-config failures.  |
 
 <AccordionGroup>
   <Accordion title="Onboarding behavior">
-    Interactive onboarding also uses `openclaw.install` for install-on-demand surfaces. If your plugin exposes provider auth choices or channel setup/catalog metadata before runtime loads, onboarding can show that choice, prompt for npm vs local install, install or enable the plugin, then continue the selected flow. Npm onboarding choices require trusted catalog metadata with a registry `npmSpec`; exact versions and `expectedIntegrity` are optional pins. If `expectedIntegrity` is present, install/update flows enforce it. Keep the "what to show" metadata in `openclaw.plugin.json` and the "how to install it" metadata in `package.json`.
+    Interactive onboarding also uses `openclaw.install` for install-on-demand surfaces. If your plugin exposes provider auth choices or channel setup/catalog metadata before runtime loads, onboarding can show that choice, prompt for ClawHub, npm, or local install, install or enable the plugin, then continue the selected flow. ClawHub onboarding choices use `clawhubSpec` and are preferred when present; npm choices require trusted catalog metadata with a registry `npmSpec`; exact versions and `expectedIntegrity` are optional npm pins. If `expectedIntegrity` is present, install/update flows enforce it for npm. Keep the "what to show" metadata in `openclaw.plugin.json` and the "how to install it" metadata in `package.json`.
   </Accordion>
   <Accordion title="minHostVersion enforcement">
     If `minHostVersion` is set, install and non-bundled manifest-registry loading both enforce it. Older hosts skip external plugins; invalid version strings are rejected. Bundled source plugins are assumed to be co-versioned with the host checkout.
