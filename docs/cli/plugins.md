@@ -13,6 +13,9 @@ Manage Gateway plugins, hook packs, and compatible bundles.
   <Card title="Plugin system" href="/tools/plugin">
     End-user guide for installing, enabling, and troubleshooting plugins.
   </Card>
+  <Card title="Manage plugins" href="/plugins/manage-plugins">
+    Quick examples for install, list, update, uninstall, and publishing.
+  </Card>
   <Card title="Plugin bundles" href="/plugins/bundles">
     Bundle compatibility model.
   </Card>

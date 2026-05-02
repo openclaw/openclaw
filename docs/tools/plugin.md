@@ -18,6 +18,9 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
 ## Quick start
 
+For copy-paste install, list, uninstall, update, and publishing examples, see
+[Manage plugins](/plugins/manage-plugins).
+
 <Steps>
   <Step title="See what is loaded">
     ```bash
