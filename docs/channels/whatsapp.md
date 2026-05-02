@@ -219,6 +219,7 @@ content and identifiers.
     Runtime behavior details:
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
+    - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron or heartbeat recipients
     - if no allowlist is configured, the linked self number is allowed by default
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
 

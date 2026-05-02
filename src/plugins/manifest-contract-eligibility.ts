@@ -5,6 +5,7 @@ import type { PluginManifestContractListKey, PluginManifestRecord } from "./mani
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataManifestView,
+  PluginMetadataRegistryView,
   PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.types.js";
 
@@ -68,6 +69,30 @@ export function loadManifestContractSnapshot(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): PluginMetadataManifestView {
+  const snapshot = loadManifestMetadataSnapshot(params);
+  return {
+    index: snapshot.index,
+    plugins: snapshot.plugins,
+  };
+}
+
+export function loadManifestMetadataRegistry(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginMetadataRegistryView {
+  const snapshot = loadManifestMetadataSnapshot(params);
+  return {
+    index: snapshot.index,
+    manifestRegistry: snapshot.manifestRegistry,
+  };
+}
+
+export function loadManifestMetadataSnapshot(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): PluginMetadataSnapshot {
   const env = params.env ?? process.env;
   const current = getCurrentPluginMetadataSnapshot({
     config: params.config,
@@ -77,13 +102,9 @@ export function loadManifestContractSnapshot(params: {
   if (current) {
     return current;
   }
-  const snapshot = loadPluginMetadataSnapshot({
+  return loadPluginMetadataSnapshot({
     config: params.config ?? {},
     env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-  return {
-    index: snapshot.index,
-    plugins: snapshot.plugins,
-  };
 }

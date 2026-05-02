@@ -303,7 +303,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: release-package-under-test
-          path: .artifacts/docker-e2e-package/openclaw-current.tgz
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
           retention-days: 14
           if-no-files-found: error
 

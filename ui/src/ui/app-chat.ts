@@ -69,7 +69,7 @@ export type ChatHost = ChatInputHistoryState & {
   pendingAbort?: { runId: string; sessionKey: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
   /** Callback for slash-command side effects that need app-level access. */
-  onSlashAction?: (action: string) => void;
+  onSlashAction?: (action: string) => void | Promise<void>;
 };
 
 export type ChatSendOptions = {
@@ -527,7 +527,7 @@ export async function handleSendChat(
 }
 
 function shouldQueueLocalSlashCommand(name: string): boolean {
-  return !["stop", "focus", "export-session", "steer", "redirect"].includes(name);
+  return !["stop", "focus", "export-session", "steer", "redirect", "new"].includes(name);
 }
 
 // ── Slash Command Dispatch ──
@@ -543,11 +543,11 @@ async function dispatchSlashCommand(
       await handleAbortChat(host);
       return;
     case "new":
-      await sendChatMessageNow(host, "/new", {
-        refreshSessions: true,
-        previousDraft: sendOpts?.previousDraft,
-        restoreDraft: sendOpts?.restoreDraft,
-      });
+      if (!host.onSlashAction) {
+        host.lastError = "New Chat is unavailable.";
+        return;
+      }
+      await host.onSlashAction("new-session");
       return;
     case "reset":
       await sendChatMessageNow(host, "/reset", {
@@ -560,10 +560,10 @@ async function dispatchSlashCommand(
       await clearChatHistory(host);
       return;
     case "focus":
-      host.onSlashAction?.("toggle-focus");
+      await host.onSlashAction?.("toggle-focus");
       return;
     case "export-session":
-      host.onSlashAction?.("export");
+      await host.onSlashAction?.("export");
       return;
   }
 
@@ -596,7 +596,7 @@ async function dispatchSlashCommand(
       ...host.chatModelOverrides,
       [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
     };
-    host.onSlashAction?.("refresh-tools-effective");
+    await host.onSlashAction?.("refresh-tools-effective");
   }
 
   if (result.action === "refresh") {

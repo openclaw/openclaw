@@ -74,6 +74,29 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function openAiProviderConfigForCodexCli(
+  modelKey: string,
+): NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>["openai"] {
+  const parsed = parseModelRef(modelKey, DEFAULT_PROVIDER);
+  const modelId = parsed?.model?.trim() || "gpt-5.5";
+  return {
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    models: [
+      {
+        contextWindow: 1_047_576,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
+        id: modelId,
+        input: ["text"],
+        maxTokens: 32_768,
+        name: modelId,
+        reasoning: true,
+      },
+    ],
+    timeoutSeconds: Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000),
+  };
+}
+
 function isProviderCapacityError(error: unknown): boolean {
   const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
   const normalized = message.toLowerCase();
@@ -282,6 +305,19 @@ describeLive("gateway live (cli backend)", () => {
           port,
           auth: { mode: "token", token },
         },
+        models:
+          providerId === "codex-cli"
+            ? {
+                ...cfg.models,
+                providers: {
+                  ...cfg.models?.providers,
+                  openai: {
+                    ...openAiProviderConfigForCodexCli(modelKey),
+                    ...cfg.models?.providers?.openai,
+                  },
+                },
+              }
+            : cfg.models,
         agents: {
           ...cfg.agents,
           defaults: {

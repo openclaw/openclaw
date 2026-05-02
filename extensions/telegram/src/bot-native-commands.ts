@@ -67,6 +67,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramGroupAllowFromContext,
   resolveTelegramThreadSpec,
+  shouldUseTelegramDmThreadSession,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -887,13 +888,16 @@ export const registerTelegramNativeCommands = ({
             senderId,
           });
           const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-          const threadKeys =
-            dmThreadId != null
-              ? (await resolveNativeCommandRuntime()).resolveThreadSessionKeys({
-                  baseSessionKey,
-                  threadId: `${chatId}:${dmThreadId}`,
-                })
-              : null;
+          const threadKeys = shouldUseTelegramDmThreadSession({
+            dmThreadId,
+            directConfig: !isGroup ? (groupConfig as TelegramDirectConfig | undefined) : undefined,
+            topicConfig,
+          })
+            ? (await resolveNativeCommandRuntime()).resolveThreadSessionKeys({
+                baseSessionKey,
+                threadId: `${chatId}:${dmThreadId}`,
+              })
+            : null;
           cachedTargetSessionKey = threadKeys?.sessionKey ?? baseSessionKey;
           return cachedTargetSessionKey;
         };

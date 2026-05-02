@@ -281,6 +281,8 @@ export type AutoTopicLabelConfig =
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
+  /** Controls whether Telegram DM message_thread_id values split sessions. Default: off unless topic config requires it. */
+  threadReplies?: "off" | "inbound" | "always";
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

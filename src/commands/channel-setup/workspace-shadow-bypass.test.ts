@@ -44,6 +44,11 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
     loadPluginManifestRegistry(...args),
   loadPluginRegistrySnapshot: (...args: unknown[]) => loadPluginRegistrySnapshot(...args),
+  loadPluginRegistrySnapshotWithMetadata: (...args: unknown[]) => ({
+    source: "derived",
+    snapshot: loadPluginRegistrySnapshot(...args),
+    diagnostics: [],
+  }),
   listPluginContributionIds: (...args: unknown[]) => listPluginContributionIds(...args),
 }));
 vi.mock("../../config/plugin-auto-enable.js", () => ({

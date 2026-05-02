@@ -125,6 +125,9 @@ key wins first).
   DuckDuckGo (order 100), then Ollama Web Search (order 110)
 - **Self-hosted** -- you control the instance, queries, and upstream search engines
 - **Categories** default to `general` when not configured
+- **Category fallback** -- if a non-`general` category request succeeds but
+  returns zero results, OpenClaw retries the same query once with `general`
+  before returning an empty result set
 
 <Tip>
   For SearXNG JSON API to work, make sure your SearXNG instance has the `json`

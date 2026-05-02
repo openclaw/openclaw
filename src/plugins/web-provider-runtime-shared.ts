@@ -112,7 +112,7 @@ function resolveWebProviderLoadOptions(
       logger: createPluginRuntimeLoaderLogger(),
     },
     {
-      cache: params.cache ?? false,
+      cache: params.cache ?? true,
       activate: params.activate ?? false,
       ...(hasExplicitPluginIdScope(context.onlyPluginIds)
         ? { onlyPluginIds: context.onlyPluginIds }
@@ -166,7 +166,7 @@ export function resolvePluginWebProviders<TEntry>(
         },
         {
           onlyPluginIds: pluginIds,
-          cache: params.cache ?? false,
+          cache: params.cache ?? true,
           activate: params.activate ?? false,
         },
       ),
@@ -186,16 +186,23 @@ export function resolvePluginWebProviders<TEntry>(
   if (isPluginRegistryLoadInFlight(loadOptions)) {
     return [];
   }
+  const scopedPluginIds = context.onlyPluginIds;
+  const hasExplicitEmptyScope = scopedPluginIds !== undefined && scopedPluginIds.length === 0;
   const activeRegistry = getActivePluginRegistry();
   if (activeRegistry) {
-    return deps.mapRegistryProviders({
+    const activeProviders = deps.mapRegistryProviders({
       registry: activeRegistry,
       onlyPluginIds: context.onlyPluginIds,
     });
+    if (activeProviders.length > 0 || hasExplicitEmptyScope) {
+      return activeProviders;
+    }
+  }
+  if (hasExplicitEmptyScope) {
+    return [];
   }
   return deps.mapRegistryProviders({
     registry: loadOpenClawPlugins(loadOptions),
-    onlyPluginIds: context.onlyPluginIds,
   });
 }
 

@@ -14,7 +14,11 @@ import {
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
 import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { TelegramGroupConfig, TelegramTopicConfig } from "openclaw/plugin-sdk/config-types";
+import type {
+  TelegramDirectConfig,
+  TelegramGroupConfig,
+  TelegramTopicConfig,
+} from "openclaw/plugin-sdk/config-types";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,
@@ -72,6 +76,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,
+  shouldUseTelegramDmThreadSession,
   withResolvedTelegramForumFlag,
 } from "./bot/helpers.js";
 import type { TelegramContext, TelegramGetChat } from "./bot/types.js";
@@ -320,7 +325,10 @@ export const registerTelegramHandlers = ({
       });
     const dmThreadId = !params.isGroup ? params.messageThreadId : undefined;
     const topicThreadId = resolvedThreadId ?? dmThreadId;
-    const { topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
+    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(params.chatId, topicThreadId);
+    const directConfig = !params.isGroup
+      ? (groupConfig as TelegramDirectConfig | undefined)
+      : undefined;
     const { route } = resolveTelegramConversationRoute({
       cfg: runtimeCfg,
       accountId,
@@ -338,10 +346,9 @@ export const registerTelegramHandlers = ({
       isGroup: params.isGroup,
       senderId: params.senderId,
     });
-    const threadKeys =
-      dmThreadId != null
-        ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
-        : null;
+    const threadKeys = shouldUseTelegramDmThreadSession({ dmThreadId, directConfig, topicConfig })
+      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${params.chatId}:${dmThreadId}` })
+      : null;
     const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
     const storePath = telegramDeps.resolveStorePath(runtimeCfg.session?.store, {
       agentId: route.agentId,
@@ -1745,8 +1752,11 @@ export const registerTelegramHandlers = ({
             const actionText = isDefaultSelection
               ? "reset to default"
               : `changed to <b>${escapeHtml(selection.provider)}/${escapeHtml(selection.model)}</b>`;
+            const scopeText = isDefaultSelection
+              ? "Session selection cleared. New replies use the agent's configured default."
+              : "Session-only selection. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.";
             await editMessageWithButtons(
-              `✅ Model ${actionText}\n\nThis model will be used for your next message.`,
+              `✅ Model ${actionText}\n\n${scopeText}`,
               [], // Empty buttons = remove inline keyboard
               { parse_mode: "HTML" },
             );

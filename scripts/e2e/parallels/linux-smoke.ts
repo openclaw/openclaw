@@ -14,6 +14,7 @@ import {
   parseProvider,
   modelProviderConfigBatchJson,
   repoRoot,
+  resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
   resolveHostPort,
   resolveLatestVersion,
@@ -343,7 +344,7 @@ class LinuxSmoke {
     this.status.freshGateway = "pass";
     await this.phase(
       "fresh.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
       () => this.verifyLocalTurn(),
     );
     this.status.freshAgent = "pass";
@@ -372,7 +373,7 @@ class LinuxSmoke {
     this.status.upgradeGateway = "pass";
     await this.phase(
       "upgrade.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 900),
+      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
       () => this.verifyLocalTurn(),
     );
     this.status.upgradeAgent = "pass";
@@ -717,7 +718,7 @@ for attempt in 1 2; do
   set +e
   /usr/bin/env ${shellQuote(`${this.auth.apiKeyEnv}=${this.auth.apiKeyValue}`)} openclaw agent --local --agent main --session-id "$session_id" --message ${shellQuote(
     "Reply with exact ASCII text OK only.",
-  )} --thinking minimal --json >"$output_file" 2>&1
+  )} --thinking minimal --timeout ${resolveParallelsModelTimeoutSeconds("linux")} --json >"$output_file" 2>&1
   rc=$?
   set -e
   cat "$output_file"

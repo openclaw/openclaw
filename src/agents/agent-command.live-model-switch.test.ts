@@ -864,6 +864,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           {
             provider: params.provider,
             model: params.model,
+            error: "empty result",
             reason: "format",
             code: "empty_result",
           },
@@ -885,6 +886,21 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       isFallbackRetry: true,
+    });
+    expect(state.deliverAgentCommandResultMock.mock.calls[0]?.[0]).toMatchObject({
+      result: {
+        meta: {
+          agentMeta: {
+            fallbackAttempts: [
+              expect.objectContaining({
+                provider: "anthropic",
+                model: "claude",
+                reason: "format",
+              }),
+            ],
+          },
+        },
+      },
     });
   });
 

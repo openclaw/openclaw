@@ -590,6 +590,7 @@ Validation and safety notes:
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module returning a hook action.
   - `transform.module` must be a relative path and stays within `hooks.transformsDir` (absolute paths and traversal are rejected).
+  - Keep `hooks.transformsDir` under `~/.openclaw/hooks/transforms`; workspace skill directories are rejected. If `openclaw doctor` reports this path as invalid, move the transform module into the hooks transforms directory or remove `hooks.transformsDir`.
 - `agentId` routes to a specific agent; unknown IDs fall back to default.
 - `allowedAgentIds`: restricts explicit routing (`*` or omitted = allow all, `[]` = deny all).
 - `defaultSessionKey`: optional fixed session key for hook agent runs without explicit `sessionKey`.
@@ -1016,7 +1017,7 @@ Notes:
 - `enabled`: global ACP feature gate (default: `true`; set `false` to hide ACP dispatch and spawn affordances).
 - `dispatch.enabled`: independent gate for ACP session turn dispatch (default: `true`). Set `false` to keep ACP commands available while blocking execution.
 - `backend`: default ACP runtime backend id (must match a registered ACP runtime plugin).
-  If `plugins.allow` is set, include the backend plugin id (for example `acpx`) or the bundled default plugin will not load.
+  Install the backend plugin first, and if `plugins.allow` is set, include the backend plugin id (for example `acpx`) or the ACP backend will not load.
 - `defaultAgent`: fallback ACP target agent id when spawns do not specify an explicit target.
 - `allowedAgents`: allowlist of agent ids permitted for ACP runtime sessions; empty means no additional restriction.
 - `maxConcurrentSessions`: maximum concurrently active ACP sessions.

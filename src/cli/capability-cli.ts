@@ -711,7 +711,13 @@ async function runModelRun(params: {
   const response: {
     result?: {
       payloads?: Array<{ text?: string; mediaUrl?: string | null; mediaUrls?: string[] }>;
-      meta?: { agentMeta?: { provider?: string; model?: string } };
+      meta?: {
+        agentMeta?: {
+          provider?: string;
+          model?: string;
+          fallbackAttempts?: Array<Record<string, unknown>>;
+        };
+      };
     };
   } = await callGateway({
     method: "agent",
@@ -746,7 +752,7 @@ async function runModelRun(params: {
     transport: "gateway" as const,
     provider: response?.result?.meta?.agentMeta?.provider,
     model: response?.result?.meta?.agentMeta?.model,
-    attempts: [],
+    attempts: response?.result?.meta?.agentMeta?.fallbackAttempts ?? [],
     outputs: (response?.result?.payloads ?? []).map((payload) => ({
       text: payload.text,
       mediaUrl: payload.mediaUrl,

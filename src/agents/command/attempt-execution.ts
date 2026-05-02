@@ -35,9 +35,7 @@ import { clearCliSessionInStore } from "./session-store.js";
 import type { AgentCommandOpts } from "./types.js";
 
 export {
-  claudeCliSessionTranscriptHasContent,
   createAcpVisibleTextAccumulator,
-  resolveFallbackRetryPrompt,
   sessionFileHasContent,
 } from "./attempt-execution.helpers.js";
 

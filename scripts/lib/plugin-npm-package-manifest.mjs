@@ -184,7 +184,7 @@ function parseRunArgs(argv) {
   };
 }
 
-export function main(argv = process.argv.slice(2)) {
+function main(argv = process.argv.slice(2)) {
   const { packageDir, command, args } = parseRunArgs(argv);
   return withAugmentedPluginNpmManifestForPackage({ packageDir }, ({ packageDir: cwd }) => {
     const result = spawnSync(command, args, {

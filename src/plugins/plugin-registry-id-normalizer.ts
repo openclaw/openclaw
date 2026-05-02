@@ -39,6 +39,9 @@ export function createPluginRegistryIdNormalizer(
 ): (pluginId: string) => string {
   const aliases = new Map<string, string>();
   for (const plugin of index.plugins) {
+    if (!plugin.pluginId) {
+      continue;
+    }
     const pluginId = normalizePluginRegistryAlias(plugin.pluginId);
     if (pluginId) {
       aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.pluginId);
