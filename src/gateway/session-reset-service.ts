@@ -779,7 +779,7 @@ export async function performGatewaySessionReset(params: {
 }
 
 async function performGatewaySessionResetInner(ctx: {
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   params: { key: string; reason: "new" | "reset"; commandSource: string };
@@ -789,7 +789,7 @@ async function performGatewaySessionResetInner(ctx: {
 > {
   const { cfg, target, storePath, params } = ctx;
   // Use the same cfg snapshot for entry resolution to avoid config drift.
-  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key, cfg);
+  const { entry, legacyKey, canonicalKey } = loadSessionEntry(params.key, { cfg });
   const hadExistingEntry = Boolean(entry);
   const agentId = normalizeAgentId(target.agentId ?? resolveDefaultAgentId(cfg));
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
