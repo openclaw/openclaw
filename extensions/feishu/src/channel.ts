@@ -22,7 +22,13 @@ import {
 import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
+  type MessagePresentationBlock,
+  type MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  buildFeishuCardElementForBlock,
+  buildFeishuPayloadButton,
+} from "./outbound.js";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
@@ -135,10 +141,27 @@ function buildFeishuPresentationCard(params: {
   presentation: NonNullable<ReturnType<typeof normalizeMessagePresentation>>;
   fallbackText?: string;
 }): Record<string, unknown> {
-  const fallbackPresentation: NonNullable<ReturnType<typeof normalizeMessagePresentation>> = {
-    ...(params.presentation.tone ? { tone: params.presentation.tone } : {}),
-    blocks: params.presentation.blocks,
-  };
+  const elements: Record<string, unknown>[] = [];
+
+  // Render blocks (text, context, divider, buttons, selects) using the same logic as buildFeishuPayloadCard
+  for (const block of params.presentation.blocks) {
+    const element = buildFeishuCardElementForBlock(block);
+    if (element) {
+      elements.push(element);
+    }
+  }
+
+  // If no elements were generated (e.g., empty blocks array), fall back to the markdown fallback
+  if (elements.length === 0 && params.fallbackText) {
+    elements.push({
+      tag: "markdown",
+      content: renderMessagePresentationFallbackText({
+        text: params.fallbackText,
+        presentation: params.presentation,
+      }),
+    });
+  }
+
   return {
     schema: "2.0",
     config: {
@@ -153,15 +176,7 @@ function buildFeishuPresentationCard(params: {
         }
       : {}),
     body: {
-      elements: [
-        {
-          tag: "markdown",
-          content: renderMessagePresentationFallbackText({
-            text: params.fallbackText,
-            presentation: fallbackPresentation,
-          }),
-        },
-      ],
+      elements,
     },
   };
 }
