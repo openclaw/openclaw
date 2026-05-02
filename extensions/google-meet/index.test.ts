@@ -560,6 +560,7 @@ describe("google-meet plugin", () => {
             "end_active_conference",
             "speak",
             "test_speech",
+            "test_listen",
           ],
           description: expect.stringContaining("recover_current_tab"),
         },
@@ -2395,6 +2396,52 @@ describe("google-meet plugin", () => {
     expect(result.details).toMatchObject({ createdSession: true });
   });
 
+  it("exposes a test-listen action that proves transcript movement", async () => {
+    const { tools, nodesInvoke } = setup(
+      {
+        defaultTransport: "chrome-node",
+      },
+      {
+        browserActResult: {
+          inCall: true,
+          captioning: true,
+          transcriptLines: 1,
+          lastCaptionText: "hello from the meeting",
+          title: "Meet call",
+          url: "https://meet.google.com/abc-defg-hij",
+        },
+        nodesInvokeResult: {
+          payload: {
+            launched: true,
+          },
+        },
+      },
+    );
+    const tool = tools[0] as {
+      execute: (
+        id: string,
+        params: unknown,
+      ) => Promise<{ details: { listenVerified?: boolean; transcriptLines?: number } }>;
+    };
+
+    const result = await tool.execute("id", {
+      action: "test_listen",
+      url: "https://meet.google.com/abc-defg-hij",
+      timeoutMs: 100,
+    });
+
+    expect(nodesInvoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "googlemeet.chrome",
+        params: expect.objectContaining({
+          action: "start",
+          mode: "transcribe",
+        }),
+      }),
+    );
+    expect(result.details).toMatchObject({ listenVerified: true, transcriptLines: 1 });
+  });
+
   it("does not start a second realtime response for test speech", async () => {
     const runtime = new GoogleMeetRuntime({
       config: resolveGoogleMeetConfig({}),
@@ -2454,6 +2501,29 @@ describe("google-meet plugin", () => {
         mode: "transcribe",
       }),
     ).rejects.toThrow("test_speech requires mode: realtime");
+  });
+
+  it("rejects realtime and Twilio modes for test listen", async () => {
+    const runtime = new GoogleMeetRuntime({
+      config: resolveGoogleMeetConfig({}),
+      fullConfig: {} as never,
+      runtime: {} as never,
+      logger: noopLogger,
+    });
+
+    await expect(
+      runtime.testListen({
+        url: "https://meet.google.com/abc-defg-hij",
+        mode: "realtime",
+      }),
+    ).rejects.toThrow("test_listen requires mode: transcribe");
+
+    await expect(
+      runtime.testListen({
+        url: "https://meet.google.com/abc-defg-hij",
+        transport: "twilio",
+      }),
+    ).rejects.toThrow("test_listen supports chrome or chrome-node");
   });
 
   it("reports manual action when the browser profile needs Google login", async () => {

@@ -193,6 +193,10 @@ a best-effort Meet caption observer. `googlemeet status --json` and
 `transcriptLines`, `lastCaptionAt`, `lastCaptionSpeaker`, `lastCaptionText`,
 and a short `recentTranscript` tail so operators can tell whether the browser
 joined the call and whether Meet captions are producing text.
+Use `openclaw googlemeet test-listen <meet-url> --transport chrome-node` when
+you need a yes/no probe: it joins in transcribe mode, waits for fresh caption or
+transcript movement, and returns `listenVerified`, `listenTimedOut`, manual
+action fields, and the latest caption health.
 
 During realtime sessions, `google_meet` status includes browser and audio bridge
 health such as `inCall`, `manualActionRequired`, `providerConnected`,
@@ -820,12 +824,32 @@ And they can end the active conference for a known room:
 }
 ```
 
+For listen-first validation, agents should use `test_listen` before claiming the
+meeting is useful:
+
+```json
+{
+  "action": "test_listen",
+  "url": "https://meet.google.com/abc-defg-hij",
+  "transport": "chrome-node",
+  "timeoutMs": 30000
+}
+```
+
 Run the guarded live smoke against a real retained meeting:
 
 ```bash
 OPENCLAW_LIVE_TEST=1 \
 OPENCLAW_GOOGLE_MEET_LIVE_MEETING=https://meet.google.com/abc-defg-hij \
 pnpm test:live -- extensions/google-meet/google-meet.live.test.ts
+```
+
+Run the live listen-first browser probe against a meeting where someone will
+speak with Meet captions available:
+
+```bash
+openclaw googlemeet setup --transport chrome-node --mode transcribe
+openclaw googlemeet test-listen https://meet.google.com/abc-defg-hij --transport chrome-node --timeout-ms 30000
 ```
 
 Live smoke environment:
@@ -1297,7 +1321,8 @@ openclaw nodes status --connected
 
 ### Browser opens but agent cannot join
 
-Run `googlemeet test-speech` and inspect the returned Chrome health. If it
+Run `googlemeet test-listen` for observe-only joins or `googlemeet test-speech`
+for realtime joins, then inspect the returned Chrome health. If either probe
 reports `manualActionRequired: true`, show `manualActionMessage` to the operator
 and stop retrying until the browser action is complete.
 

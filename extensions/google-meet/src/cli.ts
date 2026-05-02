@@ -37,6 +37,7 @@ type JoinOptions = {
   transport?: GoogleMeetTransport;
   mode?: GoogleMeetMode;
   message?: string;
+  timeoutMs?: string;
   dialInNumber?: string;
   pin?: string;
   dtmfSequence?: string;
@@ -226,6 +227,17 @@ function formatBoolean(value: boolean | undefined): string {
 
 function formatOptional(value: unknown): string {
   return typeof value === "string" && value.trim() ? value : "n/a";
+}
+
+function parsePositiveNumber(value: string | undefined, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive number`);
+  }
+  return parsed;
 }
 
 function formatDuration(value: number | undefined): string {
@@ -1563,6 +1575,22 @@ export function registerGoogleMeetCli(params: {
           transport: options.transport,
           mode: options.mode,
           message: options.message,
+        }),
+      );
+    });
+
+  root
+    .command("test-listen")
+    .argument("[url]", "Explicit https://meet.google.com/... URL")
+    .option("--transport <transport>", "Transport: chrome or chrome-node")
+    .option("--timeout-ms <ms>", "How long to wait for fresh captions/transcript movement")
+    .action(async (url: string | undefined, options: JoinOptions) => {
+      const rt = await params.ensureRuntime();
+      writeStdoutJson(
+        await rt.testListen({
+          url: resolveMeetingInput(params.config, url),
+          transport: options.transport,
+          timeoutMs: parsePositiveNumber(options.timeoutMs, "timeout-ms"),
         }),
       );
     });
