@@ -7,7 +7,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../config/config.js";
-import type { SessionEntry } from "../config/sessions.js";
+import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withEnv } from "../test-utils/env.js";
@@ -1206,6 +1206,44 @@ describe("loadCombinedSessionStoreForGateway includes disk-only agents (#32804)"
       expect(readPaths).not.toContain(fs.realpathSync.native(mainStorePath));
 
       readSpy.mockRestore();
+    });
+  });
+
+  test("keeps canonical single-target entries by reference", async () => {
+    await withStateDirEnv("openclaw-acp-canonical-", async ({ stateDir }) => {
+      const customRoot = path.join(stateDir, "custom-state");
+      const codexDir = path.join(customRoot, "agents", "codex", "sessions");
+      fs.mkdirSync(codexDir, { recursive: true });
+
+      const codexStorePath = path.join(codexDir, "sessions.json");
+      fs.writeFileSync(
+        codexStorePath,
+        JSON.stringify({
+          "agent:codex:acp-task": {
+            sessionId: "s-codex",
+            updatedAt: 200,
+            spawnedBy: "agent:codex:main",
+          },
+        }),
+        "utf8",
+      );
+
+      const cfg = {
+        session: {
+          mainKey: "main",
+          store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
+        },
+        agents: {
+          list: [{ id: "codex", default: true }],
+        },
+      } as OpenClawConfig;
+
+      const cachedStore = loadSessionStore(fs.realpathSync.native(codexStorePath), {
+        clone: false,
+      });
+      const { store } = loadCombinedSessionStoreForGateway(cfg, { agentId: "codex" });
+
+      expect(store["agent:codex:acp-task"]).toBe(cachedStore["agent:codex:acp-task"]);
     });
   });
 });
