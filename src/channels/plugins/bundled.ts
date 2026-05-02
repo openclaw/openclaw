@@ -243,7 +243,6 @@ function loadGeneratedBundledChannelEntry(params: {
         rootScope: params.rootScope,
         metadata: params.metadata,
         entry: params.metadata.source,
-        installRuntimeDeps: false,
       }),
     );
     if (!entry) {

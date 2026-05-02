@@ -100,6 +100,7 @@ afterEach(() => {
   vi.doUnmock("../../plugins/discovery.js");
   vi.doUnmock("../../plugins/manifest-registry.js");
   vi.doUnmock("../../plugins/channel-catalog-registry.js");
+  vi.doUnmock("../../plugins/bundled-runtime-root.js");
   vi.doUnmock("../../infra/boundary-file-read.js");
   vi.doUnmock("jiti");
 });
@@ -368,6 +369,70 @@ describe("bundled channel entry shape guards", () => {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
       delete (globalThis as { __bundledOverrideRuntime?: unknown }).__bundledOverrideRuntime;
+    }
+  });
+
+  it("prepares packaged bundled channel entries before importing runtime-dependent modules", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-runtime-entry-"));
+    const mirrorRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-runtime-mirror-"));
+    const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    const pluginDir = path.join(root, "dist", "extensions", "alpha");
+    const mirroredPluginDir = path.join(mirrorRoot, "dist", "extensions", "alpha");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(mirroredPluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      [
+        "import 'alpha-runtime-only';",
+        "throw new Error('unprepared bundled channel entry loaded');",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(mirroredPluginDir, "index.js"),
+      [
+        "export default {",
+        "  kind: 'bundled-channel-entry',",
+        "  id: 'alpha',",
+        "  name: 'Alpha',",
+        "  description: 'Alpha',",
+        "  register() {},",
+        "  loadChannelPlugin() {",
+        "    return { id: 'alpha', meta: { id: 'alpha', label: 'Prepared Alpha' }, capabilities: {}, config: {} };",
+        "  },",
+        "};",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+
+    mockAlphaDistExtensionRuntime();
+    vi.doMock("../../plugins/bundled-runtime-root.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../../plugins/bundled-runtime-root.js")>();
+      return {
+        ...actual,
+        isBuiltBundledPluginRuntimeRoot: () => true,
+        prepareBundledPluginRuntimeRoot: (params: { pluginRoot: string; modulePath: string }) => ({
+          pluginRoot: params.pluginRoot.replace(root, mirrorRoot),
+          modulePath: params.modulePath.replace(root, mirrorRoot),
+        }),
+      };
+    });
+
+    try {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(root, "dist", "extensions");
+
+      const bundled = await importFreshModule<typeof import("./bundled.js")>(
+        import.meta.url,
+        "./bundled.js?scope=bundled-runtime-entry-prepared",
+      );
+
+      expect(bundled.requireBundledChannelPlugin("alpha").meta.label).toBe("Prepared Alpha");
+    } finally {
+      restoreBundledPluginsDir(previousBundledPluginsDir);
+      fs.rmSync(root, { recursive: true, force: true });
+      fs.rmSync(mirrorRoot, { recursive: true, force: true });
     }
   });
 
