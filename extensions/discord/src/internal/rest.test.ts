@@ -1,3 +1,5 @@
+import { createServer, type Server } from "node:http";
+import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeRequestBody } from "./rest-body.js";
 import { RequestClient } from "./rest.js";
@@ -404,6 +406,77 @@ describe("RequestClient", () => {
       }),
     );
     expect(form.get("files[0]")).toBeInstanceOf(Blob);
+  });
+
+  it("dispatches multipart uploads with a multipart/form-data content type", async () => {
+    const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      expect(init?.headers).toBeInstanceOf(Headers);
+      expect((init?.headers as Headers).get("Content-Type")).toMatch(
+        /^multipart\/form-data; boundary=/,
+      );
+      expect(init?.body).not.toBeInstanceOf(FormData);
+      const request = new Request("https://discord.test/upload", {
+        method: "POST",
+        headers: init?.headers,
+        body: init?.body,
+      });
+      expect(request.headers.get("Content-Type")).toMatch(/^multipart\/form-data; boundary=/);
+      return new Response(JSON.stringify({ id: "msg" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
+
+    await expect(
+      client.post("/channels/c1/messages", {
+        body: {
+          content: "file",
+          files: [{ name: "a.txt", data: new Uint8Array([1]), contentType: "text/plain" }],
+        },
+      }),
+    ).resolves.toEqual({ id: "msg" });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches multipart uploads through undici fetch with a multipart/form-data content type", async () => {
+    const server = await new Promise<Server>((resolve) => {
+      const srv = createServer((req, res) => {
+        expect(req.headers["content-type"]).toMatch(/^multipart\/form-data; boundary=/);
+        req.resume();
+        req.on("end", () => {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ id: "msg" }));
+        });
+      });
+      srv.listen(0, () => resolve(srv));
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("test server did not bind to a TCP port");
+      }
+      const client = new RequestClient("test-token", {
+        baseUrl: `http://127.0.0.1:${address.port}`,
+        apiVersion: 10,
+        fetch: undiciFetch as unknown as typeof fetch,
+        queueRequests: false,
+      });
+
+      await expect(
+        client.post("/channels/c1/messages", {
+          body: {
+            content: "file",
+            files: [{ name: "a.txt", data: new Uint8Array([1]), contentType: "text/plain" }],
+          },
+        }),
+      ).resolves.toEqual({ id: "msg" });
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
+    }
   });
 
   it("serializes form multipart uploads for sticker-style endpoints", () => {

@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
 import { serializeRequestBody } from "./rest-body.js";
 import {
@@ -72,6 +73,52 @@ function coerceResponseBody(raw: string): unknown {
   } catch {
     return raw;
   }
+}
+
+function escapeMultipartQuotedValue(value: string): string {
+  return value.replace(/["\r\n]/g, (ch) => (ch === '"' ? "%22" : ch === "\r" ? "%0D" : "%0A"));
+}
+
+async function formDataToMultipartBody(body: FormData, headers: Headers): Promise<BodyInit> {
+  const boundary = `----openclaw-discord-${randomBytes(12).toString("hex")}`;
+  headers.set("Content-Type", `multipart/form-data; boundary=${boundary}`);
+  const chunks: Buffer[] = [];
+  const push = (value: string | Buffer) => {
+    chunks.push(typeof value === "string" ? Buffer.from(value) : value);
+  };
+  for (const [key, value] of body.entries()) {
+    push(`--${boundary}\r\n`);
+    const escapedKey = escapeMultipartQuotedValue(key);
+    if (typeof value === "string") {
+      push(`Content-Disposition: form-data; name="${escapedKey}"\r\n\r\n`);
+      push(value);
+      push("\r\n");
+      continue;
+    }
+    const filename = (value as Blob & { name?: unknown }).name;
+    const escapedFilename = escapeMultipartQuotedValue(
+      typeof filename === "string" && filename.length > 0 ? filename : "blob",
+    );
+    push(`Content-Disposition: form-data; name="${escapedKey}"; filename="${escapedFilename}"\r\n`);
+    if (value.type) {
+      push(`Content-Type: ${value.type}\r\n`);
+    }
+    push("\r\n");
+    push(Buffer.from(await value.arrayBuffer()));
+    push("\r\n");
+  }
+  push(`--${boundary}--\r\n`);
+  return Buffer.concat(chunks) as unknown as BodyInit;
+}
+
+async function normalizeFetchBody(
+  body: BodyInit | undefined,
+  headers: Headers,
+): Promise<BodyInit | undefined> {
+  if (body instanceof FormData) {
+    return await formDataToMultipartBody(body, headers);
+  }
+  return body;
 }
 
 export class RequestClient {
@@ -155,7 +202,7 @@ export class RequestClient {
       const response = await (this.customFetch ?? fetch)(url, {
         method,
         headers,
-        body,
+        body: await normalizeFetchBody(body, headers),
         signal: controller.signal,
       });
       const text = await response.text();
