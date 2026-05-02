@@ -667,6 +667,51 @@ describe("readSessionMessages", () => {
     }
   });
 
+  test("honors byte caps for sync recent tree-message reads", () => {
+    const sessionId = "test-session-recent-tree-byte-cap";
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const hugeContent = "huge ".repeat(4096);
+    const lines = [
+      JSON.stringify({ type: "session", version: 3, id: sessionId }),
+      JSON.stringify({
+        type: "message",
+        id: "root",
+        parentId: null,
+        message: { role: "user", content: "root" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "huge",
+        parentId: "root",
+        message: { role: "assistant", content: hugeContent },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "tail",
+        parentId: "huge",
+        message: { role: "assistant", content: "tail" },
+      }),
+    ];
+    fs.writeFileSync(transcriptPath, `${lines.join("\n")}\n`, "utf-8");
+    const readFileSpy = vi.spyOn(fs, "readFileSync");
+    const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
+
+    try {
+      const out = readRecentSessionMessages(sessionId, storePath, undefined, {
+        maxMessages: 2,
+        maxBytes: 2048,
+      });
+
+      expect(out).toEqual([expect.objectContaining({ role: "assistant", content: "tail" })]);
+      expect(JSON.stringify(out)).not.toContain("huge");
+      expect(readFileSpy).not.toHaveBeenCalled();
+      expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
+    } finally {
+      readFileSpy.mockRestore();
+      sessionManagerOpenSpy.mockRestore();
+    }
+  });
+
   test("counts transcript messages without loading the whole file", () => {
     const sessionId = "test-session-count-large";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
@@ -857,22 +902,28 @@ describe("readSessionMessages", () => {
     const rawTranscript = fs.readFileSync(sessionFile, "utf-8");
     expect(rawTranscript).toContain("original wrapped prompt");
     expect(rawTranscript).toContain("clean prompt");
+    const sessionManagerOpenSpy = vi.spyOn(SessionManager, "open");
 
-    const out = readSessionMessages(sessionId, storePath, sessionFile);
-    expect(out).toHaveLength(2);
-    expect(out).toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: "clean prompt",
-        __openclaw: expect.objectContaining({ seq: 1 }),
-      }),
-      expect.objectContaining({
-        role: "assistant",
-        content: [{ type: "text", text: "clean answer" }],
-        __openclaw: expect.objectContaining({ seq: 2 }),
-      }),
-    ]);
-    expect(JSON.stringify(out)).not.toContain("original wrapped prompt");
+    try {
+      const out = readSessionMessages(sessionId, storePath, sessionFile);
+      expect(out).toHaveLength(2);
+      expect(out).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "clean prompt",
+          __openclaw: expect.objectContaining({ seq: 1 }),
+        }),
+        expect.objectContaining({
+          role: "assistant",
+          content: [{ type: "text", text: "clean answer" }],
+          __openclaw: expect.objectContaining({ seq: 2 }),
+        }),
+      ]);
+      expect(JSON.stringify(out)).not.toContain("original wrapped prompt");
+      expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
+    } finally {
+      sessionManagerOpenSpy.mockRestore();
+    }
   });
 
   test.each([
