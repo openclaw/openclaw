@@ -29,6 +29,7 @@ import {
   sanitizeNonEmptyTransportPayloadText,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 
 const CLAUDE_CODE_VERSION = "2.1.75";
 const CLAUDE_CODE_TOOLS = [
@@ -107,6 +108,35 @@ type MutableAssistantOutput = {
   responseId?: string;
   errorMessage?: string;
 };
+
+function applyAnthropicTransportUsage(
+  model: AnthropicTransportModel,
+  output: MutableAssistantOutput,
+  rawUsage: Record<string, unknown> | undefined,
+): void {
+  const usage = normalizeUsage(rawUsage as UsageLike | undefined);
+  if (!usage) {
+    return;
+  }
+
+  if (typeof usage.input === "number") {
+    output.usage.input = usage.input;
+  }
+  if (typeof usage.output === "number") {
+    output.usage.output = usage.output;
+  }
+  if (typeof usage.cacheRead === "number") {
+    output.usage.cacheRead = usage.cacheRead;
+  }
+  if (typeof usage.cacheWrite === "number") {
+    output.usage.cacheWrite = usage.cacheWrite;
+  }
+  const componentTotal =
+    output.usage.input + output.usage.output + output.usage.cacheRead + output.usage.cacheWrite;
+  output.usage.totalTokens =
+    typeof usage.total === "number" ? Math.max(componentTotal, usage.total) : componentTotal;
+  calculateCost(model, output.usage);
+}
 
 function isClaudeOpus47Model(modelId: string): boolean {
   return modelId.includes("opus-4-7") || modelId.includes("opus-4.7");
@@ -902,22 +932,8 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const message = event.message as
               | { id?: string; usage?: Record<string, unknown> }
               | undefined;
-            const usage = message?.usage ?? {};
             output.responseId = typeof message?.id === "string" ? message.id : undefined;
-            output.usage.input = typeof usage.input_tokens === "number" ? usage.input_tokens : 0;
-            output.usage.output = typeof usage.output_tokens === "number" ? usage.output_tokens : 0;
-            output.usage.cacheRead =
-              typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0;
-            output.usage.cacheWrite =
-              typeof usage.cache_creation_input_tokens === "number"
-                ? usage.cache_creation_input_tokens
-                : 0;
-            output.usage.totalTokens =
-              output.usage.input +
-              output.usage.output +
-              output.usage.cacheRead +
-              output.usage.cacheWrite;
-            calculateCost(model, output.usage);
+            applyAnthropicTransportUsage(model, output, message?.usage);
             continue;
           }
           if (event.type === "content_block_start") {
@@ -1118,24 +1134,15 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             if (delta?.stop_reason) {
               output.stopReason = mapStopReason(delta.stop_reason);
             }
-            if (typeof usage?.input_tokens === "number") {
-              output.usage.input = usage.input_tokens;
-            }
-            if (typeof usage?.output_tokens === "number") {
-              output.usage.output = usage.output_tokens;
-            }
-            if (typeof usage?.cache_read_input_tokens === "number") {
-              output.usage.cacheRead = usage.cache_read_input_tokens;
-            }
-            if (typeof usage?.cache_creation_input_tokens === "number") {
-              output.usage.cacheWrite = usage.cache_creation_input_tokens;
-            }
-            output.usage.totalTokens =
-              output.usage.input +
-              output.usage.output +
-              output.usage.cacheRead +
-              output.usage.cacheWrite;
-            calculateCost(model, output.usage);
+            applyAnthropicTransportUsage(model, output, usage);
+            continue;
+          }
+          if (event.type === "message_stop") {
+            applyAnthropicTransportUsage(
+              model,
+              output,
+              event.usage as Record<string, unknown> | undefined,
+            );
           }
         }
         finalizeTransportStream({ stream, output, signal: transportOptions.signal });

@@ -533,6 +533,108 @@ describe("anthropic transport stream", () => {
     expect(result.usage.output).toBe(9);
   });
 
+  it("normalizes MiniMax Anthropic-compatible usage aliases", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 0, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "done" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { prompt_tokens: 23, completion_tokens: 10, total_tokens: 33 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "minimax",
+        id: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.io/anthropic",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-minimax",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage).toEqual(
+      expect.objectContaining({
+        input: 23,
+        output: 10,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 33,
+      }),
+    );
+  });
+
+  it("captures Anthropic-compatible usage emitted at message_stop", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 0, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "done" },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_stop",
+          usage: {
+            input_tokens: 21,
+            output_tokens: 8,
+            cache_read_input_tokens: 5,
+            cache_creation_input_tokens: 2,
+          },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({
+        provider: "minimax",
+        id: "MiniMax-M2.7",
+        baseUrl: "https://api.minimax.io/anthropic",
+      }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-minimax",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.usage).toEqual(
+      expect.objectContaining({
+        input: 21,
+        output: 8,
+        cacheRead: 5,
+        cacheWrite: 2,
+        totalTokens: 36,
+      }),
+    );
+  });
+
   it("skips malformed tools when building Anthropic payloads", async () => {
     await runTransportStream(
       makeAnthropicTransportModel(),
