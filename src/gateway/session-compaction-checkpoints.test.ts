@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -224,6 +224,81 @@ describe("session-compaction-checkpoints", () => {
     expect(forkedEntries.slice(1)).toEqual(
       sourceEntries.filter((entry) => entry.type !== "session"),
     );
+  });
+
+  test("async fork migrates legacy checkpoint snapshots before writing a current header", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-legacy-fork-"));
+    tempDirs.push(dir);
+
+    const legacySessionFile = path.join(dir, "legacy.jsonl");
+    const firstMessage = {
+      type: "message",
+      timestamp: new Date(0).toISOString(),
+      message: {
+        role: "user",
+        content: "legacy first",
+        timestamp: 1,
+      },
+    };
+    const secondMessage = {
+      type: "message",
+      timestamp: new Date(1).toISOString(),
+      message: {
+        role: "assistant",
+        content: "legacy second",
+        api: "responses",
+        provider: "openai",
+        model: "gpt-test",
+        timestamp: 2,
+      },
+    };
+    await fs.writeFile(
+      legacySessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          id: "legacy-session",
+          timestamp: new Date(0).toISOString(),
+          cwd: dir,
+        }),
+        JSON.stringify(firstMessage),
+        JSON.stringify(secondMessage),
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const forked = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile: legacySessionFile,
+      sessionDir: dir,
+    });
+
+    expect(forked).not.toBeNull();
+    const forkedEntries = (await fs.readFile(forked!.sessionFile, "utf-8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(forkedEntries[0]).toMatchObject({
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: forked!.sessionId,
+      parentSession: legacySessionFile,
+    });
+    expect(forkedEntries[1]).toMatchObject({
+      type: "message",
+      parentId: null,
+      message: expect.objectContaining({ content: "legacy first" }),
+    });
+    expect(forkedEntries[1]?.id).toEqual(expect.any(String));
+    expect(forkedEntries[2]).toMatchObject({
+      type: "message",
+      parentId: forkedEntries[1]?.id,
+      message: expect.objectContaining({ content: "legacy second" }),
+    });
+    expect(forkedEntries[2]?.id).toEqual(expect.any(String));
+
+    const messages = SessionManager.open(forked!.sessionFile, dir).buildSessionContext().messages;
+    expect(messages.map((message) => message.content)).toEqual(["legacy first", "legacy second"]);
   });
 
   test("persist trims old checkpoint metadata and removes trimmed snapshot files", async () => {

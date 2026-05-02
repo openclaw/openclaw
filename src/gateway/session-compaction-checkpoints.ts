@@ -1,7 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import {
+  CURRENT_SESSION_VERSION,
+  migrateSessionEntries,
+  SessionManager,
+  type FileEntry as PiSessionFileEntry,
+} from "@mariozechner/pi-coding-agent";
 import { v7 as uuidv7 } from "uuid";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
@@ -143,19 +148,21 @@ function parseTranscriptLineId(
   return null;
 }
 
-async function readTranscriptEntriesForForkAsync(sessionFile: string): Promise<unknown[] | null> {
+async function readTranscriptEntriesForForkAsync(
+  sessionFile: string,
+): Promise<PiSessionFileEntry[] | null> {
   let fileHandle: AsyncTranscriptFileHandle | undefined;
   try {
     fileHandle = await fs.open(sessionFile, "r");
     const content = await fileHandle.readFile("utf-8");
-    const entries: unknown[] = [];
+    const entries: PiSessionFileEntry[] = [];
     for (const line of content.trim().split(/\r?\n/)) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
       }
       try {
-        entries.push(JSON.parse(trimmed));
+        entries.push(JSON.parse(trimmed) as PiSessionFileEntry);
       } catch {
         // Match pi-coding-agent's loader: malformed JSONL entries are ignored.
       }
@@ -250,6 +257,7 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   if (!entries) {
     return null;
   }
+  migrateSessionEntries(entries);
 
   const targetCwd = params.targetCwd ?? sourceHeader.cwd ?? process.cwd();
   const sessionDir = params.sessionDir ?? path.dirname(sourceFile);
