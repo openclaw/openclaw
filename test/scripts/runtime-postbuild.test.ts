@@ -145,6 +145,28 @@ describe("runtime postbuild static assets", () => {
     await expect(fs.stat(path.join(distDir, "install.runtime.js"))).rejects.toThrow();
   });
 
+  it("keeps stable aliases when one colliding root runtime chunk re-exports the implementation", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-");
+    const distDir = path.join(rootDir, "dist");
+    await fs.mkdir(distDir, { recursive: true });
+    await fs.writeFile(
+      path.join(distDir, "runtime-model-auth.runtime-Impl123.js"),
+      "export const auth = true;\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(distDir, "runtime-model-auth.runtime-Wrap456.js"),
+      'import { auth } from "./runtime-model-auth.runtime-Impl123.js";\nexport { auth };\n',
+      "utf8",
+    );
+
+    writeStableRootRuntimeAliases({ rootDir });
+
+    expect(await fs.readFile(path.join(distDir, "runtime-model-auth.runtime.js"), "utf8")).toBe(
+      'export * from "./runtime-model-auth.runtime-Wrap456.js";\n',
+    );
+  });
+
   it("rewrites root runtime imports to stable aliases", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const distDir = path.join(rootDir, "dist");

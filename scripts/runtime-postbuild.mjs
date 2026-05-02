@@ -74,13 +74,38 @@ export function writeStableRootRuntimeAliases(params = {}) {
     candidatesByAlias.set(aliasFileName, candidates);
   }
 
+  const resolveAliasCandidate = (candidates) => {
+    if (candidates.length === 1) {
+      return candidates[0];
+    }
+    const candidateSet = new Set(candidates);
+    const wrappers = candidates.filter((candidate) => {
+      const filePath = path.join(distDir, candidate);
+      let source;
+      try {
+        source = fsImpl.readFileSync(filePath, "utf8");
+      } catch {
+        return false;
+      }
+      return candidates.some(
+        (target) =>
+          target !== candidate &&
+          candidateSet.has(target) &&
+          source.includes(`"./${target}"`) &&
+          !source.includes("\n//#region "),
+      );
+    });
+    return wrappers.length === 1 ? wrappers[0] : null;
+  };
+
   for (const [aliasFileName, candidates] of candidatesByAlias) {
     const aliasPath = path.join(distDir, aliasFileName);
-    if (candidates.length !== 1) {
+    const candidate = resolveAliasCandidate(candidates);
+    if (!candidate) {
       fsImpl.rmSync?.(aliasPath, { force: true });
       continue;
     }
-    writeTextFileIfChanged(aliasPath, `export * from "./${candidates[0]}";\n`);
+    writeTextFileIfChanged(aliasPath, `export * from "./${candidate}";\n`);
   }
 }
 
