@@ -22,10 +22,11 @@ function run(command, args, options = {}) {
     console.log(["+", command, ...args].join(" "));
     return "";
   }
-  return execFileSync(command, args, {
+  const output = execFileSync(command, args, {
     encoding: "utf8",
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
-  }).trim();
+  });
+  return typeof output === "string" ? output.trim() : "";
 }
 
 function runStatus(command, args, options = {}) {
