@@ -131,12 +131,14 @@ export function applyPiCompactionSettingsFromConfig(params: {
  * provider call (openclaw#75799).
  *
  * True on any of: `zai-native` endpoint class, normalized provider id `zai`,
- * a `z-ai/` / `openrouter/z-ai/` model-id namespace prefix, or a `glm-` model
- * name (with or without a path namespace) — covering in-house gateways and
- * ollama-style deploys that expose Zhipu's GLM family directly without a
- * `z-ai/` qualifier. Intentionally narrow to z.ai-style accounting; other
- * providers documented as silently truncating are not added without a
- * reproducible repro.
+ * a `z-ai/` / `openrouter/z-ai/` model-id namespace prefix, or a bare `glm-`
+ * model id (no namespace prefix) — the latter covers in-house gateways that
+ * expose Zhipu's GLM family directly without a `z-ai/` qualifier. Intentionally
+ * narrow: namespaced GLM ids that route through other providers (e.g.
+ * `ollama/glm-*`, `opencode-go/glm-*`) are NOT included because their hosts
+ * have their own overflow accounting and may not exhibit the z.ai silent-
+ * overflow shape. Other providers documented as silently truncating are not
+ * added without a reproducible repro.
  */
 export function isSilentOverflowProneModel(model: {
   provider?: string | null;
@@ -157,8 +159,7 @@ export function isSilentOverflowProneModel(model: {
     if (
       normalized.startsWith("z-ai/") ||
       normalized.startsWith("openrouter/z-ai/") ||
-      normalized.startsWith("glm-") ||
-      normalized.includes("/glm-")
+      normalized.startsWith("glm-")
     ) {
       return true;
     }

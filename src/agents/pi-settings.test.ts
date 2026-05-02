@@ -377,15 +377,25 @@ describe("isSilentOverflowProneModel", () => {
 
   // openclaw#75799 reporter's setup: an OpenAI-compatible in-house gateway
   // exposing Zhipu's GLM family directly (model id `glm-5.1`, no `z-ai/`
-  // qualifier, custom baseUrl that is not api.z.ai). Catch the GLM family
-  // name with or without a path namespace so deploys that proxy it under
-  // their own provider name still hit the guard.
-  it("flags glm- model ids regardless of path namespace", () => {
+  // qualifier, custom baseUrl that is not api.z.ai). Catch the bare GLM
+  // family name so direct gateway deployments hit the guard.
+  it("flags bare glm- model ids without a namespace prefix", () => {
     expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-5.1" })).toBe(true);
     expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-4.7" })).toBe(true);
+  });
+
+  // Detection is intentionally narrow to z.ai-style accounting. Namespaced GLM
+  // ids that route through providers with their own overflow accounting must
+  // NOT be flagged — those hosts may not exhibit the z.ai silent-overflow
+  // shape, and disabling Pi auto-compaction for them would over-broaden the
+  // kill surface beyond the reproducible repro.
+  it("does not flag namespaced GLM ids routed through non-z.ai hosts", () => {
     expect(
       isSilentOverflowProneModel({ provider: "ollama", modelId: "ollama/glm-5.1:cloud" }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      isSilentOverflowProneModel({ provider: "opencode-go", modelId: "opencode-go/glm-5.1" }),
+    ).toBe(false);
   });
 
   // pi-ai's overflow.ts only documents z.ai as the silent-overflow style. We
