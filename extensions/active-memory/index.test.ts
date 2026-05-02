@@ -185,15 +185,26 @@ describe("active-memory plugin", () => {
 
   it("registers a before_prompt_build hook", () => {
     expect(api.on).toHaveBeenCalledWith("before_prompt_build", expect.any(Function), {
-      timeoutMs: 45_000,
+      timeoutMs: 15_000,
     });
-    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(45_000);
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(15_000);
   });
 
-  it("registers before_prompt_build with the configured recall timeout plus setup grace", () => {
+  it("registers before_prompt_build with the configured recall timeout", () => {
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 90_000,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    expect(hookOptions.before_prompt_build?.timeoutMs).toBe(90_000);
+  });
+
+  it("registers before_prompt_build with explicit setup grace when configured", () => {
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 90_000,
+      setupGraceTimeoutMs: 30_000,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
 
@@ -2178,10 +2189,10 @@ describe("active-memory plugin", () => {
   it("does not spend the model timeout budget on active-memory subagent setup", async () => {
     const CONFIGURED_TIMEOUT_MS = 10;
     __testing.setMinimumTimeoutMsForTests(1);
-    __testing.setSetupGraceTimeoutMsForTests(100);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: CONFIGURED_TIMEOUT_MS,
+      setupGraceTimeoutMs: 100,
       logging: true,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
@@ -3240,6 +3251,16 @@ describe("active-memory plugin", () => {
     const config = __testing.normalizePluginConfig({});
     expect(config.circuitBreakerMaxTimeouts).toBe(3);
     expect(config.circuitBreakerCooldownMs).toBe(60_000);
+  });
+
+  it("normalizes setup grace config with a zero default and bounded opt-in", () => {
+    expect(__testing.normalizePluginConfig({}).setupGraceTimeoutMs).toBe(0);
+    expect(
+      __testing.normalizePluginConfig({ setupGraceTimeoutMs: 30_001 }).setupGraceTimeoutMs,
+    ).toBe(30_000);
+    expect(__testing.normalizePluginConfig({ setupGraceTimeoutMs: -1 }).setupGraceTimeoutMs).toBe(
+      0,
+    );
   });
 
   it("clamps circuit breaker config within valid ranges", () => {
