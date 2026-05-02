@@ -20,6 +20,7 @@ function createState(request: RequestFn, overrides: Partial<UsageState> = {}): U
     usageError: null,
     usageStartDate: "2026-02-16",
     usageEndDate: "2026-02-16",
+    usageScope: "family",
     usageSelectedSessions: [],
     usageSelectedDays: [],
     usageTimeSeries: null,
@@ -39,6 +40,8 @@ function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCal
     endDate: "2026-02-16",
     mode: "specific",
     utcOffset: "UTC+5:30",
+    groupBy: "family",
+    includeHistorical: true,
     limit: 1000,
     includeContextWeight: true,
   });
@@ -85,6 +88,8 @@ describe("usage controller date interpretation params", () => {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
       mode: "utc",
+      groupBy: "family",
+      includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
     });
@@ -139,6 +144,8 @@ describe("usage controller date interpretation params", () => {
     expect(request).toHaveBeenNthCalledWith(3, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
+      groupBy: "family",
+      includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
     });
@@ -153,6 +160,8 @@ describe("usage controller date interpretation params", () => {
     expect(request).toHaveBeenNthCalledWith(5, "sessions.usage", {
       startDate: "2026-02-16",
       endDate: "2026-02-16",
+      groupBy: "family",
+      includeHistorical: true,
       limit: 1000,
       includeContextWeight: true,
     });
