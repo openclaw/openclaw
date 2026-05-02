@@ -704,6 +704,9 @@ function resolveBundledPackageCacheIdentity(stockRoot?: string):
       mtimeMs: number;
     }
   | undefined {
+  if (!stockRoot) {
+    return undefined;
+  }
   const packageRoot = resolveBundledPackageRootForCache(stockRoot);
   if (!packageRoot) {
     return undefined;
