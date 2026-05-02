@@ -522,21 +522,45 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    // Check if the message is from our own account to prevent loop/self-reply
-    // This handles both phone number and UUID based identification
+    // Check if the message is from our own account.
+    // We treat Note-to-Self syncMessages as regular inbound (since the bot's user
+    // wants to chat via Note-to-Self when running as a linked device on their personal
+    // account), and drop all other own-account messages to prevent reply loops.
+    // This handles both phone number and UUID based identification.
     const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
-    const isOwnMessage =
+    const isOwnAccount =
       (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
       (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
-    if (isOwnMessage) {
-      return;
-    }
 
-    // Filter all sync messages (sentTranscript, readReceipts, etc.).
-    // signal-cli may set syncMessage to null instead of omitting it, so
-    // check property existence rather than truthiness to avoid replaying
-    // the bot's own sent messages on daemon restart.
-    if ("syncMessage" in envelope) {
+    // sentTranscript syncMessages where destination === source are Note-to-Self.
+    // Promote them to dataMessage so downstream allowFrom/dmPolicy/agent processing
+    // treats them as a normal inbound message. Other syncMessages (sentTranscripts
+    // to third parties, read receipts, etc.) are still dropped, as are direct
+    // own-account messages (loop protection for our own outbound replies).
+    //
+    // signal-cli may set syncMessage to null instead of omitting it, so the
+    // `"syncMessage" in envelope` check uses property existence rather than
+    // truthiness — required to avoid replaying the bot's own sent messages on
+    // daemon restart (see related work in the loop-protection / sentTranscript
+    // bug fixes).
+    const sentSyncMessage = envelope.syncMessage?.sentMessage;
+    if (sentSyncMessage) {
+      const destNum = sentSyncMessage.destinationNumber ?? sentSyncMessage.destination;
+      const srcNum = envelope.sourceNumber ?? envelope.source;
+      const destUuid = sentSyncMessage.destinationUuid;
+      const srcUuid = envelope.sourceUuid;
+      const isNoteToSelf =
+        (!!destNum && !!srcNum && destNum === srcNum) ||
+        (!!destUuid && !!srcUuid && destUuid === srcUuid);
+      if (isNoteToSelf) {
+        envelope.dataMessage = sentSyncMessage;
+        // fall through to normal inbound processing
+      } else {
+        return;
+      }
+    } else if ("syncMessage" in envelope) {
+      return;
+    } else if (isOwnAccount) {
       return;
     }
 
