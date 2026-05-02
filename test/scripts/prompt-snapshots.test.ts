@@ -68,6 +68,13 @@ describe("happy path prompt snapshots", () => {
     expect(telegram?.content).toContain(
       "Approval policy is currently never. Do not provide the `sandbox_permissions`",
     );
+    expect(telegram?.content).toContain(
+      "### User: Codex Config Instructions (OpenClaw Workspace Bootstrap Context)",
+    );
+    expect(telegram?.content).toContain("<SOUL.md contents will be here>");
+    expect(telegram?.content).toContain("<TOOLS.md contents will be here>");
+    expect(telegram?.content).toContain("<HEARTBEAT.md contents will be here>");
+    expect(telegram?.content).toContain("Codex loads AGENTS.md natively");
     expect(telegram?.content).toContain("### Tools: Dynamic Tool Catalog");
   });
 
