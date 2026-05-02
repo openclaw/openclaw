@@ -1,8 +1,36 @@
 import type { CliBackendConfig } from "../config/types.js";
+import { redactSensitiveFieldValue, redactToolPayloadText } from "../logging/redact.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
-import { sanitizeToolArgs } from "./pi-embedded-subscribe.tools.js";
+
+function sanitizeToolArgs(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === "string") {
+    return redactToolPayloadText(value);
+  }
+  if (Array.isArray(value)) {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    return value.map((item) => sanitizeToolArgs(item, seen));
+  }
+  if (value && typeof value === "object") {
+    if (seen.has(value)) {
+      return "[Circular]";
+    }
+    seen.add(value);
+    const out: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      out[key] =
+        typeof child === "string"
+          ? redactSensitiveFieldValue(key, child)
+          : sanitizeToolArgs(child, seen);
+    }
+    return out;
+  }
+  return value;
+}
 
 type CliUsage = {
   input?: number;
