@@ -1775,6 +1775,96 @@ describe("async archive fallback (missing-primary auto-fallback)", () => {
     const out = await readSessionTitleFieldsFromTranscriptAsync(sessionId, storePath);
     expect(out).toEqual({ firstUserMessage: null, lastMessagePreview: null });
   });
+
+  test("readSessionMessageCountAsync returns archive count when primary is missing", async () => {
+    const sessionId = "fallback-count-archive-only";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "u1" } },
+      { message: { role: "assistant", content: "a1" } },
+      { message: { role: "user", content: "u2" } },
+      { message: { role: "assistant", content: "a2" } },
+      { message: { role: "user", content: "u3" } },
+    ]);
+
+    expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(5);
+  });
+
+  test("readSessionMessageCountAsync prefers active count when both exist", async () => {
+    const sessionId = "fallback-count-active-priority";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(primaryPath, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "active 1" } },
+      { message: { role: "assistant", content: "active 2" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived 1" } },
+      { message: { role: "assistant", content: "archived 2" } },
+      { message: { role: "user", content: "archived 3" } },
+      { message: { role: "assistant", content: "archived 4" } },
+    ]);
+
+    expect(await readSessionMessageCountAsync(sessionId, storePath)).toBe(2);
+  });
+
+  test("readRecentSessionMessagesWithStatsAsync reports archive totals and consistent seq for archive-only transcripts", async () => {
+    const sessionId = "fallback-stats-archive-only";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "u1" } },
+      { message: { role: "assistant", content: "a1" } },
+      { message: { role: "user", content: "u2" } },
+      { message: { role: "assistant", content: "a2" } },
+      { message: { role: "user", content: "u3" } },
+    ]);
+
+    const result = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+      maxMessages: 2,
+    });
+
+    expect(result.totalMessages).toBe(5);
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages.map((m) => (m as { content?: unknown }).content)).toEqual(["a2", "u3"]);
+    expect(
+      result.messages.map((m) => (m as { __openclaw?: { seq?: number } }).__openclaw?.seq),
+    ).toEqual([4, 5]);
+  });
+
+  test("readRecentSessionMessagesWithStatsAsync prefers active totals + seq when active exists", async () => {
+    const sessionId = "fallback-stats-active-priority";
+    const primaryPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    writeJsonlLines(primaryPath, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "active u1" } },
+      { message: { role: "assistant", content: "active a1" } },
+      { message: { role: "user", content: "active u2" } },
+    ]);
+    writeJsonlLines(archivePath(primaryPath, Date.parse("2026-04-01T00:00:00.000Z")), [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "archived u1" } },
+      { message: { role: "assistant", content: "archived a1" } },
+      { message: { role: "user", content: "archived u2" } },
+      { message: { role: "assistant", content: "archived a2" } },
+      { message: { role: "user", content: "archived u3" } },
+    ]);
+
+    const result = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
+      maxMessages: 2,
+    });
+
+    expect(result.totalMessages).toBe(3);
+    expect(result.messages.map((m) => (m as { content?: unknown }).content)).toEqual([
+      "active a1",
+      "active u2",
+    ]);
+    expect(
+      result.messages.map((m) => (m as { __openclaw?: { seq?: number } }).__openclaw?.seq),
+    ).toEqual([2, 3]);
+  });
 });
 
 describe("archiveSessionTranscripts", () => {
