@@ -404,8 +404,8 @@ describe("buildContextOverflowRecoveryText", () => {
       },
     });
 
-    // Should contain "50000" (50k tier) not "20000" (default tier)
-    expect(text).toContain("50000");
+    // Should contain "50k" (50k tier) not "20k" (default tier)
+    expect(text).toContain("50k");
     expect(text).toContain("reserveTokensFloor");
     expect(text).not.toContain("heartbeat model bleed");
   });
@@ -427,9 +427,9 @@ describe("buildContextOverflowRecoveryText", () => {
       },
     });
 
-    // Should contain "50000" (50k tier from DEFAULT_CONTEXT_TOKENS 200k fallback)
-    // not "20000" (DEFAULT_RESERVE_TOKENS_FLOOR)
-    expect(text).toContain("50000");
+    // Should contain "50k" (50k tier from DEFAULT_CONTEXT_TOKENS 200k fallback)
+    // not "20k" (DEFAULT_RESERVE_TOKENS_FLOOR)
+    expect(text).toContain("50k");
     expect(text).toContain("reserveTokensFloor");
     expect(text).not.toContain("heartbeat model bleed");
   });

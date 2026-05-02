@@ -482,7 +482,7 @@ function buildContextOverflowResetHint(contextWindow: number | undefined): strin
   const reserveFloor = computeContextAwareReserveTokensFloor(effectiveContextWindow);
   return (
     "\n\nTo prevent this, increase your compaction buffer by setting " +
-    `\`agents.defaults.compaction.reserveTokensFloor\` to ${reserveFloor} or higher in your config.`
+    `\`agents.defaults.compaction.reserveTokensFloor\` to ${(reserveFloor / 1000).toFixed(0)}k or higher in your config.`
   );
 }
 
