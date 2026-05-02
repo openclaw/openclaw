@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 - Web search: point missing-key errors to `web_fetch` for known URLs and the browser tool for interactive pages. Thanks @zhaoyang97.
 - Web search: late-bind managed agent `web_search` calls to the current runtime config snapshot, so existing sessions do not keep stale unresolved SecretRefs after secrets reload. Fixes #75420. Thanks @richardmqq.
 - Web search: honor `baseUrl` overrides for Gemini, Grok, and x_search provider-owned config, so proxy-backed search tools no longer dial hardcoded public endpoints. Supersedes #61972. Thanks @Lanfei.
+- Web fetch: resolve external plugin `webFetchProviders` for non-sandboxed `web_fetch`, while keeping sandboxed fetches limited to bundled providers. Fixes #74915. Thanks @ultrahighsuper and @mingmingtsao.
 - Heartbeat: strip legacy `[TOOL_CALL]...[/TOOL_CALL]` and `[TOOL_RESULT]...[/TOOL_RESULT]` pseudo-call blocks from heartbeat replies before channel delivery. Fixes #54138. Thanks @Deniable9570.
 - macOS/Voice Wake: send wake-word and Push-to-Talk transcripts through the selected macOS session target instead of always falling back to main WebChat. Fixes #51040. Thanks @carl-jeffrolc.
 - Providers/xAI: give Grok `web_search` a 60s default timeout, harden malformed xAI Responses parsing, and return structured timeout errors instead of aborting the tool call. Fixes #58063 and #58733. Thanks @dnishimura, @marvcasasola-svg, and @Nanako0129.

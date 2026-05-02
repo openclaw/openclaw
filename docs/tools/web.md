@@ -221,6 +221,8 @@ examples.
 - choose it with `tools.web.fetch.provider`
 - or omit that field and let OpenClaw auto-detect the first ready web-fetch
   provider from available credentials
+- non-sandboxed `web_fetch` can use installed plugin providers that declare
+  `contracts.webFetchProviders`; sandboxed fetches stay bundled-only
 - today the bundled web-fetch provider is Firecrawl, configured under
   `plugins.entries.firecrawl.config.webFetch.*`
 
