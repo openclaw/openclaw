@@ -151,11 +151,10 @@ Agent run completion is authoritative for active task records. A successful deta
 - Cron tasks: the cron runtime no longer tracks the job as active and durable
   cron run history does not show a terminal result for that run. Offline CLI
   audit does not treat its own empty in-process cron runtime state as authority.
-- CLI tasks: isolated child-session tasks use the child session; chat-backed
-  CLI tasks use the live run context instead, so lingering
-  channel/group/direct session rows do not keep them alive. Gateway-backed
-  `openclaw agent` runs also finalize from their run result, so completed runs
-  do not sit active until the sweeper marks them `lost`.
+- CLI tasks: all CLI tasks (including `exec-approval-followup` and gateway-backed
+  `openclaw agent` runs) use the owning live run context as their backing signal.
+  Once the embedded agent run ends, the task is eligible to be marked `lost` — a
+  persistent session row such as `agent:main:main` does not keep it alive.
 
 ## Delivery and notifications
 
@@ -316,7 +315,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
 <Steps>
   <Step title="Reconciliation">
-    Checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and chat-backed CLI tasks use the owning run context. If that backing state is gone for more than 5 minutes, the task is marked `lost`.
+    Checks whether active tasks still have authoritative runtime backing. ACP/subagent tasks use child-session state, cron tasks use active-job ownership, and CLI tasks use the owning live run context (not the persistent session row). If that backing state is gone for more than 5 minutes, the task is marked `lost`.
   </Step>
   <Step title="ACP session repair">
     Closes terminal or orphaned parent-owned one-shot ACP sessions, and closes stale terminal or orphaned persistent ACP sessions only when no active conversation binding remains.
