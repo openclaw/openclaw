@@ -41,7 +41,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
-- Agents/exec: show plain numeric `reserveTokensFloor` value in context-overflow recovery hint instead of locale-formatted number (e.g. 50000 instead of 50,000). Thanks @XuXuClassMate.
+- Agents/exec: show context-window-aware `reserveTokensFloor` recommendations in context-overflow recovery hint (100k/50k/35k/20k tiers) instead of a static 20000 floor. Thanks @XuXuClassMate.
 - Gateway/hooks: route non-delivered hook completion and error summaries to the target agent's main session instead of the default agent session, preserving multi-agent hook isolation. Fixes #24693; carries forward #68667. Thanks @abersonFAC and @bluesky6868.
 - Discord: own the Carbon interaction listener and hand off Discord slash/component handling asynchronously, so compaction or long session locks no longer trip `InteractionEventListener` listener timeouts. Fixes #73204. Thanks @slideshow-dingo.
 - Gateway/startup: keep value-option foreground starts on the gateway fast path and skip proxy bootstrap unless proxy env is configured, reducing normal gateway startup RSS and avoiding full CLI graph loading. Thanks @vincentkoc.

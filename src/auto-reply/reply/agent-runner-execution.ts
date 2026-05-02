@@ -12,6 +12,7 @@ import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-bu
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
 import {
@@ -477,7 +478,8 @@ export function computeContextAwareReserveTokensFloor(contextWindow: number | un
 }
 
 function buildContextOverflowResetHint(contextWindow: number | undefined): string {
-  const reserveFloor = computeContextAwareReserveTokensFloor(contextWindow);
+  const effectiveContextWindow = contextWindow ?? DEFAULT_CONTEXT_TOKENS;
+  const reserveFloor = computeContextAwareReserveTokensFloor(effectiveContextWindow);
   return (
     "\n\nTo prevent this, increase your compaction buffer by setting " +
     `\`agents.defaults.compaction.reserveTokensFloor\` to ${reserveFloor} or higher in your config.`
@@ -551,6 +553,7 @@ function resolveContextWindowForHint(params: {
       provider: params.ref.provider,
       model: params.ref.model,
       allowAsyncLoad: false,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
     })
   );
 }

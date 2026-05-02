@@ -409,6 +409,30 @@ describe("buildContextOverflowRecoveryText", () => {
     expect(text).toContain("reserveTokensFloor");
     expect(text).not.toContain("heartbeat model bleed");
   });
+
+  it("uses DEFAULT_CONTEXT_TOKENS fallback when both model metadata and session context are unavailable", () => {
+    // After resetReplyRunSession clears activeSessionEntry.contextTokens, and the model
+    // is unknown (not in cache), the hint should use DEFAULT_CONTEXT_TOKENS (200k)
+    // as the fallback and recommend 50k tier, not 20k default.
+    const text = buildContextOverflowRecoveryText({
+      cfg: {}, // no model metadata
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model-without-cache-entry",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "some-known-model",
+        contextTokens: 0, // cleared by resetReplyRunSession
+      },
+    });
+
+    // Should contain "50000" (50k tier from DEFAULT_CONTEXT_TOKENS 200k fallback)
+    // not "20000" (DEFAULT_RESERVE_TOKENS_FLOOR)
+    expect(text).toContain("50000");
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
 });
 
 describe("computeContextAwareReserveTokensFloor", () => {
