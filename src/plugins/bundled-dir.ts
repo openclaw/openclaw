@@ -9,6 +9,7 @@ import { resolveUserPath } from "../utils.js";
 const DISABLED_BUNDLED_PLUGINS_DIR = path.join(os.tmpdir(), "openclaw-empty-bundled-plugins");
 const TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV = "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR";
 let bundledPluginsDirOverrideForTest: string | undefined;
+const bundledPluginsDirCache = new Map<string, string | undefined>();
 
 export type SourceCheckoutDependencyDiagnostic = {
   source: string;
@@ -192,7 +193,25 @@ function resolveBundledDirFromPackageRoot(packageRoot: string): string | undefin
   return undefined;
 }
 
-export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+function createBundledPluginsDirCacheKey(env: NodeJS.ProcessEnv): string {
+  return JSON.stringify({
+    disabled: env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ?? "",
+    override: env.OPENCLAW_BUNDLED_PLUGINS_DIR ?? "",
+    trustOverride: env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV] ?? "",
+    processTrustOverride: process.env[TEST_TRUST_BUNDLED_PLUGINS_DIR_ENV] ?? "",
+    vitest: env.VITEST ?? "",
+    processVitest: process.env.VITEST ?? "",
+    nodeEnv: process.env.NODE_ENV ?? "",
+    argv1: process.argv[1] ?? "",
+    execPath: process.execPath,
+    openClawHome: env.OPENCLAW_HOME ?? "",
+    home: env.HOME ?? "",
+    userProfile: env.USERPROFILE ?? "",
+    testOverride: bundledPluginsDirOverrideForTest ?? "",
+  });
+}
+
+function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | undefined {
   if (areBundledPluginsDisabled(env)) {
     return resolveDisabledBundledPluginsDir();
   }
@@ -278,9 +297,20 @@ export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): 
   return undefined;
 }
 
+export function resolveBundledPluginsDir(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const cacheKey = createBundledPluginsDirCacheKey(env);
+  if (bundledPluginsDirCache.has(cacheKey)) {
+    return bundledPluginsDirCache.get(cacheKey);
+  }
+  const resolved = resolveBundledPluginsDirUncached(env);
+  bundledPluginsDirCache.set(cacheKey, resolved);
+  return resolved;
+}
+
 export function setBundledPluginsDirOverrideForTest(dir: string | undefined): void {
   if (process.env.VITEST !== "true" && process.env.NODE_ENV !== "test") {
     throw new Error("setBundledPluginsDirOverrideForTest is only available in tests");
   }
   bundledPluginsDirOverrideForTest = dir;
+  bundledPluginsDirCache.clear();
 }

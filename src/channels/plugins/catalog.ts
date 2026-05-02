@@ -70,6 +70,7 @@ type ExternalCatalogEntry = {
 
 const ENV_CATALOG_PATHS = ["OPENCLAW_PLUGIN_CATALOG_PATHS", "OPENCLAW_MPM_CATALOG_PATHS"];
 const OFFICIAL_CHANNEL_CATALOG_RELATIVE_PATH = path.join("dist", "channel-catalog.json");
+const officialCatalogEntriesByPath = new Map<string, ExternalCatalogEntry[] | null>();
 
 type ManifestKey = typeof MANIFEST_KEY;
 
@@ -145,6 +146,32 @@ function loadCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEn
   return entries;
 }
 
+function loadOfficialCatalogEntriesFromPaths(paths: Iterable<string>): ExternalCatalogEntry[] {
+  const entries: ExternalCatalogEntry[] = [];
+  for (const resolvedPath of paths) {
+    const cached = officialCatalogEntriesByPath.get(resolvedPath);
+    if (cached !== undefined) {
+      if (cached) {
+        entries.push(...cached);
+      }
+      continue;
+    }
+    if (!fs.existsSync(resolvedPath)) {
+      officialCatalogEntriesByPath.set(resolvedPath, null);
+      continue;
+    }
+    try {
+      const payload = JSON.parse(fs.readFileSync(resolvedPath, "utf-8")) as unknown;
+      const parsed = parseCatalogEntries(payload);
+      officialCatalogEntriesByPath.set(resolvedPath, parsed);
+      entries.push(...parsed);
+    } catch {
+      officialCatalogEntriesByPath.set(resolvedPath, null);
+    }
+  }
+  return entries;
+}
+
 function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
   if (options.officialCatalogPaths && options.officialCatalogPaths.length > 0) {
     return options.officialCatalogPaths.map((entry) => entry.trim()).filter(Boolean);
@@ -170,7 +197,11 @@ function resolveOfficialCatalogPaths(options: CatalogOptions): string[] {
 
 function loadOfficialCatalogEntries(options: CatalogOptions): ChannelPluginCatalogEntry[] {
   const builtInEntries = parseCatalogEntries(officialExternalChannelCatalog);
-  const fileEntries = loadCatalogEntriesFromPaths(resolveOfficialCatalogPaths(options));
+  const officialPaths = resolveOfficialCatalogPaths(options);
+  const fileEntries =
+    options.officialCatalogPaths && options.officialCatalogPaths.length > 0
+      ? loadCatalogEntriesFromPaths(officialPaths)
+      : loadOfficialCatalogEntriesFromPaths(officialPaths);
   return [...builtInEntries, ...fileEntries]
     .map((entry) => buildExternalCatalogEntry(entry))
     .filter((entry): entry is ChannelPluginCatalogEntry => Boolean(entry));

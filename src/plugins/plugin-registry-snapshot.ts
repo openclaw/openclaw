@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { fileSignatureMatches } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import {
   inspectPersistedInstalledPluginIndex,
@@ -132,9 +133,22 @@ function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): strin
 function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
   return index.plugins.some((plugin) => {
     if (!hasOptionalMissingPluginManifestFile(plugin)) {
-      const manifestHash = hashExistingFile(plugin.manifestPath);
-      if (manifestHash && manifestHash !== plugin.manifestHash) {
-        return true;
+      const manifestSignatureMatches = fileSignatureMatches(
+        plugin.manifestPath,
+        plugin.manifestFile,
+      );
+      if (manifestSignatureMatches === true) {
+        // Stored stat signature is unchanged; avoid hashing on startup.
+      } else if (manifestSignatureMatches === false) {
+        const manifestHash = hashExistingFile(plugin.manifestPath);
+        if (manifestHash && manifestHash !== plugin.manifestHash) {
+          return true;
+        }
+      } else {
+        const manifestHash = hashExistingFile(plugin.manifestPath);
+        if (manifestHash && manifestHash !== plugin.manifestHash) {
+          return true;
+        }
       }
     }
     const packageJsonPath = resolveRecordPackageJsonPath(plugin);
@@ -143,6 +157,16 @@ function hasStalePersistedPluginMetadata(index: InstalledPluginIndex): boolean {
     }
     if (!packageJsonPath) {
       return true;
+    }
+    const packageJsonSignatureMatches = fileSignatureMatches(
+      packageJsonPath,
+      plugin.packageJson.fileSignature,
+    );
+    if (packageJsonSignatureMatches === true) {
+      return false;
+    }
+    if (packageJsonSignatureMatches === false) {
+      return hashExistingFile(packageJsonPath) !== plugin.packageJson.hash;
     }
     const packageJsonHash = hashExistingFile(packageJsonPath);
     return packageJsonHash !== plugin.packageJson.hash;

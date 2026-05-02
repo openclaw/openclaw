@@ -690,6 +690,17 @@ function readPackageVersionForCache(packageJsonPath: string): string {
   }
 }
 
+const bundledPackageCacheIdentityByStockRoot = new Map<
+  string,
+  {
+    packageJson: string;
+    packageRoot: string;
+    packageVersion: string;
+    size: number;
+    mtimeMs: number;
+  }
+>();
+
 function resolveBundledPackageCacheIdentity(stockRoot?: string):
   | {
       packageJson: string;
@@ -703,24 +714,33 @@ function resolveBundledPackageCacheIdentity(stockRoot?: string):
   if (!packageRoot) {
     return undefined;
   }
+  const stockRootKey = path.resolve(stockRoot);
+  const cached = bundledPackageCacheIdentityByStockRoot.get(stockRootKey);
+  if (cached) {
+    return cached;
+  }
   const packageJsonPath = path.join(packageRoot, "package.json");
   try {
     const stat = fs.statSync(packageJsonPath);
-    return {
+    const identity = {
       packageJson: safeRealpathOrResolve(packageJsonPath),
       packageRoot: safeRealpathOrResolve(packageRoot),
       packageVersion: readPackageVersionForCache(packageJsonPath),
       size: stat.size,
       mtimeMs: stat.mtimeMs,
     };
+    bundledPackageCacheIdentityByStockRoot.set(stockRootKey, identity);
+    return identity;
   } catch {
-    return {
+    const identity = {
       packageJson: path.resolve(packageJsonPath),
       packageRoot: safeRealpathOrResolve(packageRoot),
       packageVersion: "missing",
       size: -1,
       mtimeMs: -1,
     };
+    bundledPackageCacheIdentityByStockRoot.set(stockRootKey, identity);
+    return identity;
   }
 }
 
