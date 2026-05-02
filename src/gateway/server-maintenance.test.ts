@@ -250,4 +250,60 @@ describe("startGatewayMaintenanceTimers", () => {
 
     stopMaintenanceTimers(timers);
   });
+
+  it("evicts multiple dedupe overflows by oldest timestamp with interleaved reinsertions", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const now = Date.now();
+
+    // Fill to max with sequential timestamps
+    for (let index = 0; index < DEDUPE_MAX; index += 1) {
+      deps.dedupe.set(`item-${index}`, { ts: now - 10_000 + index, ok: true });
+    }
+
+    // Interleave updates and overflows:
+    // 1. Move item-0 to be the newest (was oldest)
+    deps.dedupe.delete("item-0");
+    deps.dedupe.set("item-0", { ts: now, ok: true });
+
+    // 2. Add multiple overflows
+    deps.dedupe.set("overflow-1", { ts: now - 5_000, ok: true }); // Should survive (middle age)
+    deps.dedupe.set("overflow-2", { ts: now - 20_000, ok: true }); // Should be evicted (oldest)
+
+    // 3. Move item-500 to be very old
+    deps.dedupe.delete("item-500");
+    deps.dedupe.set("item-500", { ts: now - 30_000, ok: true }); // Should be evicted (new oldest)
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    // Initial size is DEDUPE_MAX + 2 (item-0 and item-500 were re-added, overflow-1 and overflow-2 added)
+    // Actually:
+    // item-1 to item-499 (499)
+    // item-501 to item-999 (499)
+    // item-0 (1)
+    // item-500 (1)
+    // overflow-1 (1)
+    // overflow-2 (1)
+    // Total: 499 + 499 + 1 + 1 + 1 + 1 = 1002
+    expect(deps.dedupe.size).toBe(DEDUPE_MAX + 2);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.size).toBe(DEDUPE_MAX);
+
+    // item-500 (now - 30k) and overflow-2 (now - 20k) should be gone
+    expect(deps.dedupe.has("item-500")).toBe(false);
+    expect(deps.dedupe.has("overflow-2")).toBe(false);
+
+    // item-0 (now) and overflow-1 (now - 5k) should remain
+    expect(deps.dedupe.has("item-0")).toBe(true);
+    expect(deps.dedupe.has("overflow-1")).toBe(true);
+
+    // item-1 (now - 10k + 1) should remain as it is now one of the oldest but not evicted
+    expect(deps.dedupe.has("item-1")).toBe(true);
+
+    stopMaintenanceTimers(timers);
+  });
 });
