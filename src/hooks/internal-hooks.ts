@@ -5,6 +5,7 @@
  * like command processing, session lifecycle, etc.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import type { CliDeps } from "../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -272,6 +273,30 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
 }
 
 /**
+ * AsyncLocalStorage-based re-entrant guard for triggerInternalHook.
+ *
+ * Prevents infinite loops when a handler re-triggers the same hook event
+ * (e.g., a command:new handler that spawns an embedded agent turn which
+ * triggers command:new again).
+ *
+ * Uses AsyncLocalStorage to propagate the active-dispatch guard set through
+ * the async call chain. This ensures:
+ * - **Re-entrant calls within the same handler chain** are blocked (handler →
+ *   triggerInternalHook → same key → sees inherited store → dropped)
+ * - **Independent concurrent calls** are not blocked (fireAndForgetHook starts
+ *   a new async context with no inherited store → proceeds normally)
+ *
+ * This preserves at-least-once delivery semantics for real-world concurrent
+ * events (e.g., two independent message:received events for the same session)
+ * while still preventing infinite re-entrant amplification.
+ */
+const TRIGGER_GUARD_KEY = Symbol.for("openclaw.internalHookTriggerGuard");
+const dispatchContext = resolveGlobalSingleton<AsyncLocalStorage<Set<string>>>(
+  TRIGGER_GUARD_KEY,
+  () => new AsyncLocalStorage<Set<string>>(),
+);
+
+/**
  * Trigger a hook event
  *
  * Calls all handlers registered for:
@@ -280,6 +305,13 @@ export function hasInternalHookListeners(type: InternalHookEventType, action: st
  *
  * Handlers are called in registration order. Errors are caught and logged
  * but don't prevent other handlers from running.
+ *
+ * A re-entrant guard using AsyncLocalStorage prevents the same
+ * `type\0action\0sessionKey` combination from being triggered within the
+ * same async call chain (e.g., when a handler spawns an embedded agent turn
+ * that triggers the same hook again). Independent concurrent triggers for
+ * the same key from different async contexts (e.g., two independent
+ * message:received events) proceed normally.
  *
  * @param event - The event to trigger
  */
@@ -291,18 +323,35 @@ export async function triggerInternalHook(event: InternalHookEvent): Promise<voi
     return;
   }
 
-  const typeHandlers = handlers.get(event.type) ?? [];
-  const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
-  const allHandlers = [...typeHandlers, ...specificHandlers];
+  // Use \0 as separator — cannot appear in type/action/sessionKey values.
+  const guardKey = `${event.type}\0${event.action}\0${event.sessionKey}`;
 
-  for (const handler of allHandlers) {
-    try {
-      await handler(event);
-    } catch (err) {
-      const message = formatErrorMessage(err);
-      log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
-    }
+  // Check for re-entrancy within the current async call chain only.
+  const activeKeys = dispatchContext.getStore();
+  if (activeKeys?.has(guardKey)) {
+    log.debug(`Skipping re-entrant trigger for ${event.type}:${event.action}:${event.sessionKey}`);
+    return;
   }
+
+  // Run the dispatch inside AsyncLocalStorage.run() so that any re-entrant
+  // call from within the handler chain inherits the store with this guardKey.
+  await dispatchContext.run(
+    activeKeys ? new Set([...activeKeys, guardKey]) : new Set([guardKey]),
+    async () => {
+      const typeHandlers = handlers.get(event.type) ?? [];
+      const specificHandlers = handlers.get(`${event.type}:${event.action}`) ?? [];
+      const allHandlers = [...typeHandlers, ...specificHandlers];
+
+      for (const handler of allHandlers) {
+        try {
+          await handler(event);
+        } catch (err) {
+          const message = formatErrorMessage(err);
+          log.error(`Hook error [${event.type}:${event.action}]: ${message}`);
+        }
+      }
+    },
+  );
 }
 
 /**
