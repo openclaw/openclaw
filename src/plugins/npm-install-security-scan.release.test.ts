@@ -1,10 +1,8 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { withAugmentedPluginNpmManifestForPackage } from "../../scripts/lib/plugin-npm-package-manifest.mjs";
-import { collectPublishablePluginPackages } from "../../scripts/lib/plugin-npm-release.ts";
 import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
 
 type NpmPackFile = {
@@ -13,6 +11,11 @@ type NpmPackFile = {
 
 type NpmPackResult = {
   files?: unknown;
+};
+
+type PublishablePluginPackage = {
+  packageDir: string;
+  packageName: string;
 };
 
 const tempDirs: string[] = [];
@@ -41,15 +44,13 @@ function parseNpmPackFiles(raw: string, packageName: string): string[] {
 }
 
 function collectNpmPackedFiles(packageDir: string, packageName: string): string[] {
-  return withAugmentedPluginNpmManifestForPackage({ packageDir }, ({ packageDir: cwd }) => {
-    const raw = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
-      cwd,
-      encoding: "utf8",
-      maxBuffer: 128 * 1024 * 1024,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    return parseNpmPackFiles(raw, packageName);
+  const raw = execFileSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd: packageDir,
+    encoding: "utf8",
+    maxBuffer: 128 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  return parseNpmPackFiles(raw, packageName);
 }
 
 function isScannerWalkedPackedPath(packedPath: string): boolean {
@@ -80,6 +81,37 @@ function stageScannerRelevantPackedFiles(
   }
 
   return stageDir;
+}
+
+function collectPublishablePluginPackages(): PublishablePluginPackage[] {
+  return readdirSync("extensions", { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((entry) => {
+      const packageDir = join("extensions", entry.name);
+      const packageJsonPath = join(packageDir, "package.json");
+      let packageJson: {
+        name?: unknown;
+        openclaw?: { release?: { publishToNpm?: unknown } };
+      };
+      try {
+        packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as typeof packageJson;
+      } catch {
+        return [];
+      }
+      if (packageJson.openclaw?.release?.publishToNpm !== true) {
+        return [];
+      }
+      if (typeof packageJson.name !== "string" || !packageJson.name.trim()) {
+        return [];
+      }
+      return [
+        {
+          packageDir,
+          packageName: packageJson.name,
+        },
+      ];
+    })
+    .toSorted((left, right) => left.packageName.localeCompare(right.packageName));
 }
 
 describe("publishable plugin npm package install security scan", () => {
