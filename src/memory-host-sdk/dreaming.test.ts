@@ -175,6 +175,38 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("filters out agents with dreaming.enabled = false", () => {
+    resolveAgentWorkspaceDir.mockImplementation((_cfg: OpenClawConfig, agentId: string) => {
+      return `/workspace/${agentId}`;
+    });
+
+    const cfg = {
+      agents: {
+        list: [
+          { id: "alpha" },
+          { id: "beta", dreaming: { enabled: false } },
+          { id: "gamma", dreaming: { enabled: true } },
+          { id: "delta" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
+      {
+        workspaceDir: "/workspace/alpha",
+        agentIds: ["alpha"],
+      },
+      {
+        workspaceDir: "/workspace/gamma",
+        agentIds: ["gamma"],
+      },
+      {
+        workspaceDir: "/workspace/delta",
+        agentIds: ["delta"],
+      },
+    ]);
+  });
+
   it("uses default agent fallback and timezone-aware day helpers", () => {
     const cfg = {
       agents: {

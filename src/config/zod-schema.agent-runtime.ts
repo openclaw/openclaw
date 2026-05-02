@@ -881,6 +881,12 @@ export const AgentEntrySchema = z
     params: z.record(z.string(), z.unknown()).optional(),
     tools: AgentToolsSchema,
     runtime: AgentRuntimeSchema,
+    dreaming: z
+      .object({
+        enabled: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 

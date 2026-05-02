@@ -588,6 +588,35 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 | `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
 | `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
 
+### Per-agent dreaming control
+
+By default, dreaming runs for all agents. You can disable dreaming for specific agents by setting `dreaming.enabled = false` in the agent configuration:
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "main", dreaming: { enabled: false } },
+      { id: "oracle", dreaming: { enabled: false } },
+      { id: "librarian" },
+    ],
+  },
+  plugins: {
+    entries: {
+      "memory-core": {
+        config: {
+          dreaming: {
+            enabled: true,
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+In this example, `main` and `oracle` will not run dreaming, but `librarian` will (inheriting the global `enabled: true`).
+
 ### Example
 
 ```json5

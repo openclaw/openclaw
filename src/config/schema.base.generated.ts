@@ -8409,6 +8409,15 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   description:
                     "Optional runtime descriptor for this agent. Use embedded for default OpenClaw execution or acp for external ACP harness defaults.",
                 },
+                dreaming: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
               },
               required: ["id"],
               additionalProperties: false,
