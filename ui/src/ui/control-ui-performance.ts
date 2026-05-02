@@ -21,13 +21,13 @@ export type ControlUiRefreshRun = {
 const EVENT_LOG_LIMIT = 250;
 const SLOW_RPC_MS = 1_000;
 
-function nowMs(): number {
+export function controlUiNowMs(): number {
   return typeof performance !== "undefined" && typeof performance.now === "function"
     ? performance.now()
     : Date.now();
 }
 
-function roundedDurationMs(durationMs: number): number {
+export function roundedControlUiDurationMs(durationMs: number): number {
   return Math.max(0, Math.round(durationMs));
 }
 
@@ -85,7 +85,7 @@ export function scheduleControlUiTabVisibleTiming(
 ) {
   const seq = (host.controlUiTabPaintSeq ?? 0) + 1;
   host.controlUiTabPaintSeq = seq;
-  const startedAtMs = nowMs();
+  const startedAtMs = controlUiNowMs();
   host.requestUpdate?.();
 
   const record = () => {
@@ -95,7 +95,7 @@ export function scheduleControlUiTabVisibleTiming(
     recordControlUiPerformanceEvent(host, "control-ui.tab.visible", {
       previousTab,
       tab,
-      durationMs: roundedDurationMs(nowMs() - startedAtMs),
+      durationMs: roundedControlUiDurationMs(controlUiNowMs() - startedAtMs),
     });
   };
 
@@ -110,7 +110,7 @@ export function beginControlUiRefresh(
 ): ControlUiRefreshRun {
   const seq = (host.controlUiRefreshSeq ?? 0) + 1;
   host.controlUiRefreshSeq = seq;
-  const run = { seq, tab, startedAtMs: nowMs() };
+  const run = { seq, tab, startedAtMs: controlUiNowMs() };
   recordControlUiPerformanceEvent(
     host,
     "control-ui.refresh",
@@ -142,7 +142,7 @@ export function finishControlUiRefresh(
       tab: run.tab,
       phase: "end",
       status,
-      durationMs: roundedDurationMs(nowMs() - run.startedAtMs),
+      durationMs: roundedControlUiDurationMs(controlUiNowMs() - run.startedAtMs),
     },
     { console: false },
   );
@@ -152,7 +152,7 @@ export function recordControlUiRpcTiming(
   host: ControlUiPerformanceHost,
   timing: GatewayRequestTiming,
 ) {
-  const durationMs = roundedDurationMs(timing.durationMs);
+  const durationMs = roundedControlUiDurationMs(timing.durationMs);
   const warn = !timing.ok || durationMs >= SLOW_RPC_MS;
   recordControlUiPerformanceEvent(
     host,

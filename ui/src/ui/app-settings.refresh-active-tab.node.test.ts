@@ -238,4 +238,98 @@ describe("refreshActiveTab", () => {
     expect(mocks.loadSessionsMock).toHaveBeenCalled();
     expect(mocks.loadUsageMock).toHaveBeenCalled();
   });
+
+  it("records overview secondary refresh duration and aggregate status", async () => {
+    const host = createHost();
+    host.tab = "overview";
+    let resolveUsage!: () => void;
+    mocks.loadUsageMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveUsage = resolve;
+      }),
+    );
+    mocks.loadSkillsMock.mockRejectedValueOnce(new Error("skills failed"));
+
+    await refreshActiveTab(host as never);
+    resolveUsage();
+
+    await vi.waitFor(() => {
+      expect(host.eventLogBuffer).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "control-ui.overview.secondary",
+            payload: expect.objectContaining({
+              phase: "end",
+              status: "error",
+              durationMs: expect.any(Number),
+            }),
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("does not wait for cron runs before resolving the cron tab refresh", async () => {
+    const host = createHost();
+    host.tab = "cron";
+    mocks.loadCronRunsMock.mockReturnValueOnce(new Promise<void>(() => undefined));
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.loadChannelsMock).toHaveBeenCalledWith(host, false);
+    expect(mocks.loadCronStatusMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronJobsPageMock).toHaveBeenCalledOnce();
+    expect(mocks.loadCronRunsMock).toHaveBeenCalledOnce();
+  });
+
+  it("contains rejected cron runs refreshes without failing the primary cron tab refresh", async () => {
+    const host = createHost();
+    host.tab = "cron";
+    mocks.loadCronRunsMock.mockRejectedValueOnce(new Error("cron runs slow path failed"));
+
+    await expect(refreshActiveTab(host as never)).resolves.toBeUndefined();
+    await Promise.resolve();
+
+    expect(host.eventLogBuffer).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "control-ui.cron.runs",
+          payload: expect.objectContaining({
+            phase: "end",
+            status: "error",
+            durationMs: expect.any(Number),
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("does not record stale cron run timing after leaving the cron tab", async () => {
+    const host = createHost();
+    host.tab = "cron";
+    let resolveRuns!: () => void;
+    mocks.loadCronRunsMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveRuns = resolve;
+      }),
+    );
+
+    await refreshActiveTab(host as never);
+    host.tab = "chat";
+    resolveRuns();
+    await Promise.resolve();
+
+    expect(host.eventLogBuffer).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event: "control-ui.cron.runs",
+        }),
+      ]),
+    );
+  });
 });

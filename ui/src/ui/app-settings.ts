@@ -10,8 +10,10 @@ import {
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
 import {
   beginControlUiRefresh,
+  controlUiNowMs,
   finishControlUiRefresh,
   recordControlUiPerformanceEvent,
+  roundedControlUiDurationMs,
   scheduleControlUiTabVisibleTiming,
 } from "./control-ui-performance.ts";
 import { loadAgentFiles, type AgentFilesState } from "./controllers/agent-files.ts";
@@ -638,6 +640,7 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
     buildAttentionItems(app);
   }
 
+  const secondaryStartedAtMs = controlUiNowMs();
   void Promise.allSettled([
     loadDebug(app),
     loadSkills(app),
@@ -646,16 +649,19 @@ export async function loadOverview(host: SettingsHost, opts?: { refresh?: boolea
     // `refresh: true` bypasses the gateway's 60s auth-status cache so a
     // user-initiated refresh surfaces post-re-auth state immediately.
     loadModelAuthStatusState(app, { refresh: opts?.refresh }),
-  ]).then(() => {
+  ]).then((results) => {
     if (!isCurrentOverviewRefresh()) {
       return;
     }
+    const status = results.some((result) => result.status === "rejected") ? "error" : "ok";
     buildAttentionItems(app);
     recordControlUiPerformanceEvent(
       app,
       "control-ui.overview.secondary",
       {
         phase: "end",
+        status,
+        durationMs: roundedControlUiDurationMs(controlUiNowMs() - secondaryStartedAtMs),
       },
       { console: false },
     );
@@ -835,19 +841,27 @@ export async function loadCron(host: SettingsHost) {
   host.controlUiCronRefreshSeq = cronSeq;
   const isCurrentCronRefresh = () =>
     host.controlUiCronRefreshSeq === cronSeq && host.tab === "cron";
-  const runsRefresh = loadCronRuns(app, activeCronJobId).then(() => {
-    if (!isCurrentCronRefresh()) {
-      return;
-    }
-    recordControlUiPerformanceEvent(
-      app,
-      "control-ui.cron.runs",
-      {
-        phase: "end",
-      },
-      { console: false },
-    );
-  });
+  const runsStartedAtMs = controlUiNowMs();
+  const runsRefresh = loadCronRuns(app, activeCronJobId)
+    .then(
+      () => "ok" as const,
+      () => "error" as const,
+    )
+    .then((status) => {
+      if (!isCurrentCronRefresh()) {
+        return;
+      }
+      recordControlUiPerformanceEvent(
+        app,
+        "control-ui.cron.runs",
+        {
+          phase: "end",
+          status,
+          durationMs: roundedControlUiDurationMs(controlUiNowMs() - runsStartedAtMs),
+        },
+        { console: false },
+      );
+    });
   void runsRefresh;
   await Promise.all([loadChannels(app, false), loadCronStatus(app), loadCronJobsPage(app)]);
 }
