@@ -256,6 +256,46 @@ describe("arcee provider plugin", () => {
     });
 
     expect(
+      provider.normalizeConfig?.({
+        provider: "arcee",
+        providerConfig: {
+          api: "openai-completions",
+          baseUrl: "https://api.arcee.ai/api/v1",
+          models: [
+            {
+              id: "trinity-large-thinking",
+              name: "Trinity Large Thinking",
+              reasoning: true,
+              input: ["text"],
+              contextWindow: 262144,
+              maxTokens: 80000,
+              cost: {
+                input: 0.25,
+                output: 0.9,
+                cacheRead: 0.25,
+                cacheWrite: 0.25,
+              },
+              compat: {
+                supportsReasoningEffort: false,
+              },
+            },
+          ],
+        },
+      } as never),
+    ).toMatchObject({
+      baseUrl: "https://api.arcee.ai/api/v1",
+      models: [
+        {
+          id: "trinity-large-thinking",
+          compat: {
+            supportsReasoningEffort: false,
+            supportsTools: false,
+          },
+        },
+      ],
+    });
+
+    expect(
       provider.contributeResolvedModelCompat?.({
         provider: "arcee",
         modelId: "arcee/trinity-large-thinking",
