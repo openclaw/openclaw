@@ -178,6 +178,13 @@ function buildDirectoryInstallResult(params: {
   };
 }
 
+function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
+  return (
+    Object.keys(manifest.dependencies ?? {}).length > 0 ||
+    Object.keys(manifest.optionalDependencies ?? {}).length > 0
+  );
+}
+
 function buildBlockedInstallResult(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
 }): Extract<InstallPluginResult, { ok: false }> {
@@ -560,6 +567,7 @@ type ValidatedPackagePlugin = {
   manifestName?: string;
   version?: string;
   extensions: string[];
+  hasRuntimeDependencies: boolean;
   peerDependencies: Record<string, string>;
 };
 
@@ -719,6 +727,7 @@ async function validatePackagePluginInstallSource(params: {
       manifestName: pkgName || undefined,
       version: typeof manifest.version === "string" ? manifest.version : undefined,
       extensions,
+      hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest),
       peerDependencies: manifest.peerDependencies ?? {},
     },
   };
@@ -855,8 +864,9 @@ async function installPluginFromPackageDir(
     mode: preparedTarget.effectiveMode,
     dryRun,
     copyErrorPrefix: "failed to copy plugin",
-    hasDeps: false,
-    depsLogMessage: "",
+    hasDeps:
+      plugin.hasRuntimeDependencies && params.installPolicyRequest?.kind === "plugin-archive",
+    depsLogMessage: "Installing plugin dependencies…",
     nameEncoder: encodePluginInstallDirName,
     afterInstall: async (installedDir) => {
       return await scanAndLinkInstalledPackage({

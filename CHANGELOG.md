@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 - Web search/Exa: accept `plugins.entries.exa.config.webSearch.baseUrl`, normalize it to the Exa `/search` endpoint, and partition cached results by endpoint. Fixes #54928 and supersedes #54939. Thanks @mrpl327 and @lyfuci.
 - Web search/MiniMax: include MiniMax Search in the web-search setup flow and let `MINIMAX_API_KEY` participate in MiniMax Search auto-detection. Supersedes #65828. Thanks @Jah-yee.
 - Plugins/ClawHub: preserve official source-linked trust through archive installs, so OpenClaw can install trusted ClawHub plugin packages that trigger the built-in dangerous-pattern scanner. Thanks @vincentkoc.
+- Plugins/ClawHub: install package runtime dependencies for archive-backed plugin installs, so ClawHub packages such as WhatsApp load declared dependencies after download. Thanks @vincentkoc.
 - Providers/LM Studio: allow `models.providers.lmstudio.params.preload: false` to skip OpenClaw's native model-load call so LM Studio JIT loading, idle TTL, and auto-evict can own model lifecycle. Fixes #75921. Thanks @garyd9.
 - Telegram: inherit the process DNS result order for Bot API transport and downgrade recovered sticky IPv4 fallback promotions to debug logs, while keeping pinned-IP escalation warnings visible. Fixes #75904. Thanks @highfly-hi and @neeravmakwana.
 - Sessions: keep durable external conversation pointers, including group and thread-scoped chat sessions, out of age, count, and disk-budget maintenance eviction while still allowing synthetic runtime entries to age out. Fixes #58088. Thanks @drinkflav.

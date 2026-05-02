@@ -622,7 +622,7 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
-  it("does not run npm for package archive runtime dependencies", async () => {
+  it("installs package archive runtime dependencies", async () => {
     const result = await installArchivePackageAndReturnResult({
       packageJson: {
         name: "archive-with-deps",
@@ -635,7 +635,12 @@ describe("installPluginFromArchive", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+    expect(vi.mocked(runCommandWithTimeout)).toHaveBeenCalledWith(
+      expect.arrayContaining(["npm", "install"]),
+      expect.objectContaining({
+        cwd: expect.stringContaining(".openclaw-install-stage-"),
+      }),
+    );
   });
 
   it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
