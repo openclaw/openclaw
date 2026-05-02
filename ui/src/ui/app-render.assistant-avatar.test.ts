@@ -240,4 +240,26 @@ describe("renderApp assistant avatar routing", () => {
     const shell = container.querySelector<HTMLElement>(".shell");
     expect(shell?.style.getPropertyValue("--chat-message-max-width")).toBe("min(1280px, 82%)");
   });
+
+  it("does not throw when stale cron state contains a job without a payload", () => {
+    expect(() =>
+      renderApp(
+        createState({
+          cronJobs: [
+            {
+              id: "bad-missing-payload",
+              name: "Broken",
+              enabled: true,
+              createdAtMs: 0,
+              updatedAtMs: 0,
+              schedule: { kind: "cron", expr: "0 9 * * *" },
+              sessionTarget: "main",
+              wakeMode: "next-heartbeat",
+              payload: undefined,
+            } as unknown as AppViewState["cronJobs"][number],
+          ],
+        }),
+      ),
+    ).not.toThrow();
+  });
 });
