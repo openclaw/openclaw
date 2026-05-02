@@ -14,8 +14,9 @@ npm-latest-full|npm:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|
 npm-latest-conformance|npm:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|npm|success|conformance|conformance
 npm-latest-adversarial|npm:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|npm|success|adversarial|adversarial
 npm-beta|npm:@openclaw/kitchen-sink@beta|openclaw-kitchen-sink-fixture|npm|failure|none
-clawhub-latest|clawhub:openclaw-kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic
-clawhub-beta|clawhub:openclaw-kitchen-sink@beta|openclaw-kitchen-sink-fixture|clawhub|failure|none
+clawhub-latest|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic
+clawhub-beta|clawhub:@openclaw/kitchen-sink@beta|openclaw-kitchen-sink-fixture|clawhub|failure|none
+npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||npm:@openclaw/kitchen-sink@latest
 SCENARIOS
 )"
 KITCHEN_SINK_SCENARIOS="${OPENCLAW_KITCHEN_SINK_PLUGIN_SCENARIOS:-$DEFAULT_KITCHEN_SINK_SCENARIOS}"

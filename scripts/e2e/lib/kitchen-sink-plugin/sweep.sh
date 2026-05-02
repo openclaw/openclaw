@@ -75,9 +75,19 @@ assert_kitchen_sink_removed() {
   node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-removed
 }
 
+assert_kitchen_sink_cutover_preinstalled() {
+  node scripts/e2e/lib/kitchen-sink-plugin/assertions.mjs assert-cutover-preinstalled
+}
+
 run_success_scenario() {
   echo "Testing ${KITCHEN_SINK_LABEL} install from ${KITCHEN_SINK_SPEC}..."
-  run_logged_print "kitchen-sink-install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_SPEC"
+  local install_args=("$KITCHEN_SINK_SPEC")
+  if [ -n "${KITCHEN_SINK_PREINSTALL_SPEC:-}" ]; then
+    run_logged_print "kitchen-sink-preinstall-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "$KITCHEN_SINK_PREINSTALL_SPEC"
+    assert_kitchen_sink_cutover_preinstalled
+    install_args+=("--force")
+  fi
+  run_logged_print "kitchen-sink-install-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins install "${install_args[@]}"
   configure_kitchen_sink_runtime
   run_logged_print "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" node "$OPENCLAW_ENTRY" plugins enable "$KITCHEN_SINK_ID"
   node "$OPENCLAW_ENTRY" plugins list --json >"/tmp/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json"
@@ -110,7 +120,7 @@ if [[ "$KITCHEN_SINK_SCENARIOS" == *"clawhub:"* ]] &&
 fi
 
 scenario_count=0
-while IFS='|' read -r label spec plugin_id source expectation surface_mode personality; do
+while IFS='|' read -r label spec plugin_id source expectation surface_mode personality preinstall_spec; do
   if [ -z "${label:-}" ] || [[ "$label" == \#* ]]; then
     continue
   fi
@@ -122,6 +132,7 @@ while IFS='|' read -r label spec plugin_id source expectation surface_mode perso
   export KITCHEN_SINK_SURFACE_MODE="$surface_mode"
   export KITCHEN_SINK_PERSONALITY="${personality:-}"
   export OPENCLAW_KITCHEN_SINK_PERSONALITY="${personality:-}"
+  export KITCHEN_SINK_PREINSTALL_SPEC="${preinstall_spec:-}"
   case "$expectation" in
   success)
     run_success_scenario

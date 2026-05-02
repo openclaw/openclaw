@@ -8,7 +8,7 @@ const profile = process.argv[2];
 const portFile = process.argv[3];
 const requireFromApp = createRequire(path.join(process.cwd(), "package.json"));
 const JSZip = requireFromApp("jszip");
-const packageName = "openclaw-kitchen-sink";
+const packageName = "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
 
 const profiles = {
