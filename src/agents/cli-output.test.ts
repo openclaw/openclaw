@@ -4,6 +4,7 @@ import {
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
+  type CliToolEvent,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
@@ -440,5 +441,107 @@ describe("createCliJsonlStreamingParser", () => {
     expect(deltas).toEqual([
       { text: "hello", delta: "hello", sessionId: "session-stream", usage: undefined },
     ]);
+  });
+});
+
+describe("createCliJsonlStreamingParser — tool events", () => {
+  const backend = {
+    command: "local-cli",
+    output: "jsonl" as const,
+    jsonlDialect: "claude-stream-json" as const,
+    sessionIdFields: ["session_id"] as string[],
+  };
+
+  function makeParser(toolEvents: CliToolEvent[]) {
+    return createCliJsonlStreamingParser({
+      backend,
+      providerId: "local-cli",
+      onAssistantDelta: () => {},
+      onToolEvent: (e) => toolEvents.push(e),
+    });
+  }
+
+  it("emits start and end tool events for a complete tool_use block", () => {
+    const toolEvents: CliToolEvent[] = [];
+    const parser = makeParser(toolEvents);
+
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "tool_use", id: "toolu_01", name: "exec" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "input_json_delta", partial_json: '{"command":"date"}' },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n"),
+    );
+    parser.finish();
+
+    expect(toolEvents).toEqual([
+      { phase: "start", name: "exec", toolCallId: "toolu_01" },
+      { phase: "delta", toolCallId: "toolu_01", partialJson: '{"command":"date"}' },
+      { phase: "end", name: "exec", toolCallId: "toolu_01", args: { command: "date" } },
+    ]);
+  });
+
+  it("emits no tool events when onToolEvent is not provided", () => {
+    const deltas: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend,
+      providerId: "local-cli",
+      onAssistantDelta: ({ delta }) => deltas.push(delta),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "toolu_01", name: "exec" },
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(deltas).toEqual([]);
+  });
+
+  it("ignores tool events for non-claude-stream-json backends", () => {
+    const toolEvents: CliToolEvent[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: { command: "other-cli", output: "jsonl" as const },
+      providerId: "other",
+      onAssistantDelta: () => {},
+      onToolEvent: (e) => toolEvents.push(e),
+    });
+
+    parser.push(
+      JSON.stringify({
+        type: "stream_event",
+        event: {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "tool_use", id: "toolu_01", name: "exec" },
+        },
+      }) + "\n",
+    );
+    parser.finish();
+
+    expect(toolEvents).toEqual([]);
   });
 });

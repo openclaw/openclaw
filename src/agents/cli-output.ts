@@ -379,15 +379,28 @@ function parseClaudeCliStreamingDelta(params: {
   };
 }
 
+export type CliToolEvent =
+  | { phase: "start"; name: string; toolCallId: string }
+  | { phase: "delta"; toolCallId: string; partialJson: string }
+  | { phase: "end"; name: string; toolCallId: string; args: Record<string, unknown> };
+
+type InFlightToolCall = {
+  name: string;
+  toolCallId: string;
+  partialJson: string;
+};
+
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onToolEvent?: (event: CliToolEvent) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
+  const inFlightTools = new Map<number, InFlightToolCall>();
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
@@ -396,6 +409,66 @@ export function createCliJsonlStreamingParser(params: {
     }
     if (isRecord(parsed.usage)) {
       usage = toCliUsage(parsed.usage) ?? usage;
+    }
+
+    if (
+      params.onToolEvent &&
+      usesClaudeStreamJsonDialect({ backend: params.backend, providerId: params.providerId }) &&
+      parsed.type === "stream_event" &&
+      isRecord(parsed.event)
+    ) {
+      const evt = parsed.event;
+      const index = typeof evt.index === "number" ? evt.index : -1;
+
+      if (
+        evt.type === "content_block_start" &&
+        isRecord(evt.content_block) &&
+        evt.content_block.type === "tool_use" &&
+        typeof evt.content_block.id === "string" &&
+        typeof evt.content_block.name === "string"
+      ) {
+        const toolCallId = evt.content_block.id;
+        const name = evt.content_block.name;
+        inFlightTools.set(index, { name, toolCallId, partialJson: "" });
+        params.onToolEvent({ phase: "start", name, toolCallId });
+        return;
+      }
+
+      if (
+        evt.type === "content_block_delta" &&
+        isRecord(evt.delta) &&
+        evt.delta.type === "input_json_delta" &&
+        typeof evt.delta.partial_json === "string"
+      ) {
+        const tool = inFlightTools.get(index);
+        if (tool) {
+          tool.partialJson += evt.delta.partial_json;
+          params.onToolEvent({
+            phase: "delta",
+            toolCallId: tool.toolCallId,
+            partialJson: evt.delta.partial_json,
+          });
+        }
+        return;
+      }
+
+      if (evt.type === "content_block_stop") {
+        const tool = inFlightTools.get(index);
+        if (tool) {
+          inFlightTools.delete(index);
+          let args: Record<string, unknown> = {};
+          try {
+            const parsed = JSON.parse(tool.partialJson || "{}");
+            if (isRecord(parsed)) {
+              args = parsed;
+            }
+          } catch {
+            // partial JSON from interrupted stream — emit empty args
+          }
+          params.onToolEvent({ phase: "end", name: tool.name, toolCallId: tool.toolCallId, args });
+        }
+        return;
+      }
     }
 
     const delta = parseClaudeCliStreamingDelta({
