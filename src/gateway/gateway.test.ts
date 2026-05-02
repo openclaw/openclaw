@@ -19,7 +19,6 @@ import {
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
-let resolveConfigPath: typeof import("../config/config.js").resolveConfigPath;
 let createConfigIO: typeof import("../config/config.js").createConfigIO;
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 let gatewayTestSeq = 0;
@@ -137,7 +136,7 @@ describe("gateway e2e", () => {
   });
 
   beforeAll(async () => {
-    ({ createConfigIO, resolveConfigPath } = await import("../config/config.js"));
+    ({ createConfigIO } = await import("../config/config.js"));
   });
 
   it(
