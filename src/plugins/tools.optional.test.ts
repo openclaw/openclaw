@@ -26,6 +26,7 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 let resolvePluginTools: typeof import("./tools.js").resolvePluginTools;
 let buildPluginToolMetadataKey: typeof import("./tools.js").buildPluginToolMetadataKey;
+let resetPluginToolFactoryCache: typeof import("./tools.js").resetPluginToolFactoryCache;
 let pinActivePluginChannelRegistry: typeof import("./runtime.js").pinActivePluginChannelRegistry;
 let resetPluginRuntimeStateForTest: typeof import("./runtime.js").resetPluginRuntimeStateForTest;
 let setActivePluginRegistry: typeof import("./runtime.js").setActivePluginRegistry;
@@ -357,7 +358,8 @@ function expectConflictingCoreNameResolution(params: {
 
 describe("resolvePluginTools optional tools", () => {
   beforeAll(async () => {
-    ({ buildPluginToolMetadataKey, resolvePluginTools } = await import("./tools.js"));
+    ({ buildPluginToolMetadataKey, resolvePluginTools, resetPluginToolFactoryCache } =
+      await import("./tools.js"));
     ({ pinActivePluginChannelRegistry, resetPluginRuntimeStateForTest, setActivePluginRegistry } =
       await import("./runtime.js"));
     ({ clearCurrentPluginMetadataSnapshot, setCurrentPluginMetadataSnapshot } =
@@ -377,6 +379,7 @@ describe("resolvePluginTools optional tools", () => {
     }));
     resetPluginRuntimeStateForTest?.();
     clearCurrentPluginMetadataSnapshot?.();
+    resetPluginToolFactoryCache?.();
   });
 
   afterEach(() => {
@@ -1086,5 +1089,37 @@ describe("buildPluginToolMetadataKey", () => {
     expect(buildPluginToolMetadataKey("plugin", "a\u0000b")).not.toBe(
       buildPluginToolMetadataKey("plugin\u0000a", "b"),
     );
+  });
+
+  it("caches plugin tool factory results to avoid repeated calls (#75956)", () => {
+    const factoryCallCount = { count: 0 };
+    setRegistry([
+      {
+        pluginId: "cache-test",
+        names: ["cached_tool"],
+        optional: false,
+        source: "/tmp/cache-test.js",
+        factory: () => {
+          factoryCallCount.count++;
+          return makeTool("cached_tool");
+        },
+      },
+    ]);
+
+    // First call should invoke factory
+    resetPluginToolFactoryCache?.();
+    const tools1 = resolvePluginTools(createResolveToolsParams());
+    expect(tools1).toHaveLength(1);
+    expect(tools1[0].name).toBe("cached_tool");
+    expect(factoryCallCount.count).toBe(1);
+
+    // Second call should use cache, not invoke factory again
+    const tools2 = resolvePluginTools(createResolveToolsParams());
+    expect(tools2).toHaveLength(1);
+    expect(tools2[0].name).toBe("cached_tool");
+    expect(factoryCallCount.count).toBe(1); // Cache hit, factory not called
+
+    // Verify the cached tool is the same object
+    expect(tools2[0]).toBe(tools1[0]);
   });
 });

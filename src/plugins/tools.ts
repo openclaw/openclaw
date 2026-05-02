@@ -43,6 +43,27 @@ const PLUGIN_TOOL_FACTORY_WARN_TOTAL_MS = 5_000;
 const PLUGIN_TOOL_FACTORY_WARN_FACTORY_MS = 1_000;
 const PLUGIN_TOOL_FACTORY_SUMMARY_LIMIT = 20;
 
+/**
+ * Cache for plugin tool factory results.
+ * Key: pluginId (factory results are typically stable across requests).
+ * Value: { result: AnyAgentTool | AnyAgentTool[] | null, timestamp: number }
+ *
+ * This cache addresses the severe performance regression on Windows (#75956)
+ * where entry.factory() was called on every request with no caching,
+ * causing ~78s delay per message with 57 bundled plugins.
+ */
+const pluginToolFactoryCache = new Map<
+  string,
+  { result: AnyAgentTool | AnyAgentTool[] | null | undefined; timestamp: number }
+>();
+
+/**
+ * Reset the factory cache for tests.
+ */
+export function resetPluginToolFactoryCache(): void {
+  pluginToolFactoryCache.clear();
+}
+
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
 
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
@@ -431,23 +452,46 @@ export function resolvePluginTools(params: {
     let resolved: AnyAgentTool | AnyAgentTool[] | null | undefined = null;
     let factoryFailed = false;
     const factoryStartedAt = Date.now();
-    try {
-      resolved = entry.factory(params.context);
-    } catch (err) {
-      factoryFailed = true;
-      context.logger.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
-    } finally {
-      const factoryEndedAt = Date.now();
-      const result = describePluginToolFactoryResult(resolved, factoryFailed);
+
+    // Check cache first to avoid repeated factory calls (#75956)
+    const cachedResult = pluginToolFactoryCache.get(entry.pluginId);
+    if (cachedResult) {
+      resolved = cachedResult.result;
       factoryTimings.push({
         pluginId: entry.pluginId,
         names: declaredNames,
-        durationMs: toElapsedMs(factoryEndedAt - factoryStartedAt),
-        elapsedMs: toElapsedMs(factoryEndedAt - factoryTimingStartedAt),
-        result: result.result,
-        resultCount: result.resultCount,
+        durationMs: 0, // Cache hit, no factory call
+        elapsedMs: toElapsedMs(Date.now() - factoryTimingStartedAt),
+        result: describePluginToolFactoryResult(resolved, false),
+        resultCount: Array.isArray(resolved) ? resolved.length : resolved ? 1 : 0,
         optional: entry.optional,
       });
+    } else {
+      try {
+        resolved = entry.factory(params.context);
+      } catch (err) {
+        factoryFailed = true;
+        context.logger.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
+      } finally {
+        const factoryEndedAt = Date.now();
+        const result = describePluginToolFactoryResult(resolved, factoryFailed);
+        factoryTimings.push({
+          pluginId: entry.pluginId,
+          names: declaredNames,
+          durationMs: toElapsedMs(factoryEndedAt - factoryStartedAt),
+          elapsedMs: toElapsedMs(factoryEndedAt - factoryTimingStartedAt),
+          result: result.result,
+          resultCount: result.resultCount,
+          optional: entry.optional,
+        });
+        // Cache successful factory results
+        if (!factoryFailed) {
+          pluginToolFactoryCache.set(entry.pluginId, {
+            result: resolved,
+            timestamp: Date.now(),
+          });
+        }
+      }
     }
     if (factoryFailed) {
       continue;
