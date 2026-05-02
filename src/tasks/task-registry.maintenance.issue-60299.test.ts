@@ -197,7 +197,7 @@ describe("task-registry maintenance issue #60299", () => {
     expect(loadSessionStoreMock).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses CLI channel session type derivation across duplicate stale task checks", async () => {
+  it("marks stale CLI tasks lost when the owning run context is gone, regardless of session key", async () => {
     const childSessionKey = "agent:main:discord:direct:user-1";
     const tasks = Array.from({ length: 10 }, (_, index) =>
       makeStaleTask({
@@ -206,15 +206,12 @@ describe("task-registry maintenance issue #60299", () => {
         childSessionKey,
       }),
     );
-    const deriveSessionChatTypeMock = vi.fn(() => "direct" as const);
 
     createTaskRegistryMaintenanceHarness({
       tasks,
-      deriveSessionChatTypeFromKey: deriveSessionChatTypeMock,
     });
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: tasks.length });
-    expect(deriveSessionChatTypeMock).toHaveBeenCalledTimes(1);
   });
 
   it("marks stale cron tasks lost once the runtime no longer tracks the job as active", async () => {
@@ -476,6 +473,30 @@ describe("task-registry maintenance issue #60299", () => {
 
     expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 0 });
     expect(currentTasks.get(task.taskId)).toMatchObject({ status: "running" });
+  });
+
+  it("marks exec-approval-followup cli tasks lost when run ends even if persistent session exists (#76162)", async () => {
+    const persistentSessionKey = "agent:main:main";
+    const task = makeStaleTask({
+      runtime: "cli",
+      sourceId: "exec-approval-followup:abc123",
+      runId: "exec-approval-followup:abc123",
+      ownerKey: "agent:main:main",
+      requesterSessionKey: persistentSessionKey,
+      childSessionKey: persistentSessionKey,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      // Persistent session always exists in the store — the bug was that this
+      // caused hasBackingSession to return true even when the run had ended.
+      sessionStore: {
+        [persistentSessionKey]: { sessionId: persistentSessionKey, updatedAt: Date.now() },
+      },
+    });
+
+    expect(await runTaskRegistryMaintenance()).toMatchObject({ reconciled: 1 });
+    expect(currentTasks.get(task.taskId)).toMatchObject({ status: "lost" });
   });
 
   it("skips markTaskLost and counts recovered when recovery hook recovers a stale task", async () => {

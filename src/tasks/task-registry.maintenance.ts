@@ -24,10 +24,7 @@ import {
   sweepExpiredPluginStateEntries,
 } from "../plugin-state/plugin-state-store.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import {
-  deriveSessionChatTypeFromKey,
-  type SessionKeyChatType,
-} from "../sessions/session-chat-type-shared.js";
+import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -183,7 +180,6 @@ type SessionStoreLookup = {
 
 type BackingSessionLookupContext = {
   sessionStoresByPath: Map<string, SessionStoreLookup>;
-  sessionChatTypesByKey: Map<string, SessionKeyChatType>;
 };
 
 function createCronRecoveryContext(): CronRecoveryContext {
@@ -196,7 +192,6 @@ function createCronRecoveryContext(): CronRecoveryContext {
 function createBackingSessionLookupContext(): BackingSessionLookupContext {
   return {
     sessionStoresByPath: new Map<string, SessionStoreLookup>(),
-    sessionChatTypesByKey: new Map<string, SessionKeyChatType>(),
   };
 }
 
@@ -247,24 +242,6 @@ function findSessionEntryByKey(
     return undefined;
   }
   return getNormalizedSessionEntries(lookup).get(normalized);
-}
-
-function resolveSessionChatType(
-  sessionKey: string,
-  context?: BackingSessionLookupContext,
-): SessionKeyChatType {
-  const derive =
-    taskRegistryMaintenanceRuntime.deriveSessionChatTypeFromKey ?? deriveSessionChatTypeFromKey;
-  if (!context) {
-    return derive(sessionKey);
-  }
-  const cached = context.sessionChatTypesByKey.get(sessionKey);
-  if (cached) {
-    return cached;
-  }
-  const chatType = derive(sessionKey);
-  context.sessionChatTypesByKey.set(sessionKey, chatType);
-  return chatType;
 }
 
 function findTaskSessionEntry(
@@ -449,8 +426,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
   }
 
-  if (task.runtime === "cli" && hasActiveCliRun(task)) {
-    return true;
+  if (task.runtime === "cli") {
+    // CLI task liveness is determined solely by whether the embedded agent run
+    // is still active. Falling through to session-existence checks is wrong:
+    // exec-approval-followup tasks use childSessionKey="agent:main:main" which
+    // is a persistent session — it always exists, so the session-existence path
+    // would never mark the task lost (#76162). Same pattern as cron above.
+    return hasActiveCliRun(task);
   }
 
   const childSessionKey = task.childSessionKey?.trim();
@@ -466,15 +448,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     }
     return Boolean(acpEntry.entry);
   }
-  if (task.runtime === "subagent" || task.runtime === "cli") {
-    if (task.runtime === "cli") {
-      const chatType = resolveSessionChatType(childSessionKey, context);
-      if (chatType === "channel" || chatType === "group" || chatType === "direct") {
-        return false;
-      }
-    }
+  if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
-    if (task.runtime === "subagent" && isSubagentRecoveryWedgedEntry(entry)) {
+    if (isSubagentRecoveryWedgedEntry(entry)) {
       return false;
     }
     return Boolean(entry);
