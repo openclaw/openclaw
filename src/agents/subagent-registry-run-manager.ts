@@ -240,12 +240,40 @@ export function createSubagentRunManager(params: {
       });
     } catch (error) {
       const entry = params.runs.get(runId);
-      log.warn("subagent completion failed; scheduling orphan recovery", {
+      log.warn("subagent completion failed; scheduling recovery", {
         runId,
         childSessionKey: entry?.childSessionKey,
         error,
       });
-      params.scheduleOrphanRecovery({ delayMs: 1_000 });
+      if (entry && typeof entry.endedAt === "number") {
+        // Terminal state is persisted but cleanup/announce may have failed.
+        // Orphan recovery skips ended runs, so retry completion directly.
+        setTimeout(() => {
+          const current = params.runs.get(runId);
+          if (!current || current !== entry || current.cleanupHandled) {
+            return;
+          }
+          void params
+            .completeSubagentRun({
+              runId,
+              endedAt: entry.endedAt,
+              outcome: entry.outcome ?? { status: "ok" },
+              reason: entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE,
+              sendFarewell: false,
+              accountId: entry.requesterOrigin?.accountId,
+              triggerCleanup: true,
+            })
+            .catch((retryErr) => {
+              log.warn("subagent completion retry failed", {
+                runId,
+                childSessionKey: entry.childSessionKey,
+                error: retryErr,
+              });
+            });
+        }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
+      } else {
+        params.scheduleOrphanRecovery({ delayMs: 1_000 });
+      }
     }
   };
 
