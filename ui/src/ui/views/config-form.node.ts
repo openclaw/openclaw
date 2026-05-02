@@ -1059,9 +1059,12 @@ function renderObject(params: {
       onPatch,
     });
 
-  // For top-level sections, split basic vs advanced fields unless searching
+  // For top-level sections, split basic vs advanced fields unless searching.
+  // Use the original searchCriteria (before self-match clears childSearchCriteria) so
+  // queries that match the section itself still bypass the advanced disclosure.
   if (path.length === 1) {
-    const isSearchActive = childSearchCriteria && hasSearchCriteria(childSearchCriteria);
+    const isSearchActive =
+      selfMatched || (childSearchCriteria != null && hasSearchCriteria(childSearchCriteria));
     if (isSearchActive) {
       const allFields = html`
         ${sorted.map(renderFieldNode)}

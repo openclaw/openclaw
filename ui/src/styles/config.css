@@ -1574,7 +1574,9 @@
   font-weight: 500;
   letter-spacing: 0.02em;
   user-select: none;
-  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
 .cfg-advanced-section__summary::-webkit-details-marker {

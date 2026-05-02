@@ -75,6 +75,7 @@ export const ConfigUiHintSchema = Type.Object(
     sensitive: Type.Optional(Type.Boolean()),
     placeholder: Type.Optional(Type.String()),
     itemTemplate: Type.Optional(Type.Unknown()),
+    docLink: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

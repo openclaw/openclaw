@@ -44,6 +44,19 @@ describe("config form search", () => {
     expect(matched).toBe(true);
   });
 
+  it("self-matches a section node whose tag query matches its own derived tag", () => {
+    // A section node tagged "advanced" must self-match tag:advanced so that
+    // the advanced-split bypass activates even when childSearchCriteria is cleared.
+    const matched = matchesNodeSearch({
+      schema: schema.properties.gateway,
+      value: {},
+      path: ["gateway"],
+      hints: { gateway: { tags: ["advanced"] } },
+      criteria: parseConfigSearchQuery("tag:advanced"),
+    });
+    expect(matched).toBe(true);
+  });
+
   it("requires text and tag when combined", () => {
     const positive = matchesNodeSearch({
       schema: schema.properties.gateway,
