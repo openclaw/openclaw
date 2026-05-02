@@ -381,6 +381,60 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     ]);
   });
 
+  it("installs the missing configured Codex runtime plugin from the beta npm tag", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "codex",
+      targetDir: "/tmp/openclaw-plugins/codex",
+      version: "2026.5.2-beta.1",
+      npmResolution: {
+        name: "@openclaw/codex",
+        version: "2026.5.2-beta.1",
+        resolvedSpec: "@openclaw/codex@2026.5.2-beta.1",
+        integrity: "sha512-codex-beta",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      pluginIds: ["codex"],
+      env: {},
+    });
+
+    expect(mocks.resolveProviderInstallCatalogEntries).toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/codex@beta",
+        expectedPluginId: "codex",
+      }),
+    );
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
+      expect.objectContaining({
+        codex: expect.objectContaining({
+          source: "npm",
+          spec: "@openclaw/codex@beta",
+          installPath: "/tmp/openclaw-plugins/codex",
+          version: "2026.5.2-beta.1",
+        }),
+      }),
+      { env: {} },
+    );
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "codex" from @openclaw/codex@beta.',
+    ]);
+    expect(result.warnings).toEqual([]);
+  });
+
   it("does not install a blocked downloadable plugin from explicit channel ids", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {

@@ -30,6 +30,15 @@ type DownloadableInstallCandidate = {
   defaultChoice?: PluginPackageInstall["defaultChoice"];
 };
 
+const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[] = [
+  // Runtime-only configs do not have a provider/channel integration catalog entry.
+  {
+    pluginId: "codex",
+    label: "Codex",
+    npmSpec: "@openclaw/codex@beta",
+  },
+];
+
 function buildOpenClawClawHubSpec(npmSpec: string): string | undefined {
   const parsed = parseRegistryNpmSpec(npmSpec);
   if (!parsed?.name.startsWith("@openclaw/")) {
@@ -190,6 +199,16 @@ function collectDownloadableInstallCandidates(params: {
       ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
       ...(install.defaultChoice ? { defaultChoice: install.defaultChoice } : {}),
     });
+  }
+
+  for (const entry of RUNTIME_PLUGIN_INSTALL_CANDIDATES) {
+    if (!configuredPluginIds.has(entry.pluginId) && !params.missingPluginIds.has(entry.pluginId)) {
+      continue;
+    }
+    if (params.blockedPluginIds?.has(entry.pluginId)) {
+      continue;
+    }
+    candidates.set(entry.pluginId, entry);
   }
 
   return [...candidates.values()].toSorted((left, right) =>

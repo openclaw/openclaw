@@ -1,3 +1,4 @@
+import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import { listPotentialConfiguredChannelPresenceSignals } from "../../../channels/config-presence.js";
 import { normalizeChatChannelId } from "../../../channels/registry.js";
 import { isChannelConfigured } from "../../../config/channel-configured.js";
@@ -9,7 +10,12 @@ import { VERSION } from "../../../version.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
 
-export const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2";
+export const CONFIGURED_PLUGIN_INSTALL_RELEASE_VERSION = "2026.5.2-beta.1";
+
+const AGENT_HARNESS_RUNTIME_PLUGIN_IDS: Readonly<Record<string, string>> = {
+  // Codex can be selected as a harness for OpenAI models without a plugin entry.
+  codex: "codex",
+};
 
 type ReleaseConfiguredPluginIds = {
   pluginIds: string[];
@@ -207,6 +213,16 @@ function collectProviderPluginIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): 
   return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectAgentHarnessRuntimePluginIds(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv,
+): string[] {
+  return collectConfiguredAgentHarnessRuntimes(cfg, env)
+    .map((runtime) => AGENT_HARNESS_RUNTIME_PLUGIN_IDS[runtime])
+    .filter((pluginId): pluginId is string => Boolean(pluginId))
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, pluginId: string): void {
   const normalized = pluginId.trim();
   if (!normalized || isDenied(cfg, normalized) || isDisabled(cfg, normalized)) {
@@ -256,6 +272,9 @@ export function collectReleaseConfiguredPluginIds(params: {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectProviderPluginIds(params.cfg, env)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectAgentHarnessRuntimePluginIds(params.cfg, env)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {
