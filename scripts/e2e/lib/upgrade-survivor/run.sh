@@ -41,6 +41,7 @@ FAILURE_PHASE=""
 FAILURE_MESSAGE=""
 gateway_pid=""
 clawhub_fixture_pid=""
+configured_plugin_installs_clawhub_fixture_owned=""
 baseline_spec=""
 baseline_version=""
 baseline_version_expected="0"
@@ -288,6 +289,7 @@ configured_plugin_installs_enabled() {
 
 start_configured_plugin_installs_clawhub_fixture() {
   configured_plugin_installs_enabled || return 0
+  configured_plugin_installs_clawhub_fixture_owned=""
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ] || [ -n "${CLAWHUB_URL:-}" ]; then
     return 0
   fi
@@ -318,6 +320,7 @@ NODE
   for _ in $(seq 1 100); do
     if [ -s "$port_file" ]; then
       export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$port_file")"
+      configured_plugin_installs_clawhub_fixture_owned="1"
       echo "Configured plugin install scenario using ClawHub 404 fixture: $OPENCLAW_CLAWHUB_URL"
       return 0
     fi
@@ -329,6 +332,9 @@ NODE
 
 assert_configured_plugin_installs_clawhub_attempted() {
   configured_plugin_installs_enabled || return 0
+  if [ "${configured_plugin_installs_clawhub_fixture_owned:-}" != "1" ]; then
+    return 0
+  fi
   local requests_file="$ARTIFACT_ROOT/clawhub-not-found-requests.jsonl"
   if ! grep -q '/api/v1/packages/%40openclaw%2Fmatrix' "$requests_file" 2>/dev/null; then
     echo "configured plugin install scenario did not attempt ClawHub for @openclaw/matrix" >&2

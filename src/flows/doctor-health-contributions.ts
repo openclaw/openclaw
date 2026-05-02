@@ -275,6 +275,9 @@ async function runReleaseConfiguredPluginInstallsHealth(
   if (!ctx.sourceConfigValid) {
     return;
   }
+  if (!ctx.prompter.shouldRepair) {
+    return;
+  }
   const { maybeRunConfiguredPluginInstallReleaseStep } =
     await import("../commands/doctor/shared/release-configured-plugin-installs.js");
   const { note } = await import("../terminal/note.js");
