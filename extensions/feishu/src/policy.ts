@@ -207,6 +207,8 @@ export function resolveFeishuReplyPolicy(params: {
    * @-mentions are still delivered to the agent.
    */
   groupPolicy?: "open" | "allowlist" | "disabled" | "allowall";
+  /** When true, the message is in a topic thread and topicRequireMention takes priority. */
+  isTopic?: boolean;
 }): { requireMention: boolean } {
   if (params.isDirectMessage) {
     return { requireMention: false };
@@ -220,17 +222,40 @@ export function resolveFeishuReplyPolicy(params: {
     normalizeAccountId,
     omitKeys: ["defaultAccount"],
   });
-  const groupRequireMention = resolveFeishuGroupConfig({
+  const groupConfig = resolveFeishuGroupConfig({
     cfg: resolvedCfg,
     groupId: params.groupId,
-  })?.requireMention;
+  });
+  const groupRequireMention = groupConfig?.requireMention;
+  const groupTopicRequireMention = groupConfig?.topicRequireMention;
+  const resolvedRequireMention = resolvedCfg.requireMention;
+  const resolvedTopicRequireMention = resolvedCfg.topicRequireMention;
+
+  const defaultRequireMention = params.groupPolicy !== "open";
+
+  // For topic messages, topicRequireMention takes priority over requireMention.
+  // Fall back to requireMention when topicRequireMention is unset.
+  if (params.isTopic) {
+    return {
+      requireMention:
+        typeof groupTopicRequireMention === "boolean"
+          ? groupTopicRequireMention
+          : typeof resolvedTopicRequireMention === "boolean"
+            ? resolvedTopicRequireMention
+            : typeof groupRequireMention === "boolean"
+              ? groupRequireMention
+              : typeof resolvedRequireMention === "boolean"
+                ? resolvedRequireMention
+                : defaultRequireMention,
+    };
+  }
 
   return {
     requireMention:
       typeof groupRequireMention === "boolean"
         ? groupRequireMention
-        : typeof resolvedCfg.requireMention === "boolean"
-          ? resolvedCfg.requireMention
-          : params.groupPolicy !== "open",
+        : typeof resolvedRequireMention === "boolean"
+          ? resolvedRequireMention
+          : defaultRequireMention,
   };
 }

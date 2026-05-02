@@ -90,6 +90,85 @@ describe("resolveFeishuReplyPolicy", () => {
       }),
     ).toEqual({ requireMention: true });
   });
+
+  it("uses topicRequireMention for topic messages when set at group level", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        isTopic: true,
+        cfg: createCfg({
+          groupPolicy: "open",
+          requireMention: true,
+          groups: { oc_1: { topicRequireMention: false } },
+        }),
+        groupPolicy: "open",
+        groupId: "oc_1",
+      }),
+    ).toEqual({ requireMention: false });
+  });
+
+  it("uses topicRequireMention for topic messages when set at top level", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        isTopic: true,
+        cfg: createCfg({
+          groupPolicy: "open",
+          topicRequireMention: false,
+          requireMention: true,
+        }),
+        groupPolicy: "open",
+        groupId: "oc_1",
+      }),
+    ).toEqual({ requireMention: false });
+  });
+
+  it("falls back to requireMention for topic messages when topicRequireMention is unset", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        isTopic: true,
+        cfg: createCfg({
+          groupPolicy: "open",
+          requireMention: true,
+        }),
+        groupPolicy: "open",
+        groupId: "oc_1",
+      }),
+    ).toEqual({ requireMention: true });
+  });
+
+  it("uses group-level topicRequireMention over top-level topicRequireMention", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        isTopic: true,
+        cfg: createCfg({
+          groupPolicy: "open",
+          topicRequireMention: true,
+          groups: { oc_1: { topicRequireMention: false } },
+        }),
+        groupPolicy: "open",
+        groupId: "oc_1",
+      }),
+    ).toEqual({ requireMention: false });
+  });
+
+  it("does not apply topicRequireMention to non-topic messages", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        isTopic: false,
+        cfg: createCfg({
+          groupPolicy: "open",
+          requireMention: true,
+          groups: { oc_1: { topicRequireMention: false } },
+        }),
+        groupPolicy: "open",
+        groupId: "oc_1",
+      }),
+    ).toEqual({ requireMention: true });
+  });
 });
 
 describe("resolveFeishuGroupConfig", () => {

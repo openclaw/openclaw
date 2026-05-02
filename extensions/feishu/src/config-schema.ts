@@ -159,6 +159,7 @@ const ReplyInThreadSchema = z.enum(["disabled", "enabled"]).optional();
 export const FeishuGroupSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    topicRequireMention: z.boolean().optional(),
     tools: ToolPolicySchema,
     skills: z.array(z.string()).optional(),
     enabled: z.boolean().optional(),
@@ -182,6 +183,7 @@ const FeishuSharedConfigShape = {
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupSenderAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   requireMention: z.boolean().optional(),
+  topicRequireMention: z.boolean().optional(),
   groups: z.record(z.string(), FeishuGroupSchema.optional()).optional(),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),

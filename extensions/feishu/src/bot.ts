@@ -598,12 +598,15 @@ export async function handleFeishuMessage(params: {
       }
     }
 
+    const isTopicMessage = ctx.chatType === "topic_group";
+
     ({ requireMention } = resolveFeishuReplyPolicy({
       isDirectMessage: false,
       cfg,
       accountId: account.accountId,
       groupId: ctx.chatId,
       groupPolicy,
+      isTopic: isTopicMessage,
     }));
 
     if (requireMention && !ctx.mentionedBot) {
