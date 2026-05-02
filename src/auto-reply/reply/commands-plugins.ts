@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
 import {
-  buildPreferredClawHubSpec,
   createPluginInstallLogger,
   decidePreferredClawHubFallback,
   resolveFileNpmSpecToLocalPath,
+  resolvePreferredClawHubSpec,
 } from "../../cli/plugins-command-helpers.js";
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
@@ -256,7 +256,7 @@ async function installPluginFromPluginsCommand(params: {
     return { ok: true, pluginId: result.pluginId };
   }
 
-  const preferredClawHubSpec = buildPreferredClawHubSpec(params.raw);
+  const preferredClawHubSpec = await resolvePreferredClawHubSpec(params.raw);
   if (preferredClawHubSpec) {
     const clawhubResult = await installPluginFromClawHub({
       spec: preferredClawHubSpec,

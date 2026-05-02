@@ -38,12 +38,12 @@ import {
   resolveBundledInstallPlanForNpmFailure,
 } from "./plugin-install-plan.js";
 import {
-  buildPreferredClawHubSpec,
   createHookPackInstallLogger,
   createPluginInstallLogger,
   decidePreferredClawHubFallback,
   formatPluginInstallWithHookFallbackError,
   parseNpmPrefixSpec,
+  resolvePreferredClawHubSpec,
 } from "./plugins-command-helpers.js";
 import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "./plugins-install-persist.js";
@@ -776,7 +776,7 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  const preferredClawHubSpec = buildPreferredClawHubSpec(raw);
+  const preferredClawHubSpec = await resolvePreferredClawHubSpec(raw);
   if (preferredClawHubSpec) {
     const clawhubResult = await installPluginFromClawHub({
       ...safetyOverrides,

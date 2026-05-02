@@ -7,6 +7,8 @@ import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   downloadClawHubPackageArchive,
   downloadClawHubSkillArchive,
+  fetchClawHubPackageArtifact,
+  fetchClawHubPackageReadiness,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
@@ -222,6 +224,74 @@ describe("clawhub helpers", () => {
 
     await expect(searchClawHubSkills({ query: "calendar", fetchImpl })).resolves.toEqual([]);
   });
+
+  it("fetches typed package readiness reports", async () => {
+    let requestedUrl = "";
+    await expect(
+      fetchClawHubPackageReadiness({
+        name: "@openclaw/diagnostics-otel",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
+              phase: "legacy-zip-only",
+              blockers: [],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toEqual({
+      package: { name: "@openclaw/diagnostics-otel", isOfficial: true },
+      phase: "legacy-zip-only",
+      blockers: [],
+    });
+    expect(new URL(requestedUrl).pathname).toBe(
+      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/readiness",
+    );
+  });
+
+  it("fetches typed package artifact resolver reports", async () => {
+    let requestedUrl = "";
+    await expect(
+      fetchClawHubPackageArtifact({
+        name: "@openclaw/diagnostics-otel",
+        version: "2026.3.22",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              artifact: {
+                source: "clawhub",
+                artifactKind: "npm-pack",
+                packageName: "@openclaw/diagnostics-otel",
+                version: "2026.3.22",
+                downloadUrl: "https://clawhub.ai/api/v1/clawpacks/abc",
+                npmIntegrity: "sha512-demo",
+                npmShasum: "abc",
+              },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toEqual({
+      artifact: {
+        source: "clawhub",
+        artifactKind: "npm-pack",
+        packageName: "@openclaw/diagnostics-otel",
+        version: "2026.3.22",
+        downloadUrl: "https://clawhub.ai/api/v1/clawpacks/abc",
+        npmIntegrity: "sha512-demo",
+        npmShasum: "abc",
+      },
+    });
+    expect(new URL(requestedUrl).pathname).toBe(
+      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/artifact",
+    );
+  });
+
   it("downloads package archives to sanitized temp paths and cleans them up", async () => {
     const archive = await downloadClawHubPackageArchive({
       name: "@hyf/zai-external-alpha",
