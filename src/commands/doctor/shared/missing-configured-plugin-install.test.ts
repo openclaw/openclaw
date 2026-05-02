@@ -4,7 +4,7 @@ const mocks = vi.hoisted(() => ({
   installPluginFromNpmSpec: vi.fn(),
   listChannelPluginCatalogEntries: vi.fn(),
   loadInstalledPluginIndexInstallRecords: vi.fn(),
-  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
+  loadPluginMetadataSnapshot: vi.fn(),
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
   resolveProviderInstallCatalogEntries: vi.fn(),
   updateNpmInstalledPlugins: vi.fn(),
@@ -29,8 +29,8 @@ vi.mock("../../../plugins/install.js", () => ({
   installPluginFromNpmSpec: mocks.installPluginFromNpmSpec,
 }));
 
-vi.mock("../../../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
+vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
 vi.mock("../../../plugins/provider-install-catalog.js", () => ({
@@ -44,7 +44,7 @@ vi.mock("../../../plugins/update.js", () => ({
 describe("repairMissingConfiguredPluginInstalls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
       plugins: [],
       diagnostics: [],
     });
