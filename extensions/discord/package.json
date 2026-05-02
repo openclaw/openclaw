@@ -1,7 +1,11 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.4.25",
+  "version": "2026.5.1-beta.1",
   "description": "OpenClaw Discord channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "@discordjs/voice": "^0.19.2",
@@ -62,7 +66,7 @@
       "pluginApi": ">=2026.4.25"
     },
     "build": {
-      "openclawVersion": "2026.4.25"
+      "openclawVersion": "2026.5.1-beta.1"
     },
     "release": {
       "publishToClawHub": true,

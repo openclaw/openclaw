@@ -1,7 +1,11 @@
 {
   "name": "@openclaw/diagnostics-otel",
-  "version": "2026.4.25",
+  "version": "2026.5.1-beta.1",
   "description": "OpenClaw diagnostics OpenTelemetry exporter",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
@@ -27,7 +31,7 @@
       "pluginApi": ">=2026.4.25"
     },
     "build": {
-      "openclawVersion": "2026.4.25"
+      "openclawVersion": "2026.5.1-beta.1"
     },
     "release": {
       "publishToClawHub": true,
