@@ -303,7 +303,7 @@ export async function applyInlineDirectiveOverrides(params: {
             : undefined,
           modelSelection.isDefault
             ? `Model reset to default (${labelWithAlias}).`
-            : `Model set to ${labelWithAlias}.`,
+            : `Model set to ${labelWithAlias} for this session.`,
           modelResolution.profileOverride
             ? `Auth profile set to ${modelResolution.profileOverride}.`
             : undefined,
