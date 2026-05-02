@@ -119,6 +119,14 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.outbound?.preferFinalAssistantVisibleText).toBe(true);
   });
 
+  it("adds Discord mention formatting to agent prompt hints", () => {
+    const hints = discordPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
+
+    expect(hints).toContain(
+      "- Discord mentions: use canonical outbound syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Do not use the legacy `<@!USER_ID>` nickname form.",
+    );
+  });
+
   it("preserves normalized explicit Discord targets for delivery routing", () => {
     const parseExplicitTarget = discordPlugin.messaging?.parseExplicitTarget;
     if (!parseExplicitTarget) {
