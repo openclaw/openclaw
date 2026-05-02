@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Cron/agentTurn tools: apply runtime `toolsAllow` to the combined embedded-runner tool list after bundled MCP/LSP tools are materialized, so exec-only cron jobs no longer compile with the full bundled MCP/LSP fleet (saves ~370k input tokens/day on affected deployments). Allowlist entries match against tool names, plugin ids (e.g. `bundle-mcp`, `bundle-lsp`), and the broad `group:plugins` key the same way the rest of the tool-policy pipeline does. Fixes #70939. Thanks @Sanjays2402.
 - Tools: add a platform-level tool descriptor planner for descriptor-first visibility, generic availability checks, and executor references. Thanks @shakkernerd.
 - Docs/Codex: clarify that ChatGPT/Codex subscription setups should use `openai/gpt-*` with `agentRuntime.id: "codex"` for native Codex runtime, while `openai-codex/*` remains the PI OAuth route. Thanks @pashpashpash.
 - Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.

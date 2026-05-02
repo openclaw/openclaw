@@ -159,6 +159,7 @@ import {
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import { normalizeToolName } from "../../tool-policy.js";
+import type { AnyAgentTool } from "../../tools/common.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -494,8 +495,36 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   if (!toolsAllow || toolsAllow.length === 0) {
     return tools;
   }
-  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)));
-  return tools.filter((tool) => allowSet.has(normalizeToolName(tool.name)));
+  const allowSet = new Set(toolsAllow.map((name) => normalizeToolName(name)).filter(Boolean));
+  if (allowSet.size === 0) {
+    return tools;
+  }
+  // Wildcard / group keys keep all tools (plugin-aware allowlists like
+  // `bundle-mcp` are checked per-tool below).
+  if (allowSet.has("*")) {
+    return tools;
+  }
+  return tools.filter((tool) => {
+    const toolKey = normalizeToolName(tool.name);
+    if (allowSet.has(toolKey)) {
+      return true;
+    }
+    // Bundled MCP/LSP tools carry plugin metadata so allowlist entries can
+    // target the plugin id (e.g. `bundle-mcp`, `bundle-lsp`) or the broad
+    // `group:plugins` key, matching how owner-only / group-scoped policy is
+    // resolved elsewhere (see plugins/tools.ts isOptionalToolAllowed).
+    const meta = getPluginToolMeta(tool as unknown as AnyAgentTool);
+    if (meta) {
+      const pluginKey = normalizeToolName(meta.pluginId);
+      if (pluginKey && allowSet.has(pluginKey)) {
+        return true;
+      }
+      if (allowSet.has("group:plugins")) {
+        return true;
+      }
+    }
+    return false;
+  });
 }
 
 const CORE_CODING_TOOL_ALLOWLIST_NAMES = new Set([
@@ -1108,7 +1137,10 @@ export async function runEmbeddedAttempt(
       ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
+    const effectiveTools = applyEmbeddedAttemptToolsAllow(
+      [...tools, ...filteredBundledTools],
+      params.toolsAllow,
+    );
     prepStages.mark("bundle-tools");
     const allowedToolNames = collectAllowedToolNames({
       tools: effectiveTools,

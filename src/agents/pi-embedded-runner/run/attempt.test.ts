@@ -1,6 +1,7 @@
 import { streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import { setPluginToolMeta } from "../../../plugins/tools.js";
 import { appendBootstrapPromptWarning } from "../../bootstrap-budget.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
@@ -81,6 +82,65 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     expect(
       applyEmbeddedAttemptToolsAllow(tools, [" cron ", "READ"]).map((tool) => tool.name),
     ).toEqual(["cron", "read"]);
+  });
+
+  it("matches plugin-id allowlist entries against bundled MCP/LSP tools", () => {
+    // Bundled MCP/LSP tools are exposed under per-tool names like
+    // `atlassian__jira_create_issue`, but the canonical allowlist key for the
+    // entire bundle is the plugin id (`bundle-mcp`). The filter must honor
+    // that plugin-aware key the same way the rest of the tool-policy pipeline
+    // does (see plugins/tools.ts isOptionalToolAllowed).
+    const mcpTool = { name: "atlassian__jira_create_issue" };
+    const lspTool = { name: "typescript__hover" };
+    const execTool = { name: "exec" };
+    setPluginToolMeta(mcpTool as never, {
+      pluginId: "bundle-mcp",
+      toolName: "atlassian__jira_create_issue",
+    });
+    setPluginToolMeta(lspTool as never, {
+      pluginId: "bundle-lsp",
+      toolName: "typescript__hover",
+    });
+
+    expect(
+      applyEmbeddedAttemptToolsAllow([execTool, mcpTool, lspTool], ["bundle-mcp"]).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["atlassian__jira_create_issue"]);
+
+    expect(
+      applyEmbeddedAttemptToolsAllow(
+        [execTool, mcpTool, lspTool],
+        ["exec", "bundle-mcp", "bundle-lsp"],
+      ).map((tool) => tool.name),
+    ).toEqual(["exec", "atlassian__jira_create_issue", "typescript__hover"]);
+  });
+
+  it("matches the broad group:plugins allowlist key against any bundled plugin tool", () => {
+    const mcpTool = { name: "atlassian__jira_create_issue" };
+    const execTool = { name: "exec" };
+    setPluginToolMeta(mcpTool as never, {
+      pluginId: "bundle-mcp",
+      toolName: "atlassian__jira_create_issue",
+    });
+
+    expect(
+      applyEmbeddedAttemptToolsAllow([execTool, mcpTool], ["group:plugins"]).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["atlassian__jira_create_issue"]);
+  });
+
+  it("keeps non-plugin tools out of plugin-id allowlists", () => {
+    // Tools without plugin metadata must still be filtered by exact name when
+    // the allowlist is plugin-id-only, otherwise the ban on inadvertent
+    // bundled-tool exposure would leak through.
+    const execTool = { name: "exec" };
+    const readTool = { name: "read" };
+
+    expect(
+      applyEmbeddedAttemptToolsAllow([execTool, readTool], ["bundle-mcp"]).map((tool) => tool.name),
+    ).toEqual([]);
   });
 });
 
