@@ -25,7 +25,7 @@ const cachedGitCommitBySearchDir = new Map<string, string | null>();
 
 export type CommitMetadataReaders = {
   readGitCommit?: (searchDir: string, packageRoot: string | null) => string | null | undefined;
-  readBuildInfoCommit?: () => string | null;
+  readBuildInfoCommit?: (packageRoot?: string | null, searchDir?: string) => string | null;
   readPackageJsonCommit?: () => string | null;
 };
 
@@ -187,16 +187,78 @@ const readCommitFromPackageJson = () => {
   }
 };
 
-const readCommitFromBuildInfo = () => {
+const parseCommitMetadata = (raw: string) => {
+  try {
+    const parsed = JSON.parse(raw) as {
+      commit?: unknown;
+      gitHead?: unknown;
+      githead?: unknown;
+      head?: unknown;
+      sha?: unknown;
+    };
+    if (parsed && typeof parsed === "object") {
+      for (const candidate of [
+        parsed.commit,
+        parsed.gitHead,
+        parsed.githead,
+        parsed.head,
+        parsed.sha,
+      ]) {
+        if (typeof candidate === "string") {
+          const formatted = formatCommit(candidate);
+          if (formatted) {
+            return formatted;
+          }
+        }
+      }
+      return null;
+    }
+  } catch {
+    // Non-JSON metadata files may contain the raw commit.
+  }
+  return formatCommit(raw);
+};
+
+const readCommitMetadataFile = (filePath: string) => {
+  try {
+    return parseCommitMetadata(safeReadFilePrefix(filePath, 4096));
+  } catch (error) {
+    if (!isMissingPathError(error)) {
+      throw error;
+    }
+    return null;
+  }
+};
+
+const readCommitFromBuildInfo = (params: { packageRoot?: string | null } = {}) => {
+  const packageRoot = params.packageRoot ? path.resolve(params.packageRoot) : null;
+  if (packageRoot) {
+    const fileCandidates = [
+      path.join(packageRoot, "build-info.json"),
+      path.join(packageRoot, "dist", "build-info.json"),
+      path.join(packageRoot, ".buildstamp"),
+      path.join(packageRoot, "dist", ".buildstamp"),
+    ];
+    for (const candidate of fileCandidates) {
+      const formatted = readCommitMetadataFile(candidate);
+      if (formatted) {
+        return formatted;
+      }
+    }
+  }
+
   try {
     const require = createRequire(import.meta.url);
-    const candidates = ["../build-info.json", "./build-info.json"];
+    const candidates = [
+      "../build-info.json",
+      "./build-info.json",
+      "../.buildstamp",
+      "./.buildstamp",
+    ];
     for (const candidate of candidates) {
       try {
-        const info = require(candidate) as {
-          commit?: string | null;
-        };
-        const formatted = formatCommit(info.commit ?? null);
+        const info = require(candidate) as unknown;
+        const formatted = parseCommitMetadata(JSON.stringify(info));
         if (formatted) {
           return formatted;
         }
@@ -242,7 +304,9 @@ export const resolveCommitHash = (
   } catch {
     // Fall through to baked metadata for packaged installs that are not in a live checkout.
   }
-  const buildInfoCommit = readers.readBuildInfoCommit?.() ?? readCommitFromBuildInfo();
+  const buildInfoCommit =
+    readers.readBuildInfoCommit?.(packageRoot, searchDir) ??
+    readCommitFromBuildInfo({ packageRoot });
   if (buildInfoCommit) {
     return cacheGitCommit(searchDir, buildInfoCommit);
   }

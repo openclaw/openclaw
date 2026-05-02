@@ -226,6 +226,39 @@ describe("git commit resolution", () => {
     ).toBe("feedfac");
   });
 
+  it("uses packaged dist buildstamp metadata when git metadata is unavailable", async () => {
+    const temp = await makeTempDir("git-commit-dist-buildstamp");
+    const packageRoot = path.join(temp, "node_modules", "openclaw");
+    await fs.mkdir(path.join(packageRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.24" }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(packageRoot, "dist", ".buildstamp"),
+      JSON.stringify({
+        builtAt: 1777732723470,
+        head: "537b9e76479e5a558921d76963cd52a81a0acacc",
+      }),
+      "utf-8",
+    );
+
+    const moduleUrl = pathToFileURL(path.join(packageRoot, "dist", "entry.js")).href;
+
+    expect(
+      resolveCommitHash({
+        moduleUrl,
+        cwd: packageRoot,
+        env: {},
+        readers: {
+          readBuildInfoCommit: () => null,
+          readPackageJsonCommit: () => null,
+        },
+      }),
+    ).toBe("537b9e7");
+  });
+
   it("caches git lookups per resolved search directory", async () => {
     const temp = await makeTempDir("git-commit-cache");
     const repoA = path.join(temp, "repo-a");
