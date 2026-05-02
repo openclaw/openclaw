@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getRuntimeConfig } from "../../config/config.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "../jiti-loader-cache.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 import {
   isJavaScriptModulePath,
   tryNativeRequireJavaScriptModule,
 } from "../native-module-require.js";
+import {
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../plugin-module-loader-cache.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 
 type PluginRuntimeRecord = {
@@ -109,20 +112,19 @@ export function resolvePluginRuntimeModulePath(
   return null;
 }
 
-function getPluginBoundarySourceLoader(modulePath: string, loaders: PluginJitiLoaderCache) {
-  return getCachedPluginJitiLoader({
+function getPluginBoundarySourceLoader(modulePath: string, loaders: PluginModuleLoaderCache) {
+  return getCachedPluginSourceModuleLoader({
     cache: loaders,
     modulePath,
     importerUrl: import.meta.url,
-    jitiFilename: import.meta.url,
-    tryNative: false,
+    loaderFilename: import.meta.url,
   });
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic plugin boundary loaders use caller-supplied module types.
 export function loadPluginBoundaryModule<TModule>(
   modulePath: string,
-  loaders: PluginJitiLoaderCache,
+  loaders: PluginModuleLoaderCache,
   options: { origin?: PluginOrigin } = {},
 ): TModule {
   if (isJavaScriptModulePath(modulePath)) {

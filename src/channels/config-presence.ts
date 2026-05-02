@@ -120,7 +120,7 @@ export function listPotentialConfiguredChannelPresenceSignals(
     signals.push({ channelId, source });
   };
   const configuredChannelIds = new Set<string>();
-  const channelIds = listBundledChannelPluginIds();
+  const channelIds = listBundledChannelPluginIds(env);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (channels) {
@@ -164,7 +164,7 @@ function hasEnvConfiguredChannel(
   env: NodeJS.ProcessEnv,
   options: ChannelPresenceOptions = {},
 ): boolean {
-  const channelIds = listBundledChannelPluginIds();
+  const channelIds = listBundledChannelPluginIds(env);
   const channelEnvPrefixes = listChannelEnvPrefixes(channelIds);
   for (const [key, value] of Object.entries(env)) {
     if (!hasNonEmptyString(value)) {

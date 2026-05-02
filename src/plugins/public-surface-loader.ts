@@ -5,9 +5,12 @@ import { fileURLToPath } from "node:url";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/file-identity.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
+import {
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "./plugin-module-loader-cache.js";
 import { resolveBundledPluginPublicSurfacePath } from "./public-surface-runtime.js";
-import { resolvePluginLoaderJitiTryNative, resolveLoaderPackageRoot } from "./sdk-alias.js";
+import { resolvePluginLoaderTryNative, resolveLoaderPackageRoot } from "./sdk-alias.js";
 
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
@@ -23,7 +26,7 @@ const publicSurfaceLocations = new Map<
     boundaryRoot: string;
   } | null
 >();
-const jitiLoaders: PluginJitiLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = new Map();
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
@@ -88,22 +91,22 @@ function resolvePublicSurfaceLocation(params: {
   return resolved;
 }
 
-function getJiti(modulePath: string) {
-  return getCachedPluginJitiLoader({
-    cache: jitiLoaders,
+function getModuleLoader(modulePath: string) {
+  return getCachedPluginModuleLoader({
+    cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
-    jitiFilename: import.meta.url,
+    loaderFilename: import.meta.url,
   });
 }
 
 function loadPublicSurfaceModule(modulePath: string): unknown {
-  const tryNative = resolvePluginLoaderJitiTryNative(modulePath, { preferBuiltDist: true });
+  const tryNative = resolvePluginLoaderTryNative(modulePath, { preferBuiltDist: true });
   if (canUseSourceArtifactRequire({ modulePath, tryNative })) {
     return sourceArtifactRequire(modulePath);
   }
-  return getJiti(modulePath)(modulePath);
+  return getModuleLoader(modulePath)(modulePath);
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
@@ -170,5 +173,5 @@ export function resolveBundledPluginPublicArtifactPath(params: {
 export function resetBundledPluginPublicArtifactLoaderForTest(): void {
   loadedPublicSurfaceModules.clear();
   publicSurfaceLocations.clear();
-  jitiLoaders.clear();
+  moduleLoaders.clear();
 }

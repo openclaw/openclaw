@@ -4,8 +4,11 @@ import { fileURLToPath } from "node:url";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "./plugin-module-loader-cache.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 const CONTRACT_API_EXTENSIONS = [".js", ".mjs", ".cjs", ".ts", ".mts", ".cts"] as const;
@@ -36,11 +39,11 @@ type PluginDoctorContractEntry = {
 
 type PluginManifestRegistryRecord = PluginManifestRegistry["plugins"][number];
 
-const jitiLoaders: PluginJitiLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = new Map();
 
 function loadPluginDoctorContractModule(modulePath: string): PluginDoctorContractModule {
-  return getCachedPluginJitiLoader({
-    cache: jitiLoaders,
+  return getCachedPluginModuleLoader({
+    cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
   })(modulePath) as PluginDoctorContractModule;
@@ -228,7 +231,7 @@ function resolvePluginDoctorContracts(params?: {
 }
 
 export function clearPluginDoctorContractRegistryCache(): void {
-  jitiLoaders.clear();
+  moduleLoaders.clear();
 }
 
 export function listPluginDoctorLegacyConfigRules(params?: {

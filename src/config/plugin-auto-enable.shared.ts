@@ -2,7 +2,7 @@ import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtime
 import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   hasPotentialConfiguredChannels,
-  listPotentialConfiguredChannelIds,
+  listPotentialConfiguredChannelPresenceSignals,
 } from "../channels/config-presence.js";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import {
@@ -294,10 +294,12 @@ function collectPluginIdsForConfiguredChannel(
   return [builtInId ?? claims[0]?.plugin.id ?? normalizedChannelId];
 }
 
-function collectCandidateChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
-  return listPotentialConfiguredChannelIds(cfg, env, { includePersistedAuthState: false }).map(
-    (channelId) => normalizeChatChannelId(channelId) ?? channelId,
-  );
+function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {
+  return listPotentialConfiguredChannelPresenceSignals(cfg, env, {
+    includePersistedAuthState: false,
+  })
+    .map((signal) => normalizeChatChannelId(signal.channelId) ?? signal.channelId)
+    .filter((channelId) => isChannelConfigured(cfg, channelId, env));
 }
 
 function hasConfiguredWebSearchPluginEntry(cfg: OpenClawConfig): boolean {
@@ -574,11 +576,9 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
   registry: PluginManifestRegistry;
 }): PluginAutoEnableCandidate[] {
   const changes: PluginAutoEnableCandidate[] = [];
-  for (const channelId of collectCandidateChannelIds(params.config, params.env)) {
-    if (isChannelConfigured(params.config, channelId, params.env)) {
-      for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
-        changes.push({ pluginId, kind: "channel-configured", channelId });
-      }
+  for (const channelId of collectConfiguredChannelIds(params.config, params.env)) {
+    for (const pluginId of collectPluginIdsForConfiguredChannel(channelId, params.registry)) {
+      changes.push({ pluginId, kind: "channel-configured", channelId });
     }
   }
 

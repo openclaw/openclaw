@@ -3,31 +3,31 @@ import { toSafeImportPath } from "../shared/import-specifier.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import {
   buildPluginLoaderJitiOptions,
-  createPluginLoaderJitiCacheKey,
-  resolvePluginLoaderJitiConfig,
+  createPluginLoaderModuleCacheKey,
+  resolvePluginLoaderModuleConfig,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 
-export type PluginJitiLoader = ReturnType<typeof createJiti>;
-export type PluginJitiLoaderFactory = typeof createJiti;
-export type PluginJitiLoaderCache = Map<string, PluginJitiLoader>;
+export type PluginModuleLoader = ReturnType<typeof createJiti>;
+export type PluginModuleLoaderFactory = typeof createJiti;
+export type PluginModuleLoaderCache = Map<string, PluginModuleLoader>;
 
-export function getCachedPluginJitiLoader(params: {
-  cache: PluginJitiLoaderCache;
+export function getCachedPluginModuleLoader(params: {
+  cache: PluginModuleLoaderCache;
   modulePath: string;
   importerUrl: string;
   argvEntry?: string;
   preferBuiltDist?: boolean;
-  jitiFilename?: string;
-  createLoader?: PluginJitiLoaderFactory;
+  loaderFilename?: string;
+  createLoader?: PluginModuleLoaderFactory;
   aliasMap?: Record<string, string>;
   tryNative?: boolean;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cacheScopeKey?: string;
-}): PluginJitiLoader {
-  const jitiFilename = toSafeImportPath(params.jitiFilename ?? params.modulePath);
+}): PluginModuleLoader {
+  const loaderFilename = toSafeImportPath(params.loaderFilename ?? params.modulePath);
   if (params.cacheScopeKey) {
-    const scopedCacheKey = `${jitiFilename}::${params.cacheScopeKey}`;
+    const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey}`;
     const cached = params.cache.get(scopedCacheKey);
     if (cached) {
       return cached;
@@ -37,7 +37,7 @@ export function getCachedPluginJitiLoader(params: {
   const hasTryNativeOverride = typeof params.tryNative === "boolean";
   const defaultConfig =
     hasAliasOverride || hasTryNativeOverride
-      ? resolvePluginLoaderJitiConfig({
+      ? resolvePluginLoaderModuleConfig({
           modulePath: params.modulePath,
           argv1: params.argvEntry ?? process.argv[1],
           moduleUrl: params.importerUrl,
@@ -57,7 +57,7 @@ export function getCachedPluginJitiLoader(params: {
         aliasMap: params.aliasMap ?? defaultConfig.aliasMap,
         cacheKey: canReuseDefaultCacheKey ? defaultConfig.cacheKey : undefined,
       }
-    : resolvePluginLoaderJitiConfig({
+    : resolvePluginLoaderModuleConfig({
         modulePath: params.modulePath,
         argv1: params.argvEntry ?? process.argv[1],
         moduleUrl: params.importerUrl,
@@ -67,25 +67,25 @@ export function getCachedPluginJitiLoader(params: {
   const { tryNative, aliasMap } = resolved;
   const cacheKey =
     resolved.cacheKey ??
-    createPluginLoaderJitiCacheKey({
+    createPluginLoaderModuleCacheKey({
       tryNative,
       aliasMap,
     });
-  const scopedCacheKey = `${jitiFilename}::${params.cacheScopeKey ?? cacheKey}`;
+  const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ?? cacheKey}`;
   const cached = params.cache.get(scopedCacheKey);
   if (cached) {
     return cached;
   }
-  let loadWithJiti: PluginJitiLoader | undefined;
-  const getLoadWithJiti = (): PluginJitiLoader => {
-    if (loadWithJiti) {
-      return loadWithJiti;
+  let loadWithSourceTransform: PluginModuleLoader | undefined;
+  const getLoadWithSourceTransform = (): PluginModuleLoader => {
+    if (loadWithSourceTransform) {
+      return loadWithSourceTransform;
     }
-    const jitiLoader = (params.createLoader ?? createJiti)(jitiFilename, {
+    const jitiLoader = (params.createLoader ?? createJiti)(loaderFilename, {
       ...buildPluginLoaderJitiOptions(aliasMap),
       tryNative,
     });
-    loadWithJiti = new Proxy(jitiLoader, {
+    loadWithSourceTransform = new Proxy(jitiLoader, {
       apply(target, thisArg, argArray) {
         const [first, ...rest] = argArray as [unknown, ...unknown[]];
         if (typeof first === "string") {
@@ -97,7 +97,7 @@ export function getCachedPluginJitiLoader(params: {
         return Reflect.apply(target, thisArg, argArray as never) as never;
       },
     });
-    return loadWithJiti;
+    return loadWithSourceTransform;
   };
   // When the caller has explicitly opted out of native loading (for example
   // `bundled-capability-runtime` in Vitest+dist mode, which depends on
@@ -105,10 +105,10 @@ export function getCachedPluginJitiLoader(params: {
   // target through jiti so those alias rewrites still apply.
   if (!tryNative) {
     const loader = ((target: string, ...rest: unknown[]) =>
-      (getLoadWithJiti() as (t: string, ...a: unknown[]) => unknown)(
+      (getLoadWithSourceTransform() as (t: string, ...a: unknown[]) => unknown)(
         target,
         ...rest,
-      )) as PluginJitiLoader;
+      )) as PluginModuleLoader;
     params.cache.set(scopedCacheKey, loader);
     return loader;
   }
@@ -124,8 +124,20 @@ export function getCachedPluginJitiLoader(params: {
     if (native.ok) {
       return native.moduleExport;
     }
-    return (getLoadWithJiti() as (t: string, ...a: unknown[]) => unknown)(target, ...rest);
-  }) as PluginJitiLoader;
+    return (getLoadWithSourceTransform() as (t: string, ...a: unknown[]) => unknown)(
+      target,
+      ...rest,
+    );
+  }) as PluginModuleLoader;
   params.cache.set(scopedCacheKey, loader);
   return loader;
+}
+
+export function getCachedPluginSourceModuleLoader(
+  params: Omit<Parameters<typeof getCachedPluginModuleLoader>[0], "tryNative">,
+): PluginModuleLoader {
+  return getCachedPluginModuleLoader({
+    ...params,
+    tryNative: false,
+  });
 }

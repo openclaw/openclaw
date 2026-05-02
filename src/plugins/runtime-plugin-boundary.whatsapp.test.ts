@@ -3,7 +3,7 @@ import path from "node:path";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
-import type { PluginJitiLoaderCache } from "./jiti-loader-cache.js";
+import type { PluginModuleLoaderCache } from "./plugin-module-loader-cache.js";
 import { loadPluginBoundaryModule } from "./runtime/runtime-plugin-boundary.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -122,7 +122,7 @@ function createExternalTypeScriptRuntimePackageFixture() {
 }
 
 function loadWhatsAppBoundaryModules(runtimePluginDir: string) {
-  const loaders: PluginJitiLoaderCache = new Map();
+  const loaders: PluginModuleLoaderCache = new Map();
   return {
     light: loadPluginBoundaryModule<LightModule>(
       path.join(runtimePluginDir, "light-runtime-api.js"),
@@ -165,7 +165,7 @@ describe("runtime plugin boundary whatsapp seam", () => {
     const rootDir = makeTrackedTempDir("openclaw-bundled-boundary-ts", tempDirs);
     const modulePath = path.join(rootDir, "runtime-api.ts");
     writeRuntimeFixtureText(rootDir, "runtime-api.ts", "export const ok = true;\n");
-    const loaders: PluginJitiLoaderCache = new Map();
+    const loaders: PluginModuleLoaderCache = new Map();
 
     expect(() =>
       loadPluginBoundaryModule<{ ok: boolean }>(modulePath, loaders, { origin: "bundled" }),
@@ -173,9 +173,9 @@ describe("runtime plugin boundary whatsapp seam", () => {
     expect(loaders.size).toBe(0);
   });
 
-  it("keeps the Jiti TypeScript package fallback available for non-bundled plugins", () => {
+  it("keeps the TypeScript source package fallback available for non-bundled plugins", () => {
     const modulePath = createExternalTypeScriptRuntimePackageFixture();
-    const loaders: PluginJitiLoaderCache = new Map();
+    const loaders: PluginModuleLoaderCache = new Map();
 
     expect(
       loadPluginBoundaryModule<{ ok: boolean; loadedVia: string }>(modulePath, loaders, {

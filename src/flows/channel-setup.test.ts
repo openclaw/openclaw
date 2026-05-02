@@ -134,6 +134,8 @@ vi.mock("../channels/plugins/setup-registry.js", () => ({
 vi.mock("../channels/registry.js", () => ({
   getChatChannelMeta: (channelId: string) => ({ id: channelId, label: channelId }),
   listChatChannels: () => [],
+  normalizeAnyChannelId: (channelId?: unknown) =>
+    typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
   normalizeChatChannelId: (channelId?: unknown) =>
     typeof channelId === "string" ? channelId.trim().toLowerCase() || null : null,
 }));

@@ -6,7 +6,7 @@ import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeLoaderStateForTest,
-  setFacadeLoaderJitiFactoryForTest,
+  setFacadeLoaderSourceTransformFactoryForTest,
 } from "./facade-loader.js";
 import { listImportedBundledPluginFacadeIds as listImportedFacadeRuntimeIds } from "./facade-runtime.js";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
@@ -15,7 +15,9 @@ const { createTempDirSync } = createPluginSdkTestHarness();
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 const FACADE_LOADER_GLOBAL = "__openclawTestLoadBundledPluginPublicSurfaceModuleSync";
-type FacadeLoaderJitiFactory = NonNullable<Parameters<typeof setFacadeLoaderJitiFactoryForTest>[0]>;
+type FacadeLoaderSourceTransformFactory = NonNullable<
+  Parameters<typeof setFacadeLoaderSourceTransformFactoryForTest>[0]
+>;
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const trustedBundledPluginFixtureRoots: string[] = [];
 let trustedPluginIdCounter = 0;
@@ -159,7 +161,7 @@ function writeJsonFile(filePath: string, value: unknown): void {
 afterEach(() => {
   vi.restoreAllMocks();
   resetFacadeLoaderStateForTest();
-  setFacadeLoaderJitiFactoryForTest(undefined);
+  setFacadeLoaderSourceTransformFactoryForTest(undefined);
   for (const dir of trustedBundledPluginFixtureRoots.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -265,13 +267,13 @@ describe("plugin-sdk facade loader", () => {
     });
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = fixture.bundledPluginsDir;
 
-    const createJitiCalls: Parameters<FacadeLoaderJitiFactory>[] = [];
-    setFacadeLoaderJitiFactoryForTest(((...args) => {
+    const createJitiCalls: Parameters<FacadeLoaderSourceTransformFactory>[] = [];
+    setFacadeLoaderSourceTransformFactoryForTest(((...args) => {
       createJitiCalls.push(args);
       return vi.fn(() => ({
         marker: "jiti-fallback",
-      })) as unknown as ReturnType<FacadeLoaderJitiFactory>;
-    }) as FacadeLoaderJitiFactory);
+      })) as unknown as ReturnType<FacadeLoaderSourceTransformFactory>;
+    }) as FacadeLoaderSourceTransformFactory);
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
 

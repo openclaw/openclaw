@@ -9,9 +9,9 @@ import {
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
-// jiti-loader-cache prefers native require() for compiled .js before falling
+// plugin-module-loader-cache prefers native require() for compiled .js before falling
 // back to jiti. These tests scripts plugin-loading behaviour through the
-// jiti mock — disable the native-require fast path so the mocked jiti loader
+// source-transform mock — disable the native-require fast path so the mocked source transformer
 // stays authoritative for the test fixture files on disk.
 vi.mock("./native-module-require.js", () => ({
   isJavaScriptModulePath: (_modulePath: string) => false,
@@ -171,7 +171,7 @@ afterEach(() => {
   cleanupTrackedTempDirs(tempDirs);
 });
 
-describe("setup-registry getJiti", () => {
+describe("setup-registry module loader", () => {
   beforeEach(async () => {
     resetRegistryJitiMocks();
     vi.resetModules();
@@ -185,7 +185,7 @@ describe("setup-registry getJiti", () => {
     clearPluginSetupRegistryCache();
   });
 
-  it("uses the runtime-supported Jiti boundary on Windows for setup-api modules", () => {
+  it("uses the runtime-supported source-transform boundary on Windows for setup-api modules", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(path.join(pluginRoot, "setup-api.js"), "export default {};\n", "utf-8");
     mocks.loadPluginManifestRegistry.mockReturnValue({

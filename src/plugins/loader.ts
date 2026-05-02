@@ -56,7 +56,6 @@ import {
   listPluginInteractiveHandlers,
   restorePluginInteractiveHandlers,
 } from "./interactive-registry.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import {
   channelPluginIdBelongsToManifest,
@@ -105,6 +104,10 @@ import { unwrapDefaultModuleExport } from "./module-export.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
 import { withProfile } from "./plugin-load-profile.js";
 import {
+  getCachedPluginSourceModuleLoader,
+  type PluginModuleLoaderCache,
+} from "./plugin-module-loader-cache.js";
+import {
   createPluginIdScopeSet,
   hasExplicitPluginIdScope,
   normalizePluginIdScope,
@@ -135,7 +138,7 @@ import {
   resolvePluginSdkAliasFile,
   resolvePluginRuntimeModulePath,
   resolvePluginSdkScopedAliasMap,
-  shouldPreferNativeJiti,
+  shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
 import { hasKind, kindsEqual } from "./slots.js";
 import type {
@@ -457,13 +460,13 @@ function runPluginRegisterSync(
 }
 
 function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
-  const jitiLoaders: PluginJitiLoaderCache = new Map();
-  const loadWithJiti = (modulePath: string) => {
-    return getCachedPluginJitiLoader({
-      cache: jitiLoaders,
+  const moduleLoaders: PluginModuleLoaderCache = new Map();
+  const loadSourceModule = (modulePath: string) => {
+    return getCachedPluginSourceModuleLoader({
+      cache: moduleLoaders,
       modulePath,
       importerUrl: import.meta.url,
-      jitiFilename: modulePath,
+      loaderFilename: modulePath,
       aliasMap: buildPluginLoaderAliasMap(
         modulePath,
         process.argv[1],
@@ -471,11 +474,10 @@ function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkRes
         options.pluginSdkResolution,
       ),
       pluginSdkResolution: options.pluginSdkResolution,
-      tryNative: false,
     });
   };
   return (modulePath: string): unknown => {
-    if (shouldPreferNativeJiti(modulePath)) {
+    if (shouldPreferNativeModuleLoad(modulePath)) {
       const native = tryNativeRequireJavaScriptModule(modulePath, { allowWindows: true });
       if (native.ok) {
         return native.moduleExport;
@@ -484,7 +486,7 @@ function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkRes
     // Source .ts runtime shims import sibling ".js" specifiers that only exist
     // after build. Jiti remains the dev/source fallback because it rewrites those
     // imports against the source graph and applies SDK aliases.
-    return loadWithJiti(modulePath)(toSafeImportPath(modulePath));
+    return loadSourceModule(modulePath)(toSafeImportPath(modulePath));
   };
 }
 
@@ -510,7 +512,7 @@ export const __testing = {
   resolvePluginRuntimeModulePath,
   ensureOpenClawPluginSdkAlias,
   shouldLoadChannelPluginInSetupRuntime,
-  shouldPreferNativeJiti,
+  shouldPreferNativeModuleLoad,
   toSafeImportPath,
   getCompatibleActivePluginRegistry,
   resolvePluginLoadCacheContext,
