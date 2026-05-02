@@ -12,6 +12,7 @@ import {
 } from "../../agents/model-auth.js";
 import { resolveProviderAuthAliasMap } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderIdForAuth } from "../../agents/provider-id.js";
+import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "../../plugins/plugin-registry.js";
 
@@ -112,9 +113,9 @@ export function createModelListAuthIndex(
       addProvider(provider);
     }
   }
-  const defaultModel = params.cfg.agents?.defaults?.model;
-  const primaryModel = typeof defaultModel === "string" ? defaultModel : defaultModel?.primary;
-  const primaryModelProvider = primaryModel?.split("/", 1)[0];
+  const primaryModelProvider = resolveAgentModelPrimaryValue(
+    params.cfg.agents?.defaults?.model,
+  )?.split("/", 1)[0];
   if (primaryModelProvider === "openai-codex" || primaryModelProvider === "codex") {
     addSyntheticProvider("codex");
   }
