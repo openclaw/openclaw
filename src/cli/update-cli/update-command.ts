@@ -181,7 +181,8 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
     return { stopped: false, inspected: false, runtimeInspected: false, running: false };
   }
 
-  const runtimeInspected = Boolean(serviceState.runtime);
+  const runtimeStatus = serviceState.runtime?.status;
+  const runtimeInspected = runtimeStatus === "running" || runtimeStatus === "stopped";
   if (!serviceState.installed) {
     return {
       stopped: false,

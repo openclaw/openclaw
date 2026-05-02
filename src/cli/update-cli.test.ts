@@ -1344,40 +1344,53 @@ describe("update-cli", () => {
     );
   });
 
-  it("refuses package updates from inherited gateway service env when runtime inspection is inconclusive", async () => {
-    mockPackageInstallStatus(createCaseDir("openclaw-update"));
-    serviceReadCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      environment: {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-    });
-    serviceReadRuntime.mockRejectedValueOnce(new Error("runtime probe failed"));
+  it.each([
+    {
+      name: "runtime probe fails",
+      setupRuntime: () =>
+        serviceReadRuntime.mockRejectedValueOnce(new Error("runtime probe failed")),
+    },
+    {
+      name: "runtime status is unknown",
+      setupRuntime: () => serviceReadRuntime.mockResolvedValueOnce({ status: "unknown" }),
+    },
+  ])(
+    "refuses package updates from inherited gateway service env when $name",
+    async ({ setupRuntime }) => {
+      mockPackageInstallStatus(createCaseDir("openclaw-update"));
+      serviceReadCommand.mockResolvedValue({
+        programArguments: ["openclaw", "gateway", "run"],
+        environment: {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+      });
+      setupRuntime();
 
-    await withEnvAsync(
-      {
-        OPENCLAW_SERVICE_MARKER: "openclaw",
-        OPENCLAW_SERVICE_KIND: "gateway",
-      },
-      async () => {
-        await updateCommand({ yes: true });
-      },
-    );
+      await withEnvAsync(
+        {
+          OPENCLAW_SERVICE_MARKER: "openclaw",
+          OPENCLAW_SERVICE_KIND: "gateway",
+        },
+        async () => {
+          await updateCommand({ yes: true });
+        },
+      );
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "Package updates cannot run from inside the gateway service process.",
-      ),
-    );
-    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
-    expect(serviceStop).not.toHaveBeenCalled();
-    expect(runGatewayUpdate).not.toHaveBeenCalled();
-    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
-      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
-      expect.any(Object),
-    );
-  });
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Package updates cannot run from inside the gateway service process.",
+        ),
+      );
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect(serviceStop).not.toHaveBeenCalled();
+      expect(runGatewayUpdate).not.toHaveBeenCalled();
+      expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+        ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+        expect.any(Object),
+      );
+    },
+  );
 
   it("refuses package updates from inherited gateway service env when the service definition is missing but runtime is live", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
