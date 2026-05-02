@@ -753,7 +753,10 @@ export function loadPluginManifestRegistry(
         level: "warn",
         pluginId: manifest.id,
         source: overriddenCandidate.source,
-        message: `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
+        message:
+          winnerCandidate.origin === "config"
+            ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
+            : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
       });
       continue;
     }
