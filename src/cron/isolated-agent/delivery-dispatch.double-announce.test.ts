@@ -284,6 +284,33 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
+  it("delivers completed descendant output when the cron parent produced no text", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
+      "Child final summary with PR and verification details.",
+    );
+
+    const params = makeBaseParams({ runStartedAt: 1_000 });
+    params.synthesizedText = undefined;
+    params.summary = undefined;
+    params.outputText = undefined;
+    params.deliveryPayloads = [];
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      runStartedAt: 1_000,
+    });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "Child final summary with PR and verification details." }],
+      }),
+    );
+  });
+
   it("uses the run-scoped session key for isolated cron descendant fallback delivery", async () => {
     const runStartedAt = 1_000;
     const agentSessionKey = "agent:main:cron:daily-monitor";

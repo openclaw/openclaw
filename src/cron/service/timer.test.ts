@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../../cron/service.test-harness.js";
 import { createCronServiceState } from "../../cron/service/state.js";
-import { onTimer } from "../../cron/service/timer.js";
+import { applyJobResult, onTimer } from "../../cron/service/timer.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import type { CronJob } from "../../cron/types.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
@@ -30,6 +30,65 @@ function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }
 
 afterEach(() => {
   resetTaskRegistryForTests();
+});
+
+describe("applyJobResult delivered warning normalization", () => {
+  it("keeps delivered non-critical apply-patch warnings out of lastRunStatus=error", () => {
+    const now = Date.parse("2026-05-03T00:00:00.000Z");
+    const state = createCronServiceState({
+      storePath: "/tmp/openclaw-cron-test-jobs.json",
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job = createDueMainJob({ now, wakeMode: "next-heartbeat" });
+    job.delivery = { mode: "announce", channel: "telegram", to: "123" };
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "⚠️ 🩹 Apply Patch failed",
+      delivered: true,
+      startedAt: now,
+      endedAt: now + 1_000,
+    });
+
+    expect(job.state.lastRunStatus).toBe("ok");
+    expect(job.state.lastStatus).toBe("ok");
+    expect(job.state.lastError).toBeUndefined();
+    expect(job.state.consecutiveErrors).toBe(0);
+    expect(job.state.lastDeliveryStatus).toBe("delivered");
+  });
+
+  it("still records undelivered apply-patch failures as errors", () => {
+    const now = Date.parse("2026-05-03T00:00:00.000Z");
+    const state = createCronServiceState({
+      storePath: "/tmp/openclaw-cron-test-jobs.json",
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job = createDueMainJob({ now, wakeMode: "next-heartbeat" });
+    job.delivery = { mode: "announce", channel: "telegram", to: "123" };
+
+    applyJobResult(state, job, {
+      status: "error",
+      error: "⚠️ 🩹 Apply Patch failed",
+      delivered: false,
+      startedAt: now,
+      endedAt: now + 1_000,
+    });
+
+    expect(job.state.lastRunStatus).toBe("error");
+    expect(job.state.lastError).toBe("⚠️ 🩹 Apply Patch failed");
+    expect(job.state.consecutiveErrors).toBe(1);
+    expect(job.state.lastDeliveryStatus).toBe("not-delivered");
+  });
 });
 
 describe("cron service timer seam coverage", () => {

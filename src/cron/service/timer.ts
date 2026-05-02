@@ -501,6 +501,35 @@ function maybeEmitFailureAlert(
   params.job.state.lastFailureAlertAtMs = now;
 }
 
+function isNonFatalDeliveredCronError(error: string | undefined): boolean {
+  if (!error) {
+    return false;
+  }
+  const normalized = error.trim();
+  return (
+    normalized === "⚠️ 🩹 Apply Patch failed" ||
+    normalized.startsWith("⚠️ 🩹 Apply Patch failed:") ||
+    normalized.startsWith("⚠️ 📝 Edit:")
+  );
+}
+
+function normalizeDeliveredCronResult<
+  T extends {
+    status: CronRunStatus;
+    error?: string;
+    delivered?: boolean;
+  },
+>(result: T): Omit<T, "status" | "error"> & { status: CronRunStatus; error?: string } {
+  if (
+    result.status === "error" &&
+    result.delivered === true &&
+    isNonFatalDeliveredCronError(result.error)
+  ) {
+    return { ...result, status: "ok", error: undefined };
+  }
+  return result;
+}
+
 /**
  * Apply the result of a job execution to the job's state.
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
@@ -521,6 +550,7 @@ export function applyJobResult(
     preserveSchedule?: boolean;
   },
 ): boolean {
+  const normalizedResult = normalizeDeliveredCronResult(result);
   const prevLastRunAtMs = job.state.lastRunAtMs;
   const computeNextWithPreservedLastRun = (nowMs: number) => {
     const saved = job.state.lastRunAtMs;
@@ -532,36 +562,38 @@ export function applyJobResult(
     }
   };
   job.state.runningAtMs = undefined;
-  job.state.lastRunAtMs = result.startedAt;
-  job.state.lastRunStatus = result.status;
-  job.state.lastStatus = result.status;
-  job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
-  job.state.lastError = result.error;
+  job.state.lastRunAtMs = normalizedResult.startedAt;
+  job.state.lastRunStatus = normalizedResult.status;
+  job.state.lastStatus = normalizedResult.status;
+  job.state.lastDurationMs = Math.max(0, normalizedResult.endedAt - normalizedResult.startedAt);
+  job.state.lastError = normalizedResult.error;
   job.state.lastErrorReason =
-    result.status === "error" && typeof result.error === "string"
-      ? (resolveFailoverReasonFromError(result.error) ?? undefined)
+    normalizedResult.status === "error" && typeof normalizedResult.error === "string"
+      ? (resolveFailoverReasonFromError(normalizedResult.error) ?? undefined)
       : undefined;
-  const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
+  const deliveryState = resolveDeliveryState({ job, delivered: normalizedResult.delivered });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.lastDeliveryError =
-    deliveryState.status === "not-delivered" && result.error ? result.error : undefined;
-  job.updatedAtMs = result.endedAt;
+    deliveryState.status === "not-delivered" && normalizedResult.error
+      ? normalizedResult.error
+      : undefined;
+  job.updatedAtMs = normalizedResult.endedAt;
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
   // separate counter so opt-in skip alerts do not affect retry behavior.
   const alertConfig = resolveFailureAlert(state, job);
-  if (result.status === "error") {
+  if (normalizedResult.status === "error") {
     job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
     job.state.consecutiveSkipped = 0;
     maybeEmitFailureAlert(state, {
       job,
       alertConfig,
       status: "error",
-      error: result.error,
+      error: normalizedResult.error,
       consecutiveCount: job.state.consecutiveErrors,
     });
-  } else if (result.status === "skipped") {
+  } else if (normalizedResult.status === "skipped") {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
     if (alertConfig?.includeSkipped) {
@@ -569,7 +601,7 @@ export function applyJobResult(
         job,
         alertConfig,
         status: "skipped",
-        error: result.error,
+        error: normalizedResult.error,
         consecutiveCount: job.state.consecutiveSkipped,
       });
     } else {
@@ -582,23 +614,23 @@ export function applyJobResult(
   }
 
   const shouldDelete =
-    job.schedule.kind === "at" && job.deleteAfterRun === true && result.status === "ok";
+    job.schedule.kind === "at" && job.deleteAfterRun === true && normalizedResult.status === "ok";
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
-      if (result.status === "ok" || result.status === "skipped") {
+      if (normalizedResult.status === "ok" || normalizedResult.status === "skipped") {
         // One-shot done or skipped: disable to prevent tight-loop (#11452).
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
-      } else if (result.status === "error") {
+      } else if (normalizedResult.status === "error") {
         const retryConfig = resolveRetryConfig(state.deps.cronConfig);
-        const transient = isTransientCronError(result.error, retryConfig.retryOn);
+        const transient = isTransientCronError(normalizedResult.error, retryConfig.retryOn);
         // consecutiveErrors is always set to ≥1 by the increment block above.
         const consecutive = job.state.consecutiveErrors;
         if (transient && consecutive <= retryConfig.maxAttempts) {
           // Schedule retry with backoff (#24355).
           const backoff = errorBackoffMs(consecutive, retryConfig.backoffMs);
-          job.state.nextRunAtMs = result.endedAt + backoff;
+          job.state.nextRunAtMs = normalizedResult.endedAt + backoff;
           state.deps.log.info(
             {
               jobId: job.id,
@@ -621,14 +653,14 @@ export function applyJobResult(
               jobId: job.id,
               jobName: job.name,
               consecutiveErrors: consecutive,
-              error: result.error,
+              error: normalizedResult.error,
               reason: transient ? "max retries exhausted" : "permanent error",
             },
             "cron: disabling one-shot job after error",
           );
         }
       }
-    } else if (result.status === "error" && isJobEnabled(job)) {
+    } else if (normalizedResult.status === "error" && isJobEnabled(job)) {
       // Apply exponential backoff for errored jobs to prevent retry storms.
       const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
       let normalNext: number | undefined;
@@ -705,7 +737,8 @@ export function applyJobResult(
 
 function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
   clearCronJobActive(result.jobId);
-  tryFinishCronTaskRun(state, result);
+  const resultForState = normalizeDeliveredCronResult(result);
+  tryFinishCronTaskRun(state, resultForState);
   const store = state.store;
   if (!store) {
     return;
@@ -713,15 +746,15 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   const jobs = store.jobs;
   const job = jobs.find((entry) => entry.id === result.jobId);
   if (!job) {
-    if (result.status === "ok") {
+    if (resultForState.status === "ok") {
       applyJobResult(state, result.job, {
-        status: result.status,
-        error: result.error,
+        status: resultForState.status,
+        error: resultForState.error,
         delivered: result.delivered,
         startedAt: result.startedAt,
         endedAt: result.endedAt,
       });
-      emitJobFinished(state, result.job, result, result.startedAt);
+      emitJobFinished(state, result.job, resultForState, result.startedAt);
       state.deps.log.info(
         { jobId: result.jobId },
         "cron: finalized successful run after job was removed during execution",
@@ -736,14 +769,14 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
   }
 
   const shouldDelete = applyJobResult(state, job, {
-    status: result.status,
-    error: result.error,
+    status: resultForState.status,
+    error: resultForState.error,
     delivered: result.delivered,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
 
-  emitJobFinished(state, job, result, result.startedAt);
+  emitJobFinished(state, job, resultForState, result.startedAt);
 
   if (shouldDelete) {
     store.jobs = jobs.filter((entry) => entry.id !== job.id);
@@ -1537,15 +1570,16 @@ export async function executeJob(
   }
 
   const endedAt = state.deps.nowMs();
+  const coreResultForState = normalizeDeliveredCronResult(coreResult);
   const shouldDelete = applyJobResult(state, job, {
-    status: coreResult.status,
-    error: coreResult.error,
+    status: coreResultForState.status,
+    error: coreResultForState.error,
     delivered: coreResult.delivered,
     startedAt,
     endedAt,
   });
 
-  emitJobFinished(state, job, coreResult, startedAt);
+  emitJobFinished(state, job, coreResultForState, startedAt);
 
   if (shouldDelete && state.store) {
     state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
