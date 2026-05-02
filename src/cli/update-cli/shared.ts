@@ -22,7 +22,10 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import { theme } from "../../terminal/theme.js";
 import { pathExists } from "../../utils.js";
-import { COMPLETION_SKIP_PLUGIN_COMMANDS_ENV } from "../completion-runtime.js";
+import {
+  COMPLETION_SKIP_PLUGIN_COMMANDS_ENV,
+  resolveCompletionCacheWriteTimeoutMs,
+} from "../completion-runtime.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -259,7 +262,6 @@ export async function resolveGlobalManager(params: {
   return byPresence ?? "npm";
 }
 
-const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
 const COMPLETION_CACHE_MANUAL_REFRESH_HINT =
   "Shell tab-completion may be stale; refresh manually with: openclaw completion --write-state";
 
@@ -269,6 +271,7 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
     return;
   }
 
+  const timeoutMs = resolveCompletionCacheWriteTimeoutMs();
   const result = spawnSync(resolveNodeRunner(), [binPath, "completion", "--write-state"], {
     cwd: root,
     env: {
@@ -276,16 +279,14 @@ export async function tryWriteCompletionCache(root: string, jsonMode: boolean): 
       [COMPLETION_SKIP_PLUGIN_COMMANDS_ENV]: "1",
     },
     encoding: "utf-8",
-    timeout: COMPLETION_CACHE_WRITE_TIMEOUT_MS,
+    timeout: timeoutMs,
   });
 
   if (result.error) {
     if (!jsonMode) {
       const err = result.error as NodeJS.ErrnoException;
       const reason =
-        err.code === "ETIMEDOUT"
-          ? `timed out after ${COMPLETION_CACHE_WRITE_TIMEOUT_MS / 1000}s`
-          : String(result.error);
+        err.code === "ETIMEDOUT" ? `timed out after ${timeoutMs / 1000}s` : String(result.error);
       defaultRuntime.log(
         theme.warn(
           `Completion cache update failed: ${reason}. ${COMPLETION_CACHE_MANUAL_REFRESH_HINT}`,
