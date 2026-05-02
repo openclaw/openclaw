@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.
+- Providers/xAI: add Grok 4.3 to the bundled catalog and make it the default xAI chat model.
 - Plugins/ClawHub: prefer versioned ClawPack artifacts when ClawHub publishes digest metadata, verifying the ClawPack response header and downloaded bytes before installing. Thanks @vincentkoc.
 - Plugins/ClawHub: persist ClawPack digest metadata on ClawHub plugin install and update records so registry refreshes and download verification can reuse stored artifact facts. Thanks @vincentkoc.
 - Plugins/ClawHub: allow official bundled-plugin cutovers to prefer ClawHub installs with npm fallback only when the ClawHub package or version is absent. Thanks @vincentkoc.

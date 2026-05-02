@@ -28,7 +28,7 @@ type AssistantLikeMessage = {
 };
 
 function resolveLiveXaiModel() {
-  return getModel("xai", "grok-4-1-fast-reasoning" as never) ?? getModel("xai", "grok-4");
+  return getModel("xai", "grok-4.3" as never) ?? getModel("xai", "grok-4");
 }
 
 async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<void> {
@@ -63,7 +63,7 @@ function extractFirstToolCallId(message: AssistantLikeMessage): string | undefin
 }
 
 describeLive("xai live", () => {
-  it("returns assistant text for Grok 4.1 Fast Reasoning", async () => {
+  it("returns assistant text for Grok 4.3", async () => {
     await runXaiLiveCase("complete", async () => {
       const model = resolveLiveXaiModel();
       expect(model).toBeDefined();
