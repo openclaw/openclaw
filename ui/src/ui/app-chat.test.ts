@@ -3,6 +3,11 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatHost } from "./app-chat.ts";
 import {
+  CHAT_AUTOSTART_BOOTSTRAP_PROMPT,
+  createChatAutostartRequest,
+  type ChatAutostartRequest,
+} from "./chat-autostart.ts";
+import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
@@ -24,9 +29,13 @@ let navigateChatInputHistory: typeof import("./app-chat.ts").navigateChatInputHi
 let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
+let refreshChat: typeof import("./app-chat.ts").refreshChat;
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 
-async function loadChatHelpers(): Promise<void> {
+async function loadChatHelpers(params?: { reload?: boolean }): Promise<void> {
+  if (params?.reload) {
+    vi.resetModules();
+  }
   ({
     handleSendChat,
     steerQueuedChatMessage,
@@ -34,6 +43,7 @@ async function loadChatHelpers(): Promise<void> {
     handleAbortChat,
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
+    refreshChat,
     removeQueuedMessage,
   } = await import("./app-chat.ts"));
 }
@@ -51,6 +61,12 @@ function requestUrl(input: string | URL | Request): string {
 function makeHost(overrides?: Partial<ChatHost>): ChatHost {
   const host = {
     client: null,
+    toolStreamById: new Map(),
+    toolStreamOrder: [],
+    toolStreamSyncTimer: null,
+    chatHasAutoScrolled: false,
+    chatUserNearBottom: true,
+    chatNewMessagesBelow: false,
     chatMessages: [],
     chatStream: null,
     chatStreamSegments: [],
@@ -80,10 +96,8 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     chatModelOverrides: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
+    chatAutostart: null,
     refreshSessionsAfterChat: new Set<string>(),
-    toolStreamById: new Map(),
-    toolStreamOrder: [],
-    toolStreamSyncTimer: null,
     updateComplete: Promise.resolve(),
     ...overrides,
   };
@@ -117,6 +131,17 @@ function createDeferred<T>() {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function makeAutostartRequest(overrides: Partial<ChatAutostartRequest> = {}): ChatAutostartRequest {
+  const request = createChatAutostartRequest(CHAT_AUTOSTART_BOOTSTRAP_PROMPT, "main");
+  if (!request) {
+    throw new Error("expected test autostart request");
+  }
+  return {
+    ...request,
+    ...overrides,
+  };
 }
 
 describe("refreshChatAvatar", () => {
@@ -841,6 +866,398 @@ describe("handleSendChat", () => {
         text: "follow up",
       }),
     ]);
+  });
+
+  it("autostarts a hidden prompt once for an empty chat session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "chat.send") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatAutostart: makeAutostartRequest(),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: CHAT_AUTOSTART_BOOTSTRAP_PROMPT,
+      deliver: false,
+      hideUserMessage: true,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+    expect(host.chatMessages).toEqual([]);
+    expect(host.chatAutostart).toBeNull();
+  });
+
+  it("skips autostart when chat history failed to load", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        throw new Error("history unavailable");
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "chat.send") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatAutostart: makeAutostartRequest(),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatAutostart).toMatchObject({
+      prompt: CHAT_AUTOSTART_BOOTSTRAP_PROMPT,
+      sessionKey: "main",
+    });
+  });
+
+  it("preserves autostart when the hidden send fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "chat.send") {
+        throw new Error("gateway rejected hidden send");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatAutostart: makeAutostartRequest(),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+
+    expect(request).toHaveBeenCalledWith("chat.send", {
+      sessionKey: "main",
+      message: CHAT_AUTOSTART_BOOTSTRAP_PROMPT,
+      deliver: false,
+      hideUserMessage: true,
+      idempotencyKey: expect.any(String),
+      attachments: undefined,
+    });
+    expect(host.chatAutostart).toMatchObject({
+      prompt: CHAT_AUTOSTART_BOOTSTRAP_PROMPT,
+      sessionKey: "main",
+    });
+    expect(host.chatMessages).toEqual([]);
+  });
+
+  it("preserves autostart when the session changes during refresh", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    let host!: ChatHost;
+    const historyLoaded = createDeferred<void>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return historyLoaded.promise.then(() => {
+          host.sessionKey = "secondary";
+          return { messages: [], thinkingLevel: null };
+        });
+      }
+      if (method === "sessions.list") {
+        return Promise.resolve({
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        });
+      }
+      if (method === "models.list") {
+        return Promise.resolve({ models: [] });
+      }
+      if (method === "chat.send") {
+        return Promise.resolve({ ok: true });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatAutostart: makeAutostartRequest(),
+    });
+
+    const refreshPromise = refreshChat(host, { scheduleScroll: false });
+    historyLoaded.resolve(undefined);
+    await refreshPromise;
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.sessionKey).toBe("secondary");
+    expect(host.chatAutostart).toMatchObject({
+      prompt: CHAT_AUTOSTART_BOOTSTRAP_PROMPT,
+      sessionKey: "main",
+    });
+  });
+
+  it("skips autostart when the bound session differs from the current session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string, _params?: unknown) => {
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "chat.send") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "secondary",
+      chatAutostart: makeAutostartRequest({ sessionKey: "main" }),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+
+    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatAutostart).toMatchObject({
+      prompt: CHAT_AUTOSTART_BOOTSTRAP_PROMPT,
+      sessionKey: "main",
+    });
+  });
+
+  it("keeps session binding when the hidden send fails so a retry stays in the target session", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "chat.send") {
+        throw new Error("gateway rejected hidden send");
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatAutostart: makeAutostartRequest({ sessionKey: "main" }),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+
+    expect(host.chatAutostart).toMatchObject({
+      prompt: CHAT_AUTOSTART_BOOTSTRAP_PROMPT,
+      sessionKey: "main",
+    });
+  });
+
+  it("clears session binding after a successful hidden send", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "chat.send") {
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatAutostart: makeAutostartRequest({ sessionKey: "main" }),
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+
+    expect(host.chatAutostart).toBeNull();
+  });
+
+  it("reuses the same idempotency key when a hidden autostart retries", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: false,
+        json: async () => ({}),
+      }) as unknown as typeof fetch,
+    );
+    const autostart = makeAutostartRequest({
+      idempotencyKey: "hidden-autostart-id",
+      sessionKey: "main",
+    });
+    let sendAttempts = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.history") {
+        return { messages: [], thinkingLevel: null };
+      }
+      if (method === "sessions.list") {
+        return {
+          ts: 0,
+          path: "",
+          count: 0,
+          defaults: {},
+          sessions: [],
+        };
+      }
+      if (method === "models.list") {
+        return { models: [] };
+      }
+      if (method === "chat.send") {
+        sendAttempts += 1;
+        if (sendAttempts === 1) {
+          throw new Error("socket dropped after dispatch");
+        }
+        return { ok: true };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      sessionKey: "main",
+      chatAutostart: autostart,
+    });
+
+    await refreshChat(host, { scheduleScroll: false });
+    await refreshChat(host, { scheduleScroll: false });
+
+    const chatSendCalls = request.mock.calls.filter(([method]) => method === "chat.send") as Array<
+      [string, unknown?]
+    >;
+    expect(chatSendCalls).toHaveLength(2);
+    const firstSendParams = chatSendCalls[0]?.[1];
+    const secondSendParams = chatSendCalls[1]?.[1];
+    expect(firstSendParams).toBeDefined();
+    expect(secondSendParams).toBeDefined();
+    expect(firstSendParams).toEqual(
+      expect.objectContaining({
+        idempotencyKey: "hidden-autostart-id",
+      }),
+    );
+    expect(secondSendParams).toEqual(
+      expect.objectContaining({
+        idempotencyKey: "hidden-autostart-id",
+      }),
+    );
+    expect(host.chatAutostart).toBeNull();
   });
 
   it("drops sent attachment payload bytes while keeping the optimistic preview URL", async () => {

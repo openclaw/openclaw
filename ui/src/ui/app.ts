@@ -47,6 +47,7 @@ import {
   applyLocalUserIdentity as applyLocalUserIdentityInternal,
   loadCron as loadCronInternal,
   loadOverview as loadOverviewInternal,
+  promoteStagedAutostartPrompt,
   setTab as setTabInternal,
   setTheme as setThemeInternal,
   setThemeMode as setThemeModeInternal,
@@ -60,6 +61,7 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import type { ChatAutostartRequest } from "./chat-autostart.ts";
 import { exportChatMarkdown } from "./chat/export.ts";
 import { RealtimeTalkSession, type RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
@@ -223,6 +225,7 @@ export class OpenClawApp extends LitElement {
   @state() chatMobileControlsOpen = false;
   private chatMobileControlsTrigger: HTMLElement | null = null;
   @state() navDrawerOpen = false;
+  chatAutostart: ChatAutostartRequest | null = null;
 
   onSlashAction?: (action: string) => void;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>> = {};
@@ -255,6 +258,7 @@ export class OpenClawApp extends LitElement {
   @state() execApprovalError: string | null = null;
   @state() pendingGatewayUrl: string | null = null;
   pendingGatewayToken: string | null = null;
+  pendingChatAutostart: ChatAutostartRequest | null = null;
 
   @state() configLoading = false;
   @state() configRaw = "{\n}\n";
@@ -1018,6 +1022,7 @@ export class OpenClawApp extends LitElement {
     const nextToken = this.pendingGatewayToken?.trim() || "";
     this.pendingGatewayUrl = null;
     this.pendingGatewayToken = null;
+    promoteStagedAutostartPrompt(this);
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], {
       ...this.settings,
       gatewayUrl: nextGatewayUrl,
@@ -1029,6 +1034,7 @@ export class OpenClawApp extends LitElement {
   handleGatewayUrlCancel() {
     this.pendingGatewayUrl = null;
     this.pendingGatewayToken = null;
+    this.pendingChatAutostart = null;
   }
 
   // Sidebar handlers for tool output viewing

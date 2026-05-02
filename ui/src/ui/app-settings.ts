@@ -8,6 +8,7 @@ import {
   stopDebugPolling,
 } from "./app-polling.ts";
 import { scheduleChatScroll, scheduleLogsScroll } from "./app-scroll.ts";
+import { resolveChatAutostartRequest, type ChatAutostartRequest } from "./chat-autostart.ts";
 import { loadAgentFiles, type AgentFilesState } from "./controllers/agent-files.ts";
 import {
   loadAgentIdentities,
@@ -100,6 +101,8 @@ type SettingsHost = {
   dreamDiaryError: string | null;
   dreamDiaryPath: string | null;
   dreamDiaryContent: string | null;
+  pendingChatAutostart?: ChatAutostartRequest | null;
+  chatAutostart?: ChatAutostartRequest | null;
 };
 
 type LocalUserIdentityHost = {
@@ -175,6 +178,23 @@ function applySessionSelection(host: SettingsHost, session: string) {
   });
 }
 
+type ChatAutostartPromotionTarget = {
+  pendingChatAutostart: ChatAutostartRequest | null;
+  chatAutostart: ChatAutostartRequest | null;
+};
+
+/**
+ * Promote a deferred autostart request that was staged behind a pending gateway
+ * confirmation so it still targets the captured session after the switch.
+ */
+export function promoteStagedAutostartPrompt(target: ChatAutostartPromotionTarget): void {
+  const nextRequest = target.pendingChatAutostart;
+  target.pendingChatAutostart = null;
+  if (nextRequest) {
+    target.chatAutostart = nextRequest;
+  }
+}
+
 /** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
 export let warnQueryToken = false;
 
@@ -197,6 +217,7 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const hasTokenParam = hashToken != null || queryToken != null;
   const token = normalizeOptionalString(hashToken ?? queryToken);
   const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
+  const autostartRaw = params.get("autostart") ?? hashParams.get("autostart");
   const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
   let shouldCleanUrl = false;
 
@@ -242,10 +263,39 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (gatewayUrlRaw != null) {
-    host.pendingGatewayUrl = gatewayUrlChanged ? nextGatewayUrl : null;
-    host.pendingGatewayToken = gatewayUrlChanged ? (token ?? null) : null;
+    if (gatewayUrlChanged) {
+      host.pendingGatewayUrl = nextGatewayUrl;
+      host.pendingGatewayToken = token ?? null;
+      if (autostartRaw == null) {
+        host.chatAutostart = null;
+        host.pendingChatAutostart = null;
+      }
+    } else {
+      host.pendingGatewayUrl = null;
+      host.pendingGatewayToken = null;
+      host.pendingChatAutostart = null;
+    }
     params.delete("gatewayUrl");
     hashParams.delete("gatewayUrl");
+    shouldCleanUrl = true;
+  }
+
+  if (autostartRaw != null) {
+    const nextAutostart = resolveChatAutostartRequest(autostartRaw, host.sessionKey);
+    if (nextAutostart) {
+      if (gatewayUrlChanged) {
+        host.chatAutostart = null;
+        host.pendingChatAutostart = nextAutostart;
+      } else {
+        host.chatAutostart = nextAutostart;
+        host.pendingChatAutostart = null;
+      }
+    } else {
+      host.chatAutostart = null;
+      host.pendingChatAutostart = null;
+    }
+    params.delete("autostart");
+    hashParams.delete("autostart");
     shouldCleanUrl = true;
   }
 

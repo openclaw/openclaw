@@ -26,6 +26,8 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
 - `chat.history` follows the active transcript branch for modern append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
 - Control UI coalesces duplicate in-flight submits for the same session, message, and attachments before generating a new `chat.send` run id; the Gateway still dedupes repeated requests that reuse the same idempotency key.
+- Control UI and WebChat clients can use `chat.send` with `hideUserMessage: true` only from an `operator.admin` session to run a hidden bootstrap turn. Hidden sends do not write or broadcast the triggering user prompt, but they still show normal assistant output and cannot be combined with `deliver: true` or attachments.
+- The Control UI chat URL supports one-shot hidden bootstrap via `?autostart=<value>` or `#autostart=<value>`. Supported values are `1`, `true`, `yes`, `on`, and `bootstrap`; unsupported/custom values are ignored after the URL is stripped. Autostart runs only after a successful empty-session `chat.history` load.
 - `chat.history` is also display-normalized: runtime-only OpenClaw context,
   inbound envelope wrappers, inline delivery directive tags
   such as `[[reply_to_*]]` and `[[audio_as_voice]]`, plain-text tool-call XML

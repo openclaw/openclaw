@@ -700,6 +700,11 @@ function canInjectSystemProvenance(client: GatewayRequestHandlerOptions["client"
   return scopes.includes(ADMIN_SCOPE);
 }
 
+function canHideUserMessage(client: GatewayRequestHandlerOptions["client"]): boolean {
+  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+  return scopes.includes(ADMIN_SCOPE);
+}
+
 async function persistChatSendImages(params: {
   images: ChatImageContent[];
   imageOrder: PromptImageOrderEntry[];
@@ -1833,6 +1838,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: string;
       thinking?: string;
       deliver?: boolean;
+      hideUserMessage?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
       originatingAccountId?: string;
@@ -1899,6 +1905,36 @@ export const chatHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "message or attachment required"),
+      );
+      return;
+    }
+    if (p.hideUserMessage && p.deliver === true) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "hideUserMessage cannot be combined with deliver=true",
+        ),
+      );
+      return;
+    }
+    if (p.hideUserMessage && normalizedAttachments.length > 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "hideUserMessage cannot be combined with attachments",
+        ),
+      );
+      return;
+    }
+    if (p.hideUserMessage && !canHideUserMessage(client)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
       );
       return;
     }
@@ -2161,6 +2197,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       let appendedWebchatAgentMedia = false;
       let userTranscriptUpdatePromise: Promise<void> | null = null;
       const emitUserTranscriptUpdate = async () => {
+        if (p.hideUserMessage) {
+          return;
+        }
         if (userTranscriptUpdatePromise) {
           await userTranscriptUpdatePromise;
           return;
@@ -2193,8 +2232,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         })();
         await userTranscriptUpdatePromise;
       };
+      const runUserTranscriptUpdateQuietly = (label: string) => {
+        void emitUserTranscriptUpdate().catch((transcriptErr) => {
+          context.logGateway.warn(`${label}: ${formatForLog(transcriptErr)}`);
+        });
+      };
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
+        if (p.hideUserMessage) {
+          return;
+        }
         if (transcriptMediaRewriteDone) {
           return;
         }
@@ -2323,11 +2370,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       // Surface accepted inbound turns immediately so transcript subscribers
       // (gateway watchers, MCP bridges, external channel backends) do not wait
       // on model startup, completion, or failure paths before seeing the user turn.
-      void emitUserTranscriptUpdate().catch((transcriptErr) => {
-        context.logGateway.warn(
-          `webchat eager user transcript update failed: ${formatForLog(transcriptErr)}`,
-        );
-      });
+      runUserTranscriptUpdateQuietly("webchat eager user transcript update failed");
 
       let agentRunStarted = false;
       void dispatchInboundMessage({
@@ -2341,7 +2384,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
           onAgentRunStart: (runId) => {
             agentRunStarted = true;
-            void emitUserTranscriptUpdate();
+            runUserTranscriptUpdateQuietly("webchat user transcript update failed on run start");
             const connId = typeof client?.connId === "string" ? client.connId : undefined;
             const wantsToolEvents = hasGatewayClientCap(
               client?.connect?.caps,
@@ -2529,7 +2572,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               });
             }
           } else {
-            void emitUserTranscriptUpdate();
+            runUserTranscriptUpdateQuietly("webchat user transcript update failed after run");
           }
           if (!context.chatAbortedRuns.has(clientRunId)) {
             setGatewayDedupeEntry({
@@ -2549,11 +2592,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat transcript media rewrite failed after error: ${formatForLog(rewriteErr)}`,
             );
           });
-          void emitUserTranscriptUpdate().catch((transcriptErr) => {
-            context.logGateway.warn(
-              `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
-            );
-          });
+          runUserTranscriptUpdateQuietly("webchat user transcript update failed after error");
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,
