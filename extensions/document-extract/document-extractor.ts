@@ -226,7 +226,7 @@ async function extractTextFromPages(
   }
 
   const text = textParts.join("\n\n");
-  return { text: text.trimEnd(), meetsThreshold: extractedTextLength >= minTextChars };
+  return { text: text.trimEnd(), meetsThreshold: text.trim().length >= minTextChars };
 }
 
 async function extractImagesFromPages(
