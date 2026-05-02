@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diagnostics-prometheus",
-  "version": "2026.5.1-beta.2",
+  "version": "2026.5.2",
   "description": "OpenClaw diagnostics Prometheus exporter",
   "repository": {
     "type": "git",
@@ -20,10 +20,10 @@
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {
-      "pluginApi": ">=2026.4.25"
+      "pluginApi": ">=2026.5.2"
     },
     "build": {
-      "openclawVersion": "2026.5.1-beta.2"
+      "openclawVersion": "2026.5.2"
     },
     "release": {
       "publishToClawHub": true,
