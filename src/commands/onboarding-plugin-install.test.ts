@@ -292,7 +292,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(
       update.mock.calls.some(
         ([message]) =>
-          typeof message === "string" && /^Downloading  \[[█░]{16}\] \d+%$/u.test(message),
+          typeof message === "string" && /^Downloading {2}\[[█░]{16}\] \d+%$/u.test(message),
       ),
     ).toBe(true);
 
@@ -353,7 +353,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(
       update.mock.calls.some(
         ([message]) =>
-          typeof message === "string" && /^Resolving  \[[█░]{16}\] \d+%$/u.test(message),
+          typeof message === "string" && /^Resolving {2}\[[█░]{16}\] \d+%$/u.test(message),
       ),
     ).toBe(true);
 
