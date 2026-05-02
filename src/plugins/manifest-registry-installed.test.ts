@@ -290,4 +290,55 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
       }),
     ]);
   });
+
+  it("filters persisted channelConfigs diagnostics for disabled plugins from installed-index", () => {
+    const rootDir = makeTempDir();
+    writePlugin(rootDir, "external-channel", "external-channel-");
+    const index: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "2026.4.25",
+      compatRegistryVersion: "compat-v1",
+      migrationVersion: 1,
+      policyHash: "policy-v1",
+      generatedAtMs: 1777118400000,
+      installRecords: {},
+      plugins: [
+        {
+          pluginId: "external-channel",
+          manifestPath: path.join(rootDir, "openclaw.plugin.json"),
+          manifestHash: "manifest-hash",
+          source: path.join(rootDir, "index.ts"),
+          rootDir,
+          origin: "global",
+          enabled: false,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
+        },
+      ],
+      diagnostics: [
+        {
+          level: "warn",
+          pluginId: "external-channel",
+          message:
+            "channel plugin manifest declares weixin without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads",
+        },
+      ],
+    };
+
+    const registry = loadPluginManifestRegistryForInstalledIndex({
+      index,
+      env: { OPENCLAW_VERSION: "2026.4.25", VITEST: "true" },
+      includeDisabled: true,
+    });
+
+    const channelConfigsWarnings = registry.diagnostics.filter((d) =>
+      d.message.includes("without channelConfigs metadata"),
+    );
+    expect(channelConfigsWarnings).toHaveLength(0);
+  });
 });

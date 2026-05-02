@@ -414,6 +414,17 @@ function buildBundleRecord(params: {
   };
 }
 
+function pushDiagnosticIfAbsent(
+  diagnostics: PluginDiagnostic[],
+  diagnostic: PluginDiagnostic,
+): void {
+  const key = `${diagnostic.pluginId ?? ""}::${diagnostic.message}`;
+  if (diagnostics.some((d) => `${d.pluginId ?? ""}::${d.message}` === key)) {
+    return;
+  }
+  diagnostics.push(diagnostic);
+}
+
 function pushProviderAuthEnvVarsCompatDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
@@ -428,7 +439,7 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
   if (providerIds.length === 0) {
     return;
   }
-  params.diagnostics.push({
+  pushDiagnosticIfAbsent(params.diagnostics, {
     level: "warn",
     pluginId: sanitizeForLog(params.record.id),
     source: sanitizeForLog(params.record.manifestPath),
@@ -461,7 +472,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
     return;
   }
   const safeMissingChannels = missingChannels.map(sanitizeForLog);
-  params.diagnostics.push({
+  pushDiagnosticIfAbsent(params.diagnostics, {
     level: "warn",
     pluginId: sanitizeForLog(params.record.id),
     source: sanitizeForLog(params.record.manifestPath),
@@ -719,7 +730,9 @@ export function loadPluginManifestRegistry(
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-          // Compatibility diagnostics already pushed for the first occurrence of this plugin.
+          // Re-emit compatibility diagnostics for the replacing record; pushDiagnosticIfAbsent
+          // deduplicates so first-occurrence warnings are not doubled.
+          pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
         }
         continue;
       }

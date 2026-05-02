@@ -177,12 +177,23 @@ export function loadPluginManifestRegistryForInstalledIndex(params: {
       }
       const env = params.env ?? process.env;
       const pluginIdSet = params.pluginIds?.length ? new Set(params.pluginIds) : null;
-      const diagnostics = pluginIdSet
-        ? params.index.diagnostics.filter((diagnostic) => {
-            const pluginId = diagnostic.pluginId;
-            return !pluginId || pluginIdSet.has(pluginId);
-          })
-        : params.index.diagnostics;
+      const disabledPluginIds = new Set(
+        params.index.plugins.filter((p) => !p.enabled).map((p) => p.pluginId),
+      );
+      const diagnostics = params.index.diagnostics.filter((diagnostic) => {
+        const pluginId = diagnostic.pluginId;
+        if (pluginIdSet && pluginId && !pluginIdSet.has(pluginId)) {
+          return false;
+        }
+        if (
+          pluginId &&
+          disabledPluginIds.has(pluginId) &&
+          diagnostic.message.includes("without channelConfigs metadata")
+        ) {
+          return false;
+        }
+        return true;
+      });
       const candidates = params.index.plugins
         .filter((plugin) => params.includeDisabled || plugin.enabled)
         .filter((plugin) => !pluginIdSet || pluginIdSet.has(plugin.pluginId))
