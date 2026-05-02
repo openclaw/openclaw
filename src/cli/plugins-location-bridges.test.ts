@@ -1,9 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import type { InstalledPluginStartupInfo } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 
 const readPersistedInstalledPluginIndexMock = vi.fn();
 const loadPluginManifestRegistryForInstalledIndexMock = vi.fn();
+
+const startupInfo: InstalledPluginStartupInfo = {
+  sidecar: false,
+  memory: false,
+  deferConfiguredChannelFullLoadUntilAfterListen: false,
+  agentHarnesses: [],
+};
 
 vi.mock("../plugins/installed-plugin-index-store.js", () => ({
   readPersistedInstalledPluginIndex: (...args: unknown[]) =>
@@ -25,9 +33,10 @@ function makeIndex(record: InstalledPluginIndex["plugins"][number]): InstalledPl
     migrationVersion: 1,
     policyHash: "test",
     generatedAtMs: 1,
-    refreshReason: "test",
+    refreshReason: "manual",
     installRecords: {},
     plugins: [record],
+    diagnostics: [],
   };
 }
 
@@ -78,7 +87,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
         rootDir: "/app/dist/extensions/diagnostics-otel",
         origin: "bundled",
         enabled: true,
-        startup: {},
+        startup: startupInfo,
         compat: [],
         packageInstall: {
           defaultChoice: "clawhub",
@@ -123,7 +132,7 @@ describe("listPersistedBundledPluginLocationBridges", () => {
         rootDir: "/app/dist/extensions/diagnostics-otel",
         origin: "bundled",
         enabled: true,
-        startup: {},
+        startup: startupInfo,
         compat: [],
         packageInstall: {
           defaultChoice: "clawhub",
