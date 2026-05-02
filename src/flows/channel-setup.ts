@@ -326,8 +326,8 @@ export async function setupChannels(
   // Bundled channels (Signal / Tlon / Twitch / Slack ...) reach this code path
   // too whenever their plugin is not yet enabled, because they share the same
   // "installable catalog" bucket. For those we must NOT show "remote install
-  // from npm: <npm-spec>" — the plugin already lives under `extensions/<id>` and the
-  // hint would mislead users into thinking the plugin is missing.
+  // from npm: <npm-spec>" — the plugin already lives under `extensions/<id>`
+  // and the hint would mislead users into thinking the plugin is missing.
   const buildStatusByChannelForSelection = (
     catalogById: ReturnType<typeof getChannelEntries>["catalogById"],
   ): Map<ChannelChoice, ChannelSetupStatus> => {
