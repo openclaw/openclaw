@@ -653,12 +653,19 @@ function stripLeakedReasoningPreamble(text: string): string {
 // Structural contamination detector
 // ---------------------------------------------------------------------------
 
-// Match leaked metadata envelopes: handles fenced schema blocks with optional trailing debris
+// Match leaked metadata envelopes: handles fenced schema blocks with optional trailing debris.
+// Requires a ```json fence to avoid stripping unfenced JSON in normal replies.
+// The trailing ```debris``` alternative handles leaked metadata that appears as an adjacent
+// fenced block. Note: {json} separator lines between objects are a known gap (very rare)
+// and would require a more complex multi-block pattern.
 const CONTAM_ENVELOPE_RE =
   /(?:Conversation info[^\n]*\n)?```json[\s\S]*?"schema"[\s\S]*?```(?:[\s\S]*?```[^\n]*```)?/gs;
 const CONTAM_CSS_RE =
   /(?:^|\n)\s*(?:[\w.-]+\s*\{\s*)?(?:[a-z-]+\s*:\s*[^;]+;\s*){2,}(?:\}\s*)?(?:\n|$)/gm;
 const CONTAM_FENCE_RE = /```\s*```/g;
+// Match leaked method-call debris: lines starting with .methodName(...)
+// This catches leaked internal output like .copyOf(randID)); but won't match
+// legitimate code that starts with a variable name (e.g. client.send(...)).
 const CONTAM_CODE_DEBRIS_RE = /(?:^|\n)\s*\.\w+\([^)]*\)\)?;?/gm;
 // Footer scrubber: match trigger line + subsequent short lines without sentence-end punctuation
 // Bounded to avoid eating legitimate reply content after footer-like phrases
@@ -682,6 +689,8 @@ function stripStructuralContamination(text: string): string {
 
   // Always strip envelope matches (they're always contamination, never legitimate code)
   let result = text.replace(CONTAM_ENVELOPE_RE, "");
+
+  // Recompute code regions after each mutation to avoid stale offsets
   result = result.replace(CONTAM_CSS_RE, (match, offset) => {
     if (isInsideCodeAt(offset, match.length, result)) {
       return match;
@@ -689,18 +698,21 @@ function stripStructuralContamination(text: string): string {
     return "";
   });
   result = result.replace(CONTAM_FENCE_RE, (match, offset) => {
+    // Recompute regions after CSS removal
     if (isInsideCodeAt(offset, match.length, result)) {
       return match;
     }
     return "";
   });
   result = result.replace(CONTAM_CODE_DEBRIS_RE, (match, offset) => {
+    // Recompute regions after fence removal
     if (isInsideCodeAt(offset, match.length, result)) {
       return match;
     }
     return "";
   });
   result = result.replace(CONTAM_FOOTER_RE, (match, offset) => {
+    // Recompute regions after debris removal
     if (isInsideCodeAt(offset, match.length, result)) {
       return match;
     }
