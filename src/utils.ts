@@ -152,6 +152,7 @@ export function resolveConfigDir(
 }
 
 export function resolveHomeDir(): string | undefined {
+  if (typeof process === "undefined") return undefined;
   return resolveEffectiveHomeDir(process.env, os.homedir);
 }
 
@@ -160,7 +161,7 @@ function resolveHomeDisplayPrefix(): { home: string; prefix: string } | undefine
   if (!home) {
     return undefined;
   }
-  const explicitHome = process.env.OPENCLAW_HOME?.trim();
+  const explicitHome = typeof process !== "undefined" ? process.env.OPENCLAW_HOME?.trim() : undefined;
   if (explicitHome) {
     return { home, prefix: "$OPENCLAW_HOME" };
   }

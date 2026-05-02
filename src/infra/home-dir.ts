@@ -2,6 +2,12 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
+// Browser-safe accessors: when bundled for the Web UI, `process` is undefined.
+const isBrowser = typeof process === "undefined";
+const safeEnv = (): NodeJS.ProcessEnv => (isBrowser ? ({} as NodeJS.ProcessEnv) : process.env);
+const safeCwd = (): string => (isBrowser ? "/" : process.cwd());
+const safeHomedir = (): string => (isBrowser ? "/" : os.homedir());
+
 function normalize(value: string | undefined): string | undefined {
   const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
@@ -14,16 +20,16 @@ function normalize(value: string | undefined): string | undefined {
 }
 
 export function resolveEffectiveHomeDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
+  env: NodeJS.ProcessEnv = safeEnv(),
+  homedir: () => string = safeHomedir,
 ): string | undefined {
   const raw = resolveRawHomeDir(env, homedir);
   return raw ? path.resolve(raw) : undefined;
 }
 
 export function resolveOsHomeDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
+  env: NodeJS.ProcessEnv = safeEnv(),
+  homedir: () => string = safeHomedir,
 ): string | undefined {
   const raw = resolveRawOsHomeDir(env, homedir);
   return raw ? path.resolve(raw) : undefined;
@@ -66,17 +72,17 @@ function normalizeSafe(homedir: () => string): string | undefined {
 }
 
 export function resolveRequiredHomeDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
+  env: NodeJS.ProcessEnv = safeEnv(),
+  homedir: () => string = safeHomedir,
 ): string {
-  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(safeCwd());
 }
 
 export function resolveRequiredOsHomeDir(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir: () => string = os.homedir,
+  env: NodeJS.ProcessEnv = safeEnv(),
+  homedir: () => string = safeHomedir,
 ): string {
-  return resolveOsHomeDir(env, homedir) ?? path.resolve(process.cwd());
+  return resolveOsHomeDir(env, homedir) ?? path.resolve(safeCwd());
 }
 
 export function expandHomePrefix(
@@ -92,7 +98,7 @@ export function expandHomePrefix(
   }
   const home =
     normalize(opts?.home) ??
-    resolveEffectiveHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir);
+    resolveEffectiveHomeDir(opts?.env ?? safeEnv(), opts?.homedir ?? safeHomedir);
   if (!home) {
     return input;
   }
@@ -112,7 +118,7 @@ export function resolveHomeRelativePath(
   }
   if (trimmed.startsWith("~")) {
     const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
+      home: resolveRequiredHomeDir(opts?.env ?? safeEnv(), opts?.homedir ?? safeHomedir),
       env: opts?.env,
       homedir: opts?.homedir,
     });
@@ -134,7 +140,7 @@ export function resolveOsHomeRelativePath(
   }
   if (trimmed.startsWith("~")) {
     const expanded = expandHomePrefix(trimmed, {
-      home: resolveRequiredOsHomeDir(opts?.env ?? process.env, opts?.homedir ?? os.homedir),
+      home: resolveRequiredOsHomeDir(opts?.env ?? safeEnv(), opts?.homedir ?? safeHomedir),
       env: opts?.env,
       homedir: opts?.homedir,
     });

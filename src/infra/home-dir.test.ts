@@ -212,3 +212,16 @@ describe("resolveOsHomeRelativePath", () => {
     ).toBe(path.resolve("/home/alice/docs"));
   });
 });
+
+describe("browser environment (process undefined)", () => {
+  it("resolveRequiredHomeDir returns fallback when process is unavailable", () => {
+    // Simulate browser: pass empty env and a homedir that returns "/"
+    const result = resolveRequiredHomeDir({} as NodeJS.ProcessEnv, () => "/");
+    expect(result).toBe("/");
+  });
+
+  it("resolveEffectiveHomeDir returns undefined with empty env", () => {
+    const result = resolveEffectiveHomeDir({} as NodeJS.ProcessEnv, () => "");
+    expect(result).toBeUndefined();
+  });
+});
