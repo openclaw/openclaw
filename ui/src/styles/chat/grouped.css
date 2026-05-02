@@ -24,7 +24,7 @@
   gap: 2px;
   flex: 1 1 auto;
   width: 100%;
-  max-width: min(900px, 68%);
+  max-width: var(--chat-message-max-width, min(900px, 68%));
   align-items: flex-start;
   min-width: 0;
 }

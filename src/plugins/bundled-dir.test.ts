@@ -358,6 +358,24 @@ describe("resolveBundledPluginsDir", () => {
     expect(fs.readdirSync(bundledDir ?? "")).toEqual([]);
   });
 
+  it("separates tilde override cache entries by OPENCLAW_HOME", () => {
+    const homeA = makeRepoRoot("openclaw-bundled-dir-home-a-");
+    const homeB = makeRepoRoot("openclaw-bundled-dir-home-b-");
+    seedBundledPluginTree(homeA, "bundled", "memory-core");
+    seedBundledPluginTree(homeB, "bundled", "discord");
+    const envBase = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: "~/bundled",
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      VITEST: "true",
+    } satisfies NodeJS.ProcessEnv;
+
+    const bundledA = resolveBundledPluginsDir({ ...envBase, OPENCLAW_HOME: homeA });
+    const bundledB = resolveBundledPluginsDir({ ...envBase, OPENCLAW_HOME: homeB });
+
+    expect(fs.realpathSync(bundledA ?? "")).toBe(fs.realpathSync(path.join(homeA, "bundled")));
+    expect(fs.realpathSync(bundledB ?? "")).toBe(fs.realpathSync(path.join(homeB, "bundled")));
+  });
+
   it("ignores an existing override under an argv1-derived fake package root", () => {
     const installedRoot = createOpenClawRoot({
       prefix: "openclaw-bundled-dir-argv-override-reject-",

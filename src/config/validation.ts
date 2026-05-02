@@ -617,6 +617,7 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
   opts?: {
+    sourceRaw?: unknown;
     touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
@@ -633,7 +634,7 @@ export function validateConfigObjectRaw(
   });
   const legacyIssues = findLegacyConfigIssues(
     normalizedRaw,
-    normalizedRaw,
+    opts?.sourceRaw ?? normalizedRaw,
     extraLegacyRules,
     opts?.touchedPaths,
   );
@@ -686,8 +687,11 @@ export function validateConfigObjectRaw(
 
 export function validateConfigObject(
   raw: unknown,
+  opts?: {
+    sourceRaw?: unknown;
+  },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(raw);
+  const result = validateConfigObjectRaw(raw, opts);
   if (!result.ok) {
     return result;
   }
@@ -716,6 +720,7 @@ type ValidateConfigWithPluginsParams = {
   loadPluginMetadataSnapshot?: (
     config: OpenClawConfig,
   ) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  sourceRaw?: unknown;
 };
 
 export function validateConfigObjectWithPlugins(
@@ -728,6 +733,7 @@ export function validateConfigObjectWithPlugins(
     pluginValidation: params?.pluginValidation ?? "full",
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
+    sourceRaw: params?.sourceRaw,
   });
 }
 
@@ -741,6 +747,7 @@ export function validateConfigObjectRawWithPlugins(
     pluginValidation: params?.pluginValidation ?? "full",
     pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
     loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
+    sourceRaw: params?.sourceRaw,
   });
 }
 
@@ -748,7 +755,9 @@ function validateConfigObjectWithPluginsBase(
   raw: unknown,
   opts: ValidateConfigWithPluginsParams & { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  const base = opts.applyDefaults
+    ? validateConfigObject(raw, { sourceRaw: opts.sourceRaw })
+    : validateConfigObjectRaw(raw, { sourceRaw: opts.sourceRaw });
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }

@@ -7,14 +7,21 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
+- Plugins/diagnostics: make diagnostics OpenTelemetry and Prometheus ClawHub-first installs while keeping npm fallback metadata for release cutovers. Thanks @vincentkoc.
+- Plugins/onboarding: carry ClawHub install metadata through channel setup catalogs so missing channel plugins can install from ClawHub before npm/local fallback. Thanks @vincentkoc.
+- Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
 
 ### Fixes
 
 - Gateway/session history: recover Discord sender labels from hidden runtime-context rows without exposing those rows in dashboard or history output. Thanks @Squirbie.
+- Control UI: allow deployments to configure grouped chat message max-width with a validated `gateway.controlUi.chatMessageMaxWidth` setting instead of patching bundled CSS after upgrades. Fixes #67935. Thanks @xiew4589-lang.
 - Control UI/sessions: bound the default Sessions tab query to recent activity and fewer rows, avoiding expensive full-history loads while keeping filters editable. Fixes #76050. (#76051) Thanks @Neomail2.
+- Plugins/doctor: repair missing configured provider and channel plugins from ClawHub before npm fallback, preserving ClawPack metadata in the install record. Thanks @vincentkoc.
 - Gateway/channels: cap startup fanout at four channel/account handoffs and recover from Bonjour ciao self-probe races, reducing Windows startup stalls with many Telegram accounts. Fixes #75687.
+- Gateway/sessions: keep `sessions.list` polling responsive on large session stores by reusing list-safe session cache/indexes and returning a lightweight compaction checkpoint preview instead of heavyweight summaries. Thanks @rolandrscheel.
 - CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
 - Agents/failover: exempt run-level timeouts that fire during tool execution from model fallback, timeout-triggered compaction, and generic timeout payload synthesis. Long `process(poll)`, browser, or `exec` tool calls that exceed `agents.defaults.timeoutSeconds` previously rotated auth profiles, switched to a fallback model, and surfaced a misleading "LLM request timed out" error even though the primary model had already responded. Mirrors the existing `timedOutDuringCompaction` precedent (#46889). Fixes #52147. (#75873) Thanks @simonusa.
+- Docker: copy Bun 1.3.13 from a digest-pinned image and keep CI on the same version. Fixes #74356. Thanks @fede-kamel and @sallyom.
 
 ## 2026.5.2
 
@@ -66,6 +73,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/chat: show inline feedback when local slash-command dispatch is unavailable or fails unexpectedly instead of clearing the composer silently. Fixes #52105. Thanks @MooreQiao.
 - Memory/markdown: replace CRLF managed blocks in place and collapse duplicate marker blocks without rewriting unmanaged markdown, so Dreaming and Memory Wiki files self-heal from repeated generated sections. Fixes #75491; supersedes #75495, #75810, and #76008. Thanks @asaenokkostya-coder, @ottodeng, @everettjf, and @lrg913427-dot.
 - Agents/tools: return critical tool-loop circuit-breaker stops as blocked tool results instead of thrown tool failures, so models see the guardrail and stop retrying the same call. Thanks @rayraiser.
+- Agents/sessions: preserve pre-existing runtime model and context window after heartbeat turns so a per-run heartbeat model override does not bleed into shared-session status. Fixes #75452. Thanks @zhangguiping-xydt.
 - Model commands: clarify direct and inline `/model` acknowledgements for non-default selections as session-scoped. Thanks @addu2612.
 - Doctor/gateway: stop warning that non-existent, unconfigured user-bin directories are required in the Gateway service PATH. Fixes #76017. Thanks @xiphis.
 - TUI/chat: skip full provider model normalization during context-window warmup while preserving provider-owned context metadata, avoiding cold-start stalls with large model registries. Thanks @547895019.

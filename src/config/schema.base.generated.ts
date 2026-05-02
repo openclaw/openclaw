@@ -22293,6 +22293,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
               },
+              chatMessageMaxWidth: {
+                title: "Control UI Chat Message Max Width",
+                description:
+                  'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
+              },
               allowedOrigins: {
                 type: "array",
                 items: {
@@ -25987,6 +25992,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Allow External Control UI Embed URLs",
       help: "DANGEROUS toggle that allows hosted embeds to load absolute external http(s) URLs. Keep this off unless your Control UI intentionally embeds trusted third-party pages; hosted /__openclaw__/canvas and /__openclaw__/a2ui documents do not need it.",
       tags: ["security", "access", "network", "advanced"],
+    },
+    "gateway.controlUi.chatMessageMaxWidth": {
+      label: "Control UI Chat Message Max Width",
+      help: 'Optional CSS max-width for grouped Control UI chat messages, for example "960px", "82%", or "min(1280px, 82%)". Values are validated against a constrained width grammar before reaching the browser.',
+      tags: ["advanced"],
     },
     "gateway.controlUi.allowedOrigins": {
       label: "Control UI Allowed Origins",

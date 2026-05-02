@@ -34,6 +34,11 @@ const SUPPORTED_SUITES = new Set([
   "dev-update",
 ]);
 
+export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
+  1200,
+);
+
 const providerConfig = {
   openai: {
     extensionId: "openai",
@@ -41,7 +46,7 @@ const providerConfig = {
     authChoice: "openai-api-key",
     model: "openai/gpt-5.4",
     baseUrl: "https://api.openai.com/v1",
-    timeoutSeconds: 600,
+    timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
   anthropic: {
     extensionId: "anthropic",
@@ -112,7 +117,6 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
-export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = 600;
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
 
 if (isMainModule()) {
@@ -149,6 +153,18 @@ export function parseArgs(argv) {
     index += 1;
   }
   return parsed;
+}
+
+function parsePositiveIntegerEnv(name, fallback) {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  return value;
 }
 
 export function looksLikeReleaseVersionRef(ref) {
