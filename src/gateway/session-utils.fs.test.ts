@@ -4,7 +4,10 @@ import path from "node:path";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { clearSessionTranscriptIndexCache } from "./session-transcript-index.fs.js";
+import {
+  clearSessionTranscriptIndexCache,
+  readSessionTranscriptIndex,
+} from "./session-transcript-index.fs.js";
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
@@ -26,6 +29,7 @@ import {
   readSessionTitleFieldsFromTranscript,
   readSessionPreviewItemsFromTranscript,
   resolveSessionTranscriptCandidates,
+  visitSessionMessagesAsync,
 } from "./session-utils.fs.js";
 
 function registerTempSessionStore(
@@ -62,7 +66,7 @@ function buildBasicSessionTranscript(
   ];
 }
 
-function buildRuntimeContextSenderRow(label?: string): unknown {
+function buildRuntimeContextSenderRow(label?: string, suffix = ""): unknown {
   return {
     type: "custom_message",
     customType: "openclaw.runtime-context",
@@ -76,6 +80,7 @@ function buildRuntimeContextSenderRow(label?: string): unknown {
           "```json",
           JSON.stringify({ label, id: "358611388488351744" }),
           "```",
+          suffix,
         ].join("\n")
       : "OpenClaw runtime context with no parseable sender metadata.",
   };
@@ -599,6 +604,28 @@ describe("readSessionMessages", () => {
     );
   });
 
+  test("does not cache hidden runtime-context payloads in async transcript indexes", async () => {
+    const sessionId = "test-session-runtime-context-index-minimal";
+    const hiddenPayload = `hidden-payload-${"x".repeat(32 * 1024)}`;
+    const transcriptPath = writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "Hello from Discord" } },
+      buildRuntimeContextSenderRow("Yuka", hiddenPayload),
+      { message: { role: "assistant", content: "Hello" } },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const index = await readSessionTranscriptIndex(transcriptPath);
+    const serializedIndex = JSON.stringify(index);
+    expect(serializedIndex).toContain("Yuka");
+    expect(serializedIndex).not.toContain(hiddenPayload);
+    expect(index?.records).toEqual([
+      expect.objectContaining({ visible: true, seq: 1 }),
+      expect.objectContaining({ visible: false, runtimeContextSenderLabel: "Yuka" }),
+      expect.objectContaining({ visible: true, seq: 2 }),
+    ]);
+  });
+
   test("attaches runtime-context sender labels across system and compaction markers", () => {
     const sessionId = "test-session-runtime-context-after-markers";
     writeTranscript(tmpDir, sessionId, [
@@ -648,6 +675,44 @@ describe("readSessionMessages", () => {
       expect(out[0]).not.toHaveProperty("senderLabel");
     },
   );
+
+  test("visits async messages without prebuilding the full message list", async () => {
+    const sessionId = "test-session-runtime-context-visit-async";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "Hello from Discord" } },
+      buildRuntimeContextSenderRow("Yuka"),
+      { message: { role: "assistant", content: "Hello" } },
+    ]);
+    clearSessionTranscriptIndexCache();
+
+    const visited: Array<{ message: unknown; seq: number }> = [];
+    const count = await visitSessionMessagesAsync(
+      sessionId,
+      storePath,
+      undefined,
+      (message, seq) => {
+        visited.push({ message, seq });
+      },
+      { mode: "full", reason: "test runtime context sender label visitor" },
+    );
+
+    expect(count).toBe(2);
+    expect(visited).toEqual([
+      {
+        seq: 1,
+        message: expect.objectContaining({
+          role: "user",
+          content: "Hello from Discord",
+          senderLabel: "Yuka",
+        }),
+      },
+      {
+        seq: 2,
+        message: expect.objectContaining({ role: "assistant", content: "Hello" }),
+      },
+    ]);
+  });
 
   test("reads recent messages from the transcript tail without loading the whole file", () => {
     const sessionId = "test-session-recent-tail";

@@ -370,18 +370,21 @@ function extractRuntimeContextSenderLabel(entry: Record<string, unknown>): strin
   return typeof entry.content === "string" ? extractInboundSenderLabel(entry.content) : null;
 }
 
+function getTranscriptMessageRole(message: unknown): string {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return "";
+  }
+  const role = (message as { role?: unknown }).role;
+  return typeof role === "string" ? normalizeLowercaseStringOrEmpty(role) : "";
+}
+
 function attachSenderLabelToPreviousUser(messages: unknown[], senderLabel: string | null): boolean {
   if (!senderLabel) {
     return false;
   }
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      continue;
-    }
-    const record = message as Record<string, unknown>;
-    const role =
-      typeof record.role === "string" ? normalizeLowercaseStringOrEmpty(record.role) : "";
+    const role = getTranscriptMessageRole(message);
     if (!role) {
       continue;
     }
@@ -391,6 +394,7 @@ function attachSenderLabelToPreviousUser(messages: unknown[], senderLabel: strin
     if (role !== "user") {
       return false;
     }
+    const record = message as Record<string, unknown>;
     if (typeof record.senderLabel === "string" && record.senderLabel.trim()) {
       return false;
     }
@@ -401,6 +405,28 @@ function attachSenderLabelToPreviousUser(messages: unknown[], senderLabel: strin
     return true;
   }
   return false;
+}
+
+type PendingIndexedMessage = {
+  message: unknown;
+  seq: number;
+};
+
+function attachSenderLabelToPendingUser(
+  pending: PendingIndexedMessage[],
+  senderLabel: string | null,
+): boolean {
+  const messages = pending.map((entry) => entry.message);
+  const changed = attachSenderLabelToPreviousUser(messages, senderLabel);
+  if (changed) {
+    for (let index = 0; index < messages.length; index += 1) {
+      const entry = pending[index];
+      if (entry) {
+        entry.message = messages[index];
+      }
+    }
+  }
+  return changed;
 }
 
 function transcriptRecordsToMessages(records: TranscriptRecordSource[]): unknown[] {
@@ -564,13 +590,7 @@ export async function visitSessionMessagesAsync(
   if (!index) {
     return 0;
   }
-  for (const message of indexedTranscriptRecordsToMessages(index.records)) {
-    const seq = extractOpenClawTranscriptSeq(message);
-    if (typeof seq === "number") {
-      visit(message, seq);
-    }
-  }
-  return index.entries.length;
+  return visitIndexedTranscriptRecords(index.records, visit);
 }
 
 export async function readSessionMessageCountAsync(
@@ -730,19 +750,53 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
 }
 
 function indexedTranscriptRecordsToMessages(records: IndexedTranscriptRecord[]): unknown[] {
-  return transcriptRecordsToMessages(records);
+  const messages: unknown[] = [];
+  visitIndexedTranscriptRecords(records, (message) => {
+    messages.push(message);
+  });
+  return messages;
 }
 
-function extractOpenClawTranscriptSeq(message: unknown): number | undefined {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return undefined;
+function visitIndexedTranscriptRecords(
+  records: IndexedTranscriptRecord[],
+  visit: (message: unknown, seq: number) => void,
+): number {
+  const pending: PendingIndexedMessage[] = [];
+  let visited = 0;
+  const flushPending = () => {
+    for (const entry of pending) {
+      visit(entry.message, entry.seq);
+      visited += 1;
+    }
+    pending.length = 0;
+  };
+
+  for (const record of records) {
+    if (!record.visible) {
+      attachSenderLabelToPendingUser(pending, record.runtimeContextSenderLabel);
+      continue;
+    }
+    const message = parsedSessionEntryToMessage(record.record, record.seq);
+    if (!message) {
+      continue;
+    }
+    const role = getTranscriptMessageRole(message);
+    if (role === "user") {
+      flushPending();
+      pending.push({ message, seq: record.seq });
+      continue;
+    }
+    if (role === "system" && pending.length > 0) {
+      pending.push({ message, seq: record.seq });
+      continue;
+    }
+    flushPending();
+    visit(message, record.seq);
+    visited += 1;
   }
-  const meta = (message as { __openclaw?: unknown }).__openclaw;
-  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
-    return undefined;
-  }
-  const seq = (meta as { seq?: unknown }).seq;
-  return typeof seq === "number" && Number.isFinite(seq) ? seq : undefined;
+
+  flushPending();
+  return visited;
 }
 
 export {
