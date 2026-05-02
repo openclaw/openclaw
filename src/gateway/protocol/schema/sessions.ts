@@ -80,6 +80,15 @@ export const SessionsPreviewParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsDescribeParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    includeDerivedTitles: Type.Optional(Type.Boolean()),
+    includeLastMessage: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsResolveParamsSchema = Type.Object(
   {
     key: Type.Optional(NonEmptyString),

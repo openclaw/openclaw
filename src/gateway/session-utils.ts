@@ -1688,7 +1688,7 @@ export function loadGatewaySessionRow(
  */
 const SESSIONS_LIST_YIELD_BATCH_SIZE = 10;
 
-function filterAndSortSessionEntries(params: {
+export function filterAndSortSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;

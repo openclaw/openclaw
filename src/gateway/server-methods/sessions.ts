@@ -57,6 +57,7 @@ import {
   validateSessionsCompactionRestoreParams,
   validateSessionsCreateParams,
   validateSessionsDeleteParams,
+  validateSessionsDescribeParams,
   validateSessionsListParams,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
@@ -76,6 +77,7 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
+  buildGatewaySessionRow,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
@@ -823,6 +825,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+  },
+  "sessions.describe": ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    if (!key) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
+    const store = loadSessionStore(storePath);
+    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+    if (!entry) {
+      respond(true, { session: null }, undefined);
+      return;
+    }
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key: target.canonicalKey,
+      entry,
+      includeDerivedTitles: params.includeDerivedTitles,
+      includeLastMessage: params.includeLastMessage,
+      transcriptUsageMaxBytes: 64 * 1024,
+    });
+    respond(true, { session: row }, undefined);
   },
   "sessions.resolve": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
