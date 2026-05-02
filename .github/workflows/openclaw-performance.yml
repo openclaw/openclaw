@@ -206,7 +206,6 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          CLAWGRIT_REPORTS_TOKEN_PRESENT: ${{ steps.clawgrit.outputs.present || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -223,6 +222,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          CLAWGRIT_REPORTS_TOKEN_PRESENT: ${{ steps.clawgrit.outputs.present || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -282,7 +282,7 @@ jobs:
           ref_slug="$(printf '%s' "${GITHUB_REF_NAME}" | tr -c 'A-Za-z0-9._-' '-')"
           run_slug="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           report_url=""
-          if [[ "$CLAWGRIT_REPORTS_TOKEN_PRESENT" == "true" ]]; then
+          if [[ "${CLAWGRIT_REPORTS_TOKEN_PRESENT:-false}" == "true" ]]; then
             report_url="https://github.com/openclaw/clawgrit-reports/tree/main/openclaw-performance/${ref_slug}/${run_slug}/${LANE_ID}"
           fi
           summary_path="$SUMMARY_DIR/${LANE_ID}.md"
