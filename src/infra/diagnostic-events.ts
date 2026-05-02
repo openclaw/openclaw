@@ -234,7 +234,8 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
     | "unknown_tool_repeat"
     | "known_poll_no_progress"
     | "global_circuit_breaker"
-    | "ping_pong";
+    | "ping_pong"
+    | "consecutive_errors";
   count: number;
   message: string;
   pairedToolName?: string;

@@ -11,7 +11,8 @@ type LoopDetectorKind =
   | "unknown_tool_repeat"
   | "known_poll_no_progress"
   | "global_circuit_breaker"
-  | "ping_pong";
+  | "ping_pong"
+  | "consecutive_errors";
 
 type LoopDetectionResult =
   | { stuck: false }
@@ -30,6 +31,7 @@ export const WARNING_THRESHOLD = 10;
 export const UNKNOWN_TOOL_THRESHOLD = 10;
 export const CRITICAL_THRESHOLD = 20;
 export const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
+export const CONSECUTIVE_ERROR_THRESHOLD = 10;
 const DEFAULT_LOOP_DETECTION_CONFIG = {
   enabled: false,
   historySize: TOOL_CALL_HISTORY_SIZE,
@@ -37,6 +39,7 @@ const DEFAULT_LOOP_DETECTION_CONFIG = {
   unknownToolThreshold: UNKNOWN_TOOL_THRESHOLD,
   criticalThreshold: CRITICAL_THRESHOLD,
   globalCircuitBreakerThreshold: GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
+  consecutiveErrorThreshold: CONSECUTIVE_ERROR_THRESHOLD,
   detectors: {
     genericRepeat: true,
     knownPollNoProgress: true,
@@ -51,6 +54,7 @@ type ResolvedLoopDetectionConfig = {
   unknownToolThreshold: number;
   criticalThreshold: number;
   globalCircuitBreakerThreshold: number;
+  consecutiveErrorThreshold: number;
   detectors: {
     genericRepeat: boolean;
     knownPollNoProgress: boolean;
@@ -113,6 +117,10 @@ function resolveLoopDetectionConfig(config?: ToolLoopDetectionConfig): ResolvedL
     ),
     criticalThreshold,
     globalCircuitBreakerThreshold,
+    consecutiveErrorThreshold: asPositiveInt(
+      config?.consecutiveErrorThreshold,
+      DEFAULT_LOOP_DETECTION_CONFIG.consecutiveErrorThreshold,
+    ),
     detectors: {
       genericRepeat:
         config?.detectors?.genericRepeat ?? DEFAULT_LOOP_DETECTION_CONFIG.detectors.genericRepeat,
@@ -491,6 +499,21 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
 
+function getConsecutiveErrorStreak(history: Array<{ resultHash?: string }>): number {
+  let streak = 0;
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (!record?.resultHash) {
+      break;
+    }
+    if (!record.resultHash.startsWith("error:")) {
+      break;
+    }
+    streak += 1;
+  }
+  return streak;
+}
+
 /**
  * Detect if an agent is stuck in a repetitive tool call loop.
  * Checks if the same tool+params combination has been called excessively.
@@ -606,6 +629,21 @@ export function detectToolCallLoop(
       message: `WARNING: You are alternating between repeated tool-call patterns (${pingPong.count} consecutive calls). This looks like a ping-pong loop; stop retrying and report the task as failed.`,
       pairedToolName: pingPong.pairedToolName,
       warningKey: pingPongWarningKey,
+    };
+  }
+
+  const consecutiveErrorStreak = getConsecutiveErrorStreak(history);
+  if (consecutiveErrorStreak >= resolvedConfig.consecutiveErrorThreshold) {
+    log.error(
+      `Consecutive tool errors detected: ${consecutiveErrorStreak} failing calls currentTool=${toolName}`,
+    );
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "consecutive_errors",
+      count: consecutiveErrorStreak,
+      message: `CRITICAL: ${consecutiveErrorStreak} consecutive tool calls failed in this run. Stop retrying unrelated tools and report the shared failure instead of continuing the error cascade.`,
+      warningKey: `consecutive-errors:${consecutiveErrorStreak}`,
     };
   }
 
