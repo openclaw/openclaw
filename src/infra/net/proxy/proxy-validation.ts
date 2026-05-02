@@ -5,7 +5,6 @@ import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
 import { createHttp1ProxyAgent } from "../undici-runtime.js";
 
 export const DEFAULT_PROXY_VALIDATION_ALLOWED_URLS = ["https://example.com/"] as const;
-export const DEFAULT_PROXY_VALIDATION_DENIED_URLS = ["http://127.0.0.1/"] as const;
 
 export const DEFAULT_PROXY_VALIDATION_TIMEOUT_MS = 5000;
 const DENIED_CANARY_HEADER = "x-openclaw-proxy-validation-canary";
