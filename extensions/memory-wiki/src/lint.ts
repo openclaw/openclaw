@@ -4,6 +4,7 @@ import {
   replaceManagedMarkdownBlock,
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
 import {
   assessPageFreshness,
   buildClaimContradictionClusters,
@@ -12,7 +13,7 @@ import {
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import { renderWikiMarkdown, type WikiPageSummary } from "./markdown.js";
+import { renderWikiMarkdown, slugifyWikiSegment, type WikiPageSummary } from "./markdown.js";
 
 type MemoryWikiLintIssue = {
   severity: "error" | "warning";
@@ -50,18 +51,63 @@ function toExpectedPageType(page: WikiPageSummary): string {
   return page.kind;
 }
 
+function normalizeLintTarget(value: string): string {
+  const withoutFragment = value.trim().replace(/\\/g, "/").split("#")[0] ?? "";
+  const withoutQuery = withoutFragment.split("?")[0] ?? "";
+  return normalizeLowercaseStringOrEmpty(
+    withoutQuery
+      .replace(/\.md$/i, "")
+      .replace(/^\.\/+/, "")
+      .replace(/\/+$/, ""),
+  );
+}
+
+function addTargetKey(keys: Set<string>, raw: string | undefined) {
+  const normalized = raw ? normalizeLintTarget(raw) : "";
+  if (!normalized) {
+    return;
+  }
+  keys.add(normalized);
+  const basename = path.basename(normalized);
+  keys.add(basename);
+  keys.add(slugifyWikiSegment(normalized));
+  keys.add(slugifyWikiSegment(basename));
+}
+
+function addPathSuffixTargetKeys(keys: Set<string>, raw: string | undefined) {
+  const normalized = raw ? normalizeLintTarget(raw) : "";
+  if (!normalized) {
+    return;
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  for (let index = 0; index < parts.length; index += 1) {
+    addTargetKey(keys, parts.slice(index).join("/"));
+  }
+}
+
+function buildPageLinkTargetKeys(page: WikiPageSummary): Set<string> {
+  const keys = new Set<string>();
+  addTargetKey(keys, page.relativePath);
+  addTargetKey(keys, page.title);
+  addTargetKey(keys, page.id);
+  addPathSuffixTargetKeys(keys, page.sourcePath);
+  addPathSuffixTargetKeys(keys, page.bridgeRelativePath);
+  addPathSuffixTargetKeys(keys, page.unsafeLocalRelativePath);
+  return keys;
+}
+
 function collectBrokenLinkIssues(pages: WikiPageSummary[]): MemoryWikiLintIssue[] {
   const validTargets = new Set<string>();
   for (const page of pages) {
-    const withoutExtension = page.relativePath.replace(/\.md$/i, "");
-    validTargets.add(withoutExtension);
-    validTargets.add(path.basename(withoutExtension));
+    for (const target of buildPageLinkTargetKeys(page)) {
+      validTargets.add(target);
+    }
   }
 
   const issues: MemoryWikiLintIssue[] = [];
   for (const page of pages) {
     for (const linkTarget of page.linkTargets) {
-      if (!validTargets.has(linkTarget)) {
+      if (!validTargets.has(normalizeLintTarget(linkTarget))) {
         issues.push({
           severity: "warning",
           category: "links",
