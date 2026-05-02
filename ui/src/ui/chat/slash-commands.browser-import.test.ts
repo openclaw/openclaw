@@ -2,9 +2,12 @@
 import { readFile } from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 
+type SlashCommandsModule = typeof import("./slash-commands.js");
+const browserImportPath = "./slash-commands.ts?browser-import";
+
 describe("slash command browser import", () => {
   it("builds fallback commands from the browser-safe shared registry", async () => {
-    const mod = await import("./slash-commands.ts?browser-import");
+    const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
     expect(mod.SLASH_COMMANDS.find((command) => command.name === "think")).toMatchObject({
       name: "think",
@@ -22,7 +25,7 @@ describe("slash command browser import", () => {
       new URL("../../../../src/auto-reply/commands-registry.data.ts", import.meta.url),
       "utf8",
     );
-    const mod = await import("./slash-commands.ts?browser-import");
+    const mod = (await import(browserImportPath)) as SlashCommandsModule;
 
     expect(mod.SLASH_COMMANDS.some((command) => command.name === "think")).toBe(true);
     expect(slashCommands).toContain("commands-registry.shared.js");
