@@ -5,7 +5,13 @@ import {
   normalizeBundledPluginStringList,
   resolveBundledPluginScanDir,
 } from "../../bundled-plugin-scan.js";
-import { PLUGIN_MANIFEST_FILENAME, type PluginManifest } from "../../manifest.js";
+import {
+  getPackageManifestMetadata,
+  isPackageIncludedInCoreBundle,
+  PLUGIN_MANIFEST_FILENAME,
+  type PackageManifest,
+  type PluginManifest,
+} from "../../manifest.js";
 import { resolveLoaderPackageRoot } from "../../sdk-alias.js";
 import { uniqueStrings } from "../shared.js";
 
@@ -65,17 +71,7 @@ function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
 }
 
 function isExplicitlyDownloadablePlugin(packageJson: Record<string, unknown> | undefined): boolean {
-  const openclaw = packageJson?.openclaw;
-  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
-    return false;
-  }
-  const bundle = (openclaw as { bundle?: unknown }).bundle;
-  return (
-    bundle !== null &&
-    typeof bundle === "object" &&
-    !Array.isArray(bundle) &&
-    (bundle as { includeInCore?: unknown }).includeInCore === false
-  );
+  return !isPackageIncludedInCoreBundle(getPackageManifestMetadata(packageJson as PackageManifest));
 }
 
 function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {

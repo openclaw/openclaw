@@ -9,6 +9,7 @@ import {
 } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { type PluginManifestRecord, type PluginManifestRegistry } from "./manifest-registry.js";
+import { isPackageIncludedInCoreBundle } from "./manifest.js";
 import {
   loadPluginRegistrySnapshot,
   normalizePluginsConfigWithRegistry,
@@ -71,8 +72,14 @@ function resolveProviderSurfacePluginIdSet(
     resolveManifestRegistry({
       ...params,
       includeDisabled: true,
-    }).plugins.flatMap((plugin) => (plugin.providers.length > 0 ? [plugin.id] : [])),
+    }).plugins.flatMap((plugin) =>
+      plugin.providers.length > 0 && isCoreBundledManifestSurface(plugin) ? [plugin.id] : [],
+    ),
   );
+}
+
+function isCoreBundledManifestSurface(plugin: PluginManifestRecord): boolean {
+  return plugin.origin !== "bundled" || isPackageIncludedInCoreBundle(plugin.packageManifest);
 }
 
 function resolveProviderOwnerPluginIds(
@@ -139,6 +146,7 @@ export function resolveBundledProviderCompatPluginIds(params: {
       .filter(
         (plugin) =>
           plugin.origin === "bundled" &&
+          isCoreBundledManifestSurface(plugin) &&
           plugin.providers.length > 0 &&
           (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
       )
