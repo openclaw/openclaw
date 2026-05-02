@@ -34,6 +34,7 @@
     "!dist/extensions/acpx/**",
     "!dist/extensions/node_modules/**",
     "!dist/extensions/*/node_modules/**",
+    "!dist/extensions/acpx/**",
     "!dist/extensions/bluebubbles/**",
     "!dist/extensions/brave/**",
     "!dist/extensions/codex/**",
