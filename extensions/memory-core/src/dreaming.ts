@@ -620,6 +620,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         maxAgeDays: params.config.maxAgeDays,
         timezone: params.config.timezone,
         nowMs: sweepNowMs,
+        currentAgentId: params.currentAgentId,
       });
       totalApplied += applied.applied;
       reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
