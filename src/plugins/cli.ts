@@ -17,6 +17,26 @@ type RegisterPluginCliOptions = {
   primary?: string | null;
 };
 
+type PluginCliRegistrationEntries = Awaited<
+  ReturnType<typeof loadPluginCliRegistrationEntriesWithDefaults>
+>;
+
+// Cache the loaded plugin CLI entries on the Commander program so that repeat
+// calls within one invocation reuse the work. `openclaw completion
+// --write-state` enters this function three times (pairing subcli "before"
+// hook, plugins subcli "after" hook, and the completion action's own eager
+// call); without this cache each call pays the full plugin sweep (~20s on
+// Pi-class hardware). Cache key is the `primary` filter; a different filter
+// resolves to a different plugin set and forces a reload.
+const PLUGIN_CLI_ENTRIES_CACHE_KEY = Symbol.for("openclaw.plugin-cli-registration-entries-cache");
+
+interface ProgramWithEntriesCache {
+  [PLUGIN_CLI_ENTRIES_CACHE_KEY]?: {
+    primary: string | undefined;
+    entries: PluginCliRegistrationEntries;
+  };
+}
+
 const logger = createPluginCliLogger();
 
 export const loadValidatedConfigForPluginRegistration =
@@ -46,21 +66,27 @@ export async function registerPluginCliCommands(
   const mode = options?.mode ?? "eager";
   const primary = options?.primary ?? undefined;
 
-  await registerPluginCliCommandGroups(
-    program,
-    await loadPluginCliRegistrationEntriesWithDefaults({
+  const programWithCache = program as Command & ProgramWithEntriesCache;
+  const cached = programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY];
+  let entries: PluginCliRegistrationEntries;
+  if (cached && cached.primary === primary) {
+    entries = cached.entries;
+  } else {
+    entries = await loadPluginCliRegistrationEntriesWithDefaults({
       cfg,
       env,
       loaderOptions,
       primaryCommand: primary,
-    }),
-    {
-      mode,
-      primary,
-      existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
-      logger,
-    },
-  );
+    });
+    programWithCache[PLUGIN_CLI_ENTRIES_CACHE_KEY] = { primary, entries };
+  }
+
+  await registerPluginCliCommandGroups(program, entries, {
+    mode,
+    primary,
+    existingCommands: new Set(program.commands.map((cmd) => cmd.name())),
+    logger,
+  });
 }
 
 export async function registerPluginCliCommandsFromValidatedConfig(
