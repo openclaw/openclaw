@@ -44,10 +44,15 @@ export function applyAgentDefaultPrimaryModel(params: {
   };
 }
 
-export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+export function applyPrimaryModel(
+  cfg: OpenClawConfig,
+  model: string,
+  options?: { preserveExistingPrimary?: boolean },
+): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
+  const existingPrimary = resolvePrimaryModel(existingModel);
   const fallbacks =
     typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
       ? (existingModel as { fallbacks?: string[] }).fallbacks
@@ -60,7 +65,7 @@ export function applyPrimaryModel(cfg: OpenClawConfig, model: string): OpenClawC
         ...defaults,
         model: {
           ...(fallbacks ? { fallbacks } : undefined),
-          primary: model,
+          primary: options?.preserveExistingPrimary === true ? (existingPrimary ?? model) : model,
         },
         models: {
           ...existingModels,

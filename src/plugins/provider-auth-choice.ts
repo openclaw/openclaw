@@ -219,6 +219,7 @@ export async function runProviderPluginAuthMethod(params: {
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;
+  preserveExistingDefaultModel?: boolean;
 }): Promise<{ config: OpenClawConfig; defaultModel?: string }> {
   const agentId = params.agentId ?? resolveDefaultAgentId(params.config);
   const defaultAgentId = resolveDefaultAgentId(params.config);
@@ -255,6 +256,7 @@ export async function runProviderPluginAuthMethod(params: {
   if (result.configPatch) {
     nextConfig = applyProviderAuthConfigPatch(nextConfig, result.configPatch, {
       replaceDefaultModels: result.replaceDefaultModels,
+      preserveExistingDefaultModel: params.preserveExistingDefaultModel,
     });
   }
 
@@ -413,6 +415,8 @@ export async function applyAuthChoiceLoadedPluginProvider(
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
     opts: params.opts,
+    preserveExistingDefaultModel:
+      params.preserveExistingDefaultModel === true || !params.setDefaultModel,
   });
 
   nextConfig = applied.config;
@@ -509,6 +513,8 @@ export async function applyAuthChoicePluginProvider(
     secretInputMode: params.opts?.secretInputMode,
     allowSecretRefPrompt: false,
     opts: params.opts,
+    preserveExistingDefaultModel:
+      params.preserveExistingDefaultModel === true || !params.setDefaultModel,
   });
 
   nextConfig = applied.config;

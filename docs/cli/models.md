@@ -185,6 +185,9 @@ openclaw models auth login --provider openai-codex --set-default
 
 Notes:
 
+- `models auth login` can make a provider's models available without replacing
+  an existing default model. Pass `--set-default` when you intentionally want the
+  provider's default model to replace `agents.defaults.model.primary`.
 - `setup-token` and `paste-token` remain generic token commands for providers
   that expose token auth methods.
 - `setup-token` requires an interactive TTY and runs the provider's token-auth

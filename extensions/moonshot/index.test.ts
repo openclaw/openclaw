@@ -4,6 +4,7 @@ import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-ru
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
+import { applyMoonshotConfig, MOONSHOT_DEFAULT_MODEL_REF } from "./onboard.js";
 import { createKimiWebSearchProvider } from "./src/kimi-web-search-provider.js";
 
 type MoonshotManifest = {
@@ -17,6 +18,31 @@ function readManifest(): MoonshotManifest {
 }
 
 describe("moonshot provider plugin", () => {
+  it("adds Moonshot defaults without replacing an existing primary model", () => {
+    const next = applyMoonshotConfig({
+      agents: {
+        defaults: {
+          model: {
+            primary: "claude-max-proxy/claude-opus-4-7",
+            fallbacks: ["claude-max-proxy/claude-sonnet-4-6"],
+          },
+          models: {
+            "claude-max-proxy/claude-opus-4-7": {},
+            "claude-max-proxy/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    });
+
+    expect(next.agents?.defaults?.models?.[MOONSHOT_DEFAULT_MODEL_REF]).toEqual({
+      alias: "Kimi",
+    });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "claude-max-proxy/claude-opus-4-7",
+      fallbacks: ["claude-max-proxy/claude-sonnet-4-6"],
+    });
+  });
+
   it("mirrors Kimi web-search env credentials in manifest metadata", () => {
     const manifestEnvVars = readManifest().providerAuthEnvVars?.moonshot ?? [];
 

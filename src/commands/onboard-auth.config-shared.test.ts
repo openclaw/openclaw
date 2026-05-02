@@ -175,6 +175,39 @@ describe("onboard auth provider config merges", () => {
     expect(next.agents?.defaults?.model).toEqual({ primary: "custom/model-z" });
   });
 
+  it("keeps existing primary and fallbacks when applying default-model presets", () => {
+    const next = applyProviderConfigWithDefaultModelPreset(
+      {
+        agents: {
+          defaults: {
+            model: {
+              primary: "user-provider/custom-primary",
+              fallbacks: ["user-provider/custom-fallback"],
+            },
+            models: {
+              "user-provider/custom-primary": {},
+              "user-provider/custom-fallback": {},
+            },
+          },
+        },
+      },
+      {
+        providerId: "custom",
+        api: "openai-completions",
+        baseUrl: "https://example.com/v1",
+        defaultModel: makeModel("model-z"),
+        aliases: [{ modelRef: "custom/model-z", alias: "Preset" }],
+        primaryModelRef: "custom/model-z",
+      },
+    );
+
+    expect(next.agents?.defaults?.models?.["custom/model-z"]).toEqual({ alias: "Preset" });
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "user-provider/custom-primary",
+      fallbacks: ["user-provider/custom-fallback"],
+    });
+  });
+
   it("applies catalog presets with alias and merged catalog models", () => {
     const next = applyProviderConfigWithModelCatalogPreset(
       {

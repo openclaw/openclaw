@@ -163,25 +163,48 @@ vi.mock("../../plugins/provider-auth-choice-helpers.js", () => {
       );
     }),
     applyProviderAuthConfigPatch: vi.fn(
-      (cfg: OpenClawConfig, patch: unknown, options?: { replaceDefaultModels?: boolean }) => {
+      (
+        cfg: OpenClawConfig,
+        patch: unknown,
+        options?: { replaceDefaultModels?: boolean; preserveExistingDefaultModel?: boolean },
+      ) => {
         const merged = mergePatch(cfg, patch);
+        const patchModel = isRecord(patch)
+          ? (patch.agents as { defaults?: { model?: unknown } } | undefined)?.defaults?.model
+          : undefined;
+        const existingModel = cfg.agents?.defaults?.model;
+        const preserved =
+          options?.preserveExistingDefaultModel &&
+          patchModel !== undefined &&
+          existingModel !== undefined
+            ? {
+                ...merged,
+                agents: {
+                  ...merged.agents,
+                  defaults: {
+                    ...merged.agents?.defaults,
+                    model: existingModel,
+                  },
+                },
+              }
+            : merged;
         if (!options?.replaceDefaultModels) {
-          return merged;
+          return preserved;
         }
         const patchModels = (patch as { agents?: { defaults?: { models?: unknown } } })?.agents
           ?.defaults?.models;
         return isRecord(patchModels)
           ? {
-              ...merged,
+              ...preserved,
               agents: {
-                ...merged.agents,
+                ...preserved.agents,
                 defaults: {
-                  ...merged.agents?.defaults,
+                  ...preserved.agents?.defaults,
                   models: patchModels,
                 },
               },
             }
-          : merged;
+          : preserved;
       },
     ),
     applyDefaultModel: vi.fn((cfg: OpenClawConfig, model: string) => ({
@@ -686,6 +709,70 @@ describe("modelsAuthLoginCommand", () => {
       ...existingModels,
       "openai-codex/gpt-5.5": {},
     });
+  });
+
+  it("keeps existing default model when login config patch suggests one without --set-default", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "claude-max-proxy/claude-opus-4-7",
+            fallbacks: ["claude-max-proxy/claude-sonnet-4-6"],
+          },
+          models: {
+            "claude-max-proxy/claude-opus-4-7": {},
+            "claude-max-proxy/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    };
+    runProviderAuth.mockResolvedValue({
+      profiles: [
+        {
+          profileId: "openai-codex:user@example.com",
+          credential: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "a",
+            refresh: "r",
+            expires: Date.now() + 60_000,
+            email: "user@example.com",
+          },
+        },
+      ],
+      configPatch: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.5",
+              fallbacks: ["moonshot/kimi-k2.6"],
+            },
+            models: {
+              "openai-codex/gpt-5.5": {},
+              "moonshot/kimi-k2.6": {},
+            },
+          },
+        },
+      },
+      defaultModel: "openai-codex/gpt-5.5",
+    });
+
+    await modelsAuthLoginCommand({ provider: "openai-codex" }, runtime);
+
+    expect(lastUpdatedConfig?.agents?.defaults?.model).toEqual({
+      primary: "claude-max-proxy/claude-opus-4-7",
+      fallbacks: ["claude-max-proxy/claude-sonnet-4-6"],
+    });
+    expect(lastUpdatedConfig?.agents?.defaults?.models).toEqual({
+      "claude-max-proxy/claude-opus-4-7": {},
+      "claude-max-proxy/claude-sonnet-4-6": {},
+      "openai-codex/gpt-5.5": {},
+      "moonshot/kimi-k2.6": {},
+    });
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Default model available: openai-codex/gpt-5.5 (use --set-default to apply)",
+    );
   });
 
   it("overwrites an existing primary when login uses --set-default", async () => {

@@ -184,6 +184,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/auth: preserve existing default model primary and fallbacks when provider presets or auth patches register new models, so auto-onboarded plugins cannot silently replace user-selected custom models unless `--set-default` is used. Fixes #75720. Thanks @shandutta.
 - Agents/tools: skip unavailable media generation and PDF tool factories from the live reply path when Gateway metadata and the active auth store prove no configured provider can back them, while keeping explicit config and auth-backed providers on the normal factory path. Thanks @shakkernerd.
 - Agents/runtime: reuse the Gateway metadata startup plan when ensuring reply runtime plugins are loaded, so live agent turns do not broad-load plugin runtimes after the Gateway already scoped startup activation. Thanks @shakkernerd.
 - Agents/runtime: delegate scoped reply runtime registry reuse to the plugin loader cache-key compatibility checks, so config changes with the same startup plugin ids cannot keep stale runtime hooks or tools active. Thanks @shakkernerd.
@@ -196,6 +197,7 @@ Docs: https://docs.openclaw.ai
 - Agents/tools: let plugins declare media generation auth aliases and base-url guards in manifests, preserving OpenAI Codex OAuth image generation availability without core-owned provider special cases. Thanks @shakkernerd.
 - Agents/tools: reuse the auth profile store already loaded for the active run when deciding media and generation tool availability, avoiding repeated provider-auth runtime discovery during reply startup. Thanks @shakkernerd.
 - Agents/tools: keep image, video, and music generation tool registration on manifest/auth control-plane checks instead of loading runtime provider registries during reply startup, reducing live-path tool-prep blocking while leaving provider runtime resolution for execution and list actions. Thanks @shakkernerd.
+- Providers/auth: preserve existing default model primary and fallbacks when provider presets or auth patches register new models, so auto-onboarded plugins cannot silently replace user-selected custom models unless `--set-default` is used. Fixes #75720. Thanks @shandutta.
 - fix: block workspace CLOUDSDK_PYTHON override and always set trusted interpreter for gcloud. (#74492) Thanks @pgondhi987.
 - Providers/Z.AI: move the bundled GLM catalog and auth env metadata into the plugin manifest, so `models list --all --provider zai` shows the full known catalog without duplicated runtime seed data. Thanks @shakkernerd.
 - Providers/Qianfan and Providers/Stepfun: declare setup auth metadata (`api-key` method, `QIANFAN_API_KEY`, `STEPFUN_API_KEY`) in the plugin manifest so onboarding and `models setup` surface the expected env var without falling back to legacy `providerAuthEnvVars` runtime seed data. Thanks @shakkernerd.

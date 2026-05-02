@@ -36,5 +36,7 @@ export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyOpenAIConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return applyAgentDefaultModelPrimary(applyOpenAIProviderConfig(cfg), OPENAI_DEFAULT_MODEL);
+  return applyAgentDefaultModelPrimary(applyOpenAIProviderConfig(cfg), OPENAI_DEFAULT_MODEL, {
+    preserveExistingPrimary: true,
+  });
 }
