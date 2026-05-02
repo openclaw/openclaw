@@ -3,10 +3,12 @@ import type { GatewayProbeResult } from "../../gateway/probe.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { GatewayStatusProbedTarget } from "./probe-run.js";
 
-const writeRuntimeJson = vi.fn();
+const mocks = vi.hoisted(() => ({
+  writeRuntimeJson: vi.fn(),
+}));
 
 vi.mock("../../runtime.js", () => ({
-  writeRuntimeJson: (...args: unknown[]) => writeRuntimeJson(...args),
+  writeRuntimeJson: (...args: unknown[]) => mocks.writeRuntimeJson(...args),
 }));
 
 vi.mock("../../terminal/theme.js", async () => {
@@ -78,7 +80,7 @@ function createTarget(id: string, probe: GatewayProbeResult): GatewayStatusProbe
 
 describe("gateway status output", () => {
   beforeEach(() => {
-    writeRuntimeJson.mockReset();
+    mocks.writeRuntimeJson.mockReset();
   });
 
   it("warns with diagnostic next steps when no probes or Bonjour discovery find a gateway", () => {
@@ -143,7 +145,7 @@ describe("gateway status output", () => {
       primaryTargetId: "reachable-read",
     });
 
-    expect(writeRuntimeJson).toHaveBeenCalledWith(
+    expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(
       runtime,
       expect.objectContaining({
         ok: true,
@@ -217,7 +219,7 @@ describe("gateway status output", () => {
       primaryTargetId: "detail-timeout",
     });
 
-    expect(writeRuntimeJson).toHaveBeenCalledWith(
+    expect(mocks.writeRuntimeJson).toHaveBeenCalledWith(
       runtime,
       expect.objectContaining({
         ok: true,
