@@ -554,7 +554,7 @@ function setCachedPluginRegistry(
 
 function getReusableCachedPluginRegistry(params: {
   cacheKey: string;
-  onlyPluginIds?: string[];
+  onlyPluginIds: string[] | undefined;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   options: PluginLoadOptions;
 }):
