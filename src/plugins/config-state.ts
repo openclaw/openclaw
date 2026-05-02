@@ -49,10 +49,12 @@ const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
 function getBundledPluginAliasLookup(): ReadonlyMap<string, string> {
   const lookup = new Map<string, string>();
   for (const candidate of discoverOpenClawPlugins({}).candidates) {
-    const manifestResult =
-      candidate.origin === "bundled" && candidate.bundledManifest
-        ? { ok: true as const, manifest: candidate.bundledManifest }
-        : loadPluginManifest(candidate.rootDir, candidate.origin !== "bundled");
+    if (candidate.origin !== "bundled") {
+      continue;
+    }
+    const manifestResult = candidate.bundledManifest
+      ? { ok: true as const, manifest: candidate.bundledManifest }
+      : loadPluginManifest(candidate.rootDir, false);
     if (!manifestResult.ok) {
       continue;
     }

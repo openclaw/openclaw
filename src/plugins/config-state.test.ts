@@ -178,6 +178,55 @@ describe("normalizePluginsConfig", () => {
     expect(result.entries["unknown-plugin-four"]?.enabled).toBe(true);
     expect(discoverPlugins).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps alias lookup limited to bundled plugin manifests", async () => {
+    vi.resetModules();
+    const discovery = await import("./discovery.js");
+    const manifest = await import("./manifest.js");
+    const discoverPlugins = vi.spyOn(discovery, "discoverOpenClawPlugins").mockReturnValue({
+      candidates: [
+        {
+          idHint: "anthropic",
+          source: "/tmp/openclaw-bundled-anthropic/index.js",
+          rootDir: "/tmp/openclaw-bundled-anthropic",
+          origin: "bundled",
+          bundledManifest: {
+            id: "anthropic",
+            configSchema: {},
+            providers: ["anthropic"],
+          },
+        },
+        {
+          idHint: "external-anthropic",
+          source: "/tmp/openclaw-global-anthropic/index.js",
+          rootDir: "/tmp/openclaw-global-anthropic",
+          origin: "global",
+        },
+      ],
+      diagnostics: [],
+    });
+    const loadManifest = vi.spyOn(manifest, "loadPluginManifest").mockReturnValue({
+      ok: true,
+      manifestPath: "/tmp/openclaw-global-anthropic/openclaw.plugin.json",
+      manifest: {
+        id: "external-anthropic",
+        configSchema: {},
+        providers: ["anthropic"],
+      },
+    });
+    const { normalizePluginsConfig: normalizeFreshPluginsConfig } =
+      await import("./config-state.js");
+    discoverPlugins.mockClear();
+    loadManifest.mockClear();
+
+    const result = normalizeFreshPluginsConfig({
+      deny: ["anthropic"],
+    });
+
+    expect(result.deny).toEqual(["anthropic"]);
+    expect(discoverPlugins).toHaveBeenCalledTimes(1);
+    expect(loadManifest).not.toHaveBeenCalled();
+  });
 });
 
 describe("resolveEffectiveEnableState", () => {
