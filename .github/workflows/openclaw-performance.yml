@@ -52,7 +52,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   OCM_VERSION: v0.2.15
   PERFORMANCE_MODEL_ID: gpt-5.4
-  CLAWGRIT_REPORTS_TOKEN_PRESENT: ${{ secrets.CLAWGRIT_REPORTS_TOKEN != '' && 'true' || 'false' }}
 
 jobs:
   kova:
@@ -118,6 +117,20 @@ jobs:
           echo "run=$run_lane" >> "$GITHUB_OUTPUT"
           if [[ "$run_lane" != "true" ]]; then
             echo "Skipping ${LANE_ID}: ${reason}" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Detect clawgrit report token
+        id: clawgrit
+        if: steps.lane.outputs.run == 'true'
+        env:
+          CLAWGRIT_REPORTS_TOKEN: ${{ secrets.CLAWGRIT_REPORTS_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${CLAWGRIT_REPORTS_TOKEN:-}" ]]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout OpenClaw
@@ -193,6 +206,7 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          CLAWGRIT_REPORTS_TOKEN_PRESENT: ${{ steps.clawgrit.outputs.present || 'false' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -296,7 +310,7 @@ jobs:
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
 
       - name: Checkout clawgrit reports
-        if: ${{ steps.kova.outputs.report_json != '' && env.CLAWGRIT_REPORTS_TOKEN_PRESENT == 'true' }}
+        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
         uses: actions/checkout@v6
         with:
           repository: openclaw/clawgrit-reports
@@ -305,7 +319,7 @@ jobs:
           persist-credentials: true
 
       - name: Publish to clawgrit reports
-        if: ${{ steps.kova.outputs.report_json != '' && env.CLAWGRIT_REPORTS_TOKEN_PRESENT == 'true' }}
+        if: ${{ steps.kova.outputs.report_json != '' && steps.clawgrit.outputs.present == 'true' }}
         shell: bash
         run: |
           set -euo pipefail
