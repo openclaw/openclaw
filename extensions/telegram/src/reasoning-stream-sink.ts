@@ -75,6 +75,7 @@ export function createReasoningStreamSink(params: {
         init: { method: "POST", headers, body },
         timeoutMs,
         requireHttps: true,
+        capture: false,
       });
       release = result.release;
       if (!result.response.ok) {
