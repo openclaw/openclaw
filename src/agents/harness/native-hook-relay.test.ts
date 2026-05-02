@@ -726,6 +726,52 @@ describe("native hook relay registry", () => {
     }
   });
 
+  it("uses the Codex cwd when deriving apply_patch paths for PreToolUse", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+    const cwd = path.join("/tmp", "openclaw-native-hook-cwd");
+    const patch = ["*** Begin Patch", "*** Add File: src/new.ts", "+x", "*** End Patch"].join("\n");
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd,
+        tool_name: "apply_patch",
+        tool_use_id: "native-patch-1",
+        tool_input: { input: patch },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(beforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        params: { input: patch },
+        derivedPaths: [path.join(cwd, "src/new.ts")],
+      }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        toolName: "apply_patch",
+        toolCallId: "native-patch-1",
+      }),
+    );
+  });
+
   it("does not rewrite Codex native tool input when before_tool_call adjusts params", async () => {
     const beforeToolCall = vi.fn(async () => ({
       params: { command: "echo replaced" },
