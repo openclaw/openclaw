@@ -357,6 +357,8 @@ function getLastDispatchCtx():
       CommandBody?: string;
       From?: string;
       MediaTranscribedIndexes?: number[];
+      MessageSid?: string;
+      MessageSidFull?: string;
       MessageThreadId?: string | number;
       ModelParentSessionKey?: string;
       OriginatingTo?: string;
@@ -375,6 +377,8 @@ function getLastDispatchCtx():
           CommandBody?: string;
           From?: string;
           MediaTranscribedIndexes?: number[];
+          MessageSid?: string;
+          MessageSidFull?: string;
           MessageThreadId?: string | number;
           ModelParentSessionKey?: string;
           OriginatingTo?: string;
@@ -923,6 +927,25 @@ describe("processDiscordMessage session routing", () => {
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(getReactionEmojis()).toEqual(["👀"]);
     expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
+  });
+
+  it("uses PluralKit original ids for inbound dedupe while preserving the Discord message id", async () => {
+    const ctx = await createBaseContext({
+      canonicalMessageId: "orig-123",
+      message: {
+        id: "proxy-456",
+        channelId: "c1",
+        timestamp: new Date().toISOString(),
+        attachments: [],
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      MessageSid: "orig-123",
+      MessageSidFull: "proxy-456",
+    });
   });
 
   it("defaults guild replies to message-tool-only source delivery", async () => {

@@ -52,6 +52,7 @@ export async function buildDiscordMessageProcessContext(params: {
     message,
     author,
     sender,
+    canonicalMessageId,
     data,
     client,
     channelInfo,
@@ -323,7 +324,10 @@ export async function buildDiscordMessageProcessContext(params: {
     Provider: "discord" as const,
     Surface: "discord" as const,
     WasMentioned: ctx.effectiveWasMentioned,
-    MessageSid: message.id,
+    MessageSid: canonicalMessageId ?? message.id,
+    ...(canonicalMessageId && canonicalMessageId !== message.id
+      ? { MessageSidFull: message.id }
+      : {}),
     ReplyToId: filteredReplyContext?.id,
     ReplyToBody: filteredReplyContext?.body,
     ReplyToSender: filteredReplyContext?.sender,
