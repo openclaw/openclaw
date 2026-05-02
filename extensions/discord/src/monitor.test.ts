@@ -572,6 +572,117 @@ describe("discord mention gating", () => {
       }),
     ).toBe(false);
   });
+
+  it("applies parent thread.requireMention override for thread messages only", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      requireMention: true,
+      channels: {
+        "parent-1": {
+          enabled: true,
+          requireMention: true,
+          thread: { requireMention: false },
+        },
+      },
+    };
+    const threadConfig = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-1",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "parent-1",
+      parentName: "Parent",
+      parentSlug: "parent",
+      scope: "thread",
+    });
+    expect(threadConfig?.matchSource).toBe("parent");
+    expect(threadConfig?.thread?.requireMention).toBe(false);
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: true,
+        channelConfig: threadConfig,
+        guildInfo,
+      }),
+    ).toBe(false);
+    const parentConfig = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "parent-1",
+      channelName: "Parent",
+      channelSlug: "parent",
+      scope: "channel",
+    });
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: false,
+        channelConfig: parentConfig,
+        guildInfo,
+      }),
+    ).toBe(true);
+  });
+
+  it("lets parent thread.requireMention=true tighten an otherwise loose channel", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      requireMention: false,
+      channels: {
+        "parent-1": {
+          enabled: true,
+          requireMention: false,
+          thread: { requireMention: true },
+        },
+      },
+    };
+    const threadConfig = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-1",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "parent-1",
+      parentName: "Parent",
+      parentSlug: "parent",
+      scope: "thread",
+    });
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: true,
+        channelConfig: threadConfig,
+        guildInfo,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps bot-owned auto-thread bypass above thread.requireMention override", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      channels: {
+        "parent-1": {
+          enabled: true,
+          autoThread: true,
+          thread: { requireMention: true },
+        },
+      },
+    };
+    const threadConfig = resolveDiscordChannelConfigWithFallback({
+      guildInfo,
+      channelId: "thread-1",
+      channelName: "topic",
+      channelSlug: "topic",
+      parentId: "parent-1",
+      parentName: "Parent",
+      parentSlug: "parent",
+      scope: "thread",
+    });
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: true,
+        botId: "bot-1",
+        threadOwnerId: "bot-1",
+        channelConfig: threadConfig,
+        guildInfo,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("discord groupPolicy gating", () => {

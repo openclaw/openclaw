@@ -584,6 +584,29 @@ Example:
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
     `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
 
+    To enforce a different mention rule inside threads of a parent channel, add a nested `thread.requireMention` override on the parent channel entry:
+
+```json5
+{
+  channels: {
+    discord: {
+      guilds: {
+        "123456789012345678": {
+          channels: {
+            "987654321098765432": {
+              requireMention: true,
+              thread: { requireMention: false },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+    The override applies only to messages posted in threads whose parent matches that channel entry. Standalone messages in the parent channel still honor `requireMention`. Direct per-thread-ID entries and bot-owned auto-thread bypasses (`autoThread: true` threads created by the bot) continue to take precedence.
+
     Group DMs:
 
     - default: ignored (`dm.groupEnabled=false`)

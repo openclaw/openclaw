@@ -66,6 +66,16 @@ export type DiscordGuildChannelConfig = {
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
   /** Naming strategy for auto-created threads. "message" uses message text; "generated" renames with an LLM title. */
   autoThreadName?: "message" | "generated";
+  /** Per-channel overrides that apply only to messages inside threads under this channel. */
+  thread?: DiscordGuildChannelThreadConfig;
+};
+
+export type DiscordGuildChannelThreadConfig = {
+  /**
+   * Override `requireMention` for thread messages whose parent matches this channel entry.
+   * Falls back to the channel-level `requireMention` (then guild, then `true`) when omitted.
+   */
+  requireMention?: boolean;
 };
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";

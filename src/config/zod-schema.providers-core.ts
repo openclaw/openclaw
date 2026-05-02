@@ -458,6 +458,12 @@ export const DiscordThreadSchema = z
   })
   .strict();
 
+export const DiscordGuildChannelThreadSchema = z
+  .object({
+    requireMention: z.boolean().optional(),
+  })
+  .strict();
+
 export const DiscordGuildChannelSchema = z
   .object({
     requireMention: z.boolean().optional(),
@@ -483,6 +489,8 @@ export const DiscordGuildChannelSchema = z
         z.literal(10080),
       ])
       .optional(),
+    /** Per-channel overrides that apply only to messages inside threads under this channel. */
+    thread: DiscordGuildChannelThreadSchema.optional(),
   })
   .strict();
 
