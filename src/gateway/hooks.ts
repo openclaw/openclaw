@@ -52,7 +52,10 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
   }
   const token = normalizeOptionalString(cfg.hooks?.token);
   if (!token) {
-    throw new Error("hooks.enabled requires hooks.token");
+    throw new Error(
+      "hooks.enabled requires hooks.token to be set. " +
+        "Add a token via: openclaw config.patch '{ hooks: { token: \"<your-secret>\" } }'",
+    );
   }
   const rawPath = normalizeOptionalString(cfg.hooks?.path) || DEFAULT_HOOKS_PATH;
   const withSlash = rawPath.startsWith("/") ? rawPath : `/${rawPath}`;
