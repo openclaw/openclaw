@@ -148,6 +148,92 @@ OpenClaw recommends running WhatsApp on a separate number when possible. (The ch
   </Accordion>
 </AccordionGroup>
 
+## Specialist group lanes
+
+WhatsApp does not have Telegram-style forum topics, so the practical pattern for
+separate specialist contexts is **one WhatsApp group per lane**. Each group gets
+its own group session automatically, and you can optionally bind each group to a
+separate OpenClaw agent.
+
+Example lane layout:
+
+- `Frank - Main` for normal decisions and coordination
+- `Frank - Code` for coding tasks, PRs, and repo work
+- `Frank - Research` for web research, client/investor research, and synthesis
+- `Frank - Ops` for monitoring, inbox triage, and operational follow-up
+
+Minimal single-agent setup keeps the same agent/personality but isolates context
+per WhatsApp group JID:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+15551234567"],
+      groups: {
+        "120363000000001@g.us": { requireMention: false }, // Frank - Main
+        "120363000000002@g.us": { requireMention: false }, // Frank - Code
+        "120363000000003@g.us": { requireMention: false }, // Frank - Research
+      },
+    },
+  },
+}
+```
+
+Multi-agent setup gives each WhatsApp group its own prompt, workspace, tools,
+sandbox, and model/runtime policy:
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "main", default: true },
+      {
+        id: "code",
+        workspace: "~/.openclaw/workspace-code",
+        instructions: "You are the coding lane. Prefer PRs over direct commits.",
+        agentRuntime: { id: "codex" },
+      },
+      {
+        id: "research",
+        workspace: "~/.openclaw/workspace-research",
+        instructions: "You are the research lane. Cite sources and separate facts from judgment.",
+      },
+      {
+        id: "ops",
+        workspace: "~/.openclaw/workspace-ops",
+        instructions: "You are the operations lane. Track blockers, follow-ups, and alerts.",
+      },
+    ],
+  },
+  bindings: [
+    {
+      agentId: "code",
+      match: { channel: "whatsapp", peer: { kind: "group", id: "120363000000002@g.us" } },
+    },
+    {
+      agentId: "research",
+      match: { channel: "whatsapp", peer: { kind: "group", id: "120363000000003@g.us" } },
+    },
+    {
+      agentId: "ops",
+      match: { channel: "whatsapp", peer: { kind: "group", id: "120363000000004@g.us" } },
+    },
+  ],
+}
+```
+
+<Note>
+These are separate inbound contexts, not always-running workers. An agent wakes
+when a message, cron, heartbeat, or delegated task targets that lane. For an
+always-on specialist, use a scheduled cron/heartbeat or background task that
+targets the relevant agent/session explicitly.
+</Note>
+
+Use separate WhatsApp groups only for lanes you will actually use. Too many
+lanes become another inbox; three or four specialist groups is usually enough.
+
 ## Runtime model
 
 - Gateway owns the WhatsApp socket and reconnect loop.
