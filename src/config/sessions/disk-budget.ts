@@ -424,3 +424,63 @@ export async function enforceSessionDiskBudget(params: {
     overBudget: true,
   };
 }
+
+export type OrphanSweepResult = {
+  removedFiles: number;
+  freedBytes: number;
+};
+
+/**
+ * Remove session artifact files in `sessionsDir` that are not referenced by any entry in `store`.
+ * Covers primary transcripts (`.jsonl`), trajectory pointers (`.trajectory-path.json`),
+ * trajectory files, and compaction checkpoint transcripts.  Archive backups (`.jsonl.deleted.*`,
+ * `.jsonl.bak-*`) are intentionally left alone — they are managed by the archive retention path.
+ *
+ * This is the companion to index-entry pruning: when entries are removed (by age or count caps),
+ * normal gateway writes archive the linked transcripts, but files orphaned before that write
+ * (e.g. by a crash or a prior bug) accumulate indefinitely.  This sweep catches them.
+ */
+export async function sweepOrphanedSessionArtifacts(params: {
+  store: Record<string, SessionEntry>;
+  storePath: string;
+  dryRun?: boolean;
+  log?: SessionDiskBudgetLogger;
+}): Promise<OrphanSweepResult> {
+  const sessionsDir = path.dirname(params.storePath);
+  const log = params.log ?? NOOP_LOGGER;
+  const dryRun = params.dryRun === true;
+
+  const files = await readSessionsDirFiles(sessionsDir);
+  const referencedPaths = resolveReferencedSessionArtifactPaths({
+    sessionsDir,
+    store: params.store,
+  });
+
+  let removedFiles = 0;
+  let freedBytes = 0;
+  for (const file of files) {
+    const isSessionArtifact =
+      isPrimarySessionTranscriptFileName(file.name) ||
+      isTrajectorySessionArtifactName(file.name) ||
+      isCompactionCheckpointTranscriptFileName(file.name);
+    if (!isSessionArtifact || referencedPaths.has(file.canonicalPath)) {
+      continue;
+    }
+    if (!dryRun) {
+      await fs.promises.rm(file.path, { force: true }).catch(() => undefined);
+    }
+    removedFiles += 1;
+    freedBytes += file.size;
+  }
+
+  if (removedFiles > 0) {
+    log.info("swept orphaned session artifact files", {
+      sessionsDir,
+      removedFiles,
+      freedBytes,
+      dryRun,
+    });
+  }
+
+  return { removedFiles, freedBytes };
+}
