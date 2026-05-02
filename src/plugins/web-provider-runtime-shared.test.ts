@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveCompatibleRuntimePluginRegistry: vi.fn(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveRuntimePluginRegistry: vi.fn(),
+  getActivePluginRegistry: vi.fn(() => null),
   getActivePluginRegistryWorkspaceDir: vi.fn(() => undefined),
   buildPluginRuntimeLoadOptionsFromValues: vi.fn(
     (_values: unknown, overrides?: Record<string, unknown>) => ({
@@ -29,6 +30,7 @@ vi.mock("./loader.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
+  getActivePluginRegistry: mocks.getActivePluginRegistry,
   getActivePluginRegistryWorkspaceDir: mocks.getActivePluginRegistryWorkspaceDir,
 }));
 
@@ -56,6 +58,8 @@ describe("web-provider-runtime-shared", () => {
       JSON.stringify(options),
     );
     mocks.resolveRuntimePluginRegistry.mockReset();
+    mocks.getActivePluginRegistry.mockReset();
+    mocks.getActivePluginRegistry.mockReturnValue(null);
     mocks.getActivePluginRegistryWorkspaceDir.mockReset();
     mocks.getActivePluginRegistryWorkspaceDir.mockReturnValue(undefined);
     mocks.buildPluginRuntimeLoadOptionsFromValues.mockReset();
@@ -155,5 +159,76 @@ describe("web-provider-runtime-shared", () => {
         onlyPluginIds: ["alpha"],
       }),
     );
+  });
+
+  it("reuses the active registry after deriving web provider candidates from resolved config", () => {
+    const activeRegistry = { source: "active" };
+    const resolvedConfig = { plugins: { entries: { brave: { enabled: true } } } };
+    const resolveCandidatePluginIds = vi.fn(() => ["brave"]);
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(null);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: { plugins: { entries: {} } },
+        env: { BRAVE_API_KEY: "key" },
+        onlyPluginIds: ["brave", "firecrawl"],
+        origin: "bundled",
+        workspaceDir: "/workspace",
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: resolvedConfig,
+          activationSourceConfig: { plugins: { entries: {} } },
+          autoEnabledReasons: { brave: ["env"] },
+        }),
+        resolveCandidatePluginIds,
+        mapRegistryProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(resolveCandidatePluginIds).toHaveBeenCalledWith({
+      config: resolvedConfig,
+      workspaceDir: "/workspace",
+      env: { BRAVE_API_KEY: "key" },
+      onlyPluginIds: ["brave", "firecrawl"],
+      origin: "bundled",
+    });
+    expect(mapRegistryProviders).toHaveBeenCalledWith({
+      registry: activeRegistry,
+      onlyPluginIds: ["brave"],
+    });
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicit empty candidate scopes when reusing the active registry", () => {
+    const activeRegistry = { source: "active" };
+    const mapRegistryProviders = vi.fn(() => []);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(null);
+    mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+
+    resolvePluginWebProviders(
+      {
+        config: {},
+        onlyPluginIds: [],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => [],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(mapRegistryProviders).toHaveBeenCalledWith({
+      registry: activeRegistry,
+      onlyPluginIds: [],
+    });
+    expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
 });
