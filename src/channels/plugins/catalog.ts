@@ -32,14 +32,15 @@ export type ChannelUiCatalog = {
   byId: Record<string, ChannelUiMetaEntry>;
 };
 
+export type ChannelPluginCatalogInstall = PluginPackageInstall &
+  ({ clawhubSpec: string } | { npmSpec: string });
+
 export type ChannelPluginCatalogEntry = {
   id: string;
   pluginId?: string;
   origin?: PluginOrigin;
   meta: ChannelMeta;
-  install: PluginPackageInstall & {
-    npmSpec: string;
-  };
+  install: ChannelPluginCatalogInstall;
   installSource?: PluginInstallSourceInfo;
 };
 
@@ -210,19 +211,34 @@ function resolveInstallInfo(params: {
   packageDir?: string;
   workspaceDir?: string;
 }): ChannelPluginCatalogEntry["install"] | null {
-  const npmSpec = params.install?.npmSpec?.trim() ?? params.packageName?.trim();
-  if (!npmSpec) {
+  const clawhubSpec = normalizeOptionalString(params.install?.clawhubSpec);
+  const npmSpec =
+    normalizeOptionalString(params.install?.npmSpec) ?? normalizeOptionalString(params.packageName);
+  if (!clawhubSpec && !npmSpec) {
     return null;
   }
   let localPath = normalizeOptionalString(params.install?.localPath);
   if (!localPath && params.workspaceDir && params.packageDir) {
     localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
   }
-  const defaultChoice = params.install?.defaultChoice ?? (localPath ? "local" : "npm");
+  const requestedDefaultChoice = params.install?.defaultChoice;
+  const defaultChoice =
+    requestedDefaultChoice === "clawhub" && clawhubSpec
+      ? "clawhub"
+      : requestedDefaultChoice === "npm" && npmSpec
+        ? "npm"
+        : requestedDefaultChoice === "local" && localPath
+          ? "local"
+          : clawhubSpec
+            ? "clawhub"
+            : localPath
+              ? "local"
+              : "npm";
   return {
-    npmSpec,
+    ...(clawhubSpec ? { clawhubSpec } : {}),
+    ...(npmSpec ? { npmSpec } : {}),
     ...(localPath ? { localPath } : {}),
-    ...(defaultChoice ? { defaultChoice } : {}),
+    defaultChoice,
     ...(params.install?.minHostVersion ? { minHostVersion: params.install.minHostVersion } : {}),
     ...(params.install?.expectedIntegrity
       ? { expectedIntegrity: params.install.expectedIntegrity }
