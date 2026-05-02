@@ -221,6 +221,8 @@ examples.
 - choose it with `tools.web.fetch.provider`
 - or omit that field and let OpenClaw auto-detect the first ready web-fetch
   provider from available credentials
+- non-sandboxed `web_fetch` can use installed plugin providers that declare
+  `contracts.webFetchProviders`; sandboxed fetches stay bundled-only
 - today the bundled web-fetch provider is Firecrawl, configured under
   `plugins.entries.firecrawl.config.webFetch.*`
 
@@ -334,6 +336,7 @@ tool on the request that serves this tool call.
           xSearch: {
             enabled: true,
             model: "grok-4-1-fast-non-reasoning",
+            baseUrl: "https://api.x.ai/v1", // optional, overrides webSearch.baseUrl
             inlineCitations: false,
             maxTurns: 2,
             timeoutSeconds: 30,
@@ -341,6 +344,7 @@ tool on the request that serves this tool call.
           },
           webSearch: {
             apiKey: "xai-...", // optional if XAI_API_KEY is set
+            baseUrl: "https://api.x.ai/v1", // optional shared xAI Responses base URL
           },
         },
       },
@@ -348,6 +352,11 @@ tool on the request that serves this tool call.
   },
 }
 ```
+
+`x_search` posts to `<baseUrl>/responses` when
+`plugins.entries.xai.config.xSearch.baseUrl` is set. If that field is omitted,
+it falls back to `plugins.entries.xai.config.webSearch.baseUrl`, then the
+legacy `tools.web.search.grok.baseUrl`, and finally the public xAI endpoint.
 
 ### x_search parameters
 

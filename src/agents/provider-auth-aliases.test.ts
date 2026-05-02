@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pluginRegistryMocks = vi.hoisted(() => {
   const loadManifestRegistry = vi.fn();
@@ -20,9 +20,20 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginRegistrySnapshot: pluginRegistryMocks.loadPluginRegistrySnapshot,
 }));
 
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import {
+  resetProviderAuthAliasMapCacheForTest,
+  resolveProviderIdForAuth,
+} from "./provider-auth-aliases.js";
 
 describe("provider auth aliases", () => {
+  beforeEach(() => {
+    resetProviderAuthAliasMapCacheForTest();
+    pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
+    pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
+  });
+
   it("treats deprecated auth choice ids as provider auth aliases", () => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
       plugins: [
@@ -45,5 +56,40 @@ describe("provider auth aliases", () => {
     expect(resolveProviderIdForAuth("codex-cli")).toBe("openai-codex");
     expect(resolveProviderIdForAuth("openai-codex-import")).toBe("openai-codex");
     expect(resolveProviderIdForAuth("openai-codex")).toBe("openai-codex");
+  });
+
+  it("does not reuse aliases across env-resolved plugin roots", () => {
+    const env = {
+      HOME: "/home/one",
+      OPENCLAW_HOME: undefined,
+    } as NodeJS.ProcessEnv;
+    pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry
+      .mockReturnValueOnce({
+        plugins: [
+          {
+            id: "one",
+            origin: "global",
+            providerAuthAliases: { fixture: "provider-one" },
+          },
+        ],
+        diagnostics: [],
+      })
+      .mockReturnValueOnce({
+        plugins: [
+          {
+            id: "two",
+            origin: "global",
+            providerAuthAliases: { fixture: "provider-two" },
+          },
+        ],
+        diagnostics: [],
+      });
+
+    expect(resolveProviderIdForAuth("fixture", { config: {}, env })).toBe("provider-one");
+    env.HOME = "/home/two";
+    expect(resolveProviderIdForAuth("fixture", { config: {}, env })).toBe("provider-two");
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledTimes(
+      2,
+    );
   });
 });

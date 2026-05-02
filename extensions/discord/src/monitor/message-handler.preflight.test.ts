@@ -117,6 +117,12 @@ function createDmClient(channelId: string): DiscordClient {
   } as unknown as DiscordClient;
 }
 
+function createMissingChannelClient(): DiscordClient {
+  return {
+    fetchChannel: async () => null,
+  } as unknown as DiscordClient;
+}
+
 async function runThreadBoundPreflight(params: {
   threadId: string;
   parentId: string;
@@ -199,6 +205,26 @@ async function runDmPreflight(params: {
         message: params.message,
       } as DiscordMessageEvent,
       client: createDmClient(params.channelId),
+    }),
+  });
+}
+
+async function runUnresolvedDmPreflight(params: {
+  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  channelId: string;
+  message: import("../internal/discord.js").Message;
+  discordConfig: DiscordConfig;
+}) {
+  return preflightDiscordMessage({
+    ...createPreflightArgs({
+      cfg: params.cfg ?? DEFAULT_PREFLIGHT_CFG,
+      discordConfig: params.discordConfig,
+      data: {
+        channel_id: params.channelId,
+        author: params.message.author,
+        message: params.message,
+      } as DiscordMessageEvent,
+      client: createMissingChannelClient(),
     }),
   });
 }
@@ -481,6 +507,38 @@ describe("preflightDiscordMessage", () => {
     expect(result).not.toBeNull();
     expect(result?.isDirectMessage).toBe(true);
     expect(result?.preflightAudioTranscript).toBe("hello openclaw from dm audio");
+  });
+
+  it("keeps no-guild messages direct when channel lookup is unavailable", async () => {
+    const result = await runUnresolvedDmPreflight({
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        session: {
+          ...DEFAULT_PREFLIGHT_CFG.session,
+          dmScope: "per-channel-peer",
+        },
+      },
+      channelId: "dm-channel-unresolved-1",
+      message: createDiscordMessage({
+        id: "m-dm-unresolved-1",
+        channelId: "dm-channel-unresolved-1",
+        content: "hello from a degraded dm",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "alice",
+        },
+      }),
+      discordConfig: {
+        dmPolicy: "open",
+      } as DiscordConfig,
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.channelInfo).toBeNull();
+    expect(result?.isDirectMessage).toBe(true);
+    expect(result?.isGroupDm).toBe(false);
+    expect(result?.route.sessionKey).toBe("agent:main:discord:direct:user-1");
   });
 
   it("falls back to the default discord account for omitted-account dm authorization", async () => {

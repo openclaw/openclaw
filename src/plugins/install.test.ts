@@ -5,8 +5,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
-import { expectInstallUsesIgnoreScripts } from "../test-utils/npm-spec-install-test-helpers.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 import * as installSecurityScan from "./install-security-scan.js";
@@ -620,6 +618,22 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
+  it("does not run npm for package archive runtime dependencies", async () => {
+    const result = await installArchivePackageAndReturnResult({
+      packageJson: {
+        name: "archive-with-deps",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: { "left-pad": "1.3.0" },
+      },
+      outName: "archive-with-deps.tgz",
+      withDistIndex: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
+  });
+
   it("installs scoped archives, rejects duplicate installs, and allows updates", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const archiveV1 = await ensureDynamicArchiveTemplate({
@@ -903,6 +917,38 @@ describe("installPluginFromArchive", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
       expect(result.error).toContain("runtimeExtensions length (1)");
       expect(result.error).toContain("extensions length (2)");
+    }
+  });
+
+  it("rejects package installs when runtimeSetupEntry is missing", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "missing-runtime-setup-plugin",
+        version: "1.0.0",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          setupEntry: "./src/setup-entry.ts",
+          runtimeSetupEntry: "./dist/setup-entry.js",
+        },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+    fs.writeFileSync(path.join(pluginDir, "src", "setup-entry.ts"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("runtime setup entry not found");
+      expect(result.error).toContain("./dist/setup-entry.js");
     }
   });
 
@@ -1826,7 +1872,14 @@ describe("installPluginFromArchive", () => {
   });
 
   it("does not flag the real qa-matrix plugin as dangerous install code", async () => {
-    const pluginDir = path.resolve(process.cwd(), "extensions", "qa-matrix");
+    const sourcePluginDir = path.resolve(process.cwd(), "extensions", "qa-matrix");
+    const pluginDir = path.join(suiteTempRootTracker.makeTempDir(), "qa-matrix");
+    fs.cpSync(sourcePluginDir, pluginDir, {
+      recursive: true,
+      filter: (entryPath) =>
+        !path.relative(sourcePluginDir, entryPath).split(path.sep).includes("node_modules"),
+    });
+    vi.mocked(resolveOpenClawPackageRootSync).mockReturnValue(process.cwd());
 
     const scanResult = await installSecurityScan.scanPackageInstallSource({
       extensions: ["./index.ts"],
@@ -2469,30 +2522,25 @@ describe("installPluginFromDir", () => {
     expect(result.targetDir, name).toBe(resolvePluginInstallDir(pluginId, extensionsDir));
   }
 
-  it("uses --ignore-scripts for dependency install", async () => {
+  it("does not run npm for local package dependencies", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
 
-    const run = vi.mocked(runCommandWithTimeout);
-    await expectInstallUsesIgnoreScripts({
-      run,
-      install: async () =>
-        await installPluginFromDir({
-          dirPath: pluginDir,
-          extensionsDir,
-        }),
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
     });
+
+    expect(res.ok).toBe(true);
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
-  it("runs npm install for optional-only dependencies", async () => {
+  it("copies optional-only local package dependencies without installing them", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
       omitDependencies: true,
       optionalDependencies: {
         "left-pad": "1.3.0",
       },
     });
-
-    const run = vi.mocked(runCommandWithTimeout);
-    mockSuccessfulCommandRun(run);
 
     const res = await installPluginFromDir({
       dirPath: pluginDir,
@@ -2503,22 +2551,16 @@ describe("installPluginFromDir", () => {
     if (!res.ok) {
       return;
     }
-    expectSingleNpmInstallIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-      expectedTargetDir: res.targetDir,
-    });
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
-  it("strips workspace devDependencies before npm install", async () => {
+  it("preserves local package manifests without dependency surgery", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture({
       devDependencies: {
         openclaw: "workspace:*",
         vitest: "^3.0.0",
       },
     });
-
-    const run = vi.mocked(runCommandWithTimeout);
-    mockSuccessfulCommandRun(run);
 
     const res = await installPluginFromDir({
       dirPath: pluginDir,
@@ -2534,38 +2576,24 @@ describe("installPluginFromDir", () => {
     ) as {
       devDependencies?: Record<string, string>;
     };
-    expect(manifest.devDependencies?.openclaw).toBeUndefined();
+    expect(manifest.devDependencies?.openclaw).toBe("workspace:*");
     expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
-  it("blocks install when resolved dependencies introduce a denied package", async () => {
+  it("blocks local installs when vendored dependencies include a denied package", async () => {
     const { pluginDir, extensionsDir } = setupInstallPluginFromDirFixture();
 
-    const run = vi.mocked(runCommandWithTimeout);
-    run.mockImplementation(async (_command, opts) => {
-      const cwd = typeof opts === "number" ? undefined : opts?.cwd;
-      if (!cwd) {
-        throw new Error("expected cwd for npm install");
-      }
-      const blockedPkgDir = path.join(cwd, "node_modules", "plain-crypto-js");
-      fs.mkdirSync(blockedPkgDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(blockedPkgDir, "package.json"),
-        JSON.stringify({
-          name: "plain-crypto-js",
-          version: "4.2.1",
-        }),
-        "utf-8",
-      );
-      return {
-        code: 0,
-        stdout: "",
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit" as const,
-      };
-    });
+    const blockedPkgDir = path.join(pluginDir, "node_modules", "plain-crypto-js");
+    fs.mkdirSync(blockedPkgDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(blockedPkgDir, "package.json"),
+      JSON.stringify({
+        name: "plain-crypto-js",
+        version: "4.2.1",
+      }),
+      "utf-8",
+    );
 
     const result = await installPluginFromDir({
       dirPath: pluginDir,
@@ -2578,6 +2606,7 @@ describe("installPluginFromDir", () => {
       expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
       expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
     }
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -2772,9 +2801,6 @@ describe("installPluginFromDir", () => {
       bundleFormat: "codex",
     });
 
-    const run = vi.mocked(runCommandWithTimeout);
-    mockSuccessfulCommandRun(run);
-
     const res = await installPluginFromDir({
       dirPath: pluginDir,
       extensionsDir,
@@ -2786,10 +2812,7 @@ describe("installPluginFromDir", () => {
     }
     expect(res.pluginId).toBe("native-dual");
     expect(res.targetDir).toBe(path.join(extensionsDir, "native-dual"));
-    expectSingleNpmInstallIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-      expectedTargetDir: res.targetDir,
-    });
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 });
 
@@ -2838,14 +2861,18 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it("keeps the openclaw peer symlink when plugin package dependencies are installed", async () => {
+  it("keeps the openclaw peer symlink when a local plugin already has dependencies", async () => {
     const { pluginDir, extensionsDir } = setupPluginInstallDirs();
     const fakeHostRoot = suiteTempRootTracker.makeTempDir();
-    const run = vi.mocked(runCommandWithTimeout);
-    mockSuccessfulCommandRun(run);
     resolveRootMock.mockReturnValue(fakeHostRoot);
 
     writePluginWithPeerDeps(pluginDir, { openclaw: "*" }, { "is-number": "7.0.0" });
+    fs.mkdirSync(path.join(pluginDir, "node_modules", "is-number"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "node_modules", "is-number", "package.json"),
+      JSON.stringify({ name: "is-number", version: "7.0.0" }),
+      "utf-8",
+    );
 
     const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
 
@@ -2854,13 +2881,11 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
       return;
     }
 
-    expectSingleNpmInstallIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-      expectedTargetDir: result.targetDir,
-    });
     const symlinkPath = path.join(result.targetDir, "node_modules", "openclaw");
     expect(fs.lstatSync(symlinkPath).isSymbolicLink()).toBe(true);
     expect(fs.realpathSync(symlinkPath)).toBe(fs.realpathSync(fakeHostRoot));
+    expect(fs.existsSync(path.join(result.targetDir, "node_modules", "is-number"))).toBe(true);
+    expect(vi.mocked(runCommandWithTimeout)).not.toHaveBeenCalled();
   });
 
   it("does not create a symlink when peerDependencies is empty", async () => {

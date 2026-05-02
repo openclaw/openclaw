@@ -449,6 +449,81 @@ Example:
 
   </Tab>
 
+  <Tab title="DM access groups">
+    Discord DMs can use dynamic `accessGroup:<name>` entries in `channels.discord.allowFrom`.
+
+    Access group names are shared across message channels. Use `type: "message.senders"` for a static group whose members are expressed in each channel's normal `allowFrom` syntax, or `type: "discord.channelAudience"` when a Discord channel's current `ViewChannel` audience should define membership dynamically. Shared access-group behavior is documented here: [Access groups](/channels/access-groups).
+
+```json5
+{
+  accessGroups: {
+    operators: {
+      type: "message.senders",
+      members: {
+        "*": ["global-owner-id"],
+        discord: ["discord:123456789012345678"],
+        telegram: ["987654321"],
+      },
+    },
+  },
+  channels: {
+    discord: {
+      dmPolicy: "allowlist",
+      allowFrom: ["accessGroup:operators"],
+    },
+  },
+}
+```
+
+    A Discord text channel has no separate member list. `type: "discord.channelAudience"` models membership as: the DM sender is a member of the configured guild and currently has effective `ViewChannel` permission on the configured channel after role and channel overwrites are applied.
+
+    Example: allow anyone who can see `#maintainers` to DM the bot, while keeping DMs closed to everyone else.
+
+```json5
+{
+  accessGroups: {
+    maintainers: {
+      type: "discord.channelAudience",
+      guildId: "1456350064065904867",
+      channelId: "1456744319972282449",
+      membership: "canViewChannel",
+    },
+  },
+  channels: {
+    discord: {
+      dmPolicy: "allowlist",
+      allowFrom: ["accessGroup:maintainers"],
+    },
+  },
+}
+```
+
+    You can mix dynamic and static entries:
+
+```json5
+{
+  accessGroups: {
+    maintainers: {
+      type: "discord.channelAudience",
+      guildId: "1456350064065904867",
+      channelId: "1456744319972282449",
+    },
+  },
+  channels: {
+    discord: {
+      dmPolicy: "allowlist",
+      allowFrom: ["accessGroup:maintainers", "discord:123456789012345678"],
+    },
+  },
+}
+```
+
+    Lookups fail closed. If Discord returns `Missing Access`, the member lookup fails, or the channel belongs to a different guild, the DM sender is treated as unauthorized.
+
+    Enable the Discord Developer Portal **Server Members Intent** for the bot when using channel-audience access groups. DMs do not include guild member state, so OpenClaw resolves the member through Discord REST at authorization time.
+
+  </Tab>
+
   <Tab title="Guild policy">
     Guild handling is controlled by `channels.discord.groupPolicy`:
 
@@ -851,6 +926,30 @@ Default slash command settings:
 
   </Accordion>
 
+  <Accordion title="Outbound mention aliases">
+    Use `mentionAliases` when agents need deterministic outbound mentions for known Discord users. Keys are handles without the leading `@`; values are Discord user IDs. Unknown handles, `@everyone`, `@here`, and mentions inside Markdown code spans are left unchanged.
+
+```json5
+{
+  channels: {
+    discord: {
+      mentionAliases: {
+        Vladislava: "123456789012345678",
+      },
+      accounts: {
+        ops: {
+          mentionAliases: {
+            OpsLead: "234567890123456789",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+  </Accordion>
+
   <Accordion title="Presence configuration">
     Presence updates are applied when you set a status or activity field, or when you enable auto presence.
 
@@ -1048,6 +1147,8 @@ Auto-join example:
         ],
         daveEncryption: true,
         decryptionFailureTolerance: 24,
+        connectTimeoutMs: 30000,
+        reconnectGraceMs: 15000,
         tts: {
           provider: "openai",
           openai: { voice: "onyx" },
@@ -1063,11 +1164,14 @@ Notes:
 - `voice.tts` overrides `messages.tts` for voice playback only.
 - `voice.model` overrides the LLM used for Discord voice channel responses only. Leave it unset to inherit the routed agent model.
 - STT uses `tools.media.audio`; `voice.model` does not affect transcription.
+- Per-channel Discord `systemPrompt` overrides apply to voice transcript turns for that voice channel.
 - Voice transcript turns derive owner status from Discord `allowFrom` (or `dm.allowFrom`); non-owner speakers cannot access owner-only tools (for example `gateway` and `cron`).
-- Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable voice runtime and the `GuildVoiceStates` gateway intent.
-- `channels.discord.intents.voiceStates` can explicitly override voice-state intent subscription. Leave it unset for the intent to follow `voice.enabled`.
+- Discord voice is opt-in for text-only configs; set `channels.discord.voice.enabled=true` (or keep an existing `channels.discord.voice` block) to enable `/vc` commands, the voice runtime, and the `GuildVoiceStates` gateway intent.
+- `channels.discord.intents.voiceStates` can explicitly override voice-state intent subscription. Leave it unset for the intent to follow effective voice enablement.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
+- `voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts. Default: `30000`.
+- `voice.reconnectGraceMs` controls how long OpenClaw waits for a disconnected voice session to begin reconnecting before destroying it. Default: `15000`.
 - OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
 - If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)` after updating, collect a dependency report and logs. The bundled `@discordjs/voice` line includes the upstream padding fix from discord.js PR #11449, which closed discord.js issue #11419.
 
@@ -1075,7 +1179,7 @@ Voice channel pipeline:
 
 - Discord PCM capture is converted to a WAV temp file.
 - `tools.media.audio` handles STT, for example `openai/gpt-4o-mini-transcribe`.
-- The transcript is sent through normal Discord ingress and routing.
+- The transcript is sent through Discord ingress and routing while the response LLM runs with a voice-output policy that hides the agent `tts` tool and asks for returned text, because Discord voice owns final TTS playback.
 - `voice.model`, when set, overrides only the response LLM for this voice-channel turn.
 - `voice.tts` is merged over `messages.tts`; the resulting audio is played in the joined channel.
 
@@ -1175,6 +1279,22 @@ openclaw logs --follow
 
   </Accordion>
 
+  <Accordion title="Gateway READY timeout restarts">
+    OpenClaw waits for Discord's gateway `READY` event during startup and after runtime reconnects. Multi-account setups with startup staggering can need a longer startup READY window than the default.
+
+    READY timeout knobs:
+
+    - startup single-account: `channels.discord.gatewayReadyTimeoutMs`
+    - startup multi-account: `channels.discord.accounts.<accountId>.gatewayReadyTimeoutMs`
+    - startup env fallback when config is unset: `OPENCLAW_DISCORD_READY_TIMEOUT_MS`
+    - startup default: `15000` (15 seconds), max: `120000`
+    - runtime single-account: `channels.discord.gatewayRuntimeReadyTimeoutMs`
+    - runtime multi-account: `channels.discord.accounts.<accountId>.gatewayRuntimeReadyTimeoutMs`
+    - runtime env fallback when config is unset: `OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS`
+    - runtime default: `30000` (30 seconds), max: `120000`
+
+  </Accordion>
+
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
@@ -1221,7 +1341,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
-- gateway metadata: `gatewayInfoTimeoutMs`
+- gateway: `gatewayInfoTimeoutMs`, `gatewayReadyTimeoutMs`, `gatewayRuntimeReadyTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `streaming.preview.toolProgress`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`

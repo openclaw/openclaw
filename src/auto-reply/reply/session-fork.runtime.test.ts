@@ -63,7 +63,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
       totalTokensFresh: false,
     };
 
-    const tokens = resolveParentForkTokenCountRuntime({
+    const tokens = await resolveParentForkTokenCountRuntime({
       parentEntry: entry,
       storePath: path.join(root, "sessions.json"),
     });

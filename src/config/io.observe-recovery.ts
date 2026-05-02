@@ -77,16 +77,6 @@ export type ObserveRecoveryDeps = {
   logger: Pick<typeof console, "warn">;
 };
 
-type ObserveSnapshot = {
-  path: string;
-  exists: boolean;
-  valid: boolean;
-  raw: string | null;
-  hash?: string;
-  parsed: unknown;
-  resolved?: unknown;
-};
-
 type ConfigHealthFingerprint = {
   hash: string;
   bytes: number;
@@ -137,6 +127,8 @@ function createConfigObserveAuditRecord(params: {
   clobberedPath: string | null;
   restoredFromBackup: boolean;
   restoredBackupPath: string | null;
+  restoreErrorCode?: string | null;
+  restoreErrorMessage?: string | null;
 }): ConfigObserveAuditRecord {
   return {
     ts: params.ts,
@@ -185,6 +177,8 @@ function createConfigObserveAuditRecord(params: {
     clobberedPath: params.clobberedPath,
     restoredFromBackup: params.restoredFromBackup,
     restoredBackupPath: params.restoredBackupPath,
+    restoreErrorCode: params.restoreErrorCode ?? null,
+    restoreErrorMessage: params.restoreErrorMessage ?? null,
   };
 }
 
@@ -202,15 +196,22 @@ function createConfigObserveAuditAppendParams(
   };
 }
 
-function createConfigObserveAnomalyAuditAppendParams(
-  deps: ObserveRecoveryDeps,
-  params: Omit<ConfigObserveAuditRecordParams, "restoredFromBackup" | "restoredBackupPath">,
-) {
-  return createConfigObserveAuditAppendParams(deps, {
-    ...params,
-    restoredFromBackup: false,
-    restoredBackupPath: null,
-  });
+function extractRestoreErrorDetails(error: unknown): {
+  code: string | null;
+  message: string | null;
+} {
+  if (!error || typeof error !== "object") {
+    return { code: null, message: typeof error === "string" ? error : null };
+  }
+  const code =
+    "code" in error && typeof (error as { code?: unknown }).code === "string"
+      ? (error as { code: string }).code
+      : null;
+  const message =
+    "message" in error && typeof (error as { message?: unknown }).message === "string"
+      ? (error as { message: string }).message
+      : null;
+  return { code, message };
 }
 
 function hashConfigRaw(raw: string | null): string {
@@ -312,6 +313,10 @@ function resolveConfigHealthStatePath(env: NodeJS.ProcessEnv, homedir: () => str
   return path.join(resolveStateDir(env, homedir), "logs", "config-health.json");
 }
 
+function formatObserveRecoveryError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function readConfigHealthState(deps: ObserveRecoveryDeps): Promise<ConfigHealthState> {
   try {
     const raw = await deps.fs.promises.readFile(
@@ -339,25 +344,33 @@ async function writeConfigHealthState(
   deps: ObserveRecoveryDeps,
   state: ConfigHealthState,
 ): Promise<void> {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     await deps.fs.promises.mkdir(path.dirname(healthPath), { recursive: true, mode: 0o700 });
     await deps.fs.promises.writeFile(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {}
+  } catch (err) {
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
+  }
 }
 
 function writeConfigHealthStateSync(deps: ObserveRecoveryDeps, state: ConfigHealthState): void {
+  const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
   try {
-    const healthPath = resolveConfigHealthStatePath(deps.env, deps.homedir);
     deps.fs.mkdirSync(path.dirname(healthPath), { recursive: true, mode: 0o700 });
     deps.fs.writeFileSync(healthPath, `${JSON.stringify(state, null, 2)}\n`, {
       encoding: "utf-8",
       mode: 0o600,
     });
-  } catch {}
+  } catch (err) {
+    deps.logger.warn(
+      `Config health-state write failed: ${healthPath}: ${formatObserveRecoveryError(err)}`,
+    );
+  }
 }
 
 function getConfigHealthEntry(state: ConfigHealthState, configPath: string): ConfigHealthEntry {
@@ -658,19 +671,34 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
   });
 
   let restoredFromBackup = false;
+  let restoreError: unknown;
   try {
     await params.deps.fs.promises.copyFile(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {}
+  } catch (error) {
+    restoreError = error;
+  }
 
-  params.deps.logger.warn(
-    `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
-  );
+  const restoreErrorDetails = restoredFromBackup
+    ? { code: null, message: null }
+    : extractRestoreErrorDetails(restoreError);
+
+  if (restoredFromBackup) {
+    params.deps.logger.warn(
+      `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
+    );
+  } else {
+    params.deps.logger.warn(
+      `Config auto-restore from backup failed: ${params.configPath} (${suspicious.join(", ")}${
+        restoreErrorDetails.message ? `; ${restoreErrorDetails.message}` : ""
+      })`,
+    );
+  }
   await appendConfigAuditRecord(
     createConfigObserveAuditAppendParams(params.deps, {
       ts: now,
       configPath: params.configPath,
-      valid: true,
+      valid: restoredFromBackup,
       current,
       suspicious,
       lastKnownGood: entry.lastKnownGood,
@@ -678,6 +706,8 @@ export async function maybeRecoverSuspiciousConfigRead(params: {
       clobberedPath,
       restoredFromBackup,
       restoredBackupPath: backupPath,
+      restoreErrorCode: restoreErrorDetails.code,
+      restoreErrorMessage: restoreErrorDetails.message,
     }),
   );
 
@@ -748,19 +778,34 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   });
 
   let restoredFromBackup = false;
+  let restoreError: unknown;
   try {
     params.deps.fs.copyFileSync(backupPath, params.configPath);
     restoredFromBackup = true;
-  } catch {}
+  } catch (error) {
+    restoreError = error;
+  }
 
-  params.deps.logger.warn(
-    `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
-  );
+  const restoreErrorDetails = restoredFromBackup
+    ? { code: null, message: null }
+    : extractRestoreErrorDetails(restoreError);
+
+  if (restoredFromBackup) {
+    params.deps.logger.warn(
+      `Config auto-restored from backup: ${params.configPath} (${suspicious.join(", ")})`,
+    );
+  } else {
+    params.deps.logger.warn(
+      `Config auto-restore from backup failed: ${params.configPath} (${suspicious.join(", ")}${
+        restoreErrorDetails.message ? `; ${restoreErrorDetails.message}` : ""
+      })`,
+    );
+  }
   appendConfigAuditRecordSync(
     createConfigObserveAuditAppendParams(params.deps, {
       ts: now,
       configPath: params.configPath,
-      valid: true,
+      valid: restoredFromBackup,
       current,
       suspicious,
       lastKnownGood: entry.lastKnownGood,
@@ -768,6 +813,8 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
       clobberedPath,
       restoredFromBackup,
       restoredBackupPath: backupPath,
+      restoreErrorCode: restoreErrorDetails.code,
+      restoreErrorMessage: restoreErrorDetails.message,
     }),
   );
 
@@ -778,187 +825,6 @@ export function maybeRecoverSuspiciousConfigReadSync(params: {
   );
   writeConfigHealthStateSync(params.deps, healthState);
   return { raw: backupRaw, parsed: backupParsed };
-}
-
-export async function observeConfigSnapshot(
-  deps: ObserveRecoveryDeps,
-  snapshot: ObserveSnapshot,
-): Promise<void> {
-  if (!snapshot.exists || typeof snapshot.raw !== "string") {
-    return;
-  }
-
-  const stat = await deps.fs.promises.stat(snapshot.path).catch(() => null);
-  const now = new Date().toISOString();
-  const current = createConfigHealthFingerprint({
-    hash: resolveConfigSnapshotHash(snapshot) ?? hashConfigRaw(snapshot.raw),
-    raw: snapshot.raw,
-    parsed: snapshot.parsed,
-    gatewaySource: snapshot.resolved,
-    stat: stat as ConfigStatMetadataSource,
-    observedAt: now,
-  });
-
-  let healthState = await readConfigHealthState(deps);
-  const entry = getConfigHealthEntry(healthState, snapshot.path);
-  const backupBaseline =
-    entry.lastKnownGood ??
-    (await readConfigFingerprintForPath(deps, `${snapshot.path}.bak`)) ??
-    undefined;
-  const suspicious = resolveConfigObserveSuspiciousReasons({
-    bytes: current.bytes,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    parsed: snapshot.parsed,
-    lastKnownGood: backupBaseline,
-  });
-
-  if (suspicious.length === 0) {
-    if (snapshot.valid) {
-      const nextEntry: ConfigHealthEntry = {
-        ...entry,
-        lastKnownGood: current,
-        lastObservedSuspiciousSignature: null,
-      };
-      const same =
-        entry.lastKnownGood &&
-        entry.lastKnownGood.hash === current.hash &&
-        entry.lastKnownGood.bytes === current.bytes &&
-        entry.lastKnownGood.mtimeMs === current.mtimeMs &&
-        entry.lastKnownGood.ctimeMs === current.ctimeMs &&
-        entry.lastKnownGood.dev === current.dev &&
-        entry.lastKnownGood.ino === current.ino &&
-        entry.lastKnownGood.mode === current.mode &&
-        entry.lastKnownGood.nlink === current.nlink &&
-        entry.lastKnownGood.uid === current.uid &&
-        entry.lastKnownGood.gid === current.gid &&
-        entry.lastKnownGood.hasMeta === current.hasMeta &&
-        entry.lastKnownGood.gatewayMode === current.gatewayMode;
-      if (!same || entry.lastObservedSuspiciousSignature !== null) {
-        healthState = setConfigHealthEntry(healthState, snapshot.path, nextEntry);
-        await writeConfigHealthState(deps, healthState);
-      }
-    }
-    return;
-  }
-
-  const suspiciousSignature = resolveSuspiciousSignature(current, suspicious);
-  if (entry.lastObservedSuspiciousSignature === suspiciousSignature) {
-    return;
-  }
-
-  const backup =
-    (backupBaseline?.hash ? backupBaseline : null) ??
-    (await readConfigFingerprintForPath(deps, `${snapshot.path}.bak`));
-  const clobberedPath = await persistClobberedConfigSnapshot({
-    deps,
-    configPath: snapshot.path,
-    raw: snapshot.raw,
-    observedAt: now,
-  });
-
-  deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  await appendConfigAuditRecord(
-    createConfigObserveAnomalyAuditAppendParams(deps, {
-      ts: now,
-      configPath: snapshot.path,
-      valid: snapshot.valid,
-      current,
-      suspicious,
-      lastKnownGood: entry.lastKnownGood,
-      backup,
-      clobberedPath,
-    }),
-  );
-
-  healthState = setConfigHealthEntry(
-    healthState,
-    snapshot.path,
-    createLastObservedSuspiciousEntry(entry, suspiciousSignature),
-  );
-  await writeConfigHealthState(deps, healthState);
-}
-
-export function observeConfigSnapshotSync(
-  deps: ObserveRecoveryDeps,
-  snapshot: ObserveSnapshot,
-): void {
-  if (!snapshot.exists || typeof snapshot.raw !== "string") {
-    return;
-  }
-
-  const stat = deps.fs.statSync(snapshot.path, { throwIfNoEntry: false }) ?? null;
-  const now = new Date().toISOString();
-  const current = createConfigHealthFingerprint({
-    hash: resolveConfigSnapshotHash(snapshot) ?? hashConfigRaw(snapshot.raw),
-    raw: snapshot.raw,
-    parsed: snapshot.parsed,
-    gatewaySource: snapshot.resolved,
-    stat,
-    observedAt: now,
-  });
-
-  let healthState = readConfigHealthStateSync(deps);
-  const entry = getConfigHealthEntry(healthState, snapshot.path);
-  const backupBaseline =
-    entry.lastKnownGood ??
-    readConfigFingerprintForPathSync(deps, `${snapshot.path}.bak`) ??
-    undefined;
-  const suspicious = resolveConfigObserveSuspiciousReasons({
-    bytes: current.bytes,
-    hasMeta: current.hasMeta,
-    gatewayMode: current.gatewayMode,
-    parsed: snapshot.parsed,
-    lastKnownGood: backupBaseline,
-  });
-
-  if (suspicious.length === 0) {
-    if (snapshot.valid) {
-      healthState = setConfigHealthEntry(healthState, snapshot.path, {
-        ...entry,
-        lastKnownGood: current,
-        lastObservedSuspiciousSignature: null,
-      });
-      writeConfigHealthStateSync(deps, healthState);
-    }
-    return;
-  }
-
-  const suspiciousSignature = resolveSuspiciousSignature(current, suspicious);
-  if (entry.lastObservedSuspiciousSignature === suspiciousSignature) {
-    return;
-  }
-
-  const backup =
-    (backupBaseline?.hash ? backupBaseline : null) ??
-    readConfigFingerprintForPathSync(deps, `${snapshot.path}.bak`);
-  const clobberedPath = persistClobberedConfigSnapshotSync({
-    deps,
-    configPath: snapshot.path,
-    raw: snapshot.raw,
-    observedAt: now,
-  });
-
-  deps.logger.warn(`Config observe anomaly: ${snapshot.path} (${suspicious.join(", ")})`);
-  appendConfigAuditRecordSync(
-    createConfigObserveAnomalyAuditAppendParams(deps, {
-      ts: now,
-      configPath: snapshot.path,
-      valid: snapshot.valid,
-      current,
-      suspicious,
-      lastKnownGood: entry.lastKnownGood,
-      backup,
-      clobberedPath,
-    }),
-  );
-
-  healthState = setConfigHealthEntry(
-    healthState,
-    snapshot.path,
-    createLastObservedSuspiciousEntry(entry, suspiciousSignature),
-  );
-  writeConfigHealthStateSync(deps, healthState);
 }
 
 export async function promoteConfigSnapshotToLastKnownGood(params: {

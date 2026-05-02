@@ -37,6 +37,8 @@ import {
   type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
+  type PluginPackageChannel,
+  type PluginPackageInstall,
 } from "./manifest.js";
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
@@ -96,6 +98,9 @@ export type PluginManifestRecord = {
   name?: string;
   description?: string;
   version?: string;
+  packageName?: string;
+  packageVersion?: string;
+  packageDescription?: string;
   enabledByDefault?: boolean;
   autoEnableWhenConfiguredProviders?: string[];
   legacyPluginIds?: string[];
@@ -122,6 +127,9 @@ export type PluginManifestRecord = {
   providerAuthChoices?: PluginManifest["providerAuthChoices"];
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
+  packageManifest?: OpenClawPackageManifest;
+  packageChannel?: PluginPackageChannel;
+  packageInstall?: PluginPackageInstall;
   qaRunners?: PluginManifestQaRunner[];
   skills: string[];
   settingsFiles?: string[];
@@ -269,6 +277,9 @@ function buildRecord(params: {
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
+    packageName: params.candidate.packageName,
+    packageVersion: params.candidate.packageVersion,
+    packageDescription: params.candidate.packageDescription,
     enabledByDefault: params.manifest.enabledByDefault === true ? true : undefined,
     autoEnableWhenConfiguredProviders: params.manifest.autoEnableWhenConfiguredProviders,
     legacyPluginIds: params.manifest.legacyPluginIds,
@@ -298,6 +309,9 @@ function buildRecord(params: {
     providerAuthChoices: params.manifest.providerAuthChoices,
     activation: params.manifest.activation,
     setup: params.manifest.setup,
+    packageManifest: params.candidate.packageManifest,
+    packageChannel: params.candidate.packageManifest?.channel,
+    packageInstall: params.candidate.packageManifest?.install,
     qaRunners: params.manifest.qaRunners,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
@@ -357,6 +371,12 @@ function buildBundleRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.idHint,
     description: normalizeOptionalString(params.manifest.description),
     version: normalizeOptionalString(params.manifest.version),
+    packageName: params.candidate.packageName,
+    packageVersion: params.candidate.packageVersion,
+    packageDescription: params.candidate.packageDescription,
+    packageManifest: params.candidate.packageManifest,
+    packageChannel: params.candidate.packageManifest?.channel,
+    packageInstall: params.candidate.packageManifest?.install,
     format: "bundle",
     bundleFormat: params.candidate.bundleFormat,
     bundleCapabilities: params.manifest.capabilities,
@@ -540,6 +560,15 @@ export function loadPluginManifestRegistry(
   const config = params.config ?? {};
   const normalized = normalizePluginsConfigWithResolver(config.plugins);
   const env = params.env ?? process.env;
+  let installRecords = params.installRecords;
+  let installRecordsLoaded = Boolean(params.installRecords);
+  const getInstallRecords = (): Record<string, PluginInstallRecord> => {
+    if (!installRecordsLoaded) {
+      installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
+      installRecordsLoaded = true;
+    }
+    return installRecords ?? {};
+  };
 
   const discovery = params.candidates
     ? {
@@ -550,6 +579,7 @@ export function loadPluginManifestRegistry(
         workspaceDir: params.workspaceDir,
         extraPaths: normalized.loadPaths,
         env,
+        installRecords: getInstallRecords(),
       });
   const diagnostics: PluginDiagnostic[] = [...discovery.diagnostics];
   const candidates: PluginCandidate[] = discovery.candidates;
@@ -557,15 +587,6 @@ export function loadPluginManifestRegistry(
   const seenIds = new Map<string, SeenIdEntry>();
   const realpathCache = new Map<string, string>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
-  let installRecords = params.installRecords;
-  let installRecordsLoaded = Boolean(params.installRecords);
-  const getInstallRecords = (): Record<string, PluginInstallRecord> => {
-    if (!installRecordsLoaded) {
-      installRecords = loadInstalledPluginIndexInstallRecordsSync({ env });
-      installRecordsLoaded = true;
-    }
-    return installRecords ?? {};
-  };
 
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
@@ -596,27 +617,39 @@ export function loadPluginManifestRegistry(
       continue;
     }
     const manifest = manifestRes.manifest;
-    const minHostVersionCheck = checkMinHostVersion({
-      currentVersion: currentHostVersion,
-      minHostVersion: candidate.packageManifest?.install?.minHostVersion,
-    });
-    if (!minHostVersionCheck.ok) {
-      const packageManifestSource = path.join(
-        candidate.packageDir ?? candidate.rootDir,
-        "package.json",
-      );
-      diagnostics.push({
-        level: minHostVersionCheck.kind === "unknown_host_version" ? "warn" : "error",
-        pluginId: manifest.id,
-        source: packageManifestSource,
-        message:
-          minHostVersionCheck.kind === "invalid"
-            ? `plugin manifest invalid | ${minHostVersionCheck.error}`
-            : minHostVersionCheck.kind === "unknown_host_version"
-              ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
-              : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+    if (candidate.origin !== "bundled") {
+      const allowLegacyBareMinHostVersion =
+        candidate.origin === "global" &&
+        matchesInstalledPluginRecord({
+          pluginId: manifest.id,
+          candidate,
+          config,
+          env,
+          installRecords: getInstallRecords(),
+        });
+      const minHostVersionCheck = checkMinHostVersion({
+        currentVersion: currentHostVersion,
+        minHostVersion: candidate.packageManifest?.install?.minHostVersion,
+        allowLegacyBareSemver: allowLegacyBareMinHostVersion,
       });
-      continue;
+      if (!minHostVersionCheck.ok) {
+        const packageManifestSource = path.join(
+          candidate.packageDir ?? candidate.rootDir,
+          "package.json",
+        );
+        diagnostics.push({
+          level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message:
+            minHostVersionCheck.kind === "invalid"
+              ? `plugin manifest invalid | ${minHostVersionCheck.error}`
+              : minHostVersionCheck.kind === "unknown_host_version"
+                ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+                : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+        });
+        continue;
+      }
     }
 
     const configSchema = "configSchema" in manifest ? manifest.configSchema : undefined;

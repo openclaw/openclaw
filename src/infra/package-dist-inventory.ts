@@ -34,7 +34,6 @@ const OMITTED_PRIVATE_QA_DIST_PREFIXES = ["dist/qa-runtime-"];
 const OMITTED_DIST_SUBTREE_PATTERNS = [
   /^dist\/extensions\/node_modules(?:\/|$)/u,
   /^dist\/extensions\/[^/]+\/node_modules(?:\/|$)/u,
-  /^dist\/extensions\/[^/]+\/\.openclaw-runtime-deps-[^/]+(?:\/|$)/u,
   /^dist\/extensions\/qa-matrix(?:\/|$)/u,
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_CHANNEL_DIR}(?:/|$)`, "u"),
   new RegExp(`^dist/plugin-sdk/extensions/${LEGACY_QA_LAB_DIR}(?:/|$)`, "u"),
@@ -49,7 +48,22 @@ function isInstallStageDirName(value: string): boolean {
   return INSTALL_STAGE_DEBRIS_DIR_PATTERN.test(value);
 }
 
-export function isBundledRuntimeDepsInstallStagePath(relativePath: string): boolean {
+function isLegacyPluginDependencyDirPath(relativePath: string): boolean {
+  const parts = normalizeRelativePath(relativePath).split("/");
+  if (parts[0]?.toLowerCase() !== "dist" || parts[1]?.toLowerCase() !== "extensions") {
+    return false;
+  }
+
+  const rootDependencyDir = parts[2] ?? "";
+  if (rootDependencyDir.toLowerCase() === "node_modules") {
+    return true;
+  }
+
+  const pluginDependencyDir = parts[3] ?? "";
+  return pluginDependencyDir.toLowerCase() === "node_modules";
+}
+
+export function isLegacyPluginDependencyInstallStagePath(relativePath: string): boolean {
   const parts = normalizeRelativePath(relativePath).split("/");
   return (
     parts.length >= 4 &&
@@ -64,13 +78,13 @@ function isPackagedDistPath(relativePath: string): boolean {
   if (!relativePath.startsWith("dist/")) {
     return false;
   }
+  if (isLegacyPluginDependencyDirPath(relativePath)) {
+    return false;
+  }
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
     return false;
   }
   if (isLocalBuildMetadataDistPath(relativePath)) {
-    return false;
-  }
-  if (relativePath.endsWith("/.openclaw-runtime-deps-stamp.json")) {
     return false;
   }
   if (relativePath.endsWith(".map")) {
@@ -94,7 +108,7 @@ function isPackagedDistPath(relativePath: string): boolean {
 
 function isOmittedDistSubtree(relativePath: string): boolean {
   return (
-    isBundledRuntimeDepsInstallStagePath(relativePath) ||
+    isLegacyPluginDependencyDirPath(relativePath) ||
     OMITTED_DIST_SUBTREE_PATTERNS.some((pattern) => pattern.test(relativePath))
   );
 }
@@ -141,7 +155,7 @@ export async function collectPackageDistInventory(packageRoot: string): Promise<
   return await collectRelativeFiles(path.join(packageRoot, "dist"), packageRoot);
 }
 
-export async function collectBundledRuntimeDepsStagingDebrisPaths(
+export async function collectLegacyPluginDependencyStagingDebrisPaths(
   packageRoot: string,
 ): Promise<string[]> {
   const distDirs: string[] = [];
@@ -216,18 +230,20 @@ export async function collectBundledRuntimeDepsStagingDebrisPaths(
   return debris.toSorted((left, right) => left.localeCompare(right));
 }
 
-export async function assertNoBundledRuntimeDepsStagingDebris(packageRoot: string): Promise<void> {
-  const debris = await collectBundledRuntimeDepsStagingDebrisPaths(packageRoot);
+export async function assertNoLegacyPluginDependencyStagingDebris(
+  packageRoot: string,
+): Promise<void> {
+  const debris = await collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
   if (debris.length === 0) {
     return;
   }
   throw new Error(
-    `unexpected bundled-runtime-deps install staging debris in package dist: ${debris.join(", ")}`,
+    `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
   );
 }
 
 export async function writePackageDistInventory(packageRoot: string): Promise<string[]> {
-  await assertNoBundledRuntimeDepsStagingDebris(packageRoot);
+  await assertNoLegacyPluginDependencyStagingDebris(packageRoot);
   const inventory = [...new Set(await collectPackageDistInventory(packageRoot))].toSorted(
     (left, right) => left.localeCompare(right),
   );
@@ -237,7 +253,7 @@ export async function writePackageDistInventory(packageRoot: string): Promise<st
   return inventory;
 }
 
-export async function readPackageDistInventory(packageRoot: string): Promise<string[]> {
+async function readPackageDistInventory(packageRoot: string): Promise<string[]> {
   const inventoryPath = path.join(packageRoot, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   const raw = await fs.readFile(inventoryPath, "utf8");
   const parsed = JSON.parse(raw) as unknown;

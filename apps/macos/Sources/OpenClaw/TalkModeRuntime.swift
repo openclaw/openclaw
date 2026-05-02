@@ -225,7 +225,7 @@ actor TalkModeRuntime {
         input.removeTap(onBus: 0)
         let meter = self.rmsMeter
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request, meter] buffer, _ in
-            request?.append(buffer)
+            request?.append(SpeechAudioBufferNormalizer.speechCompatibleBuffer(from: buffer))
             if let rms = Self.rmsLevel(buffer: buffer) {
                 meter.set(rms)
             }

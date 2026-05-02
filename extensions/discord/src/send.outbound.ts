@@ -155,6 +155,7 @@ export async function sendMessageDiscord(
   const textWithTables = convertMarkdownTables(text ?? "", effectiveTableMode);
   const textWithMentions = rewriteDiscordKnownMentions(textWithTables, {
     accountId: accountInfo.accountId,
+    mentionAliases: accountInfo.config.mentionAliases,
   });
   const { token, rest, request } = createDiscordClient({ ...opts, cfg });
   const recipient = await parseAndResolveRecipient(to, cfg, opts.accountId);
@@ -406,6 +407,7 @@ async function resolveDiscordStructuredSendContext(
   const rewrittenContent = content
     ? rewriteDiscordKnownMentions(content, {
         accountId: accountInfo.accountId,
+        mentionAliases: accountInfo.config.mentionAliases,
       })
     : undefined;
   return { rest, request, channelId, rewrittenContent };

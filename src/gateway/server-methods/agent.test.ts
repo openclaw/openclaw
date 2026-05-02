@@ -1110,6 +1110,38 @@ describe("gateway agent handler", () => {
     expect(callArgs.bestEffortDeliver).toBe(false);
   });
 
+  it("rejects strict delivery with a missing target before dispatching the agent", async () => {
+    mocks.agentCommand.mockClear();
+    primeMainAgentRun();
+    const respond = vi.fn();
+
+    await invokeAgent(
+      {
+        message: "strict missing delivery target",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        deliver: true,
+        replyChannel: "telegram",
+        bestEffortDeliver: false,
+        idempotencyKey: "test-strict-delivery-missing-target",
+      },
+      {
+        reqId: "strict-delivery-missing-target",
+        respond,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("requires target"),
+      }),
+    );
+  });
+
   it("downgrades to session-only when bestEffortDeliver=true and no external channel is configured", async () => {
     mocks.agentCommand.mockClear();
     primeMainAgentRun();
@@ -1178,6 +1210,21 @@ describe("gateway agent handler", () => {
         message: expect.stringContaining("invalid agent params"),
       }),
     );
+  });
+
+  it("forwards one-shot bundle MCP cleanup from agent RPC into the runner", async () => {
+    primeMainAgentRun();
+    mocks.agentCommand.mockClear();
+
+    await invokeAgent({
+      message: "cleanup probe",
+      sessionKey: "agent:main:subagent:cleanup-probe",
+      idempotencyKey: "test-idem-agent-cleanup-bundle-mcp",
+      cleanupBundleMcpOnRunEnd: true,
+    });
+
+    const call = await waitForAgentCommandCall();
+    expect(call.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
   it.each(

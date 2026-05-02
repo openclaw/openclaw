@@ -11,10 +11,12 @@ import {
   installHooksFromNpmSpec,
   installHooksFromPath,
   installPluginFromClawHub,
+  installPluginFromGitSpec,
   installPluginFromMarketplace,
   installPluginFromNpmSpec,
   installPluginFromPath,
   loadConfig,
+  loadPluginManifestRegistry,
   readConfigFileSnapshot,
   parseClawHubPluginSpec,
   recordHookInstall,
@@ -82,6 +84,10 @@ function createClawHubInstallResult(params: {
       version: params.version,
       integrity: "sha256-abc",
       resolvedAt: "2026-03-22T00:00:00.000Z",
+      clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      clawpackSpecVersion: 1,
+      clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      clawpackSize: 4096,
     },
   };
 }
@@ -98,6 +104,24 @@ function createNpmPluginInstallResult(
       packageName: pluginId,
       resolvedVersion: "1.2.3",
       tarballUrl: `https://registry.npmjs.org/${pluginId}/-/${pluginId}-1.2.3.tgz`,
+    },
+  };
+}
+
+function createGitPluginInstallResult(
+  pluginId = "demo",
+): Awaited<ReturnType<typeof installPluginFromGitSpec>> {
+  return {
+    ok: true,
+    pluginId,
+    targetDir: cliInstallPath(pluginId),
+    version: "1.2.3",
+    extensions: ["index.js"],
+    git: {
+      url: "https://github.com/acme/demo.git",
+      ref: "v1.2.3",
+      commit: "abc123",
+      resolvedAt: "2026-04-30T00:00:00.000Z",
     },
   };
 }
@@ -366,6 +390,10 @@ describe("plugins cli install", () => {
       plugins: [{ id: "alpha", kind: "provider" }],
       diagnostics: [],
     });
+    loadPluginManifestRegistry.mockReturnValue({
+      plugins: [{ id: "alpha", kind: "memory" }],
+      diagnostics: [],
+    });
     applyExclusiveSlotSelection.mockReturnValue({
       config: enabledCfg,
       warnings: ["slot adjusted"],
@@ -443,6 +471,10 @@ describe("plugins cli install", () => {
         clawhubPackage: "demo",
         clawhubFamily: "code-plugin",
         clawhubChannel: "official",
+        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        clawpackSize: 4096,
       }),
     });
     expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
@@ -520,7 +552,7 @@ describe("plugins cli install", () => {
           "memory-lancedb": {
             config: {
               embedding: {
-                provider: "openai",
+                apiKey: "sk-test",
                 model: "text-embedding-3-small",
               },
             },
@@ -612,6 +644,10 @@ describe("plugins cli install", () => {
         installPath: cliInstallPath("demo"),
         version: "1.2.3",
         clawhubPackage: "demo",
+        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        clawpackSize: 4096,
       }),
     });
   });
@@ -850,6 +886,53 @@ describe("plugins cli install", () => {
     expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
     expect(runtimeErrors.at(-1)).toContain("unsupported npm: spec: missing package");
+  });
+
+  it("installs directly from git when git: prefix is used", async () => {
+    const cfg = createEmptyPluginConfig();
+    const enabledCfg = createEnabledPluginConfig("demo");
+
+    loadConfig.mockReturnValue(cfg);
+    installPluginFromGitSpec.mockResolvedValue(createGitPluginInstallResult("demo"));
+    enablePluginInConfig.mockReturnValue({ config: enabledCfg });
+    recordPluginInstall.mockReturnValue(enabledCfg);
+    applyExclusiveSlotSelection.mockReturnValue({
+      config: enabledCfg,
+      warnings: [],
+    });
+
+    await runPluginsCommand(["plugins", "install", "git:github.com/acme/demo@v1.2.3"]);
+
+    expect(installPluginFromGitSpec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "git:github.com/acme/demo@v1.2.3",
+        mode: "install",
+      }),
+    );
+    expect(installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith({
+      demo: expect.objectContaining({
+        source: "git",
+        spec: "git:github.com/acme/demo@v1.2.3",
+        installPath: cliInstallPath("demo"),
+        gitUrl: "https://github.com/acme/demo.git",
+        gitRef: "v1.2.3",
+        gitCommit: "abc123",
+      }),
+    });
+    expect(writeConfigFile).toHaveBeenCalledWith(enabledCfg);
+  });
+
+  it("rejects --pin for git installs and points at git refs", async () => {
+    loadConfig.mockReturnValue({} as OpenClawConfig);
+
+    await expect(
+      runPluginsCommand(["plugins", "install", "git:github.com/acme/demo", "--pin"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(installPluginFromGitSpec).not.toHaveBeenCalled();
+    expect(runtimeErrors.at(-1)).toContain("use `git:<repo>@<ref>`");
   });
 
   it("passes dangerous force unsafe install to marketplace installs", async () => {

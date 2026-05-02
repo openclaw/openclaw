@@ -9,15 +9,18 @@ import {
 import { resolveBundledPluginRepoEntryPath } from "./bundled-plugin-metadata.js";
 import { createCapturedPluginRegistration } from "./captured-registration.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
-import { getCachedPluginJitiLoader, type PluginJitiLoaderCache } from "./jiti-loader-cache.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
+import {
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "./plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   buildPluginLoaderAliasMap,
-  shouldPreferNativeJiti,
+  shouldPreferNativeModuleLoad,
   type PluginSdkResolutionPreference,
 } from "./sdk-alias.js";
 import type { OpenClawPluginDefinition, OpenClawPluginModule } from "./types.js";
@@ -193,11 +196,12 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   const env = params.env ?? process.env;
   const pluginIds = new Set(params.pluginIds);
   const registry = createEmptyPluginRegistry();
-  const jitiLoaders: PluginJitiLoaderCache = new Map();
+  const moduleLoaders: PluginModuleLoaderCache = new Map();
 
-  const getJiti = (modulePath: string) => {
+  const getModuleLoader = (modulePath: string) => {
     const tryNative =
-      shouldPreferNativeJiti(modulePath) && !(env?.VITEST && params.pluginSdkResolution === "dist");
+      shouldPreferNativeModuleLoad(modulePath) &&
+      !(env?.VITEST && params.pluginSdkResolution === "dist");
     const aliasMap = shouldApplyVitestCapabilityAliasOverrides({
       pluginSdkResolution: params.pluginSdkResolution,
       env,
@@ -213,11 +217,11 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
           env,
         })
       : undefined;
-    return getCachedPluginJitiLoader({
-      cache: jitiLoaders,
+    return getCachedPluginModuleLoader({
+      cache: moduleLoaders,
       modulePath,
       importerUrl: import.meta.url,
-      jitiFilename: import.meta.url,
+      loaderFilename: import.meta.url,
       ...(aliasMap ? { aliasMap } : {}),
       pluginSdkResolution: params.pluginSdkResolution,
       tryNative,
@@ -289,7 +293,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
 
     let mod: OpenClawPluginModule | null = null;
     try {
-      mod = getJiti(safeSource)(safeSource) as OpenClawPluginModule;
+      mod = getModuleLoader(safeSource)(safeSource) as OpenClawPluginModule;
     } catch (error) {
       recordCapabilityLoadError(registry, record, String(error));
       continue;

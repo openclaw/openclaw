@@ -17,7 +17,7 @@ export type SlackRoutingContextDeps = {
   threadHistoryScope: "thread" | "channel";
 };
 
-export type SlackRoutingContext = {
+type SlackRoutingContext = {
   route: ReturnType<typeof resolveAgentRoute>;
   runtimeBinding: RuntimeConversationBindingRouteResult["bindingRecord"];
   runtimeBoundSessionKey: string | undefined;
@@ -92,9 +92,9 @@ export function resolveSlackRoutingContext(params: {
   const threadContext = resolveSlackThreadContext({ message, replyToMode });
   const threadTs = threadContext.incomingThreadTs;
   const isThreadReply = threadContext.isThreadReply;
-  // Keep true thread replies thread-scoped, but preserve channel-level sessions
-  // for top-level room turns when replyToMode is off.
-  // For DMs, preserve existing auto-thread behavior when replyToMode="all".
+  // Keep true thread replies thread-scoped, while top-level DMs keep their
+  // stable direct-message session even when reply delivery targets a Slack UI
+  // thread.
   const autoThreadId =
     !isThreadReply && replyToMode === "all" && threadContext.messageTs
       ? threadContext.messageTs
@@ -115,7 +115,15 @@ export function resolveSlackRoutingContext(params: {
       ? seedCandidateThreadId
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
-  const canonicalThreadId = isRoomish ? roomThreadId : isThreadReply ? threadTs : autoThreadId;
+  const canonicalThreadId = isDirectMessage
+    ? isThreadReply
+      ? threadTs
+      : undefined
+    : isRoomish
+      ? roomThreadId
+      : isThreadReply
+        ? threadTs
+        : autoThreadId;
   const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
   const baseConversationId = resolveSlackBaseConversationId({ message, isDirectMessage });
   const boundThreadRoute = routedThreadId

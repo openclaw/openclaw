@@ -24,9 +24,6 @@ import type { GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
 
-/** The `ts` sentinel the UI uses to distinguish "never loaded" from "load failed". */
-export const MODEL_AUTH_STATUS_NEVER_LOADED = 0;
-
 /**
  * Models-auth status wire types. Mirrored in ui/src/ui/types.ts via an
  * `import(...)` re-export — edit here and the UI picks up the change.

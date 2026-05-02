@@ -192,9 +192,33 @@ When any subkey is enabled, model and tool spans get bounded, redacted
 - `openclaw.queue.depth` (histogram, attrs: `openclaw.lane` or `openclaw.channel=heartbeat`)
 - `openclaw.queue.wait_ms` (histogram, attrs: `openclaw.lane`)
 - `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
-- `openclaw.session.stuck` (counter, attrs: `openclaw.state`)
-- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`)
+- `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
+- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
 - `openclaw.run.attempt` (counter, attrs: `openclaw.attempt`)
+
+### Session liveness telemetry
+
+`diagnostics.stuckSessionWarnMs` is the no-progress age threshold for session
+liveness diagnostics. A `processing` session does not age toward this threshold
+while OpenClaw observes reply, tool, status, block, or ACP runtime progress.
+Typing keepalives are not counted as progress, so a silent model or harness can
+still be detected.
+
+OpenClaw classifies sessions by the work it can still observe:
+
+- `session.long_running`: active embedded work, model calls, or tool calls are
+  still making progress.
+- `session.stalled`: active work exists, but the active run has not reported
+  recent progress.
+- `session.stuck`: stale session bookkeeping with no active work. This is the
+  only liveness classification that releases the affected session lane.
+
+Only `session.stuck` emits the `openclaw.session.stuck` counter, the
+`openclaw.session.stuck_age_ms` histogram, and the `openclaw.session.stuck`
+span. Repeated `session.stuck` diagnostics back off while the session remains
+unchanged, so dashboards should alert on sustained increases rather than every
+heartbeat tick. For the config knob and defaults, see
+[Configuration reference](/gateway/configuration-reference#diagnostics).
 
 ### Harness lifecycle
 
@@ -277,8 +301,8 @@ to them directly without OTLP export.
 **Queue and session**
 
 - `queue.lane.enqueue` / `queue.lane.dequeue`
-- `session.state` / `session.stuck`
-- `run.attempt`
+- `session.state` / `session.long_running` / `session.stalled` / `session.stuck`
+- `run.attempt` / `run.progress`
 - `diagnostic.heartbeat` (aggregate counters: webhooks/queue/session)
 
 **Harness lifecycle**

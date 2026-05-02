@@ -8,7 +8,6 @@ import {
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
-import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-utils.fs.js";
 import { deriveSessionTitle } from "../../gateway/session-utils.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
@@ -119,6 +118,8 @@ export function createSessionsListTool(opts?: {
           label,
           agentId,
           search,
+          includeDerivedTitles,
+          includeLastMessage,
           includeGlobal: !restrictToSpawned,
           includeUnknown: !restrictToSpawned,
           spawnedBy: restrictToSpawned ? effectiveRequesterKey : undefined,
@@ -309,31 +310,17 @@ export function createSessionsListTool(opts?: {
           lastAccountId,
           transcriptPath,
         };
-        if (sessionId && (includeDerivedTitles || includeLastMessage)) {
-          const fields = readSessionTitleFieldsFromTranscript(
-            sessionId,
-            storePath,
-            sessionFile,
-            resolvedAgentId,
+        if (sessionId && includeDerivedTitles && !row.derivedTitle) {
+          row.derivedTitle = deriveSessionTitle(
+            {
+              sessionId,
+              displayName: row.displayName,
+              label: row.label,
+              subject: readStringValue((entry as { subject?: unknown }).subject),
+              updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
+            },
+            undefined,
           );
-          if (includeDerivedTitles && !row.derivedTitle) {
-            const derivedTitle = deriveSessionTitle(
-              {
-                sessionId,
-                displayName: row.displayName,
-                label: row.label,
-                subject: readStringValue((entry as { subject?: unknown }).subject),
-                updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
-              },
-              fields.firstUserMessage,
-            );
-            if (derivedTitle) {
-              row.derivedTitle = derivedTitle;
-            }
-          }
-          if (includeLastMessage && !row.lastMessagePreview && fields.lastMessagePreview) {
-            row.lastMessagePreview = fields.lastMessagePreview;
-          }
         }
         if (messageLimit > 0) {
           const resolvedKey = resolveInternalSessionKey({
