@@ -178,7 +178,6 @@ export const TelegramDirectSchema = z
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
     topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
-    threadReplies: TelegramDmThreadRepliesSchema.optional(),
     errorPolicy: TelegramErrorPolicySchema,
     errorCooldownMs: z.number().int().nonnegative().optional(),
     requireTopic: z.boolean().optional(),
