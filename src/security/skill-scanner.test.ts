@@ -265,6 +265,15 @@ const match = /^keychain:(.+)$/.exec(value);
     expect(findings.some((f) => f.ruleId === "dangerous-exec")).toBe(false);
   });
 
+  it("does not use full-line comments as source-rule context", () => {
+    const source = `
+const env = process.env;
+// fetch() can reach the endpoint later.
+`;
+    const findings = scanSource(source, "plugin.ts");
+    expect(findings.some((f) => f.ruleId === "env-harvesting")).toBe(false);
+  });
+
   it("returns empty array for clean plugin code", () => {
     const source = `
 export function greet(name: string): string {

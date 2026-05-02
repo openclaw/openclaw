@@ -233,9 +233,18 @@ function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean 
   return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
 }
 
+function stripFullLineCommentsForHeuristics(source: string): string {
+  return source
+    .split("\n")
+    .map((line) => (line.trimStart().startsWith("//") ? "" : line))
+    .join("\n");
+}
+
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
+  const heuristicSource = stripFullLineCommentsForHeuristics(source);
+  const heuristicLines = heuristicSource.split("\n");
   const matchedLineRules = new Set<string>();
 
   // --- Line rules ---
@@ -291,10 +300,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       continue;
     }
 
-    if (!rule.pattern.test(source)) {
+    if (!rule.pattern.test(heuristicSource)) {
       continue;
     }
-    if (rule.requiresContext && !rule.requiresContext.test(source)) {
+    if (rule.requiresContext && !rule.requiresContext.test(heuristicSource)) {
       continue;
     }
 
@@ -302,7 +311,7 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
     let matchLine = 0;
     let matchEvidence = "";
     for (let i = 0; i < lines.length; i++) {
-      if (rule.pattern.test(lines[i])) {
+      if (rule.pattern.test(heuristicLines[i] ?? "")) {
         matchLine = i + 1;
         matchEvidence = lines[i].trim();
         break;
