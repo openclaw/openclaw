@@ -237,6 +237,15 @@ describe("plugin runtime command execution", () => {
       },
     },
     {
+      name: "exposes runtime.usage pricing helpers",
+      assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
+        expectFunctionKeys(runtime.usage as Record<string, unknown>, [
+          "resolveModelCostConfig",
+          "estimateUsageCost",
+        ]);
+      },
+    },
+    {
       name: "exposes canonical runtime.tasks task runtimes while keeping legacy TaskFlow aliases",
       assert: (runtime: ReturnType<typeof createPluginRuntime>) => {
         expectFunctionKeys(runtime.tasks.runs as Record<string, unknown>, [

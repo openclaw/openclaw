@@ -129,6 +129,37 @@ Provider and channel execution paths must use the active runtime config snapshot
     ```
 
   </Accordion>
+  <Accordion title="api.runtime.usage">
+    Resolve configured model pricing and estimate token usage cost without
+    duplicating OpenClaw pricing tables inside a plugin.
+
+    ```typescript
+    const costConfig = api.runtime.usage.resolveModelCostConfig({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+
+    if (costConfig) {
+      const estimatedCostUsd = api.runtime.usage.estimateUsageCost(
+        {
+          inputTokens: 12_000,
+          outputTokens: 2_000,
+        },
+        costConfig,
+      );
+    }
+    ```
+
+    `resolveModelCostConfig(...)` returns OpenClaw's active pricing config for
+    the requested provider/model pair when one is available. `estimateUsageCost(...)`
+    applies that config to token usage and returns the estimated USD cost.
+
+    This namespace is intended for local plugin accounting, preflight warnings,
+    and status/reporting surfaces. It should not be used as a billing authority;
+    providers remain the source of truth for final charged usage.
+
+  </Accordion>
+
   <Accordion title="api.runtime.subagent">
     Launch and manage background subagent runs.
 

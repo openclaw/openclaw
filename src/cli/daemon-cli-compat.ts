@@ -8,9 +8,9 @@ export const LEGACY_DAEMON_CLI_EXPORTS = [
   "runDaemonUninstall",
 ] as const;
 
-type LegacyDaemonCliExport = (typeof LEGACY_DAEMON_CLI_EXPORTS)[number];
-type LegacyDaemonCliRunnerExport = Exclude<LegacyDaemonCliExport, "registerDaemonCli">;
-type LegacyDaemonCliAccessors = {
+export type LegacyDaemonCliExport = (typeof LEGACY_DAEMON_CLI_EXPORTS)[number];
+export type LegacyDaemonCliRunnerExport = Exclude<LegacyDaemonCliExport, "registerDaemonCli">;
+export type LegacyDaemonCliAccessors = {
   registerDaemonCli: string;
   runDaemonRestart: string;
 } & Partial<
