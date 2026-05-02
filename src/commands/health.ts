@@ -23,6 +23,7 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { asNullableRecord } from "../shared/record-coerce.js";
 import { styleHealthChannelLine } from "../terminal/health-style.js";
 import { isRich } from "../terminal/theme.js";
@@ -48,11 +49,12 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 
 type ConfigModule = typeof import("../config/config.js");
 
-let configModulePromise: Promise<ConfigModule> | undefined;
+const configModuleLoader = createLazyImportLoader<ConfigModule>(
+  () => import("../config/config.js"),
+);
 
 function loadConfigModule(): Promise<ConfigModule> {
-  configModulePromise ??= import("../config/config.js");
-  return configModulePromise;
+  return configModuleLoader.load();
 }
 
 const debugHealth = (...args: unknown[]) => {

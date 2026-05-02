@@ -5,6 +5,7 @@ import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.j
 import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { shortenHomePath } from "../utils.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 
@@ -41,23 +42,26 @@ type AgentWorkspaceModule = typeof import("../agents/workspace.js");
 type ConfigIOModule = typeof import("../config/config.js");
 type ConfigLoggingModule = typeof import("../config/logging.js");
 
-let agentWorkspaceModulePromise: Promise<AgentWorkspaceModule> | undefined;
-let configIOModulePromise: Promise<ConfigIOModule> | undefined;
-let configLoggingModulePromise: Promise<ConfigLoggingModule> | undefined;
+const agentWorkspaceModuleLoader = createLazyImportLoader<AgentWorkspaceModule>(
+  () => import("../agents/workspace.js"),
+);
+const configIOModuleLoader = createLazyImportLoader<ConfigIOModule>(
+  () => import("../config/config.js"),
+);
+const configLoggingModuleLoader = createLazyImportLoader<ConfigLoggingModule>(
+  () => import("../config/logging.js"),
+);
 
 function loadAgentWorkspaceModule(): Promise<AgentWorkspaceModule> {
-  agentWorkspaceModulePromise ??= import("../agents/workspace.js");
-  return agentWorkspaceModulePromise;
+  return agentWorkspaceModuleLoader.load();
 }
 
 function loadConfigIOModule(): Promise<ConfigIOModule> {
-  configIOModulePromise ??= import("../config/config.js");
-  return configIOModulePromise;
+  return configIOModuleLoader.load();
 }
 
 function loadConfigLoggingModule(): Promise<ConfigLoggingModule> {
-  configLoggingModulePromise ??= import("../config/logging.js");
-  return configLoggingModulePromise;
+  return configLoggingModuleLoader.load();
 }
 
 async function createDefaultConfigIO(): Promise<ConfigIO> {

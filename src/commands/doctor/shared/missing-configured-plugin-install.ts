@@ -6,7 +6,7 @@ import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields } from "../../../plugins/installs.js";
-import { loadPluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { asObjectRecord } from "./object.js";
@@ -154,7 +154,7 @@ export async function repairMissingConfiguredPluginInstalls(params: {
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
   const knownIds = new Set(
-    loadPluginMetadataSnapshot({
+    loadManifestMetadataSnapshot({
       config: params.cfg,
       env,
     }).plugins.map((plugin) => plugin.id),
