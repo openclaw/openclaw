@@ -8,6 +8,7 @@ import type {
   CliBackendAuthEpochMode,
   CliBackendPreparedExecution,
 } from "../../plugins/cli-backend.types.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -349,9 +350,8 @@ export async function prepareCliRunContext(
         workspaceDir,
         modelProviderId: params.provider,
         modelId,
-        messageProvider: params.messageProvider,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider,
+        ...buildAgentHookContextChannelFields(params),
       },
       hookRunner,
     });

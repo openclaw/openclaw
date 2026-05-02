@@ -9,6 +9,7 @@ import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -423,9 +424,8 @@ export async function runEmbeddedPiAgent(
         workspaceDir: resolvedWorkspace,
         modelProviderId: provider,
         modelId,
-        messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        ...buildAgentHookContextChannelFields(params),
       };
       if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
         const hookResult = await hookRunner.runBeforeAgentReply(
