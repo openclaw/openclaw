@@ -202,9 +202,6 @@ importers:
       undici:
         specifier: 8.1.0
         version: 8.1.0
-      uuid:
-        specifier: 14.0.0
-        version: 14.0.0
       web-push:
         specifier: ^3.6.7
         version: 3.6.7
