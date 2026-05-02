@@ -65,10 +65,10 @@ export function disableUnavailableSkillsInConfig(
   if (skills.length === 0) {
     return config;
   }
-  const entries = { ...(config.skills?.entries ?? {}) };
+  const entries = { ...config.skills?.entries };
   for (const skill of skills) {
     entries[skill.skillKey] = {
-      ...(entries[skill.skillKey] ?? {}),
+      ...entries[skill.skillKey],
       enabled: false,
     };
   }

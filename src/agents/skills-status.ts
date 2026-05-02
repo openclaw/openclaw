@@ -176,20 +176,23 @@ function normalizeInstallOptions(
 
 function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
   if (entry.exposure) {
-    return entry.exposure.includeInAvailableSkillsPrompt !== false;
+    return (
+      entry.exposure.includeInAvailableSkillsPrompt ||
+      !("includeInAvailableSkillsPrompt" in entry.exposure)
+    );
   }
   if (entry.invocation) {
-    return entry.invocation.disableModelInvocation !== true;
+    return !entry.invocation.disableModelInvocation;
   }
-  return entry.skill.disableModelInvocation !== true;
+  return !entry.skill.disableModelInvocation;
 }
 
 function isSkillUserInvocable(entry: SkillEntry): boolean {
   if (entry.exposure) {
-    return entry.exposure.userInvocable !== false;
+    return entry.exposure.userInvocable || !("userInvocable" in entry.exposure);
   }
   if (entry.invocation) {
-    return entry.invocation.userInvocable !== false;
+    return entry.invocation.userInvocable || !("userInvocable" in entry.invocation);
   }
   return true;
 }
