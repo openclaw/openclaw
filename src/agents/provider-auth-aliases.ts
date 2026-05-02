@@ -4,6 +4,7 @@ import {
   isWorkspacePluginAllowedByConfig,
   normalizePluginConfigId,
 } from "../plugins/plugin-config-trust.js";
+import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -31,9 +32,16 @@ let providerAuthAliasMapCache = new WeakMap<
   Map<string, Record<string, string>>
 >();
 
-function buildProviderAuthAliasMapCacheKey(params?: ProviderAuthAliasLookupParams): string {
+function buildProviderAuthAliasMapCacheKey(
+  params: ProviderAuthAliasLookupParams | undefined,
+  env: NodeJS.ProcessEnv,
+): string {
   return JSON.stringify({
-    workspaceDir: params?.workspaceDir ?? "",
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params?.config,
+      env,
+      workspaceDir: params?.workspaceDir,
+    }),
     includeUntrustedWorkspacePlugins: params?.includeUntrustedWorkspacePlugins === true,
     plugins: params?.config?.plugins ?? null,
   });
@@ -100,7 +108,7 @@ export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
   const env = params?.env ?? process.env;
-  const cacheKey = buildProviderAuthAliasMapCacheKey(params);
+  const cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
   let envCache = providerAuthAliasMapCache.get(env);
   if (!envCache) {
     envCache = new Map<string, Record<string, string>>();

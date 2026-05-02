@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
@@ -45,6 +46,11 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
 function resolveProviderRuntimePluginCacheKey(params: ProviderRuntimePluginLookupParams): string {
   return JSON.stringify({
     provider: normalizeLowercaseStringOrEmpty(params.provider),
+    pluginControlPlane: resolvePluginControlPlaneFingerprint({
+      config: params.config,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+    }),
     plugins: params.config?.plugins,
     models: params.config?.models?.providers,
     workspaceDir: params.workspaceDir ?? "",

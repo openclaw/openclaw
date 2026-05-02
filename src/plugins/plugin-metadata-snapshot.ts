@@ -53,7 +53,9 @@ export function isPluginMetadataSnapshotCompatible(params: {
       params.snapshot.configFingerprint ===
         resolvePluginMetadataSnapshotConfigFingerprint(params.config, {
           env,
+          index: params.index ?? params.snapshot.index,
           policyHash: params.snapshot.policyHash,
+          workspaceDir: params.workspaceDir,
         })) &&
     (params.snapshot.workspaceDir ?? "") === (params.workspaceDir ?? "") &&
     indexesMatch(params.snapshot.index, params.index)
@@ -185,7 +187,9 @@ function loadPluginMetadataSnapshotImpl(
     policyHash: index.policyHash,
     configFingerprint: resolvePluginMetadataSnapshotConfigFingerprint(params.config, {
       env: params.env,
+      index,
       policyHash: index.policyHash,
+      workspaceDir: params.workspaceDir,
     }),
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     index,

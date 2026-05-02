@@ -13,14 +13,16 @@ export { resolvePluginMetadataSnapshotConfigFingerprint } from "./plugin-metadat
 // never accumulate historical metadata snapshots here.
 export function setCurrentPluginMetadataSnapshot(
   snapshot: PluginMetadataSnapshot | undefined,
-  options: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv } = {},
+  options: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; workspaceDir?: string } = {},
 ): void {
   setCurrentPluginMetadataSnapshotState(
     snapshot,
     snapshot
       ? resolvePluginMetadataSnapshotConfigFingerprint(options.config, {
           env: options.env,
+          index: snapshot.index,
           policyHash: snapshot.policyHash,
+          workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
         })
       : undefined,
   );
@@ -53,6 +55,9 @@ export function getCurrentPluginMetadataSnapshot(
       params.config,
       {
         env: params.env,
+        index: snapshot.index,
+        policyHash: snapshot.policyHash,
+        workspaceDir: params.workspaceDir,
       },
     );
     if (configFingerprint && configFingerprint !== requestedConfigFingerprint) {

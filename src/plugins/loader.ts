@@ -102,6 +102,10 @@ import {
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
+import {
+  fingerprintPluginDiscoveryContext,
+  resolvePluginDiscoveryContext,
+} from "./plugin-control-plane-context.js";
 import { withProfile } from "./plugin-load-profile.js";
 import {
   getCachedPluginSourceModuleLoader,
@@ -116,7 +120,6 @@ import {
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
@@ -616,11 +619,12 @@ function buildCacheKey(params: {
   coreGatewayMethodNames?: string[];
   activate?: boolean;
 }): string {
-  const { roots, loadPaths } = resolvePluginCacheInputs({
+  const discoveryContext = resolvePluginDiscoveryContext({
     workspaceDir: params.workspaceDir,
     loadPaths: params.plugins.loadPaths,
     env: params.env,
   });
+  const { roots, loadPaths } = discoveryContext;
   const bundledPackage = resolveBundledPackageCacheIdentity(roots.stock);
   const installs = Object.fromEntries(
     Object.entries(params.installs ?? {}).map(([pluginId, install]) => [
@@ -655,6 +659,7 @@ function buildCacheKey(params: {
   const activationMode = params.activate === false ? "snapshot" : "active";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     bundledPackage,
+    discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
     ...params.plugins,
     installs,
     loadPaths,
