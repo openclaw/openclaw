@@ -60,11 +60,14 @@ Site: [clawhub.ai](https://clawhub.ai)
   </Tab>
   <Tab title="Plugins">
     ```bash
+    openclaw plugins search "calendar"
     openclaw plugins install clawhub:<package>
     openclaw plugins update --all
     ```
 
-    Bare npm-safe plugin specs are also tried against ClawHub before npm:
+    `plugins search` queries the ClawHub plugin catalog and prints install-ready
+    package names. Bare npm-safe plugin specs are also tried against ClawHub
+    before npm:
 
     ```bash
     openclaw plugins install openclaw-codex-app-server

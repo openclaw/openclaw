@@ -310,11 +310,11 @@ function createBundledChannelLoadContext(): BundledChannelLoadContext {
   };
 }
 
-function resolveActiveBundledChannelLoadScope(): {
+function resolveActiveBundledChannelLoadScope(env: NodeJS.ProcessEnv = process.env): {
   rootScope: BundledChannelRootScope;
   loadContext: BundledChannelLoadContext;
 } {
-  const rootScope = resolveBundledChannelRootScope();
+  const rootScope = resolveBundledChannelRootScope(env);
   const cachedContext = bundledChannelLoadContextsByRoot.get(rootScope.cacheKey);
   if (cachedContext) {
     bundledChannelLoadContextsByRoot.delete(rootScope.cacheKey);
@@ -787,13 +787,19 @@ export function getBundledChannelSecrets(id: ChannelId): ChannelPlugin["secrets"
   return getBundledChannelSecretsForRoot(id, rootScope, loadContext);
 }
 
-export function getBundledChannelSetupPlugin(id: ChannelId): ChannelPlugin | undefined {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
+export function getBundledChannelSetupPlugin(
+  id: ChannelId,
+  env: NodeJS.ProcessEnv = process.env,
+): ChannelPlugin | undefined {
+  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope(env);
   return getBundledChannelSetupPluginForRoot(id, rootScope, loadContext);
 }
 
-export function getBundledChannelSetupSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
-  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope();
+export function getBundledChannelSetupSecrets(
+  id: ChannelId,
+  env: NodeJS.ProcessEnv = process.env,
+): ChannelPlugin["secrets"] | undefined {
+  const { rootScope, loadContext } = resolveActiveBundledChannelLoadScope(env);
   return getBundledChannelSetupSecretsForRoot(id, rootScope, loadContext);
 }
 

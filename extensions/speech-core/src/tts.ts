@@ -1527,7 +1527,8 @@ export async function maybeApplyTtsToPayload(params: {
   const cleanedText = directives.cleanedText;
   const trimmedCleaned = cleanedText.trim();
   const visibleText = trimmedCleaned.length > 0 ? trimmedCleaned : "";
-  const ttsText = directives.ttsText?.trim() || visibleText;
+  const explicitTtsText = directives.ttsText?.trim() || "";
+  const ttsText = explicitTtsText || visibleText;
 
   const nextPayload =
     visibleText === text.trim()
@@ -1558,7 +1559,7 @@ export async function maybeApplyTtsToPayload(params: {
   if (text.includes("MEDIA:")) {
     return nextPayload;
   }
-  if (ttsText.trim().length < 10) {
+  if (!explicitTtsText && ttsText.trim().length < 10) {
     return nextPayload;
   }
 
@@ -1598,7 +1599,10 @@ export async function maybeApplyTtsToPayload(params: {
   }
 
   textForAudio = stripMarkdown(textForAudio).trim();
-  if (textForAudio.length < 10) {
+  if (!textForAudio) {
+    return nextPayload;
+  }
+  if (!explicitTtsText && textForAudio.length < 10) {
     return nextPayload;
   }
 

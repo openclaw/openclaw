@@ -283,6 +283,47 @@ describe("slackPlugin actions", () => {
       undefined,
     );
   });
+
+  it("forwards media access through the bundled Slack action invoke path", async () => {
+    handleSlackActionMock.mockResolvedValueOnce({ ok: true });
+    const handleAction = requireSlackHandleAction();
+    const mediaLocalRoots = ["/tmp/workspace-agent"];
+    const mediaReadFile = vi.fn(async () => Buffer.from("file"));
+
+    await handleAction({
+      action: "upload-file",
+      channel: "slack",
+      accountId: "default",
+      cfg: {},
+      params: {
+        to: "channel:C123",
+        filePath: "/tmp/workspace-agent/renders/file.wav",
+        initialComment: "render",
+      },
+      mediaLocalRoots,
+      mediaReadFile,
+      toolContext: {
+        currentChannelId: "C123",
+        replyToMode: "all",
+      },
+    } as never);
+
+    expect(handleSlackActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "uploadFile",
+        to: "channel:C123",
+        filePath: "/tmp/workspace-agent/renders/file.wav",
+        initialComment: "render",
+      }),
+      {},
+      expect.objectContaining({
+        currentChannelId: "C123",
+        replyToMode: "all",
+        mediaLocalRoots,
+        mediaReadFile,
+      }),
+    );
+  });
 });
 
 describe("slackPlugin status", () => {

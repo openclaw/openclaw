@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 type PluginSdkAliasCandidateKind = "dist" | "src";
 export type PluginSdkResolutionPreference = "auto" | "dist" | "src";
@@ -249,8 +250,13 @@ export function resolvePluginSdkAliasFile(params: {
   return null;
 }
 
-const cachedPluginSdkExportedSubpaths = new Map<string, string[]>();
-const cachedPluginSdkScopedAliasMaps = new Map<string, Record<string, string>>();
+const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
+const cachedPluginSdkExportedSubpaths = new PluginLruCache<string[]>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
+const cachedPluginSdkScopedAliasMaps = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
 const PLUGIN_SDK_PACKAGE_NAMES = ["openclaw/plugin-sdk", "@openclaw/plugin-sdk"] as const;
 const PLUGIN_SDK_SOURCE_CANDIDATE_EXTENSIONS = [
   ".ts",
@@ -480,7 +486,6 @@ export function resolveExtensionApiAlias(params: LoaderModuleResolveParams = {})
   return null;
 }
 
-const MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES = 512;
 const JITI_NORMALIZED_ALIAS_SYMBOL = Symbol.for("pathe:normalizedAlias");
 const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefined]);
 
@@ -488,30 +493,17 @@ const JITI_ALIAS_ROOT_SENTINELS = new Set<string | undefined>(["/", "\\", undefi
 // loader setup avoids rebuilding the same filesystem-derived map and cache key.
 // Include cwd/env inputs because the fallback root and private QA alias
 // surfaces depend on them.
-const aliasMapCache = new Map<string, Record<string, string>>();
-const normalizedJitiAliasMapCache = new Map<string, Record<string, string>>();
-const pluginLoaderModuleConfigCache = new Map<
-  string,
-  {
-    tryNative: boolean;
-    aliasMap: Record<string, string>;
-    cacheKey: string;
-  }
->();
-
-function setBoundedCacheValue<T>(cache: Map<string, T>, key: string, value: T) {
-  if (cache.has(key)) {
-    cache.delete(key);
-  }
-  cache.set(key, value);
-  while (cache.size > MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES) {
-    const oldestKey = cache.keys().next().value;
-    if (typeof oldestKey !== "string") {
-      break;
-    }
-    cache.delete(oldestKey);
-  }
-}
+const aliasMapCache = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
+const normalizedJitiAliasMapCache = new PluginLruCache<Record<string, string>>(
+  MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES,
+);
+const pluginLoaderModuleConfigCache = new PluginLruCache<{
+  tryNative: boolean;
+  aliasMap: Record<string, string>;
+  cacheKey: string;
+}>(MAX_PLUGIN_LOADER_ALIAS_CACHE_ENTRIES);
 
 function hasJitiNormalizedAliasMarker(aliasMap: Record<string, string>) {
   return Boolean((aliasMap as Record<symbol, unknown>)[JITI_NORMALIZED_ALIAS_SYMBOL]);
@@ -557,7 +549,7 @@ function normalizePluginLoaderAliasMapForJiti(
     value: true,
     enumerable: false,
   });
-  setBoundedCacheValue(normalizedJitiAliasMapCache, cacheKey, normalizedAliasMap);
+  normalizedJitiAliasMapCache.set(cacheKey, normalizedAliasMap);
   return normalizedAliasMap;
 }
 
@@ -640,7 +632,7 @@ export function buildPluginLoaderAliasMap(
       ).map(([key, value]) => [key, normalizeJitiAliasTargetPath(value)]),
     ),
   };
-  setBoundedCacheValue(aliasMapCache, cacheKey, result);
+  aliasMapCache.set(cacheKey, result);
   return result;
 }
 
@@ -781,7 +773,7 @@ export function resolvePluginLoaderModuleConfig(params: {
       aliasMap,
     }),
   };
-  setBoundedCacheValue(pluginLoaderModuleConfigCache, configCacheKey, result);
+  pluginLoaderModuleConfigCache.set(configCacheKey, result);
   return result;
 }
 

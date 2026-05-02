@@ -120,7 +120,7 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
   };
 }
 
-export async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
+async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   protectJsonStdout(opts);
   const body = (opts.message ?? "").trim();
   if (!body) {

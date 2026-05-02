@@ -136,6 +136,7 @@ function normalizeClawHubClawPackInstallFields(
   if (clawpack?.available !== true) {
     return {};
   }
+
   const clawpackSha256 =
     typeof clawpack.sha256 === "string" ? normalizeClawHubSha256Hex(clawpack.sha256) : null;
   const clawpackManifestSha256 =
@@ -158,6 +159,18 @@ function normalizeClawHubClawPackInstallFields(
     ...(clawpackManifestSha256 ? { clawpackManifestSha256 } : {}),
     ...(clawpackSize !== undefined ? { clawpackSize } : {}),
   };
+}
+
+function isTrustedSourceLinkedOfficialPackage(pkg: NonNullable<ClawHubPackageDetail["package"]>) {
+  const sourceRepo = normalizeOptionalString(pkg.verification?.sourceRepo);
+  return (
+    pkg.channel === "official" &&
+    pkg.isOfficial &&
+    pkg.verification?.tier === "source-linked" &&
+    (sourceRepo === "openclaw/openclaw" ||
+      sourceRepo === "github.com/openclaw/openclaw" ||
+      sourceRepo === "https://github.com/openclaw/openclaw")
+  );
 }
 
 function resolveClawHubClawPackArtifactSha256(
@@ -943,6 +956,7 @@ export async function installPluginFromClawHub(
     const installResult = await installPluginFromArchive({
       archivePath: archive.archivePath,
       dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      trustedSourceLinkedOfficialInstall: isTrustedSourceLinkedOfficialPackage(detail.package!),
       logger: params.logger,
       mode: params.mode,
       extensionsDir: params.extensionsDir,

@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -17,10 +18,11 @@ type RestartDrainTimeoutMs = number | undefined;
 
 type GatewayLifecycleRuntimeModule = typeof import("./lifecycle.runtime.js");
 
-let gatewayLifecycleRuntimeModule: Promise<GatewayLifecycleRuntimeModule> | undefined;
+const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRuntimeModule>(
+  () => import("./lifecycle.runtime.js"),
+);
 
-const loadGatewayLifecycleRuntimeModule = () =>
-  (gatewayLifecycleRuntimeModule ??= import("./lifecycle.runtime.js"));
+const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
 
 function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
   let isFirstIteration = true;

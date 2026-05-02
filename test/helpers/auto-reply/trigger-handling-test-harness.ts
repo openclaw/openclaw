@@ -42,10 +42,6 @@ export function getRunEmbeddedPiAgentMock(): AnyMock {
   return piEmbeddedMocks.runEmbeddedPiAgent;
 }
 
-export function getQueueEmbeddedPiMessageMock(): AnyMock {
-  return piEmbeddedMocks.queueEmbeddedPiMessage;
-}
-
 const installPiEmbeddedMock = () =>
   vi.doMock("../../../src/agents/pi-embedded.js", () => ({
     abortEmbeddedPiRun: (...args: unknown[]) => piEmbeddedMocks.abortEmbeddedPiRun(...args),
@@ -105,10 +101,6 @@ const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalo
   resetModelCatalogCacheForTest: vi.fn(),
 }));
 
-export function getModelCatalogMocks(): AnyMocks {
-  return modelCatalogMocks;
-}
-
 const installModelCatalogMock = () =>
   vi.doMock("../../../src/agents/model-catalog.js", () => modelCatalogMocks);
 
@@ -143,10 +135,6 @@ const modelFallbackMocks = getSharedMocks("openclaw.trigger-handling.model-fallb
   ),
 }));
 
-export function getModelFallbackMocks(): AnyMocks {
-  return modelFallbackMocks;
-}
-
 const installModelFallbackMock = () =>
   vi.doMock("../../../src/agents/model-fallback.js", () => modelFallbackMocks);
 
@@ -161,10 +149,6 @@ const webSessionMocks = getSharedMocks("openclaw.trigger-handling.web-session-mo
   getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
   readWebSelfId: vi.fn().mockReturnValue({ e164: "+1999" }),
 }));
-
-export function getWebSessionMocks(): AnyMocks {
-  return webSessionMocks;
-}
 
 const installWebSessionMock = () =>
   vi.doMock("../../../src/plugins/runtime/runtime-web-channel-plugin.js", () => ({
@@ -319,66 +303,6 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
     throw new Error("expected session store path");
   }
   return storePath;
-}
-
-export async function readSessionStore(cfg: {
-  session?: { store?: string };
-}): Promise<Record<string, { elevatedLevel?: string }>> {
-  const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
-  return JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
-}
-
-export function makeWhatsAppElevatedCfg(
-  home: string,
-  opts?: { elevatedEnabled?: boolean; requireMentionInGroups?: boolean },
-): OpenClawConfig {
-  const cfg = makeCfg(home);
-  cfg.channels ??= {};
-  cfg.channels.whatsapp = {
-    ...cfg.channels.whatsapp,
-    allowFrom: ["+1000"],
-  };
-  if (opts?.requireMentionInGroups !== undefined) {
-    cfg.channels.whatsapp.groups = { "*": { requireMention: opts.requireMentionInGroups } };
-  }
-
-  cfg.tools = {
-    ...cfg.tools,
-    elevated: {
-      allowFrom: { whatsapp: ["+1000"] },
-      ...(opts?.elevatedEnabled === false ? { enabled: false } : {}),
-    },
-  };
-  return cfg;
-}
-
-export async function runDirectElevatedToggleAndLoadStore(params: {
-  cfg: OpenClawConfig;
-  getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
-  body?: string;
-}): Promise<{
-  text: string | undefined;
-  store: Record<string, { elevatedLevel?: string }>;
-}> {
-  const res = await params.getReplyFromConfig(
-    {
-      Body: params.body ?? "/elevated on",
-      From: "+1000",
-      To: "+2000",
-      Provider: "whatsapp",
-      SenderE164: "+1000",
-      CommandAuthorized: true,
-    },
-    {},
-    params.cfg,
-  );
-  const text = Array.isArray(res) ? res[0]?.text : res?.text;
-  const storePath = params.cfg.session?.store;
-  if (!storePath) {
-    throw new Error("session.store is required in test config");
-  }
-  const store = await readSessionStore(params.cfg);
-  return { text, store };
 }
 
 export async function expectInlineCommandHandledAndStripped(params: {

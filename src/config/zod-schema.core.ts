@@ -362,6 +362,7 @@ const ModelProviderSchema = z
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
+    params: z.record(z.string(), z.unknown()).optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
@@ -570,6 +571,19 @@ const CliBackendWatchdogModeSchema = z
   .strict()
   .optional();
 
+const CliBackendOutputLimitsSchema = z
+  .object({
+    maxTurnRawChars: z
+      .number()
+      .int()
+      .min(1024)
+      .max(64 * 1024 * 1024)
+      .optional(),
+    maxTurnLines: z.number().int().min(100).max(100_000).optional(),
+  })
+  .strict()
+  .optional();
+
 export const CliBackendSchema = z
   .object({
     command: z.string(),
@@ -605,6 +619,7 @@ export const CliBackendSchema = z
     serialize: z.boolean().optional(),
     reliability: z
       .object({
+        outputLimits: CliBackendOutputLimitsSchema,
         watchdog: z
           .object({
             fresh: CliBackendWatchdogModeSchema,

@@ -695,6 +695,39 @@ describe("monitorSlackProvider tool results", () => {
     });
   });
 
+  it("keeps status reactions for mentioned message-tool-only channel turns", async () => {
+    replyMock.mockResolvedValue({ text: "quiet default reply" });
+    slackTestState.config = {
+      messages: {
+        responsePrefix: "PFX",
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        groupChat: { visibleReplies: "message_tool" },
+        statusReactions: {
+          enabled: true,
+          timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },
+        },
+      },
+      channels: {
+        slack: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+          groupPolicy: "open",
+        },
+      },
+    };
+    mockGeneralChannelInfo();
+
+    await runMentionGatedChannelMessageAndFlush();
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(reactMock).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "456",
+      name: "eyes",
+    });
+  });
+
   it("keeps the error reaction when dispatch fails before any reply is delivered", async () => {
     replyMock.mockRejectedValue(new Error("boom"));
     setMentionGatedAckConfig(true);

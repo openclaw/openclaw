@@ -28,7 +28,7 @@ export type CapturedCompactionCheckpointSnapshot = {
   leafId: string;
 };
 
-export type ForkedCompactionCheckpointTranscript = {
+type ForkedCompactionCheckpointTranscript = {
   sessionId: string;
   sessionFile: string;
 };

@@ -491,6 +491,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     >();
     let { botUserId, botUserName } = await fetchDiscordBotIdentity({
       client,
+      token,
       runtime,
       logStartupPhase: (phase, details) =>
         logDiscordStartupPhase({

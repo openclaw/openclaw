@@ -27,6 +27,12 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
   <Step title="Install a plugin">
     ```bash
+    # Search ClawHub plugins
+    openclaw plugins search "calendar"
+
+    # From ClawHub
+    openclaw plugins install clawhub:openclaw-codex-app-server
+
     # From npm
     openclaw plugins install npm:@acme/openclaw-plugin
 
@@ -362,6 +368,12 @@ including plugin id, declared tool names, result shape, and whether the tool is
 optional. Slow lines are promoted to warnings when a single factory takes at
 least 1s or total plugin tool factory prep takes at least 5s.
 
+OpenClaw caches successful plugin tool factory results for repeated resolutions
+with the same effective request context. The cache key includes the effective
+runtime config, workspace, agent/session ids, sandbox policy, browser settings,
+delivery context, requester identity, and ownership state, so factories that
+depend on those trusted fields are re-run when the context changes.
+
 If one plugin dominates the timing, inspect its runtime registrations:
 
 ```bash
@@ -433,6 +445,7 @@ openclaw plugins list                       # compact inventory
 openclaw plugins list --enabled            # only enabled plugins
 openclaw plugins list --verbose            # per-plugin detail lines
 openclaw plugins list --json               # machine-readable inventory
+openclaw plugins search <query>            # search ClawHub plugin catalog
 openclaw plugins inspect <id>              # static detail
 openclaw plugins inspect <id> --runtime    # registered hooks/tools/CLI/gateway methods
 openclaw plugins inspect <id> --json       # machine-readable

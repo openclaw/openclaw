@@ -153,6 +153,7 @@ import {
   toSessionToolAllowlist,
 } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
+import { readTranscriptFileState } from "./transcript-file-state.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { mapThinkingLevel } from "./utils.js";
 import { flushPendingToolResultsAfterIdle } from "./wait-for-idle-before-flush.js";
@@ -1172,7 +1173,9 @@ async function compactEmbeddedPiSessionDirectOnce(
             typeof sessionManager.getLeafId === "function"
               ? (sessionManager.getLeafId() ?? undefined)
               : undefined;
-          let transcriptRotationSessionManager = sessionManager;
+          let transcriptRotationSessionManager: Parameters<
+            typeof rotateTranscriptAfterCompaction
+          >[0]["sessionManager"] = sessionManager;
           if (params.trigger === "manual") {
             try {
               const hardenedBoundary = await hardenManualCompactionBoundary({
@@ -1185,7 +1188,9 @@ async function compactEmbeddedPiSessionDirectOnce(
                   hardenedBoundary.firstKeptEntryId ?? effectiveFirstKeptEntryId;
                 postCompactionLeafId = hardenedBoundary.leafId ?? postCompactionLeafId;
                 session.agent.state.messages = hardenedBoundary.messages;
-                transcriptRotationSessionManager = SessionManager.open(params.sessionFile);
+                transcriptRotationSessionManager = await readTranscriptFileState(
+                  params.sessionFile,
+                );
               }
             } catch (err) {
               log.warn("[compaction] failed to harden manual compaction boundary", {

@@ -20,12 +20,11 @@ import {
   type PluginInspectShape,
 } from "./inspect-shape.js";
 import { loadOpenClawPlugins } from "./loader.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import {
-  loadPluginManifestRegistryForPluginRegistry,
   loadPluginRegistrySnapshotWithMetadata,
   type PluginRegistrySnapshotDiagnostic,
   type PluginRegistrySnapshotSource,
@@ -230,14 +229,13 @@ export function buildPluginRegistrySnapshotReport(
       }),
     { surface: "status" },
   );
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
+  const metadataSnapshot = loadPluginMetadataSnapshot({
     index: result.snapshot,
     config,
-    env: params?.env,
+    env: params?.env ?? process.env,
     workspaceDir: params?.workspaceDir,
-    includeDisabled: true,
   });
-  const manifestByPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));
+  const manifestByPluginId = metadataSnapshot.byPluginId;
   return {
     workspaceDir: params?.workspaceDir,
     ...createEmptyPluginRegistry(),
@@ -258,12 +256,11 @@ function buildPluginReport(
   const initialWorkspaceDir =
     params?.workspaceDir ??
     resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig), params?.env);
-  const manifestRegistry = !loadModules
-    ? loadPluginManifestRegistryForPluginRegistry({
+  const metadataSnapshot = !loadModules
+    ? loadPluginMetadataSnapshot({
         config: rawConfig,
-        env: params?.env,
+        env: params?.env ?? process.env,
         workspaceDir: initialWorkspaceDir,
-        includeDisabled: true,
       })
     : undefined;
   const baseContext = resolvePluginRuntimeLoadContext({
@@ -271,7 +268,7 @@ function buildPluginReport(
     env: params?.env,
     logger: params?.logger,
     workspaceDir: initialWorkspaceDir,
-    manifestRegistry,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
   });
   const workspaceDir =
     baseContext.workspaceDir ?? initialWorkspaceDir ?? resolveDefaultAgentWorkspaceDir();
@@ -294,7 +291,7 @@ function buildPluginReport(
     config,
     workspaceDir,
     env: params?.env,
-    manifestRegistry,
+    manifestRegistry: metadataSnapshot?.manifestRegistry,
   });
   const effectiveConfig = withBundledPluginAllowlistCompat({
     config,
@@ -344,7 +341,7 @@ function buildPluginReport(
             logger: params?.logger,
             loadModules: false,
             onlyPluginIds,
-            manifestRegistry,
+            manifestRegistry: metadataSnapshot?.manifestRegistry,
             runtimeContext: context,
           }),
         { surface: "status", onlyPluginCount: onlyPluginIds?.length },

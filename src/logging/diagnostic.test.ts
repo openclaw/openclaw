@@ -25,6 +25,7 @@ import {
 import {
   logSessionStateChange,
   logMessageQueued,
+  diagnosticLogger,
   markDiagnosticSessionProgress,
   resetDiagnosticStateForTest,
   resolveStuckSessionWarnMs,
@@ -124,6 +125,7 @@ describe("stuck session diagnostics threshold", () => {
   afterEach(() => {
     resetDiagnosticEventsForTest();
     resetDiagnosticStateForTest();
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -427,8 +429,9 @@ describe("stuck session diagnostics threshold", () => {
     expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
   });
 
-  it("emits idle liveness warnings into the stability recorder", () => {
+  it("records idle liveness samples without warning in the gateway log", () => {
     const emitMemorySample = createEmitMemorySampleMock();
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
     const events: string[] = [];
     const unsubscribe = onDiagnosticEvent((event) => events.push(event.type));
 
@@ -461,11 +464,12 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events).toContain("diagnostic.liveness.warning");
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
     expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
     expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
       expect.objectContaining({
         type: "diagnostic.liveness.warning",
-        level: "warning",
+        level: "info",
         reason: "cpu",
         durationMs: 30_000,
         count: 1,
@@ -478,6 +482,70 @@ describe("stuck session diagnostics threshold", () => {
         queued: 0,
       }),
     );
+  });
+
+  it("warns for liveness samples when diagnostic work is open", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 1_500,
+          eventLoopDelayMaxMs: 2_000,
+        }),
+      },
+    );
+
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+    vi.advanceTimersByTime(30_000);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
+      expect.objectContaining({
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        active: 0,
+        waiting: 0,
+        queued: 1,
+      }),
+    );
+  });
+
+  it("does not let idle liveness samples suppress later active-work warnings", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 1_500,
+          eventLoopDelayMaxMs: 2_000,
+        }),
+      },
+    );
+
+    vi.advanceTimersByTime(30_000);
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
+    vi.advanceTimersByTime(30_000);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
   });
 
   it("throttles repeated liveness warnings", () => {

@@ -20,6 +20,11 @@ import {
 import { buildAnnounceIdempotencyKey, resolveQueueAnnounceId } from "./announce-idempotency.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import {
+  getGatewayAgentResult,
+  hasMessagingToolDeliveryEvidence,
+  hasVisibleAgentPayload,
+} from "./pi-embedded-runner/delivery-evidence.js";
+import {
   callGateway,
   createBoundDeliveryRouter,
   getGlobalHookRunner,
@@ -554,43 +559,10 @@ export function extractThreadCompletionFallbackText(internalEvents?: AgentIntern
 }
 
 function hasVisibleGatewayAgentPayload(response: unknown): boolean {
-  const result =
-    response && typeof response === "object" && "result" in response
-      ? (response as { result?: unknown }).result
-      : undefined;
-  const payloads =
-    result && typeof result === "object" && "payloads" in result
-      ? (result as { payloads?: unknown }).payloads
-      : undefined;
-  if (!Array.isArray(payloads)) {
-    return false;
-  }
-  return payloads.some((payload) => {
-    if (!payload || typeof payload !== "object") {
-      return false;
-    }
-    const record = payload as {
-      text?: unknown;
-      mediaUrl?: unknown;
-      mediaUrls?: unknown;
-      presentation?: unknown;
-      interactive?: unknown;
-      channelData?: unknown;
-    };
-    const text = typeof record.text === "string" ? record.text.trim() : "";
-    const mediaUrl = typeof record.mediaUrl === "string" ? record.mediaUrl.trim() : "";
-    const mediaUrls = Array.isArray(record.mediaUrls)
-      ? record.mediaUrls.some((item) => typeof item === "string" && item.trim())
-      : false;
-    return Boolean(
-      text ||
-      mediaUrl ||
-      mediaUrls ||
-      record.presentation ||
-      record.interactive ||
-      record.channelData,
-    );
-  });
+  const result = getGatewayAgentResult(response);
+  return Boolean(
+    result && (hasVisibleAgentPayload(result) || hasMessagingToolDeliveryEvidence(result)),
+  );
 }
 
 async function sendCompletionFallback(params: {

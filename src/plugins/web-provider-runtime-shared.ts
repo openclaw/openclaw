@@ -1,10 +1,6 @@
 import { withActivatedPluginIds } from "./activation-context.js";
-import {
-  isPluginRegistryLoadInFlight,
-  loadOpenClawPlugins,
-  resolveCompatibleRuntimePluginRegistry,
-  resolveRuntimePluginRegistry,
-} from "./loader.js";
+import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import { isPluginRegistryLoadInFlight, loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { hasExplicitPluginIdScope, normalizePluginIdScope } from "./plugin-scope.js";
@@ -58,10 +54,19 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
   }) => TEntry[] | null;
 };
 
-function resolveWebProviderLoadOptions<TEntry>(
+type WebProviderRuntimeContext = {
+  env: NonNullable<PluginLoadOptions["env"]>;
+  workspaceDir?: string;
+  config: PluginLoadOptions["config"];
+  activationSourceConfig?: PluginLoadOptions["config"];
+  autoEnabledReasons: Record<string, string[]>;
+  onlyPluginIds?: string[];
+};
+
+function resolveWebProviderRuntimeContext<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
-) {
+): WebProviderRuntimeContext {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
   const { config, activationSourceConfig, autoEnabledReasons } =
@@ -79,19 +84,35 @@ function resolveWebProviderLoadOptions<TEntry>(
       origin: params.origin,
     }),
   );
+  return {
+    activationSourceConfig,
+    autoEnabledReasons,
+    config,
+    env,
+    onlyPluginIds,
+    workspaceDir,
+  };
+}
+
+function resolveWebProviderLoadOptions(
+  context: WebProviderRuntimeContext,
+  params: ResolvePluginWebProvidersParams,
+) {
   return buildPluginRuntimeLoadOptionsFromValues(
     {
-      env,
-      config,
-      activationSourceConfig,
-      autoEnabledReasons,
-      workspaceDir,
+      env: context.env,
+      config: context.config,
+      activationSourceConfig: context.activationSourceConfig,
+      autoEnabledReasons: context.autoEnabledReasons,
+      workspaceDir: context.workspaceDir,
       logger: createPluginRuntimeLoaderLogger(),
     },
     {
-      cache: params.cache ?? false,
+      cache: params.cache ?? true,
       activate: params.activate ?? false,
-      ...(hasExplicitPluginIdScope(onlyPluginIds) ? { onlyPluginIds } : {}),
+      ...(hasExplicitPluginIdScope(context.onlyPluginIds)
+        ? { onlyPluginIds: context.onlyPluginIds }
+        : {}),
     },
   );
 }
@@ -141,7 +162,7 @@ export function resolvePluginWebProviders<TEntry>(
         },
         {
           onlyPluginIds: pluginIds,
-          cache: params.cache ?? false,
+          cache: params.cache ?? true,
           activate: params.activate ?? false,
         },
       ),
@@ -149,30 +170,40 @@ export function resolvePluginWebProviders<TEntry>(
     return deps.mapRegistryProviders({ registry, onlyPluginIds: pluginIds });
   }
 
-  const loadOptions = resolveWebProviderLoadOptions(params, deps);
-  const compatible = resolveCompatibleRuntimePluginRegistry(loadOptions);
+  const context = resolveWebProviderRuntimeContext(params, deps);
+  const loadOptions = resolveWebProviderLoadOptions(context, params);
+  const compatible = getLoadedRuntimePluginRegistry({
+    env: context.env,
+    loadOptions,
+    workspaceDir: context.workspaceDir,
+    requiredPluginIds: context.onlyPluginIds,
+  });
   if (compatible) {
     return deps.mapRegistryProviders({
       registry: compatible,
-      onlyPluginIds: params.onlyPluginIds,
+      onlyPluginIds: context.onlyPluginIds,
     });
   }
   if (isPluginRegistryLoadInFlight(loadOptions)) {
     return [];
   }
-  return deps.mapRegistryProviders({
-    registry: loadOpenClawPlugins(loadOptions),
-    onlyPluginIds: params.onlyPluginIds,
-  });
+  const scopedPluginIds = context.onlyPluginIds;
+  const hasExplicitEmptyScope = scopedPluginIds !== undefined && scopedPluginIds.length === 0;
+  if (hasExplicitEmptyScope) {
+    return [];
+  }
+  return [];
 }
 
 export function resolveRuntimeWebProviders<TEntry>(
   params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
 ): TEntry[] {
-  const loadOptions =
-    params.config === undefined ? undefined : resolveWebProviderLoadOptions(params, deps);
-  const runtimeRegistry = resolveRuntimePluginRegistry(loadOptions);
+  const runtimeRegistry = getLoadedRuntimePluginRegistry({
+    env: params.env,
+    workspaceDir: params.workspaceDir,
+    requiredPluginIds: params.onlyPluginIds,
+  });
   if (runtimeRegistry) {
     return deps.mapRegistryProviders({
       registry: runtimeRegistry,

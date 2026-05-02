@@ -388,6 +388,69 @@ describe("speech-core native voice-note routing", () => {
     });
   });
 
+  it("synthesizes explicitly tagged short hidden TTS text", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-short-hidden-tts-test");
+    let mediaDir: string | undefined;
+    try {
+      const result = await maybeApplyTtsToPayload({
+        payload: {
+          text: "[[tts:text]]hello[[/tts:text]]",
+          audioAsVoice: true,
+        },
+        cfg,
+        channel: "telegram",
+        kind: "final",
+      });
+
+      expect(synthesizeMock).toHaveBeenCalledWith(expect.objectContaining({ text: "hello" }));
+      expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
+      expect(result.audioAsVoice).toBe(true);
+      expect(result.text).toBeUndefined();
+      mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("keeps skipping untagged short TTS text", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-short-plain-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: {
+        text: "hello",
+        audioAsVoice: true,
+      },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      text: "hello",
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps skipping explicit tagged TTS text that strips to empty markdown", async () => {
+    const cfg = createTtsConfig("openclaw-speech-core-empty-hidden-tts-test");
+    const result = await maybeApplyTtsToPayload({
+      payload: {
+        text: "[[tts:text]]***[[/tts:text]]",
+        audioAsVoice: true,
+      },
+      cfg,
+      channel: "telegram",
+      kind: "final",
+    });
+
+    expect(synthesizeMock).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      audioAsVoice: true,
+    });
+  });
+
   it("selects persona preferred provider before config fallback", () => {
     const cfg: OpenClawConfig = {
       messages: {

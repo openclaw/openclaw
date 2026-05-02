@@ -1,4 +1,3 @@
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
@@ -28,7 +27,7 @@ import {
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 import {
-  rotateTranscriptAfterCompaction,
+  rotateTranscriptFileAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "./compaction-successor-transcript.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
@@ -177,8 +176,7 @@ export async function compactEmbeddedPiSession(
         if (result.ok && result.compacted) {
           if (shouldRotateCompactionTranscript(params.config) && !delegatedRotatedTranscript) {
             try {
-              const rotation = await rotateTranscriptAfterCompaction({
-                sessionManager: SessionManager.open(params.sessionFile),
+              const rotation = await rotateTranscriptFileAfterCompaction({
                 sessionFile: params.sessionFile,
               });
               if (rotation.rotated) {

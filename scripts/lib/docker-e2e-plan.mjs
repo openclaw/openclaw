@@ -69,7 +69,7 @@ function sanitizeLaneNameSuffix(value) {
   );
 }
 
-export const UPGRADE_SURVIVOR_SCENARIOS = [
+const UPGRADE_SURVIVOR_SCENARIOS = [
   "base",
   "feishu-channel",
   "bootstrap-persona",
@@ -101,7 +101,7 @@ export function normalizeUpgradeSurvivorBaselineSpec(raw) {
   return spec;
 }
 
-export function parseUpgradeSurvivorBaselineSpecs(raw) {
+function parseUpgradeSurvivorBaselineSpecs(raw) {
   if (!raw) {
     return [];
   }
@@ -115,7 +115,7 @@ export function parseUpgradeSurvivorBaselineSpecs(raw) {
   ];
 }
 
-export function normalizeUpgradeSurvivorScenario(raw) {
+function normalizeUpgradeSurvivorScenario(raw) {
   const value = String(raw ?? "").trim();
   if (!value) {
     return undefined;
@@ -130,7 +130,7 @@ export function normalizeUpgradeSurvivorScenario(raw) {
   return value;
 }
 
-export function parseUpgradeSurvivorScenarios(raw) {
+function parseUpgradeSurvivorScenarios(raw) {
   if (!raw) {
     return [];
   }
@@ -147,7 +147,7 @@ export function parseUpgradeSurvivorScenarios(raw) {
   ];
 }
 
-export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
+function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
   const scenarios = parseUpgradeSurvivorScenarios(rawScenarios);
   if (baselineSpecs.length === 0 && scenarios.length === 0) {
@@ -188,7 +188,7 @@ export function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, 
   });
 }
 
-export function dedupeLanes(poolLanes) {
+function dedupeLanes(poolLanes) {
   const byName = new Map();
   for (const poolLane of poolLanes) {
     if (!byName.has(poolLane.name)) {
@@ -198,7 +198,7 @@ export function dedupeLanes(poolLanes) {
   return [...byName.values()];
 }
 
-export function selectNamedLanes(poolLanes, selectedNames, label) {
+function selectNamedLanes(poolLanes, selectedNames, label) {
   const byName = new Map(poolLanes.map((poolLane) => [poolLane.name, poolLane]));
   const missing = selectedNames.filter((name) => !byName.has(name));
   if (missing.length > 0) {
@@ -231,14 +231,14 @@ export function parseProfile(raw) {
   );
 }
 
-export function applyLiveMode(poolLanes, mode) {
+function applyLiveMode(poolLanes, mode) {
   if (mode === "all") {
     return poolLanes;
   }
   return poolLanes.filter((poolLane) => (mode === "only" ? poolLane.live : !poolLane.live));
 }
 
-export function applyLiveRetries(poolLanes, retries) {
+function applyLiveRetries(poolLanes, retries) {
   return poolLanes.map((poolLane) => (poolLane.live ? { ...poolLane, retries } : poolLane));
 }
 
@@ -281,7 +281,7 @@ export function findLaneByName(name) {
   ).find((poolLane) => poolLane.name === name);
 }
 
-export function laneCredentialRequirements(poolLane) {
+function laneCredentialRequirements(poolLane) {
   const credentials = [];
   if (poolLane.name === "install-e2e-openai") {
     credentials.push("openai");
@@ -299,7 +299,7 @@ function unique(values) {
   return [...new Set(values.filter(Boolean))];
 }
 
-export function buildPlanJson(params) {
+function buildPlanJson(params) {
   const scheduledLanes = [...params.orderedLanes, ...params.orderedTailLanes];
   const imageKinds = unique(scheduledLanes.map((poolLane) => poolLane.e2eImageKind)).toSorted(
     (a, b) => a.localeCompare(b),

@@ -7,19 +7,7 @@ const execFileAsync = promisify(execFile);
 
 export type RttProviderMode = "mock-openai" | "live-frontier";
 
-export type RttCliOptions = {
-  packageTgz?: string;
-  providerMode: RttProviderMode;
-  runs: number;
-  samples: number;
-  sampleTimeoutMs: number;
-  harnessRoot: string;
-  output: string;
-  scenarios: string[];
-  timeoutMs: number;
-};
-
-export type RttResult = {
+type RttResult = {
   package: {
     spec: string;
     version: string;
@@ -53,7 +41,7 @@ export type RttResult = {
   };
 };
 
-export type TelegramQaSummary = {
+type TelegramQaSummary = {
   scenarios?: Array<{
     id?: string;
     rttMs?: number;
@@ -266,7 +254,3 @@ export function buildRttResult(params: {
     artifacts: params.artifacts,
   };
 }
-
-export const __testing = {
-  REQUIRED_TELEGRAM_ENV,
-};

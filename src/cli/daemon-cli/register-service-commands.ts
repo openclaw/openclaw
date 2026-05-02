@@ -1,24 +1,22 @@
 import type { Command } from "commander";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
 import type { DaemonInstallOptions, GatewayRpcOpts } from "./types.js";
 
-let daemonInstallModulePromise: Promise<typeof import("./install.runtime.js")> | undefined;
-let daemonLifecycleModulePromise: Promise<typeof import("./lifecycle.runtime.js")> | undefined;
-let daemonStatusModulePromise: Promise<typeof import("./status.runtime.js")> | undefined;
+const daemonInstallModuleLoader = createLazyImportLoader(() => import("./install.runtime.js"));
+const daemonLifecycleModuleLoader = createLazyImportLoader(() => import("./lifecycle.runtime.js"));
+const daemonStatusModuleLoader = createLazyImportLoader(() => import("./status.runtime.js"));
 
 function loadDaemonInstallModule() {
-  daemonInstallModulePromise ??= import("./install.runtime.js");
-  return daemonInstallModulePromise;
+  return daemonInstallModuleLoader.load();
 }
 
 function loadDaemonLifecycleModule() {
-  daemonLifecycleModulePromise ??= import("./lifecycle.runtime.js");
-  return daemonLifecycleModulePromise;
+  return daemonLifecycleModuleLoader.load();
 }
 
 function loadDaemonStatusModule() {
-  daemonStatusModulePromise ??= import("./status.runtime.js");
-  return daemonStatusModulePromise;
+  return daemonStatusModuleLoader.load();
 }
 
 function resolveInstallOptions(

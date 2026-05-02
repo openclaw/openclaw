@@ -6,7 +6,7 @@ import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { writePersistedInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import { buildNpmResolutionInstallFields } from "../../../plugins/installs.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
+import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
 import { asObjectRecord } from "./object.js";
@@ -153,12 +153,12 @@ export async function repairMissingConfiguredPluginInstalls(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const env = params.env ?? process.env;
-  const registry = loadPluginManifestRegistryForPluginRegistry({
-    config: params.cfg,
-    env,
-    includeDisabled: true,
-  });
-  const knownIds = new Set(registry.plugins.map((plugin) => plugin.id));
+  const knownIds = new Set(
+    loadManifestMetadataSnapshot({
+      config: params.cfg,
+      env,
+    }).plugins.map((plugin) => plugin.id),
+  );
   const records = await loadInstalledPluginIndexInstallRecords({ env });
   const configuredPluginIds = collectConfiguredPluginIds(params.cfg);
   const missingRecordedPluginIds = Object.keys(records).filter(

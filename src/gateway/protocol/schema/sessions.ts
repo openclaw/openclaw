@@ -60,6 +60,17 @@ export const SessionsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsCleanupParamsSchema = Type.Object(
+  {
+    agent: Type.Optional(NonEmptyString),
+    allAgents: Type.Optional(Type.Boolean()),
+    enforce: Type.Optional(Type.Boolean()),
+    activeKey: Type.Optional(NonEmptyString),
+    fixMissing: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsPreviewParamsSchema = Type.Object(
   {
     keys: Type.Array(NonEmptyString, { minItems: 1 }),

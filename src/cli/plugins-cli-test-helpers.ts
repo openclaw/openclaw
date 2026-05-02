@@ -151,6 +151,8 @@ function restoreRuntimeCaptureMocks() {
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+  writeRuntimeJson: (runtime: CliMockOutputRuntime, value: unknown, space = 2) =>
+    runtime.writeJson(value, space),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -324,6 +326,11 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
     ...args: unknown[]
   ) => unknown,
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   inspectPluginRegistry: ((
     ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>
   ) =>

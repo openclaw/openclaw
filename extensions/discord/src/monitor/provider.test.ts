@@ -879,7 +879,7 @@ describe("monitorDiscordProvider", () => {
     );
   });
 
-  it("logs repeated native command deploy rate limits as one concise warning", async () => {
+  it("skips native command deploy retries after one rate limit warning", async () => {
     const runtime = baseRuntime();
     const rateLimitError = createRateLimitError(
       new Response(null, {
@@ -898,7 +898,7 @@ describe("monitorDiscordProvider", () => {
       runtime,
     });
 
-    await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
     const warningMessages = vi
       .mocked(runtime.log)
       .mock.calls.map((call) => String(call[0]))
@@ -1012,6 +1012,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(fetchApplicationId).not.toHaveBeenCalled();
+    expect(clientFetchUserMock).not.toHaveBeenCalled();
     expect(getConstructedClientOptions().clientId).toBe("123");
   });
 
