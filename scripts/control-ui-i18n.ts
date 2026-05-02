@@ -127,6 +127,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
   { locale: "nl", fileName: "nl.ts", exportName: "nl", languageKey: "nl" },
   { locale: "fa", fileName: "fa.ts", exportName: "fa", languageKey: "fa" },
+  { locale: "ru", fileName: "ru.ts", exportName: "ru", languageKey: "ru" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [

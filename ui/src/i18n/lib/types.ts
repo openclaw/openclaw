@@ -19,7 +19,8 @@ export type Locale =
   | "th"
   | "vi"
   | "nl"
-  | "fa";
+  | "fa"
+  | "ru";
 
 export interface I18nConfig {
   locale: Locale;
