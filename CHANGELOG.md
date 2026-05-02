@@ -376,6 +376,7 @@ Docs: https://docs.openclaw.ai
 - Cron: retry recurring wake-now main-session jobs through temporary heartbeat busy skips before recording success, so queued cron events no longer appear as ok ghost runs while the main lane is still busy. Fixes #75964. (#76083) Thanks @kshetrajna12 and @xuruiray.
 - Providers/Google: keep Gemini thinking-signature-only stream chunks active during reasoning, so Gemini 3.1 Pro Preview replies no longer hit idle timeouts before visible text. Fixes #76071. (#76080) Thanks @marcoschierhorn and @zhangguiping-xydt.
 - CLI/skills: show per-agent model and command visibility in `openclaw skills check --agent`, and let doctor report or disable unavailable skills allowed for the default agent. (#75983) Thanks @mbelinky.
+- Codex/ChatGPT failover errors: surface provider quota and rate-limit detail (plan, retry-after window) instead of generic timeout when the app-server emits structured `usageLimitExceeded` or `account/rateLimits/updated` events. (#75661) Thanks @amittell.
 
 ## 2026.4.30
 
