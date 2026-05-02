@@ -44,6 +44,8 @@ Use the `agent=<id>` value from the system prompt Runtime line.
 
 - **`sessions.json`** - Index mapping session keys to session IDs
 - **`<session-id>.jsonl`** - Full conversation transcript per session
+- **`<session-id>.jsonl.reset.<timestamp>`** - Archived transcript from
+  `/new`, `/reset`, or idle/session rotation
 
 ## Structure
 
@@ -67,6 +69,15 @@ for f in "$SESSION_DIR"/*.jsonl; do
   size=$(ls -lh "$f" | awk '{print $5}')
   echo "$date $size $(basename $f)"
 done | sort -r
+```
+
+When you need complete history across resets, include reset archives too:
+
+```bash
+AGENT_ID="<agentId>"
+SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+find "$SESSION_DIR" -maxdepth 1 -type f \( -name "*.jsonl" -o -name "*.jsonl.reset.*" \) \
+  -exec sh -c 'for f do size=$(ls -lh "$f" | awk "{print \\$5}"); echo "$size $(basename "$f")"; done' sh {} +
 ```
 
 ### Find sessions from a specific day
@@ -135,11 +146,27 @@ SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
 rg -l "phrase" "$SESSION_DIR"/*.jsonl
 ```
 
+### Search across active and reset transcripts
+
+Use this when a user asks about earlier history after `/new`, `/reset`, or an
+idle session rollover:
+
+```bash
+AGENT_ID="<agentId>"
+SESSION_DIR="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}/agents/$AGENT_ID/sessions"
+rg -n "phrase" "$SESSION_DIR" \
+  -g "*.jsonl" \
+  -g "*.jsonl.reset.*" \
+  -g "!*.trajectory.jsonl"
+```
+
 ## Tips
 
 - Sessions are append-only JSONL (one JSON object per line)
 - Large sessions can be several MB - use `head`/`tail` for sampling
 - The `sessions.json` index maps chat providers (discord, whatsapp, etc.) to session IDs
+- Reset archives use `.jsonl.reset.<timestamp>` and can contain the only copy
+  of the conversation immediately after `/new`, `/reset`, or idle rotation
 - Deleted sessions have `.deleted.<timestamp>` suffix
 
 ## Fast text-only hint (low noise)
