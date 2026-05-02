@@ -70,6 +70,24 @@ const browserToolDeps = {
   untrackSessionBrowserTab,
 };
 
+function resolveStartHeadlessOverride(params: Record<string, unknown>): boolean | undefined {
+  const headless = params.headless;
+  const headed = params.headed;
+  if (typeof headless === "boolean" && typeof headed === "boolean") {
+    if (headless === headed) {
+      throw new Error("Use either headless or headed for browser start, not both.");
+    }
+    return headless;
+  }
+  if (typeof headless === "boolean") {
+    return headless;
+  }
+  if (typeof headed === "boolean") {
+    return !headed;
+  }
+  return undefined;
+}
+
 export const __testing = {
   setDepsForTest(
     overrides: Partial<{
@@ -559,12 +577,14 @@ export function createBrowserTool(opts?: {
           return jsonResult(
             await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
           );
-        case "start":
+        case "start": {
+          const startHeadless = resolveStartHeadlessOverride(params);
           if (proxyRequest) {
             await proxyRequest({
               method: "POST",
               path: "/start",
               profile,
+              query: typeof startHeadless === "boolean" ? { headless: startHeadless } : undefined,
               timeoutMs: toolTimeoutMs,
             });
             return jsonResult(
@@ -576,10 +596,15 @@ export function createBrowserTool(opts?: {
               }),
             );
           }
-          await browserToolDeps.browserStart(baseUrl, { profile, timeoutMs: toolTimeoutMs });
+          await browserToolDeps.browserStart(baseUrl, {
+            profile,
+            timeoutMs: toolTimeoutMs,
+            headless: startHeadless,
+          });
           return jsonResult(
             await browserToolDeps.browserStatus(baseUrl, { profile, timeoutMs: toolTimeoutMs }),
           );
+        }
         case "stop":
           if (proxyRequest) {
             await proxyRequest({

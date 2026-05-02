@@ -12,6 +12,7 @@ import {
   browserDoctor,
   browserOpenTab,
   browserSnapshot,
+  browserStart,
   browserStatus,
   browserTabs,
 } from "./client.js";
@@ -277,6 +278,9 @@ describe("browser client", () => {
       profile: "openclaw",
     });
 
+    await expect(
+      browserStart("http://127.0.0.1:18791", { profile: "work", headless: false }),
+    ).resolves.toBeUndefined();
     await expect(browserTabs("http://127.0.0.1:18791")).resolves.toHaveLength(1);
     await expect(
       browserOpenTab("http://127.0.0.1:18791", "https://example.com"),
@@ -314,6 +318,7 @@ describe("browser client", () => {
       browserScreenshotAction("http://127.0.0.1:18791", { targetId: "t-default" }),
     ).resolves.toMatchObject({ ok: true, path: "/tmp/a.png" });
 
+    expect(calls.some((c) => c.url.endsWith("/start?profile=work&headless=false"))).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/tabs"))).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/doctor"))).toBe(true);
     expect(calls.some((c) => c.url.endsWith("/doctor?profile=openclaw&deep=true"))).toBe(true);

@@ -381,6 +381,46 @@ describe("browser tool snapshot maxChars", () => {
     );
   });
 
+  it("passes headless=false through local browser start", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "start", profile: "openclaw", headless: false });
+
+    expect(browserClientMocks.browserStart).toHaveBeenCalledWith(undefined, {
+      profile: "openclaw",
+      timeoutMs: undefined,
+      headless: false,
+    });
+  });
+
+  it("maps headed=true to headless=false for browser start through node proxy", async () => {
+    mockSingleBrowserProxyNode();
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", { action: "start", target: "node", headed: true });
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      "node.invoke",
+      { timeoutMs: 25000 },
+      expect.objectContaining({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: expect.objectContaining({
+          method: "POST",
+          path: "/start",
+          query: { headless: false },
+          timeoutMs: 20000,
+        }),
+      }),
+    );
+  });
+
+  it("rejects conflicting browser start headless/headed params", async () => {
+    const tool = createBrowserTool();
+
+    await expect(
+      tool.execute?.("call-1", { action: "start", headless: true, headed: true }),
+    ).rejects.toThrow(/Use either headless or headed/);
+  });
+
   it("uses a longer default timeout for existing-session profile status through node proxy", async () => {
     mockSingleBrowserProxyNode();
     setResolvedBrowserProfiles({

@@ -110,9 +110,16 @@ export async function browserProfiles(
 
 export async function browserStart(
   baseUrl?: string,
-  opts?: { profile?: string; timeoutMs?: number },
+  opts?: { profile?: string; timeoutMs?: number; headless?: boolean },
 ): Promise<void> {
-  const q = buildProfileQuery(opts?.profile);
+  const params = new URLSearchParams();
+  if (opts?.profile) {
+    params.set("profile", opts.profile);
+  }
+  if (typeof opts?.headless === "boolean") {
+    params.set("headless", String(opts.headless));
+  }
+  const q = params.size ? `?${params.toString()}` : "";
   await fetchBrowserJson(withBaseUrl(baseUrl, `/start${q}`), {
     method: "POST",
     timeoutMs:
