@@ -300,15 +300,7 @@ function resolveEstimatedSessionCostUsd(params: {
   if (!cost) {
     return undefined;
   }
-  const estimated = estimateUsageCost({
-    usage: {
-      ...(input !== undefined ? { input } : {}),
-      ...(output !== undefined ? { output } : {}),
-      ...(cacheRead !== undefined ? { cacheRead } : {}),
-      ...(cacheWrite !== undefined ? { cacheWrite } : {}),
-    },
-    cost,
-  });
+  const estimated = estimateUsageCost({ usage: { input, output, cacheRead, cacheWrite }, cost });
   return resolveNonNegativeNumber(estimated);
 }
 
