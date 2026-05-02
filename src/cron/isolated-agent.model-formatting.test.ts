@@ -401,6 +401,45 @@ describe("cron model formatting and precedence edge cases", () => {
     });
   });
 
+  describe("CLI runtime compatibility", () => {
+    it("uses a configured Claude CLI runtime for resolved Anthropic models", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+                agentRuntime: { id: "claude-cli" },
+              },
+            },
+          },
+        },
+        { provider: "claude-cli", model: "claude-opus-4-6" },
+      );
+    });
+
+    it("keeps an OpenAI payload override on OpenAI when Claude CLI is configured", async () => {
+      await expectSelectedModel(
+        {
+          cfg: {
+            agents: {
+              defaults: {
+                model: "anthropic/claude-opus-4-6",
+                agentRuntime: { id: "claude-cli" },
+              },
+            },
+          },
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "openai/gpt-4.1-mini",
+          },
+        },
+        { provider: "openai", model: "gpt-4.1-mini" },
+      );
+    });
+  });
+
   describe("stored session overrides", () => {
     it("stored modelOverride/providerOverride are applied", async () => {
       await expectSelectedModel(
