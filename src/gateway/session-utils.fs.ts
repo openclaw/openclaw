@@ -13,6 +13,7 @@ import {
   archiveFileOnDisk,
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
+  findLatestResetArchiveAsync,
 } from "./session-transcript-files.fs.js";
 import {
   readSessionTranscriptIndex,
@@ -488,7 +489,7 @@ export async function readSessionMessagesAsync(
     const { mode: _mode, ...recentOpts } = opts;
     return await readRecentSessionMessagesAsync(sessionId, storePath, sessionFile, recentOpts);
   }
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  const filePath = await findActiveOrLatestResetArchiveAsync(sessionId, storePath, sessionFile);
   if (!filePath) {
     return [];
   }
@@ -573,7 +574,7 @@ export async function readRecentSessionMessagesAsync(
     return [];
   }
 
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile);
+  const filePath = await findActiveOrLatestResetArchiveAsync(sessionId, storePath, sessionFile);
   if (!filePath) {
     return [];
   }
@@ -797,8 +798,12 @@ export async function readSessionTitleFieldsFromTranscriptAsync(
   agentId?: string,
   opts?: { includeInterSession?: boolean },
 ): Promise<SessionTitleFields> {
-  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
-  const filePath = candidates.find((p) => fs.existsSync(p));
+  const filePath = await findActiveOrLatestResetArchiveAsync(
+    sessionId,
+    storePath,
+    sessionFile,
+    agentId,
+  );
   if (!filePath) {
     return { firstUserMessage: null, lastMessagePreview: null };
   }
@@ -920,6 +925,24 @@ function findExistingTranscriptPath(
 ): string | null {
   const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
   return candidates.find((p) => fs.existsSync(p)) ?? null;
+}
+
+// Async path narrow fallback: when the primary/active transcript is missing,
+// return the path to the latest `.reset.<ts>` archive sibling. Active wins
+// when present (existing behavior); only the single latest archive is
+// returned (no chain aggregation, no active+archive merging).
+async function findActiveOrLatestResetArchiveAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile?: string,
+  agentId?: string,
+): Promise<string | null> {
+  const candidates = resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId);
+  const active = candidates.find((p) => fs.existsSync(p));
+  if (active) {
+    return active;
+  }
+  return await findLatestResetArchiveAsync(candidates);
 }
 
 function withOpenTranscriptFd<T>(filePath: string, read: (fd: number) => T | null): T | null {
