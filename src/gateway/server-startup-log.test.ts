@@ -49,6 +49,128 @@ describe("gateway startup log", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("warns when remote plain-HTTP Control UI will require secure context auth", () => {
+    const info = vi.fn();
+    const warn = vi.fn();
+
+    logGatewayStartup({
+      cfg: {
+        gateway: {
+          controlUi: { enabled: true },
+        },
+      },
+      bindHost: "0.0.0.0",
+      loadedPluginIds: [],
+      port: 18789,
+      tlsEnabled: false,
+      log: { info, warn },
+      isNixMode: false,
+    });
+
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("Control UI requires a secure browser context"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("DEVICE_IDENTITY_REQUIRED"));
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
+    );
+  });
+
+  it("uses resolved runtime state for Control UI secure context warnings", () => {
+    const disabledWarn = vi.fn();
+    logGatewayStartup({
+      cfg: {
+        gateway: {
+          controlUi: { enabled: true },
+        },
+      },
+      bindHost: "0.0.0.0",
+      loadedPluginIds: [],
+      port: 18789,
+      tlsEnabled: false,
+      controlUiEnabled: false,
+      log: { info: vi.fn(), warn: disabledWarn },
+      isNixMode: false,
+    });
+    expect(disabledWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Control UI requires a secure browser context"),
+    );
+
+    const runtimeEnabledWarn = vi.fn();
+    logGatewayStartup({
+      cfg: {
+        gateway: {
+          controlUi: { enabled: false },
+        },
+      },
+      bindHost: "0.0.0.0",
+      loadedPluginIds: [],
+      port: 18789,
+      tlsEnabled: false,
+      controlUiEnabled: true,
+      log: { info: vi.fn(), warn: runtimeEnabledWarn },
+      isNixMode: false,
+    });
+    expect(runtimeEnabledWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Control UI requires a secure browser context"),
+    );
+
+    const trustedProxyWarn = vi.fn();
+    logGatewayStartup({
+      cfg: {},
+      bindHost: "0.0.0.0",
+      loadedPluginIds: [],
+      port: 18789,
+      tlsEnabled: false,
+      controlUiEnabled: true,
+      authMode: "trusted-proxy",
+      log: { info: vi.fn(), warn: trustedProxyWarn },
+      isNixMode: false,
+    });
+    expect(trustedProxyWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Control UI requires a secure browser context"),
+    );
+  });
+
+  it("does not warn about Control UI secure context for loopback, TLS, trusted proxy, disabled UI, or disabled device auth", () => {
+    const cases = [
+      { cfg: {}, bindHost: "127.0.0.1", tlsEnabled: false },
+      { cfg: {}, bindHost: "0.0.0.0", tlsEnabled: true },
+      {
+        cfg: { gateway: { auth: { mode: "trusted-proxy" as const } } },
+        bindHost: "0.0.0.0",
+        tlsEnabled: false,
+      },
+      {
+        cfg: { gateway: { controlUi: { enabled: false } } },
+        bindHost: "0.0.0.0",
+        tlsEnabled: false,
+      },
+      {
+        cfg: { gateway: { controlUi: { dangerouslyDisableDeviceAuth: true } } },
+        bindHost: "0.0.0.0",
+        tlsEnabled: false,
+      },
+    ];
+
+    for (const testCase of cases) {
+      const info = vi.fn();
+      const warn = vi.fn();
+      logGatewayStartup({
+        cfg: testCase.cfg,
+        bindHost: testCase.bindHost,
+        loadedPluginIds: [],
+        port: 18789,
+        tlsEnabled: testCase.tlsEnabled,
+        log: { info, warn },
+        isNixMode: false,
+      });
+      expect(warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("Control UI requires a secure browser context"),
+      );
+    }
+  });
+
   it("logs a compact listening line with loaded plugin ids and duration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-03T10:00:16.000Z"));

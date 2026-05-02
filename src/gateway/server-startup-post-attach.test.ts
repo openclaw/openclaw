@@ -247,7 +247,11 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(hoisted.loadInternalHooks).not.toHaveBeenCalled();
     expect(hoisted.setInternalHooksEnabled).not.toHaveBeenCalled();
     expect(hoisted.logGatewayStartup).toHaveBeenCalledWith(
-      expect.objectContaining({ loadedPluginIds: ["beta", "alpha"] }),
+      expect.objectContaining({
+        loadedPluginIds: ["beta", "alpha"],
+        controlUiEnabled: true,
+        authMode: "trusted-proxy",
+      }),
     );
     expect(log.info).toHaveBeenCalledWith("gateway ready");
     expect(hoisted.startGatewayMemoryBackend).not.toHaveBeenCalled();
@@ -806,6 +810,8 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     tailscaleMode: "off",
     resetOnExit: false,
     controlUiBasePath: "/",
+    controlUiEnabled: true,
+    authMode: "trusted-proxy",
     logTailscale: {
       info: vi.fn(),
       warn: vi.fn(),
