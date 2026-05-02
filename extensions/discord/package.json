@@ -43,6 +43,7 @@
       "blurb": "very well supported right now.",
       "systemImage": "bubble.left.and.bubble.right",
       "markdownCapable": true,
+      "preferSessionLookupForAnnounceTarget": true,
       "commands": {
         "nativeCommandsAutoEnabled": true,
         "nativeSkillsAutoEnabled": true
