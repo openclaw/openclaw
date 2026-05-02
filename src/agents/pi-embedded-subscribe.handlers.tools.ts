@@ -92,6 +92,26 @@ function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
+/**
+ * Count tool executions currently in flight for a given run.
+ *
+ * Reads the existing `toolStartData` map: handleToolExecutionStart inserts on
+ * tool start, handleToolExecutionEnd deletes on completion. Used by the
+ * embedded run timer to detect whether a run-level timeout fired while tool
+ * execution was active (in which case the failover policy should not rotate
+ * to a fallback model — the LLM had already responded).
+ */
+export function countActiveToolExecutions(runId: string): number {
+  const prefix = `${runId}:`;
+  let count = 0;
+  for (const key of toolStartData.keys()) {
+    if (key.startsWith(prefix)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function isCronAddAction(args: unknown): boolean {
   if (!args || typeof args !== "object") {
     return false;

@@ -58,6 +58,12 @@ export type EmbeddedRunAttemptResult = {
   idleTimedOut: boolean;
   /** True if the timeout occurred while compaction was in progress or pending. */
   timedOutDuringCompaction: boolean;
+  /**
+   * True if the run-level timer fired while at least one tool execution was
+   * still in flight. The LLM had already responded; the timeout is unrelated
+   * to the primary model and must not trigger model fallback. Closes #52147.
+   */
+  timedOutDuringToolExecution: boolean;
   promptError: unknown;
   /**
    * Identifies which phase produced the promptError.
