@@ -66,7 +66,7 @@ describe("loadWebMedia image optimizer fallback", () => {
 
   it("preserves the underlying optimizer failure as the cause", async () => {
     await expect(optimizeImageToJpeg(Buffer.from(TINY_PNG_BASE64, "base64"), 1024)).rejects.toThrow(
-      /Failed to optimize image after 25 attempts \(25 failures\): mock image backend unavailable/,
+      /Failed to optimize image: mock image backend unavailable/,
     );
 
     await optimizeImageToJpeg(Buffer.from(TINY_PNG_BASE64, "base64"), 1024).catch(
