@@ -15,12 +15,13 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("collects and removes legacy plugin dependency state roots", async () => {
+  it("collects and removes legacy plugin dependency state without deleting runtime roots", async () => {
     const stateDir = path.join(tempDir, "state");
     const explicitStageDir = path.join(tempDir, "explicit-stage");
     const stateDirectory = path.join(tempDir, "systemd-state");
     const packageRoot = path.join(tempDir, "package");
     const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const legacyRuntimeVersionedRoot = path.join(legacyRuntimeRoot, "openclaw-2026.4.25-deadbeef");
     const legacyLocalRoot = path.join(stateDir, ".local", "bundled-plugin-runtime-deps");
     const legacyExtensionNodeModules = path.join(
       packageRoot,
@@ -35,14 +36,19 @@ describe("cleanupLegacyPluginDependencyState", () => {
       "demo",
       ".openclaw-runtime-deps.json",
     );
+    const stateDirectoryRuntimeRoot = path.join(stateDirectory, "plugin-runtime-deps");
+    const stateDirectoryVersionedRoot = path.join(
+      stateDirectoryRuntimeRoot,
+      "openclaw-2026.4.25-feedface",
+    );
 
-    await fs.mkdir(legacyRuntimeRoot, { recursive: true });
+    await fs.mkdir(path.join(legacyRuntimeVersionedRoot, "node_modules"), { recursive: true });
     await fs.mkdir(legacyLocalRoot, { recursive: true });
     await fs.mkdir(legacyExtensionNodeModules, { recursive: true });
     await fs.mkdir(path.dirname(legacyManifest), { recursive: true });
     await fs.writeFile(legacyManifest, "{}");
     await fs.mkdir(explicitStageDir, { recursive: true });
-    await fs.mkdir(path.join(stateDirectory, "plugin-runtime-deps"), { recursive: true });
+    await fs.mkdir(path.join(stateDirectoryVersionedRoot, "node_modules"), { recursive: true });
 
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
@@ -52,24 +58,177 @@ describe("cleanupLegacyPluginDependencyState", () => {
     const targets = await __testing.collectLegacyPluginDependencyTargets(env, { packageRoot });
     expect(targets).toEqual(
       expect.arrayContaining([
-        legacyRuntimeRoot,
+        legacyRuntimeVersionedRoot,
         legacyLocalRoot,
         legacyExtensionNodeModules,
         legacyManifest,
         explicitStageDir,
-        path.join(stateDirectory, "plugin-runtime-deps"),
+        stateDirectoryVersionedRoot,
       ]),
     );
+    expect(targets).not.toContain(legacyRuntimeRoot);
+    expect(targets).not.toContain(stateDirectoryRuntimeRoot);
 
     const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });
 
     expect(result.warnings).toEqual([]);
     expect(result.changes.length).toBeGreaterThanOrEqual(6);
-    await expect(fs.stat(legacyRuntimeRoot)).rejects.toThrow();
+    await expect(fs.stat(legacyRuntimeRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(legacyRuntimeVersionedRoot)).rejects.toThrow();
     await expect(fs.stat(legacyLocalRoot)).rejects.toThrow();
     await expect(fs.stat(legacyExtensionNodeModules)).rejects.toThrow();
     await expect(fs.stat(legacyManifest)).rejects.toThrow();
     await expect(fs.stat(explicitStageDir)).rejects.toThrow();
-    await expect(fs.stat(path.join(stateDirectory, "plugin-runtime-deps"))).rejects.toThrow();
+    await expect(fs.stat(stateDirectoryRuntimeRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(stateDirectoryVersionedRoot)).rejects.toThrow();
+  });
+
+  it("prunes stale versioned runtime deps without a current root and preserves local data", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const staleRoot = path.join(runtimeRoot, "openclaw-2026.4.25-deadbeef");
+    const legacyPluginRoot = path.join(runtimeRoot, "discord");
+    const localDataFile = path.join(runtimeRoot, "README.local");
+    const symlinkTarget = path.join(tempDir, "..", "external-local-data");
+    const symlinkPath = path.join(runtimeRoot, "local-link");
+
+    await fs.mkdir(path.join(staleRoot, "node_modules", "stale-dep"), { recursive: true });
+    await fs.mkdir(path.join(legacyPluginRoot, "node_modules", "legacy-dep"), {
+      recursive: true,
+    });
+    await fs.writeFile(localDataFile, "keep me\n");
+    await fs.symlink(symlinkTarget, symlinkPath);
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.4.29" }, null, 2)}\n`,
+    );
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual(
+      expect.arrayContaining([`Removed legacy plugin dependency state: ${staleRoot}`]),
+    );
+    expect(result.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${legacyPluginRoot}`,
+    );
+    expect(result.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${localDataFile}`,
+    );
+    expect(result.changes).not.toContain(`Removed legacy plugin dependency state: ${symlinkPath}`);
+    await expect(fs.stat(staleRoot)).rejects.toThrow();
+    await expect(fs.stat(legacyPluginRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(localDataFile)).resolves.toBeTruthy();
+    await expect(fs.lstat(symlinkPath)).resolves.toBeTruthy();
+    await expect(fs.stat(runtimeRoot)).resolves.toBeTruthy();
+  });
+
+  it("preserves current package and non-versioned runtime deps while pruning stale versioned siblings", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const runtimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const currentRoot = path.join(runtimeRoot, "openclaw-2026.4.29-a1b2c3d4");
+    const staleRoot = path.join(runtimeRoot, "openclaw-2026.4.25-deadbeef");
+    const legacyPluginRoot = path.join(runtimeRoot, "discord");
+    const localDataFile = path.join(runtimeRoot, "README.local");
+    const symlinkTarget = path.join(tempDir, "..", "external-local-data");
+    const symlinkPath = path.join(runtimeRoot, "local-link");
+
+    await fs.mkdir(path.join(currentRoot, "node_modules", "current-dep"), { recursive: true });
+    await fs.mkdir(path.join(staleRoot, "node_modules", "stale-dep"), { recursive: true });
+    await fs.mkdir(path.join(legacyPluginRoot, "node_modules", "legacy-dep"), {
+      recursive: true,
+    });
+    await fs.writeFile(localDataFile, "keep me\n");
+    await fs.symlink(symlinkTarget, symlinkPath);
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.4.29" }, null, 2)}\n`,
+    );
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual(
+      expect.arrayContaining([`Removed legacy plugin dependency state: ${staleRoot}`]),
+    );
+    expect(result.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${legacyPluginRoot}`,
+    );
+    expect(result.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${localDataFile}`,
+    );
+    expect(result.changes).not.toContain(`Removed legacy plugin dependency state: ${symlinkPath}`);
+    await expect(fs.stat(currentRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(staleRoot)).rejects.toThrow();
+    await expect(fs.stat(legacyPluginRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(localDataFile)).resolves.toBeTruthy();
+    await expect(fs.lstat(symlinkPath)).resolves.toBeTruthy();
+    await expect(fs.stat(runtimeRoot)).resolves.toBeTruthy();
+  });
+
+  it("prunes only stale versioned children when explicit stage dir is a runtime deps root", async () => {
+    const packageRoot = path.join(tempDir, "package");
+    const explicitStageRoot = path.join(tempDir, "plugin-runtime-deps");
+    const currentRoot = path.join(explicitStageRoot, "openclaw-2026.4.29-a1b2c3d4");
+    const staleRoot = path.join(explicitStageRoot, "openclaw-2026.4.25-deadbeef");
+    const legacyPluginRoot = path.join(explicitStageRoot, "discord");
+    const localDataFile = path.join(explicitStageRoot, "README.local");
+    const symlinkTarget = path.join(tempDir, "..", "external-local-data");
+    const symlinkPath = path.join(explicitStageRoot, "local-link");
+
+    await fs.mkdir(path.join(currentRoot, "node_modules", "current-dep"), { recursive: true });
+    await fs.mkdir(path.join(staleRoot, "node_modules", "stale-dep"), { recursive: true });
+    await fs.mkdir(path.join(legacyPluginRoot, "node_modules", "legacy-dep"), {
+      recursive: true,
+    });
+    await fs.writeFile(localDataFile, "keep me\n");
+    await fs.symlink(symlinkTarget, symlinkPath);
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.writeFile(
+      path.join(packageRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.4.29" }, null, 2)}\n`,
+    );
+
+    const env = { OPENCLAW_PLUGIN_STAGE_DIR: explicitStageRoot };
+    const targets = await __testing.collectLegacyPluginDependencyTargets(env, { packageRoot });
+    expect(targets).toContain(staleRoot);
+    expect(targets).not.toContain(explicitStageRoot);
+    expect(targets).not.toContain(currentRoot);
+    expect(targets).not.toContain(legacyPluginRoot);
+    expect(targets).not.toContain(localDataFile);
+    expect(targets).not.toContain(symlinkPath);
+
+    const result = await cleanupLegacyPluginDependencyState({ env, packageRoot });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toEqual(
+      expect.arrayContaining([`Removed legacy plugin dependency state: ${staleRoot}`]),
+    );
+    expect(result.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${explicitStageRoot}`,
+    );
+    expect(result.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${legacyPluginRoot}`,
+    );
+    expect(result.changes).not.toContain(
+      `Removed legacy plugin dependency state: ${localDataFile}`,
+    );
+    expect(result.changes).not.toContain(`Removed legacy plugin dependency state: ${symlinkPath}`);
+    await expect(fs.stat(currentRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(staleRoot)).rejects.toThrow();
+    await expect(fs.stat(legacyPluginRoot)).resolves.toBeTruthy();
+    await expect(fs.stat(localDataFile)).resolves.toBeTruthy();
+    await expect(fs.lstat(symlinkPath)).resolves.toBeTruthy();
+    await expect(fs.stat(explicitStageRoot)).resolves.toBeTruthy();
   });
 });

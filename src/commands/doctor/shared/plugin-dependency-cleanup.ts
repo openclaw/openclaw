@@ -5,6 +5,7 @@ import { resolveOpenClawPackageRootSync } from "../../../infra/openclaw-root.js"
 import { resolveConfigDir, resolveUserPath } from "../../../utils.js";
 
 const LEGACY_DIRECT_CHILD_NAMES = new Set(["plugin-runtime-deps", "bundled-plugin-runtime-deps"]);
+const VERSIONED_RUNTIME_DEPS_ROOT_RE = /^openclaw-(\d{4}\.\d{1,2}\.\d{1,2})-[a-fA-F0-9]{8,}$/u;
 
 function uniqueSorted(values: Iterable<string | null | undefined>): string[] {
   return [
@@ -51,6 +52,58 @@ async function collectDirectChildren(root: string): Promise<string[]> {
   return entries.map((entry) => path.join(root, entry.name));
 }
 
+async function readPackageVersion(packageRoot: string | null): Promise<string | null> {
+  if (!packageRoot) {
+    return null;
+  }
+  try {
+    const packageJson = JSON.parse(
+      await fs.readFile(path.join(packageRoot, "package.json"), "utf-8"),
+    ) as { version?: unknown };
+    return typeof packageJson.version === "string" && packageJson.version.length > 0
+      ? packageJson.version
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function collectLegacyRuntimeDepsRootTargets(
+  runtimeRoot: string,
+  currentPackageVersion: string | null,
+): Promise<string[]> {
+  const entries = await fs.readdir(runtimeRoot, { withFileTypes: true }).catch(() => null);
+  if (!entries) {
+    return [];
+  }
+  const currentPrefix = currentPackageVersion ? `openclaw-${currentPackageVersion}-` : null;
+  return entries
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        VERSIONED_RUNTIME_DEPS_ROOT_RE.test(entry.name) &&
+        (currentPrefix === null || !entry.name.startsWith(currentPrefix)),
+    )
+    .map((entry) => path.join(runtimeRoot, entry.name));
+}
+
+async function collectExplicitStageRootTargets(
+  explicitStageRoots: readonly string[],
+  currentPackageVersion: string | null,
+): Promise<string[]> {
+  const targets: string[] = [];
+  for (const explicitStageRoot of explicitStageRoots) {
+    if (path.basename(explicitStageRoot) === "plugin-runtime-deps") {
+      targets.push(
+        ...(await collectLegacyRuntimeDepsRootTargets(explicitStageRoot, currentPackageVersion)),
+      );
+      continue;
+    }
+    targets.push(explicitStageRoot);
+  }
+  return targets;
+}
+
 async function collectLegacyExtensionDebris(extensionsRoot: string): Promise<string[]> {
   const pluginDirs = await fs.readdir(extensionsRoot, { withFileTypes: true }).catch(() => []);
   const targets: string[] = [];
@@ -80,20 +133,35 @@ async function collectLegacyPluginDependencyTargets(
       cwd: process.cwd(),
     });
   const roots = uniqueSorted([resolveStateDir(env), resolveConfigDir(env), packageRoot]);
+  const currentPackageVersion = await readPackageVersion(packageRoot);
   const explicitStageRoots = splitPathList(env.OPENCLAW_PLUGIN_STAGE_DIR).map((entry) =>
     resolveUserPath(entry, env),
   );
   const stateDirectoryRoots = splitPathList(env.STATE_DIRECTORY).map((entry) =>
     path.join(resolveUserPath(entry, env), "plugin-runtime-deps"),
   );
+  const explicitStageTargets = await collectExplicitStageRootTargets(
+    explicitStageRoots,
+    currentPackageVersion,
+  );
   const targets = [
-    ...explicitStageRoots,
-    ...stateDirectoryRoots,
+    ...explicitStageTargets,
     ...roots.flatMap((root) => [
-      ...[...LEGACY_DIRECT_CHILD_NAMES].map((name) => path.join(root, name)),
+      ...[...LEGACY_DIRECT_CHILD_NAMES]
+        .filter((name) => name !== "plugin-runtime-deps")
+        .map((name) => path.join(root, name)),
       path.join(root, ".local", "bundled-plugin-runtime-deps"),
     ]),
   ];
+  const runtimeRoots = uniqueSorted([
+    ...stateDirectoryRoots,
+    ...roots.map((root) => path.join(root, "plugin-runtime-deps")),
+  ]);
+  for (const runtimeRoot of runtimeRoots) {
+    targets.push(
+      ...(await collectLegacyRuntimeDepsRootTargets(runtimeRoot, currentPackageVersion)),
+    );
+  }
   for (const root of roots) {
     targets.push(...(await collectLegacyExtensionDebris(path.join(root, "extensions"))));
     targets.push(...(await collectLegacyExtensionDebris(path.join(root, "dist", "extensions"))));
