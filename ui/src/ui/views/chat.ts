@@ -1206,11 +1206,13 @@ export function renderChat(props: ChatProps) {
           ? html`
               <div class="agent-chat__stt-interim agent-chat__dictation-status">
                 ${props.chatDictationDetail ??
-                (props.chatDictationStatus === "recording"
-                  ? "Recording dictation..."
-                  : props.chatDictationStatus === "transcribing"
-                    ? "Transcribing dictation..."
-                    : "Dictation unavailable")}
+                (props.chatDictationStatus === "starting"
+                  ? "Starting dictation..."
+                  : props.chatDictationStatus === "recording"
+                    ? "Recording dictation..."
+                    : props.chatDictationStatus === "transcribing"
+                      ? "Transcribing dictation..."
+                      : "Dictation unavailable")}
               </div>
             `
           : props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
@@ -1282,7 +1284,9 @@ export function renderChat(props: ChatProps) {
                       : "Dictate with server STT"}
                     ?disabled=${props.chatDictationStatus === "recording"
                       ? false
-                      : !props.connected || props.chatDictationStatus === "transcribing"}
+                      : !props.connected ||
+                        props.chatDictationStatus === "starting" ||
+                        props.chatDictationStatus === "transcribing"}
                   >
                     ${props.chatDictationStatus === "recording" ? icons.stop : icons.mic}
                   </button>

@@ -230,6 +230,7 @@ export class OpenClawApp extends LitElement {
   private chatDictationStream: MediaStream | null = null;
   private chatDictationChunks: Blob[] = [];
   private chatDictationCancelNextStop = false;
+  private chatDictationStartToken = 0;
   @state() chatManualRefreshInFlight = false;
   @state() chatMobileControlsOpen = false;
   private chatMobileControlsTrigger: HTMLElement | null = null;
@@ -958,7 +959,7 @@ export class OpenClawApp extends LitElement {
       this.chatDictationRecorder.stop();
       return;
     }
-    if (this.chatDictationStatus === "transcribing") {
+    if (this.chatDictationStatus === "starting" || this.chatDictationStatus === "transcribing") {
       return;
     }
     if (!this.client || !this.connected) {
@@ -974,8 +975,16 @@ export class OpenClawApp extends LitElement {
       return;
     }
 
+    const startToken = ++this.chatDictationStartToken;
+    this.chatDictationStatus = "starting";
+    this.chatDictationDetail = "Starting dictation...";
+    let stream: MediaStream | null = null;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (this.chatDictationStartToken !== startToken || this.chatDictationStatus !== "starting") {
+        this.stopMediaStream(stream);
+        return;
+      }
       const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((candidate) =>
         MediaRecorder.isTypeSupported(candidate),
       );
@@ -992,9 +1001,10 @@ export class OpenClawApp extends LitElement {
         }
       });
       recorder.addEventListener("error", (event) => {
-        if (this.chatDictationRecorder === recorder) {
-          this.chatDictationRecorder = null;
+        if (this.chatDictationRecorder !== recorder) {
+          return;
         }
+        this.chatDictationRecorder = null;
         this.chatDictationChunks = [];
         this.chatDictationStatus = "error";
         this.chatDictationDetail =
@@ -1003,20 +1013,17 @@ export class OpenClawApp extends LitElement {
         this.stopChatDictationStream();
       });
       recorder.addEventListener("stop", () => {
-        const isCurrentRecorder = this.chatDictationRecorder === recorder;
-        const chunks = isCurrentRecorder ? this.chatDictationChunks : [];
-        if (isCurrentRecorder) {
-          this.chatDictationChunks = [];
+        if (this.chatDictationRecorder !== recorder) {
+          return;
         }
+        const chunks = this.chatDictationChunks;
+        this.chatDictationChunks = [];
         const canceledByRequest = this.chatDictationCancelNextStop;
-        const canceled = canceledByRequest || !isCurrentRecorder;
         this.chatDictationCancelNextStop = false;
-        if (isCurrentRecorder) {
-          this.chatDictationRecorder = null;
-          this.stopChatDictationStream();
-        }
-        if (canceled) {
-          if (canceledByRequest && this.chatDictationStatus !== "error") {
+        this.chatDictationRecorder = null;
+        this.stopChatDictationStream();
+        if (canceledByRequest) {
+          if (this.chatDictationStatus !== "error") {
             this.chatDictationStatus = "idle";
             this.chatDictationDetail = null;
           }
@@ -1034,6 +1041,12 @@ export class OpenClawApp extends LitElement {
       this.chatDictationDetail = "Recording dictation...";
       recorder.start();
     } catch (error) {
+      if (stream && this.chatDictationStream !== stream) {
+        this.stopMediaStream(stream);
+      }
+      if (this.chatDictationStartToken !== startToken) {
+        return;
+      }
       this.chatDictationRecorder = null;
       this.stopChatDictationStream();
       this.chatDictationStatus = "error";
@@ -1043,11 +1056,16 @@ export class OpenClawApp extends LitElement {
   }
 
   private stopChatDictationStream() {
-    this.chatDictationStream?.getTracks().forEach((track) => track.stop());
+    this.stopMediaStream(this.chatDictationStream);
     this.chatDictationStream = null;
   }
 
+  private stopMediaStream(stream: MediaStream | null) {
+    stream?.getTracks().forEach((track) => track.stop());
+  }
+
   cancelChatDictation() {
+    this.chatDictationStartToken += 1;
     if (this.chatDictationRecorder?.state === "recording") {
       this.chatDictationCancelNextStop = true;
       this.chatDictationRecorder.stop();

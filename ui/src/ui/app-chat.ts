@@ -75,7 +75,7 @@ export type ChatHost = ChatInputHistoryState & {
   onSlashAction?: (action: string) => void | Promise<void>;
 };
 
-export type ChatDictationStatus = "idle" | "recording" | "transcribing" | "error";
+export type ChatDictationStatus = "idle" | "starting" | "recording" | "transcribing" | "error";
 
 type ChatTranscribeAudioResult = {
   text?: unknown;

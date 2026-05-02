@@ -466,6 +466,20 @@ describe("chat voice controls", () => {
     expect(container.textContent).toContain("Recording dictation");
   });
 
+  it("disables duplicate dictation starts while microphone access is pending", () => {
+    const container = renderChatView({
+      chatDictationStatus: "starting",
+      chatDictationDetail: null,
+    });
+
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Dictate with server STT"]',
+    );
+    expect(button).not.toBeNull();
+    expect(button!.disabled).toBe(true);
+    expect(container.textContent).toContain("Starting dictation");
+  });
+
   it("keeps stop dictation enabled while recording after disconnect", () => {
     const container = renderChatView({
       connected: false,

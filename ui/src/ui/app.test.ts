@@ -60,9 +60,27 @@ type AppWithDictationInternals = {
   chatDictationDetail: string | null;
   chatDictationChunks: Blob[];
   toggleChatDictation: () => Promise<void>;
+  cancelChatDictation: () => void;
 };
 
 let originalMediaDevices: PropertyDescriptor | undefined;
+
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function createMockStream(track = { stop: vi.fn() }) {
+  return {
+    getTracks: () => [track],
+    track,
+  } as unknown as MediaStream & { track: { stop: ReturnType<typeof vi.fn> } };
+}
 
 async function createRecordingApp() {
   const { OpenClawApp } = await import("./app.ts");
@@ -83,9 +101,7 @@ describe("OpenClawApp dictation recorder lifecycle", () => {
     Object.defineProperty(globalThis.navigator, "mediaDevices", {
       configurable: true,
       value: {
-        getUserMedia: vi.fn(async () => ({
-          getTracks: () => [{ stop: vi.fn() }],
-        })),
+        getUserMedia: vi.fn(async () => createMockStream()),
       },
     });
   });
@@ -129,5 +145,57 @@ describe("OpenClawApp dictation recorder lifecycle", () => {
       size: 5,
       type: "audio/webm",
     });
+  });
+
+  it("ignores duplicate starts while microphone permission is pending", async () => {
+    const app = await createRecordingApp();
+    const pendingUserMedia = createDeferred<MediaStream>();
+    const getUserMedia = vi.fn(() => pendingUserMedia.promise);
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia },
+    });
+    const stream = createMockStream();
+
+    const firstStart = app.toggleChatDictation();
+    const secondStart = app.toggleChatDictation();
+
+    expect(getUserMedia).toHaveBeenCalledTimes(1);
+    await secondStart;
+    expect(app.chatDictationStatus).toBe("starting");
+
+    pendingUserMedia.resolve(stream);
+    await firstStart;
+
+    expect(MockMediaRecorder.instances).toHaveLength(1);
+    expect(MockMediaRecorder.instances[0].state).toBe("recording");
+    expect(stream.track.stop).not.toHaveBeenCalled();
+
+    MockMediaRecorder.instances[0].emitData(new Blob(["audio"], { type: "audio/webm" }));
+    MockMediaRecorder.instances[0].stop();
+
+    expect(stream.track.stop).toHaveBeenCalledTimes(1);
+    expect(transcribeChatAudioMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops a microphone stream that resolves after pending dictation is canceled", async () => {
+    const app = await createRecordingApp();
+    const pendingUserMedia = createDeferred<MediaStream>();
+    const getUserMedia = vi.fn(() => pendingUserMedia.promise);
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: { getUserMedia },
+    });
+    const stream = createMockStream();
+
+    const start = app.toggleChatDictation();
+    app.cancelChatDictation();
+    pendingUserMedia.resolve(stream);
+    await start;
+
+    expect(MockMediaRecorder.instances).toHaveLength(0);
+    expect(stream.track.stop).toHaveBeenCalledTimes(1);
+    expect(app.chatDictationStatus).toBe("idle");
+    expect(transcribeChatAudioMock).not.toHaveBeenCalled();
   });
 });
