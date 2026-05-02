@@ -17,7 +17,7 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
 # To update: docker buildx imagetools inspect oven/bun:<version> and use the manifest-list digest.
-ARG OPENCLAW_BUN_IMAGE="oven/bun:1.3.9@sha256:856da45d07aeb62eb38ea3e7f9e1794c0143a4ff63efb00e6c4491b627e2a521"
+ARG OPENCLAW_BUN_IMAGE="oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"
 
 # Base images are pinned to SHA256 digests for reproducible builds.
 # Dependabot refreshes these blessed digests; release builds consume the
