@@ -14,6 +14,7 @@ const resolveApprovalOverGatewayMock = vi.hoisted(() =>
   vi.fn<(arg: unknown) => Promise<void>>(async () => undefined),
 );
 const readSlackInteractiveMessageOwnerMock = vi.hoisted(() => vi.fn());
+const requestHeartbeatMock = vi.hoisted(() => vi.fn());
 
 let registerSlackInteractionEvents: typeof import("./interactions.js").registerSlackInteractionEvents;
 
@@ -75,6 +76,14 @@ vi.mock("../../interactive-dispatch.js", () => ({
 vi.mock("../../interactive-message-owner-cache.js", () => ({
   readSlackInteractiveMessageOwner: (...args: unknown[]) =>
     readSlackInteractiveMessageOwnerMock(...args),
+}));
+
+vi.mock("../../runtime.js", () => ({
+  getOptionalSlackRuntime: () => ({
+    system: {
+      requestHeartbeat: (...args: unknown[]) => requestHeartbeatMock(...args),
+    },
+  }),
 }));
 
 vi.mock("../conversation.runtime.js", () => {
@@ -287,6 +296,7 @@ describe("registerSlackInteractionEvents", () => {
 
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
+    enqueueSystemEventMock.mockReturnValue(true);
     dispatchPluginInteractiveHandlerMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockClear();
     resolvePluginConversationBindingApprovalMock.mockResolvedValue({ status: "expired" });
@@ -296,6 +306,7 @@ describe("registerSlackInteractionEvents", () => {
     resolveApprovalOverGatewayMock.mockResolvedValue(undefined);
     readSlackInteractiveMessageOwnerMock.mockReset();
     readSlackInteractiveMessageOwnerMock.mockReturnValue(undefined);
+    requestHeartbeatMock.mockReset();
     dispatchPluginInteractiveHandlerMock.mockResolvedValue({
       matched: false,
       handled: false,
@@ -2241,6 +2252,12 @@ describe("registerSlackInteractionEvents", () => {
     });
     const [, options] = enqueueSystemEventMock.mock.calls[0] as [string, { sessionKey?: string }];
     expect(options.sessionKey).toBe("agent:main:slack:direct:U123");
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "other",
+      intent: "event",
+      reason: "slack-interaction",
+      sessionKey: "agent:main:slack:direct:U123",
+    });
   });
 
   it("defaults modal close isCleared to false when Slack omits the flag", async () => {
