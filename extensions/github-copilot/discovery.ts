@@ -1,5 +1,9 @@
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  mergeSsrFPolicies,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
+} from "openclaw/plugin-sdk/ssrf-policy";
+import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -75,8 +79,10 @@ export async function discoverCopilotModels(params: {
   copilotToken: string;
   knownModelIds?: Set<string>;
   extraHeaders?: Record<string, string>;
+  dangerouslyAllowPrivateNetwork?: boolean;
 }): Promise<ModelDefinitionConfig[]> {
-  const { baseUrl, copilotToken, knownModelIds, extraHeaders } = params;
+  const { baseUrl, copilotToken, knownModelIds, extraHeaders, dangerouslyAllowPrivateNetwork } =
+    params;
 
   const url = `${baseUrl.replace(/\/+$/, "")}/models`;
   const { response, release } = await fetchWithSsrFGuard({
@@ -88,7 +94,10 @@ export async function discoverCopilotModels(params: {
         ...extraHeaders,
       },
     },
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+    policy: mergeSsrFPolicies(
+      ssrfPolicyFromHttpBaseUrlAllowedHostname(baseUrl),
+      ssrfPolicyFromDangerouslyAllowPrivateNetwork(dangerouslyAllowPrivateNetwork),
+    ),
     timeoutMs: 10_000,
     auditContext: "github-copilot-model-discovery",
   });
@@ -119,6 +128,11 @@ export async function discoverCopilotModels(params: {
         }
         // Skip models already in the built-in list
         if (knownModelIds?.has(m.id)) {
+          return false;
+        }
+        // Skip Gemini models — they fail on the /responses endpoint.
+        // See https://github.com/openclaw/openclaw/issues/74159
+        if (m.id.startsWith("gemini")) {
           return false;
         }
         return true;
