@@ -16,7 +16,7 @@ type ExtendableZodObject = ZodTypeAny & {
   extend: (shape: Record<string, ZodTypeAny>) => ZodTypeAny;
 };
 
-export const AllowFromEntrySchema = z.union([z.string(), z.number()]);
+export const AllowFromEntrySchema = z.union([z.string(), z.number().transform(n => `+${n}`)]);
 export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
 
 export function buildNestedDmConfigSchema(extraShape?: ZodRawShape) {
