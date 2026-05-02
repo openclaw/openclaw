@@ -142,6 +142,7 @@ describe("OpenClawApp dictation recorder lifecycle", () => {
     });
 
     await app.toggleChatDictation();
+    await Promise.resolve();
 
     expect(app.chatDictationChunks).toEqual([]);
     expect(transcribeChatAudioMock).toHaveBeenCalledTimes(1);
