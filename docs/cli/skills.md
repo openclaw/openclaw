@@ -40,7 +40,6 @@ openclaw skills info <name> --agent <id>
 openclaw skills check
 openclaw skills check --agent <id>
 openclaw skills check --json
-openclaw skills check --agent <id>
 ```
 
 `search`/`install`/`update` use ClawHub directly and install into the active
