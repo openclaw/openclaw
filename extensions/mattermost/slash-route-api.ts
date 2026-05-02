@@ -1,1 +1,1 @@
-export { registerSlashCommandRoute } from "./src/mattermost/slash-state.js";
+export { registerSlashCommandRoute } from "./src/mattermost/slash-route.js";
