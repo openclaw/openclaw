@@ -6,7 +6,7 @@ import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRecord } from "./manifest-registry.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import type {
   LoadPluginMetadataSnapshotParams,
@@ -45,6 +45,22 @@ function indexesMatch(
     resolveInstalledManifestRegistryIndexFingerprint(left) ===
     resolveInstalledManifestRegistryIndexFingerprint(right)
   );
+}
+
+function normalizeInstalledPluginIndex(index: InstalledPluginIndex): InstalledPluginIndex {
+  return {
+    version: index.version ?? 1,
+    hostContractVersion: index.hostContractVersion ?? "",
+    compatRegistryVersion: index.compatRegistryVersion ?? "",
+    migrationVersion: index.migrationVersion ?? 1,
+    policyHash: index.policyHash ?? "",
+    generatedAtMs: index.generatedAtMs ?? 0,
+    installRecords: index.installRecords ?? {},
+    plugins: index.plugins ?? [],
+    diagnostics: index.diagnostics ?? [],
+    ...(index.warning ? { warning: index.warning } : {}),
+    ...(index.refreshReason ? { refreshReason: index.refreshReason } : {}),
+  } as InstalledPluginIndex;
 }
 
 export function isPluginMetadataSnapshotCompatible(params: {
@@ -184,17 +200,30 @@ function loadPluginMetadataSnapshotImpl(
     env: params.env,
     ...(params.preferPersisted !== undefined ? { preferPersisted: params.preferPersisted } : {}),
     ...(params.index ? { index: params.index } : {}),
-  });
+  }) ?? {
+    source: "derived" as const,
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  };
   const registrySnapshotMs = performance.now() - registryStartedAt;
-  const index = registryResult.snapshot;
+  const index = normalizeInstalledPluginIndex(registryResult.snapshot);
   const manifestStartedAt = performance.now();
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
+  const manifestRegistry =
+    index.plugins.length === 0
+      ? loadPluginManifestRegistry({
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          diagnostics: index.diagnostics,
+          installRecords: index.installRecords,
+        })
+      : loadPluginManifestRegistryForInstalledIndex({
+          index,
+          config: params.config,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          includeDisabled: true,
+        });
   const manifestRegistryMs = performance.now() - manifestStartedAt;
   const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
   const byPluginId = new Map(manifestRegistry.plugins.map((plugin) => [plugin.id, plugin]));

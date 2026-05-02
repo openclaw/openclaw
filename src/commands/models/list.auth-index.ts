@@ -112,6 +112,10 @@ export function createModelListAuthIndex(
       addProvider(provider);
     }
   }
+  const primaryModelProvider = params.cfg.agents?.defaults?.model?.primary?.split("/", 1)[0];
+  if (primaryModelProvider === "openai-codex" || primaryModelProvider === "codex") {
+    addSyntheticProvider("codex");
+  }
 
   for (const provider of params.syntheticAuthProviderRefs ??
     listValidatedSyntheticAuthProviderRefs({
