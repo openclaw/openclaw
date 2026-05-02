@@ -260,7 +260,9 @@ describe("modelsAuthCleanCommand", () => {
     const mergedRuntimeStore = makeStore(["anthropic:runtime-ext-only"]); // only a runtime external
 
     // No auth config in openclaw.json — configDerivedProfileIds.size === 0
-    mocks.loadModelsConfig.mockResolvedValue({ auth: {} } as import("../../config/config.js").OpenClawConfig);
+    mocks.loadModelsConfig.mockResolvedValue({
+      auth: {},
+    } as import("../../config/config.js").OpenClawConfig);
     mocks.ensureAuthProfileStore.mockReturnValue(mergedRuntimeStore);
     // Disk-only probe returns the empty persisted store
     mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue(emptyDiskStore);
