@@ -284,6 +284,17 @@ function applyConfigForOpenClawTarget(
   if (entry.id === "agents.defaults.memorySearch.remote.apiKey") {
     setPathCreateStrict(config, ["agents", "list", "0", "id"], "sample-agent");
   }
+  if (entry.id === "mcp.servers.*.env.*") {
+    setPathCreateStrict(config, ["mcp", "servers", wildcardToken, "command"], "node");
+    setPathCreateStrict(config, ["mcp", "servers", wildcardToken, "args"], ["server.js"]);
+  }
+  if (entry.id === "mcp.servers.*.headers.*") {
+    setPathCreateStrict(
+      config,
+      ["mcp", "servers", wildcardToken, "url"],
+      "https://example.invalid/mcp",
+    );
+  }
   if (entry.id === "gateway.auth.password") {
     setPathCreateStrict(config, ["gateway", "auth", "mode"], "password");
   }

@@ -1,5 +1,15 @@
+import {
+  resolveHttpMcpServerLaunchConfig,
+  type HttpMcpServerLaunchResult,
+} from "../agents/mcp-http.js";
+import {
+  resolveStdioMcpServerLaunchConfig,
+  type StdioMcpServerLaunchResult,
+} from "../agents/mcp-stdio.js";
+import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
+import { isDangerousHostEnvVarName } from "../infra/host-env-security.js";
 import {
   resolveConfiguredMediaEntryCapabilities,
   resolveEffectiveMediaEntryCapabilities,
@@ -27,12 +37,103 @@ type SkillEntryLike = {
   enabled?: unknown;
 };
 
+type McpServerLike = {
+  env?: unknown;
+  headers?: unknown;
+};
+
 type ProviderRequestLike = {
   headers?: unknown;
   auth?: unknown;
   proxy?: unknown;
   tls?: unknown;
 };
+
+type McpSecretSurfaceActivity = {
+  env: { active: boolean; inactiveReason?: string };
+  headers: { active: boolean; inactiveReason?: string };
+};
+
+function describeInactiveMcpSecretSurface(params: {
+  transportLabel: string;
+  launch: StdioMcpServerLaunchResult | HttpMcpServerLaunchResult;
+}): string {
+  if (params.launch.ok) {
+    return `${params.transportLabel} MCP transport is inactive because another transport is selected.`;
+  }
+  return `${params.transportLabel} MCP transport is inactive because ${params.launch.reason}.`;
+}
+
+function resolveMcpSecretSurfaceActivity(server: unknown): McpSecretSurfaceActivity {
+  const stdioLaunch = resolveStdioMcpServerLaunchConfig(server);
+  if (stdioLaunch.ok) {
+    return {
+      env: { active: true },
+      headers: {
+        active: false,
+        inactiveReason: "HTTP MCP transport is inactive because stdio transport is selected.",
+      },
+    };
+  }
+
+  const serverObject =
+    server && typeof server === "object" ? (server as Record<string, unknown>) : undefined;
+  const explicitTransport = serverObject
+    ? normalizeOptionalLowercaseString(serverObject.transport)
+    : undefined;
+  const aliasedTransport =
+    !explicitTransport && serverObject
+      ? resolveOpenClawMcpTransportAlias(serverObject.type)
+      : undefined;
+  const requestedTransport = explicitTransport ?? aliasedTransport;
+  if (
+    requestedTransport &&
+    requestedTransport !== "sse" &&
+    requestedTransport !== "streamable-http"
+  ) {
+    return {
+      env: {
+        active: false,
+        inactiveReason: `stdio MCP transport is inactive because transport "${requestedTransport}" is not supported.`,
+      },
+      headers: {
+        active: false,
+        inactiveReason: `HTTP MCP transport is inactive because transport "${requestedTransport}" is not supported.`,
+      },
+    };
+  }
+
+  const httpLaunch = resolveHttpMcpServerLaunchConfig(server, {
+    transportType: requestedTransport === "streamable-http" ? "streamable-http" : "sse",
+  });
+  if (httpLaunch.ok) {
+    return {
+      env: {
+        active: false,
+        inactiveReason:
+          "stdio MCP transport is inactive because an HTTP MCP transport is selected.",
+      },
+      headers: { active: true },
+    };
+  }
+
+  return {
+    env: {
+      active: false,
+      inactiveReason: describeInactiveMcpSecretSurface({
+        transportLabel: "stdio",
+        launch: stdioLaunch,
+      }),
+    },
+    headers: {
+      active: false,
+      inactiveReason: describeInactiveMcpSecretSurface({
+        transportLabel: "HTTP",
+        launch: httpLaunch,
+      }),
+    },
+  };
+}
 
 function collectModelProviderAssignments(params: {
   providers: Record<string, ProviderLike>;
@@ -104,6 +205,60 @@ function collectSkillAssignments(params: {
         entry.apiKey = value;
       },
     });
+  }
+}
+
+function collectMcpAssignments(params: {
+  config: OpenClawConfig;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const servers = params.config.mcp?.servers as Record<string, McpServerLike> | undefined;
+  if (!isRecord(servers)) {
+    return;
+  }
+  for (const [serverName, server] of Object.entries(servers)) {
+    const surfaceActivity = resolveMcpSecretSurfaceActivity(server);
+    const env = isRecord(server.env) ? server.env : undefined;
+    if (env) {
+      for (const [envKey, envValue] of Object.entries(env)) {
+        const envKeyBlocked = surfaceActivity.env.active && isDangerousHostEnvVarName(envKey);
+        const envActive = surfaceActivity.env.active && !envKeyBlocked;
+        const envInactiveReason = envKeyBlocked
+          ? `stdio MCP env key "${envKey}" is blocked by host env safety policy and is dropped before launch.`
+          : surfaceActivity.env.inactiveReason;
+        collectSecretInputAssignment({
+          value: envValue,
+          path: `mcp.servers.${serverName}.env.${envKey}`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: envActive,
+          inactiveReason: envInactiveReason,
+          apply: (value) => {
+            env[envKey] = value;
+          },
+        });
+      }
+    }
+
+    const headers = isRecord(server.headers) ? server.headers : undefined;
+    if (headers) {
+      for (const [headerKey, headerValue] of Object.entries(headers)) {
+        collectSecretInputAssignment({
+          value: headerValue,
+          path: `mcp.servers.${serverName}.headers.${headerKey}`,
+          expected: "string",
+          defaults: params.defaults,
+          context: params.context,
+          active: surfaceActivity.headers.active,
+          inactiveReason: surfaceActivity.headers.inactiveReason,
+          apply: (value) => {
+            headers[headerKey] = value;
+          },
+        });
+      }
+    }
   }
 }
 
@@ -658,6 +813,7 @@ export function collectCoreConfigAssignments(params: {
     });
   }
 
+  collectMcpAssignments(params);
   collectAgentMemorySearchAssignments(params);
   collectTalkAssignments(params);
   collectGatewayAssignments(params);

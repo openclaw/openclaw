@@ -30,6 +30,76 @@ describe("secret target registry", () => {
     expect(targets[0]?.path).toBe(TALK_TEST_PROVIDER_API_KEY_PATH);
   });
 
+  it("discovers core mcp env and header SecretRef targets", () => {
+    const config = {
+      mcp: {
+        servers: {
+          "mission-control": {
+            env: {
+              MC_API_KEY: { source: "env" as const, provider: "default", id: "MC_API_KEY" },
+            },
+            headers: {
+              Authorization: {
+                source: "env" as const,
+                provider: "default",
+                id: "REMOTE_MCP_AUTH",
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const targets = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["mcp.servers.*.env.*", "mcp.servers.*.headers.*"]),
+    ).map((target) => target.path);
+
+    expect(targets).toEqual([
+      "mcp.servers.mission-control.env.MC_API_KEY",
+      "mcp.servers.mission-control.headers.Authorization",
+    ]);
+  });
+
+  it("discovers generic core mcp env and header paths from the registry", () => {
+    const config = {
+      mcp: {
+        servers: {
+          "mission-control": {
+            env: {
+              MC_URL: { source: "env" as const, provider: "default", id: "MC_URL" },
+              MC_API_KEY: { source: "env" as const, provider: "default", id: "MC_API_KEY" },
+            },
+            headers: {
+              "X-Feature-Flag": {
+                source: "env" as const,
+                provider: "default",
+                id: "FEATURE_FLAG",
+              },
+              Authorization: {
+                source: "env" as const,
+                provider: "default",
+                id: "REMOTE_MCP_AUTH",
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const targets = discoverConfigSecretTargetsByIds(
+      config,
+      new Set(["mcp.servers.*.env.*", "mcp.servers.*.headers.*"]),
+    ).map((target) => target.path);
+
+    expect(targets).toEqual([
+      "mcp.servers.mission-control.env.MC_URL",
+      "mcp.servers.mission-control.env.MC_API_KEY",
+      "mcp.servers.mission-control.headers.X-Feature-Flag",
+      "mcp.servers.mission-control.headers.Authorization",
+    ]);
+  });
+
   it("resolves config targets by exact path including sibling ref metadata", () => {
     const target = resolveConfigSecretTargetByPath(["channels", "googlechat", "serviceAccount"]);
 
@@ -90,5 +160,38 @@ describe("secret target registry", () => {
 
     expect(target).not.toBeNull();
     expect(target?.entry?.id).toBe("plugins.entries.voice-call.config.tts.providers.*.apiKey");
+  });
+
+  it("resolves core mcp env target paths", () => {
+    const target = resolveConfigSecretTargetByPath([
+      "mcp",
+      "servers",
+      "mission-control",
+      "env",
+      "MC_API_KEY",
+    ]);
+
+    expect(target).not.toBeNull();
+    expect(target?.entry?.id).toBe("mcp.servers.*.env.*");
+  });
+
+  it("resolves generic core mcp env and header paths as secret targets", () => {
+    const envTarget = resolveConfigSecretTargetByPath([
+      "mcp",
+      "servers",
+      "mission-control",
+      "env",
+      "MC_URL",
+    ]);
+    const headerTarget = resolveConfigSecretTargetByPath([
+      "mcp",
+      "servers",
+      "mission-control",
+      "headers",
+      "X-Feature-Flag",
+    ]);
+
+    expect(envTarget?.entry?.id).toBe("mcp.servers.*.env.*");
+    expect(headerTarget?.entry?.id).toBe("mcp.servers.*.headers.*");
   });
 });

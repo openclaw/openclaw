@@ -2,7 +2,7 @@ import { getAgentRuntimeCommandSecretTargetIds } from "../cli/command-secret-tar
 import { getRuntimeConfig, readConfigFileSnapshotForWrite } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isSecretRef } from "../config/types.secrets.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 export async function resolveAgentRuntimeConfig(
@@ -48,7 +48,7 @@ export async function resolveAgentRuntimeConfig(
 }
 
 function hasNestedSecretRef(value: unknown): boolean {
-  if (isSecretRef(value)) {
+  if (coerceSecretRef(value)) {
     return true;
   }
   if (Array.isArray(value)) {
@@ -75,6 +75,9 @@ function hasAgentRuntimeSecretRefs(params: {
     Array.isArray(config.agents?.list) &&
     config.agents.list.some((agent) => hasNestedSecretRef(agent?.memorySearch?.remote?.apiKey))
   ) {
+    return true;
+  }
+  if (hasNestedSecretRef(config.mcp?.servers)) {
     return true;
   }
   if (hasNestedSecretRef(config.messages?.tts?.providers)) {
