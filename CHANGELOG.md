@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Heartbeat: strip legacy `[TOOL_CALL]...[/TOOL_CALL]` and `[TOOL_RESULT]...[/TOOL_RESULT]` pseudo-call blocks from heartbeat replies before channel delivery. Fixes #54138. Thanks @Deniable9570.
+- macOS/Voice Wake: send wake-word and Push-to-Talk transcripts through the selected macOS session target instead of always falling back to main WebChat. Fixes #51040. Thanks @carl-jeffrolc.
 - Slack: recover full inbound DM text from top-level rich-text blocks when Slack sends a shortened message preview, so long direct messages still reach the agent intact. Fixes #55358. Thanks @tonyjwinter.
 - Replies: strip legacy `[TOOL_CALL]{tool => ..., args => ...}[/TOOL_CALL]` pseudo-call text from user-facing replies and flag it in tool-call diagnostics instead of showing raw tool syntax in channels. Fixes #63610. Thanks @canh0chua.
 - WhatsApp: close long-lived web sockets through Baileys `end(error)` before falling back to raw websocket close, so listener teardown runs Baileys cleanup instead of leaving zombie sockets. Fixes #52442. Thanks @essendigitalgroup-cyber.

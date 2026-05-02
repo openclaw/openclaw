@@ -348,7 +348,7 @@ actor VoicePushToTalk {
                     VoiceWakeChimePlayer.play(chime, reason: "ptt.fallback_send")
                 }
                 Task.detached {
-                    await VoiceWakeForwarder.forward(transcript: finalText)
+                    await VoiceWakeForwarder.forwardToSelectedSession(transcript: finalText)
                 }
             }
         }

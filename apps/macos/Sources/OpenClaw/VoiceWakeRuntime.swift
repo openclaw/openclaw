@@ -694,9 +694,9 @@ actor VoiceWakeRuntime {
                 await MainActor.run { VoiceWakeChimePlayer.play(sendChime, reason: "voicewake.send") }
             }
             Task.detached {
-                await VoiceWakeForwarder.forward(
+                await VoiceWakeForwarder.forwardToSelectedSession(
                     transcript: finalTranscript,
-                    options: .init(voiceWakeTrigger: triggerWord))
+                    voiceWakeTrigger: triggerWord)
             }
         }
         self.overlayToken = nil

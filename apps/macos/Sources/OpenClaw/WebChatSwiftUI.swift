@@ -134,6 +134,9 @@ struct MacGatewayChatTransport: OpenClawChatTransport {
     }
 
     func setActiveSessionKey(_ sessionKey: String) async throws {
+        await MainActor.run {
+            WebChatManager.shared.recordActiveSessionKey(sessionKey)
+        }
         _ = try await GatewayConnection.shared.request(
             method: "sessions.messages.subscribe",
             params: ["key": AnyCodable(sessionKey)],
