@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Agents/models: keep legacy CLI runtime model refs such as `claude-cli/*` in the configured allowlist after canonical runtime migration, so cron `payload.model` overrides keep working. Fixes #75753. Thanks @RyanSandoval.
+- Gateway/watch: keep colored subsystem log prefixes in the managed tmux pane even when the parent shell exports `NO_COLOR`, while preserving explicit `FORCE_COLOR=0` opt-out. Thanks @vincentkoc.
 - Plugin SDK: re-export `isPrivateIpAddress` from `plugin-sdk/ssrf-runtime`, restoring source-checkout builds for SearXNG and Firecrawl private-network guards. Thanks @vincentkoc.
 - CLI/directory: report unsupported directory operations for installed channel plugins instead of prompting to reinstall the plugin when it lacks a directory adapter. Fixes #75770. Thanks @lawong888.
 - Web search/SearXNG: show the JSON API `search.formats` prerequisite during SearXNG setup before prompting for the base URL. Supersedes #65592. Thanks @evanpaul14.
