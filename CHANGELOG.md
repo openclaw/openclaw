@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- TTS: honor explicit short `[[tts:text]]...[[/tts:text]]` blocks while keeping untagged short auto-TTS suppressed, so tagged voice replies are synthesized instead of being dropped as empty voice-only payloads. Fixes #73758. Thanks @yfge.
 - Proxy/audio: convert standard `FormData` bodies before proxy-backed undici fetches, so audio transcription and multipart uploads no longer send `[object FormData]` when `HTTP_PROXY` or `HTTPS_PROXY` is configured. Fixes #48554. Thanks @dco5.
 - Gateway/diagnostics: include a bounded redacted startup error message in stability bundles, so crash-loop reports identify the failing plugin or contract without exposing secrets. Refs #75797. Thanks @ymebosma.
 - Gateway/pricing: abort in-flight model pricing catalog fetches when Gateway shutdown stops the refresh loop, and avoid post-stop cache writes or refresh timers. Fixes #72208. Thanks @rzcq.
