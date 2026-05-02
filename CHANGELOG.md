@@ -24,6 +24,7 @@ Docs: https://docs.openclaw.ai
 
 - Subagents: honor `sessions_spawn` with `expectsCompletionMessage: false` by skipping parent completion handoff delivery while still running child cleanup. Fixes #75848. Thanks @alfredjbclaw.
 - Gateway/logging: keep deferred channel startup logs on the subsystem logger, so Slack, Discord, Telegram, and voice-call startup messages keep timestamped prefixes. Thanks @vincentkoc.
+- ACP/Discord: suppress completion announce delivery for inline thread-bound ACP session runs, so Discord thread-bound ACP replies are not delivered twice. Fixes #60780. Thanks @solavrc.
 - Discord/threads: ignore webhook-authored copies in already-bound Discord session threads even when the webhook id differs, preventing PluralKit proxy copies from creating duplicate turn pressure. Fixes #52005. Thanks @acgh213.
 - Discord/threads: return the created thread as partial success when the follow-up initial message fails, so agents do not retry thread creation and create empty duplicate threads. Fixes #48450. Thanks @dahifi.
 - Discord/components: consume every button or select in a non-reusable component message after the first authorized click, so single-use panels cannot fire sibling callbacks. Fixes #54227. Thanks @fujiwarakasei.

@@ -688,6 +688,7 @@ describe("spawnAcpDirect", () => {
     expect(accepted.childSessionKey).toMatch(/^agent:codex:acp:/);
     expect(accepted.runId).toBe("run-1");
     expect(accepted.mode).toBe("session");
+    expect(accepted.inlineDelivery).toBe(true);
     const patchCall = hoisted.callGatewayMock.mock.calls
       .map((call: unknown[]) => call[0] as { method?: string; params?: Record<string, unknown> })
       .find((request) => request.method === "sessions.patch");
