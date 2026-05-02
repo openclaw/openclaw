@@ -96,7 +96,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
-  it("keeps persisted package plugins when metadata still matches", () => {
+  it("keeps persisted package plugins on the fast path when file signatures match", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");
     const stateDir = path.join(tempRoot, "state");
@@ -113,14 +113,19 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(record?.packageJson?.fileSignature).toBeDefined();
     writePersistedInstalledPluginIndexSync(index, { stateDir });
 
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
     const result = loadPluginRegistrySnapshotWithMetadata({
       config,
       env,
       stateDir,
     });
+    const pluginManifestFileReads = readFileSyncSpy.mock.calls.filter((call) => {
+      const filePath = String(call[0]);
+      return filePath === path.join(rootDir, "openclaw.plugin.json");
+    });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(pluginManifestFileReads).toEqual([]);
   });
 
   it("detects same-size same-mtime manifest replacements", () => {
