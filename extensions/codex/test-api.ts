@@ -17,7 +17,7 @@ import {
   buildTurnStartParams,
 } from "./src/app-server/thread-lifecycle.js";
 
-export type CodexHarnessPromptSnapshot = {
+type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
   threadStartParams: ReturnType<typeof buildThreadStartParams>;
   threadResumeParams: ReturnType<typeof buildThreadResumeParams>;
