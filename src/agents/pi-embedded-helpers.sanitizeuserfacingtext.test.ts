@@ -227,6 +227,14 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
   });
 
+  it("strips legacy uppercase TOOL_RESULT blocks before user-facing delivery", () => {
+    const input = ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join(
+      "\n",
+    );
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
   it("keeps ordinary inline mentions of the replay placeholder", () => {
     expect(sanitizeUserFacingText("What does [tool calls omitted] mean?")).toBe(
       "What does [tool calls omitted] mean?",

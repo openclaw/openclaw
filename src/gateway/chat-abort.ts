@@ -31,7 +31,7 @@ export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
 }
 
-export function resolveChatRunExpiresAtMs(params: {
+function resolveChatRunExpiresAtMs(params: {
   now: number;
   timeoutMs: number;
   graceMs?: number;

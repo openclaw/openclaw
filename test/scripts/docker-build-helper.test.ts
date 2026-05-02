@@ -24,6 +24,7 @@ const PLUGINS_DOCKER_SWEEP_PATH = "scripts/e2e/lib/plugins/sweep.sh";
 const PLUGINS_DOCKER_MARKETPLACE_PATH = "scripts/e2e/lib/plugins/marketplace.sh";
 const PLUGINS_DOCKER_CLAWHUB_PATH = "scripts/e2e/lib/plugins/clawhub.sh";
 const PLUGINS_DOCKER_ASSERTIONS_PATH = "scripts/e2e/lib/plugins/assertions.mjs";
+const PLUGINS_DOCKER_NPM_REGISTRY_PATH = "scripts/e2e/lib/plugins/npm-registry-server.mjs";
 const PLUGIN_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_PATH = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const PLUGIN_UPDATE_PROBE_PATH = "scripts/e2e/lib/plugin-update/probe.mjs";
@@ -273,5 +274,31 @@ describe("docker build helper", () => {
     expect(clawhub).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
     expect(clawhub).toContain("live ClawHub can rate-limit CI");
     expect(clawhub).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
+  });
+
+  it("covers plugin install/update sources in the Docker plugin sweep", () => {
+    const sweep = readFileSync(PLUGINS_DOCKER_SWEEP_PATH, "utf8");
+    const clawhub = readFileSync(PLUGINS_DOCKER_CLAWHUB_PATH, "utf8");
+    const assertions = readFileSync(PLUGINS_DOCKER_ASSERTIONS_PATH, "utf8");
+    const npmRegistry = readFileSync(PLUGINS_DOCKER_NPM_REGISTRY_PATH, "utf8");
+
+    expect(sweep).toContain('plugins install "$dir_plugin"');
+    expect(sweep).toContain("plugins update demo-plugin-dir");
+    expect(assertions).toContain('Skipping "demo-plugin-dir" (source: path).');
+
+    expect(sweep).toContain("start_npm_fixture_registry");
+    expect(sweep).toContain('plugins install "npm:@openclaw/demo-plugin-npm@0.0.1"');
+    expect(sweep).toContain("plugins update demo-plugin-npm");
+    expect(assertions).toContain("demo-plugin-npm is up to date (0.0.1).");
+    expect(npmRegistry).toContain('"dist-tags": { latest: entry.version }');
+    expect(npmRegistry).toContain("packageArgs.length % 3");
+
+    expect(sweep).toContain('plugins install "git:$git_update_repo_url@main"');
+    expect(sweep).toContain("plugins update demo-plugin-git-update");
+    expect(assertions).toContain("demo.git.update.v2");
+
+    expect(clawhub).toContain('plugins install "$CLAWHUB_PLUGIN_SPEC"');
+    expect(clawhub).toContain('plugins update "$CLAWHUB_PLUGIN_ID"');
+    expect(assertions).toContain("clawhub-updated");
   });
 });

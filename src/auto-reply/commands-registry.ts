@@ -84,12 +84,16 @@ function resolveNativeName(
 }
 
 function toNativeCommandSpec(command: ChatCommandDefinition, provider?: string): NativeCommandSpec {
-  return {
+  const spec: NativeCommandSpec = {
     name: resolveNativeName(command, provider) ?? command.key,
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),
     args: command.args,
   };
+  if (command.descriptionLocalizations) {
+    spec.descriptionLocalizations = command.descriptionLocalizations;
+  }
+  return spec;
 }
 
 function listNativeSpecsFromCommands(

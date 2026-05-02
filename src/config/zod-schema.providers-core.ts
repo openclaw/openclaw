@@ -59,6 +59,7 @@ const DiscordIdSchema = z
   })
   .pipe(z.string());
 const DiscordIdListSchema = z.array(DiscordIdSchema);
+const DiscordSnowflakeStringSchema = z.string().regex(/^\d+$/, "Discord user ID must be numeric");
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
@@ -532,8 +533,11 @@ export const DiscordAccountSchema = z
     applicationId: DiscordIdSchema.optional(),
     proxy: z.string().optional(),
     gatewayInfoTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
+    gatewayRuntimeReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
+    mentionAliases: z.record(z.string(), DiscordSnowflakeStringSchema).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),

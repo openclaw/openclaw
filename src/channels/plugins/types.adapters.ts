@@ -524,6 +524,7 @@ export type ChannelDoctorAdapter = {
   collectPreviewWarnings?: (params: {
     cfg: OpenClawConfig;
     doctorFixCommand: string;
+    env?: NodeJS.ProcessEnv;
   }) => string[] | Promise<string[]>;
   collectMutableAllowlistWarnings?: (params: {
     cfg: OpenClawConfig;

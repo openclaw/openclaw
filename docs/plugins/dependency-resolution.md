@@ -46,6 +46,11 @@ npm installs run in the npm root with:
 npm install --prefix ~/.openclaw/npm <spec> --omit=dev --ignore-scripts --no-audit --no-fund
 ```
 
+npm may hoist transitive dependencies to `~/.openclaw/npm/node_modules` beside
+the plugin package. OpenClaw scans the managed npm root before trusting the
+install and uses npm to remove npm-managed packages during uninstall, so hoisted
+runtime dependencies stay inside the managed cleanup boundary.
+
 git installs clone or refresh the repository, then run:
 
 ```bash
@@ -53,7 +58,8 @@ npm install --omit=dev --ignore-scripts --no-audit --no-fund
 ```
 
 The installed plugin then loads from that package directory, so package-local
-`node_modules` resolution works the same way it does for a normal Node package.
+and parent `node_modules` resolution works the same way it does for a normal
+Node package.
 
 ## Local plugins
 

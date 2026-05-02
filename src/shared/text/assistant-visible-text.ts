@@ -10,7 +10,7 @@ import {
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
-const LEGACY_BRACKET_TOOL_CALL_QUICK_RE = /\[\s*\/?\s*TOOL_CALL\s*\]/i;
+const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
 
 /**
  * Strip XML-style tool call tags that models sometimes emit as plain text.
@@ -361,8 +361,16 @@ function isLegacyBracketToolCallPayload(value: string): boolean {
   );
 }
 
+function isLegacyBracketToolResultPayload(value: string): boolean {
+  return (
+    /^\s*[{[]/.test(value) ||
+    /\b(?:tool|result|output|content)\s*=>/i.test(value) ||
+    /\b(?:tool|result|output|content)\s*:/i.test(value)
+  );
+}
+
 export function stripLegacyBracketToolCallBlocks(text: string): string {
-  if (!text || !LEGACY_BRACKET_TOOL_CALL_QUICK_RE.test(text)) {
+  if (!text || !LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE.test(text)) {
     return text;
   }
 
@@ -370,11 +378,12 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
   let result = "";
   let cursor = 0;
   while (cursor < text.length) {
-    const openMatch = /\[\s*TOOL_CALL\s*\]/gi.exec(text.slice(cursor));
+    const openMatch = /\[\s*TOOL_(CALL|RESULT)\s*\]/gi.exec(text.slice(cursor));
     if (!openMatch?.[0]) {
       result += text.slice(cursor);
       break;
     }
+    const blockKind = openMatch[1]?.toUpperCase();
     const openStart = cursor + (openMatch.index ?? 0);
     const payloadStart = openStart + openMatch[0].length;
     if (isInsideCode(openStart, codeRegions)) {
@@ -383,14 +392,20 @@ export function stripLegacyBracketToolCallBlocks(text: string): string {
       continue;
     }
 
-    const closeMatch = /\[\s*\/\s*TOOL_CALL\s*\]/gi.exec(text.slice(payloadStart));
+    const closeRe =
+      blockKind === "RESULT" ? /\[\s*\/\s*TOOL_RESULT\s*\]/gi : /\[\s*\/\s*TOOL_CALL\s*\]/gi;
+    const closeMatch = closeRe.exec(text.slice(payloadStart));
     const closeStart =
       closeMatch?.[0] && !isInsideCode(payloadStart + (closeMatch.index ?? 0), codeRegions)
         ? payloadStart + (closeMatch.index ?? 0)
         : -1;
     const payloadEnd = closeStart >= 0 ? closeStart : text.length;
     const payload = text.slice(payloadStart, payloadEnd);
-    if (!isLegacyBracketToolCallPayload(payload)) {
+    const shouldStrip =
+      blockKind === "RESULT"
+        ? isLegacyBracketToolResultPayload(payload)
+        : isLegacyBracketToolCallPayload(payload);
+    if (!shouldStrip) {
       result += text.slice(cursor, payloadStart);
       cursor = payloadStart;
       continue;

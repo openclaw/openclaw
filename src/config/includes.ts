@@ -32,7 +32,7 @@ export type IncludeResolver = {
   parseJson: (raw: string) => unknown;
 };
 
-export type IncludeFileReadParams = {
+type IncludeFileReadParams = {
   includePath: string;
   resolvedPath: string;
   rootRealDir: string;
@@ -40,7 +40,7 @@ export type IncludeFileReadParams = {
   maxBytes?: number;
 };
 
-export type ResolveConfigIncludesOptions = {
+type ResolveConfigIncludesOptions = {
   /**
    * Additional directories outside the config directory that `$include` paths
    * may resolve into. Typically populated from `OPENCLAW_INCLUDE_ROOTS`.

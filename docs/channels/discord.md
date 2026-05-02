@@ -926,6 +926,30 @@ Default slash command settings:
 
   </Accordion>
 
+  <Accordion title="Outbound mention aliases">
+    Use `mentionAliases` when agents need deterministic outbound mentions for known Discord users. Keys are handles without the leading `@`; values are Discord user IDs. Unknown handles, `@everyone`, `@here`, and mentions inside Markdown code spans are left unchanged.
+
+```json5
+{
+  channels: {
+    discord: {
+      mentionAliases: {
+        Vladislava: "123456789012345678",
+      },
+      accounts: {
+        ops: {
+          mentionAliases: {
+            OpsLead: "234567890123456789",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+  </Accordion>
+
   <Accordion title="Presence configuration">
     Presence updates are applied when you set a status or activity field, or when you enable auto presence.
 
@@ -1255,6 +1279,22 @@ openclaw logs --follow
 
   </Accordion>
 
+  <Accordion title="Gateway READY timeout restarts">
+    OpenClaw waits for Discord's gateway `READY` event during startup and after runtime reconnects. Multi-account setups with startup staggering can need a longer startup READY window than the default.
+
+    READY timeout knobs:
+
+    - startup single-account: `channels.discord.gatewayReadyTimeoutMs`
+    - startup multi-account: `channels.discord.accounts.<accountId>.gatewayReadyTimeoutMs`
+    - startup env fallback when config is unset: `OPENCLAW_DISCORD_READY_TIMEOUT_MS`
+    - startup default: `15000` (15 seconds), max: `120000`
+    - runtime single-account: `channels.discord.gatewayRuntimeReadyTimeoutMs`
+    - runtime multi-account: `channels.discord.accounts.<accountId>.gatewayRuntimeReadyTimeoutMs`
+    - runtime env fallback when config is unset: `OPENCLAW_DISCORD_RUNTIME_READY_TIMEOUT_MS`
+    - runtime default: `30000` (30 seconds), max: `120000`
+
+  </Accordion>
+
   <Accordion title="Permissions audit mismatches">
     `channels status --probe` permission checks only work for numeric channel IDs.
 
@@ -1301,7 +1341,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - policy: `groupPolicy`, `dm.*`, `guilds.*`, `guilds.*.channels.*`
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
-- gateway metadata: `gatewayInfoTimeoutMs`
+- gateway: `gatewayInfoTimeoutMs`, `gatewayReadyTimeoutMs`, `gatewayRuntimeReadyTimeoutMs`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `streaming.preview.toolProgress`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`

@@ -22,7 +22,6 @@ function requestMismatch(): SystemRunApprovalMatchResult {
 }
 
 export { toSystemRunApprovalMismatchError } from "../infra/system-run-approval-binding.js";
-export type { SystemRunApprovalMatchResult } from "../infra/system-run-approval-binding.js";
 
 export function evaluateSystemRunApprovalMatch(params: {
   argv: string[];

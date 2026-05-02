@@ -19,7 +19,8 @@ import {
 const { monitorSlackProvider } = await import("./monitor/provider.js");
 
 const slackTestState = getSlackTestState();
-const { sendMock, replyMock, reactMock, upsertPairingRequestMock } = slackTestState;
+const { sendMock, replyMock, reactMock, reactionAddMock, upsertPairingRequestMock } =
+  slackTestState;
 
 beforeEach(() => {
   resetInboundDedupe();
@@ -275,7 +276,7 @@ describe("monitorSlackProvider tool results", () => {
     endsWith: string;
     includes: string;
   }) {
-    const names = reactMock.mock.calls.map(([args]) => (args as { name: string }).name);
+    const names = reactionAddMock.mock.calls.map(([args]) => (args as { name: string }).name);
     expect(names.slice(0, expected.startsWith.length)).toEqual(expected.startsWith);
     expect(names).toContain(expected.includes);
     expect(names.at(-1)).toBe(expected.endsWith);

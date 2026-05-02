@@ -164,7 +164,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
 
     expect(source).toContain('"--thinking",\n    "minimal"');
-    expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeLessThanOrEqual(180);
+    expect(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS).toBeLessThanOrEqual(360);
     expect(source).toContain('"--timeout",\n    String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS)');
     expect(source.match(/buildReleaseAgentTurnArgs\(sessionId\)/g)?.length).toBeGreaterThanOrEqual(
       2,

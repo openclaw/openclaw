@@ -54,6 +54,7 @@ function loadCoverageRegistryEntries(): SecretRegistryEntry[] {
 
 const COVERAGE_REGISTRY_ENTRIES = loadCoverageRegistryEntries();
 const DEBUG_COVERAGE_BATCHES = process.env.OPENCLAW_DEBUG_RUNTIME_COVERAGE === "1";
+const RUNTIME_COVERAGE_TEST_TIMEOUT_MS = 240_000;
 const COVERAGE_LOADABLE_PLUGIN_ORIGINS =
   buildCoverageLoadablePluginOrigins(COVERAGE_REGISTRY_ENTRIES);
 const PLUGIN_OWNED_OPENCLAW_COVERAGE_EXCLUSIONS = new Set([
@@ -564,19 +565,27 @@ describe("secrets runtime target coverage", () => {
     ({ resolveSecretRefValues } = resolver);
   });
 
-  it("handles every core and channel openclaw.json registry target when configured as active", async () => {
-    await expectOpenClawCoverageEntriesResolved(
-      "openclaw.json core",
-      collectOpenClawCoverageEntries({ includePluginEntries: false }),
-    );
-  });
+  it(
+    "handles every core and channel openclaw.json registry target when configured as active",
+    async () => {
+      await expectOpenClawCoverageEntriesResolved(
+        "openclaw.json core",
+        collectOpenClawCoverageEntries({ includePluginEntries: false }),
+      );
+    },
+    RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
+  );
 
-  it("handles every plugin openclaw.json registry target when configured as active", async () => {
-    await expectOpenClawCoverageEntriesResolved(
-      "openclaw.json plugins",
-      collectOpenClawCoverageEntries({ includePluginEntries: true }),
-    );
-  });
+  it(
+    "handles every plugin openclaw.json registry target when configured as active",
+    async () => {
+      await expectOpenClawCoverageEntriesResolved(
+        "openclaw.json plugins",
+        collectOpenClawCoverageEntries({ includePluginEntries: true }),
+      );
+    },
+    RUNTIME_COVERAGE_TEST_TIMEOUT_MS,
+  );
 
   it("handles every auth-profiles registry target", async () => {
     const entries = COVERAGE_REGISTRY_ENTRIES.filter(

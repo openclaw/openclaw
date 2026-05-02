@@ -13,6 +13,7 @@ import {
 } from "../internal/discord.js";
 import type { GatewayPlugin } from "../internal/gateway.js";
 import { VoicePlugin } from "../internal/voice.js";
+import { parseApplicationIdFromToken } from "../probe.js";
 import { createDiscordRequestClient, DISCORD_REST_TIMEOUT_MS } from "../proxy-request-client.js";
 import type { DiscordGuildEntryResolved } from "./allow-list.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
@@ -190,10 +191,20 @@ export async function createDiscordMonitorClient(params: {
 
 export async function fetchDiscordBotIdentity(params: {
   client: Pick<Client, "fetchUser">;
+  token?: string;
   runtime: RuntimeEnv;
   logStartupPhase: (phase: string, details?: string) => void;
 }) {
   params.logStartupPhase("fetch-bot-identity:start");
+  const parsedBotUserId = parseApplicationIdFromToken(params.token ?? "");
+  if (parsedBotUserId) {
+    params.logStartupPhase(
+      "fetch-bot-identity:done",
+      `botUserId=${parsedBotUserId} botUserName=<missing> source=token`,
+    );
+    return { botUserId: parsedBotUserId, botUserName: undefined };
+  }
+
   let botUser: Awaited<ReturnType<typeof params.client.fetchUser>>;
   try {
     botUser = await params.client.fetchUser("@me");

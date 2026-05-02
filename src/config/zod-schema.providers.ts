@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { collectBundledChannelConfigs } from "../plugins/bundled-channel-config-metadata.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifest } from "../plugins/manifest.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import type { ChannelsConfig } from "./types.channels.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
@@ -13,12 +15,27 @@ const ChannelModelByChannelSchema = z
   .record(z.string(), z.record(z.string(), z.string()))
   .optional();
 
-function getDirectChannelRuntimeSchema(channelId: string) {
-  return loadPluginManifestRegistryForPluginRegistry({
-    includeDisabled: true,
-    bundledChannelConfigCollector: collectBundledChannelConfigs,
-  }).plugins.find((plugin) => plugin.origin === "bundled" && plugin.channelConfigs?.[channelId])
-    ?.channelConfigs?.[channelId]?.runtime;
+function getDirectChannelRuntimeSchema(channelId: string, registry: PluginManifestRegistry) {
+  const record = registry.plugins.find(
+    (plugin) => plugin.origin === "bundled" && plugin.channels.includes(channelId),
+  );
+  if (!record) {
+    return undefined;
+  }
+  const manifestRuntime = record.channelConfigs?.[channelId]?.runtime;
+  if (manifestRuntime) {
+    return manifestRuntime;
+  }
+  return collectBundledChannelConfigs({
+    pluginDir: record.rootDir,
+    manifest: {
+      id: record.id,
+      configSchema: record.configSchema ?? {},
+      channels: record.channels,
+      channelConfigs: record.channelConfigs,
+    } as PluginManifest,
+    packageManifest: record.packageManifest,
+  })?.[channelId]?.runtime;
 }
 
 function hasPluginOwnedChannelConfig(
@@ -68,8 +85,12 @@ function normalizeBundledChannelConfigs(
   }
 
   let next: ChannelsConfig | undefined;
+  let registry: PluginManifestRegistry | undefined;
   for (const channelId of Object.keys(value)) {
-    const runtimeSchema = getDirectChannelRuntimeSchema(channelId);
+    registry ??= loadPluginManifestRegistryForPluginRegistry({
+      includeDisabled: true,
+    });
+    const runtimeSchema = getDirectChannelRuntimeSchema(channelId, registry);
     if (!runtimeSchema) {
       continue;
     }

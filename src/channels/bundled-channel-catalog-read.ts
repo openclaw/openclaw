@@ -28,7 +28,11 @@ function listPackageRoots(): string[] {
 }
 
 function readBundledExtensionCatalogEntriesSync(): PluginPackageChannel[] {
-  return listChannelCatalogEntries({ origin: "bundled" }).map((entry) => entry.channel);
+  try {
+    return listChannelCatalogEntries({ origin: "bundled" }).map((entry) => entry.channel);
+  } catch {
+    return [];
+  }
 }
 
 function readOfficialCatalogFileSync(): ChannelCatalogEntryLike[] {

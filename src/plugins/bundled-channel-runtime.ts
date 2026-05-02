@@ -10,6 +10,11 @@ type BundledChannelEntryPathPair = {
   built: string;
 };
 
+type BundledMetadataScope =
+  | { kind: "default" }
+  | { kind: "empty" }
+  | { kind: "env"; env: NodeJS.ProcessEnv };
+
 export type BundledChannelPluginMetadata = {
   dirName: string;
   source: BundledChannelEntryPathPair;
@@ -22,22 +27,28 @@ export type BundledChannelPluginMetadata = {
   rootDir: string;
 };
 
-function resolveBundledMetadataEnv(params?: {
+function resolveBundledMetadataScope(params?: {
   rootDir?: string;
   scanDir?: string;
-}): NodeJS.ProcessEnv | undefined {
+}): BundledMetadataScope {
   const overrideDir = params?.scanDir
     ? path.resolve(params.scanDir)
     : params?.rootDir
       ? resolveBundledPluginsDirForRoot(params.rootDir)
       : undefined;
   if (!overrideDir) {
-    return undefined;
+    return params?.rootDir ? { kind: "empty" } : { kind: "default" };
+  }
+  if (!fs.existsSync(overrideDir)) {
+    return { kind: "empty" };
   }
   return {
-    ...process.env,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: overrideDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    kind: "env",
+    env: {
+      ...process.env,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: overrideDir,
+      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+    },
   };
 }
 
@@ -87,8 +98,12 @@ export function listBundledChannelPluginMetadata(params?: {
   includeChannelConfigs?: boolean;
   includeSyntheticChannelConfigs?: boolean;
 }): readonly BundledChannelPluginMetadata[] {
+  const scope = resolveBundledMetadataScope(params);
+  if (scope.kind === "empty") {
+    return [];
+  }
   return loadPluginManifestRegistryForPluginRegistry({
-    env: resolveBundledMetadataEnv(params),
+    env: scope.kind === "env" ? scope.env : undefined,
     includeDisabled: true,
   }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
 }

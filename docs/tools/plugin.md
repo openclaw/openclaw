@@ -27,6 +27,12 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
   <Step title="Install a plugin">
     ```bash
+    # Search ClawHub plugins
+    openclaw plugins search "calendar"
+
+    # From ClawHub
+    openclaw plugins install clawhub:openclaw-codex-app-server
+
     # From npm
     openclaw plugins install npm:@acme/openclaw-plugin
 
@@ -100,9 +106,10 @@ Plugin dependency installation happens only during explicit install/update or
 doctor repair flows. Gateway startup, config reload, and runtime inspection do
 not run package managers or repair dependency trees. Local plugins must already
 have their dependencies installed, while npm, git, and ClawHub plugins are
-installed under OpenClaw's managed plugin roots with package-local
-dependencies. External plugins and custom load paths must still be installed
-through `openclaw plugins install`.
+installed under OpenClaw's managed plugin roots. npm dependencies may be hoisted
+within OpenClaw's managed npm root; install/update scans that managed root before
+trust and uninstall removes npm-managed packages through npm. External plugins
+and custom load paths must still be installed through `openclaw plugins install`.
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the
 install-time lifecycle.
 
@@ -432,6 +439,7 @@ openclaw plugins list                       # compact inventory
 openclaw plugins list --enabled            # only enabled plugins
 openclaw plugins list --verbose            # per-plugin detail lines
 openclaw plugins list --json               # machine-readable inventory
+openclaw plugins search <query>            # search ClawHub plugin catalog
 openclaw plugins inspect <id>              # static detail
 openclaw plugins inspect <id> --runtime    # registered hooks/tools/CLI/gateway methods
 openclaw plugins inspect <id> --json       # machine-readable

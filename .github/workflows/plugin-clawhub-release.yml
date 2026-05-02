@@ -247,6 +247,36 @@ jobs:
           chmod +x "$RUNNER_TEMP/clawhub"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
+      - name: Write ClawHub token config
+        env:
+          CLAWHUB_TOKEN: ${{ secrets.CLAWHUB_TOKEN }}
+          CLAWHUB_REGISTRY: ${{ env.CLAWHUB_REGISTRY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CLAWHUB_TOKEN}" ]]; then
+            echo "No CLAWHUB_TOKEN secret configured; publish will rely on GitHub OIDC trusted publishing."
+            exit 0
+          fi
+          node --input-type=module <<'EOF'
+          import { writeFileSync } from "node:fs";
+          import { join } from "node:path";
+
+          const path = join(process.env.RUNNER_TEMP, "clawhub-config.json");
+          writeFileSync(
+            path,
+            `${JSON.stringify(
+              {
+                registry: process.env.CLAWHUB_REGISTRY,
+                token: process.env.CLAWHUB_TOKEN,
+              },
+              null,
+              2,
+            )}\n`,
+          );
+          console.log(path);
+          EOF
+          echo "CLAWHUB_CONFIG_PATH=${RUNNER_TEMP}/clawhub-config.json" >> "$GITHUB_ENV"
+
       - name: Ensure version is not already published
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}

@@ -14,7 +14,7 @@ export type IndexedTranscriptEntry = {
   record: ParsedTranscriptRecord;
 };
 
-export type SessionTranscriptIndex = {
+type SessionTranscriptIndex = {
   filePath: string;
   mtimeMs: number;
   size: number;
@@ -62,10 +62,6 @@ function setCachedIndex(filePath: string, entry: CacheEntry): void {
     }
     transcriptIndexCache.delete(oldestKey);
   }
-}
-
-export function invalidateSessionTranscriptIndex(filePath: string): void {
-  transcriptIndexCache.delete(filePath);
 }
 
 export function clearSessionTranscriptIndexCache(): void {

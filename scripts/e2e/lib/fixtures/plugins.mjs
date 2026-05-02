@@ -86,6 +86,39 @@ function writePluginWithCli([dir, id, version, method, name, cliRoot, cliOutput]
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
 
+function writePluginWithCliRegistryDependency([
+  dir,
+  id,
+  version,
+  method,
+  name,
+  cliRoot,
+  cliOutput,
+]) {
+  for (const [value, label] of [
+    [dir, "dir"],
+    [id, "id"],
+    [version, "version"],
+    [method, "method"],
+    [name, "name"],
+    [cliRoot, "cliRoot"],
+    [cliOutput, "cliOutput"],
+  ]) {
+    requireArg(value, label);
+  }
+  writeJson(path.join(dir, "package.json"), {
+    name: `@openclaw/${id}`,
+    version,
+    dependencies: { "is-number": "7.0.0" },
+    openclaw: { extensions: ["./index.js"] },
+  });
+  write(
+    path.join(dir, "index.js"),
+    `const isNumber = require("is-number");\nmodule.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: isNumber(42) })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
+  );
+  writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
+}
+
 function writeClaudeBundle([root]) {
   root = requireArg(root, "root");
   writeJson(path.join(root, ".claude-plugin", "plugin.json"), { name: "claude-bundle-e2e" });
@@ -128,6 +161,8 @@ export const pluginCommands = {
   plugin: writePlugin,
   "plugin-vendored-dep": writePluginWithVendoredDependency,
   "plugin-cli": writePluginWithCli,
+  "plugin-cli-registry-dep": writePluginWithCliRegistryDependency,
+  "fake-is-number-package": ([dir]) => writeFakeIsNumberPackage(requireArg(dir, "dir")),
   "plugin-manifest": ([file, id]) =>
     writePluginManifest(requireArg(file, "file"), requireArg(id, "id")),
   "claude-bundle": writeClaudeBundle,

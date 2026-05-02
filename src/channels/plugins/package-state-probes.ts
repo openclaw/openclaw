@@ -76,9 +76,9 @@ function resolveChannelPackageStateMetadata(
   }
   const specifier = normalizeOptionalString(metadata.specifier) ?? "";
   const exportName = normalizeOptionalString(metadata.exportName) ?? "";
-  const metadataWithEnv = metadata as ChannelPackageStateMetadata;
-  const allOf = normalizeStringList(metadataWithEnv.env?.allOf);
-  const anyOf = normalizeStringList(metadataWithEnv.env?.anyOf);
+  const envMetadata = "env" in metadata ? metadata.env : undefined;
+  const allOf = normalizeStringList(envMetadata?.allOf);
+  const anyOf = normalizeStringList(envMetadata?.anyOf);
   const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
   if ((!specifier || !exportName) && !env) {
     return null;

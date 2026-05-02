@@ -77,7 +77,7 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, undefined)).toBe(null);
   });
 
-  it("returns null when sessionKey does not match", () => {
+  it("returns null when sessionKey does not match and no active run is in flight", () => {
     const state = createState({ sessionKey: "main" });
     const payload: ChatEventPayload = {
       runId: "run-1",
@@ -85,6 +85,73 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe(null);
+  });
+
+  it("accepts delta events for the active run when gateway emits a canonical session key", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Live reply");
+    expect(state.chatRunId).toBe("run-1");
+  });
+
+  it("accepts final events for the active run when gateway emits a canonical session key", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live reply",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "agent:main:main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Live reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+  });
+
+  it("still drops events when neither session key nor active run id matches", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Working...",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-2",
+      sessionKey: "agent:main:main",
+      state: "delta",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Wrong run" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe(null);
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatMessages).toEqual([]);
   });
 
   it("returns null for delta from another run", () => {

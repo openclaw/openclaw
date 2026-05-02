@@ -137,7 +137,7 @@ describe("getCachedPluginModuleLoader", () => {
     );
   });
 
-  it("lets callers intentionally share loaders behind a custom cache scope key", async () => {
+  it("keeps cache scope keys separated by loader options", async () => {
     const { createJiti, getCachedPluginModuleLoader } =
       await loadCachedPluginModuleLoader("cache-scope-key");
 
@@ -163,6 +163,41 @@ describe("getCachedPluginModuleLoader", () => {
       },
       tryNative: true,
       cacheScopeKey: "bundled:native",
+    });
+
+    expect(second).not.toBe(first);
+    first("/repo/dist/extensions/demo-a/api.js");
+    second("/repo/dist/extensions/demo-b/api.js");
+    expect(createJiti).toHaveBeenCalledTimes(2);
+    expect(cache.size).toBe(2);
+  });
+
+  it("lets callers explicitly share loaders behind an unsafe shared cache scope key", async () => {
+    const { createJiti, getCachedPluginModuleLoader } =
+      await loadCachedPluginModuleLoader("shared-cache-scope-key");
+
+    const cache = new Map();
+    const first = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo-a/api.js",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+      aliasMap: {
+        demo: "/repo/demo-a.js",
+      },
+      tryNative: true,
+      sharedCacheScopeKey: "bundled:native",
+    });
+    const second = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/dist/extensions/demo-b/api.js",
+      importerUrl: "file:///repo/src/plugins/public-surface-loader.ts",
+      loaderFilename: "file:///repo/src/plugins/public-surface-loader.ts",
+      aliasMap: {
+        demo: "/repo/demo-b.js",
+      },
+      tryNative: true,
+      sharedCacheScopeKey: "bundled:native",
     });
 
     expect(second).toBe(first);

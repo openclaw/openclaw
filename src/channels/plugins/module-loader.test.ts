@@ -12,7 +12,9 @@ afterEach(() => {
   for (const tempDir of tempDirs.splice(0)) {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
+  vi.restoreAllMocks();
   vi.resetModules();
+  vi.doUnmock("jiti");
 });
 
 function createTempDir(): string {
@@ -61,29 +63,39 @@ describe("channel plugin module loader helpers", () => {
     expect(createJiti).not.toHaveBeenCalled();
   });
 
-  it("rejects TypeScript modules without creating Jiti", async () => {
-    const createJiti = vi.fn(() => {
-      throw new Error("channel module loader must not create jiti");
-    });
+  it("loads TypeScript channel plugin modules through Jiti when no native hook exists", async () => {
+    const loadWithJiti = vi.fn((target: string) => ({
+      loadedBy: "jiti",
+      target,
+    }));
+    const createJiti = vi.fn(() => loadWithJiti);
     vi.resetModules();
     vi.doMock("jiti", () => ({
       createJiti,
     }));
     const loaderModule = await importFreshModule<typeof import("./module-loader.js")>(
       import.meta.url,
-      "./module-loader.js?scope=source-ts-native-hook",
+      "./module-loader.js?scope=source-ts-jiti-fallback",
     );
     const rootDir = createTempDir();
     const modulePath = path.join(rootDir, "extensions", "demo", "index.ts");
     fs.mkdirSync(path.dirname(modulePath), { recursive: true });
     fs.writeFileSync(modulePath, "export const ok = true;\n", "utf8");
 
-    expect(() =>
+    expect(
       loaderModule.loadChannelPluginModule({
         modulePath,
         rootDir,
       }),
-    ).toThrow(/must be built JavaScript/u);
-    expect(createJiti).not.toHaveBeenCalled();
+    ).toEqual({
+      loadedBy: "jiti",
+      target: fs.realpathSync.native(modulePath),
+    });
+    expect(createJiti).toHaveBeenCalledOnce();
+    expect(createJiti).toHaveBeenCalledWith(
+      expect.stringContaining("module-loader.ts"),
+      expect.objectContaining({ tryNative: false }),
+    );
+    expect(loadWithJiti).toHaveBeenCalledWith(fs.realpathSync.native(modulePath));
   });
 });

@@ -23,6 +23,7 @@ import { resolveHeartbeatSummaryForAgent } from "../../../infra/heartbeat-summar
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
+import { buildAgentHookContextChannelFields } from "../../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import {
   extractModelCompat,
@@ -2442,9 +2443,8 @@ export async function runEmbeddedAttempt(
           workspaceDir: params.workspaceDir,
           modelProviderId: params.model.provider,
           modelId: params.model.id,
-          messageProvider: params.messageProvider ?? undefined,
           trigger: params.trigger,
-          channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+          ...buildAgentHookContextChannelFields(params),
         };
         const promptBuildMessages =
           pruneProcessedHistoryImages(activeSession.messages) ?? activeSession.messages;
@@ -2761,9 +2761,8 @@ export async function runEmbeddedAttempt(
                   sessionKey: params.sessionKey,
                   sessionId: params.sessionId,
                   workspaceDir: params.workspaceDir,
-                  messageProvider: params.messageProvider ?? undefined,
                   trigger: params.trigger,
-                  channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                  ...buildAgentHookContextChannelFields(params),
                 },
               )
               .catch((err) => {
@@ -3228,9 +3227,8 @@ export async function runEmbeddedAttempt(
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
-                messageProvider: params.messageProvider ?? undefined,
                 trigger: params.trigger,
-                channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+                ...buildAgentHookContextChannelFields(params),
               },
             )
             .catch((err) => {
@@ -3336,9 +3334,8 @@ export async function runEmbeddedAttempt(
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,
-              messageProvider: params.messageProvider ?? undefined,
               trigger: params.trigger,
-              channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+              ...buildAgentHookContextChannelFields(params),
             },
           )
           .catch((err) => {

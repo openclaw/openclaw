@@ -88,7 +88,6 @@ describe("ChannelsSchema bundled runtime loading", () => {
     expect(loadPluginManifestRegistryMock.mock.calls).toContainEqual([
       expect.objectContaining({
         includeDisabled: true,
-        bundledChannelConfigCollector: expect.any(Function),
       }),
     ]);
     expect(collectBundledChannelConfigsMock).not.toHaveBeenCalled();
@@ -103,21 +102,15 @@ describe("ChannelsSchema bundled runtime loading", () => {
         },
       },
     });
-    loadPluginManifestRegistryMock.mockImplementationOnce((options) => ({
+    loadPluginManifestRegistryMock.mockImplementationOnce(() => ({
       diagnostics: [],
       plugins: [
         {
           id: "discord",
           origin: "bundled",
+          rootDir: "/repo/extensions/discord",
           channels: ["discord"],
-          channelConfigs: (
-            options?.bundledChannelConfigCollector as
-              | ((params: unknown) => Record<string, PluginManifestChannelConfig> | undefined)
-              | undefined
-          )?.({
-            pluginDir: "/repo/extensions/discord",
-            manifest: { id: "discord", channels: ["discord"] },
-          }),
+          channelConfigs: {},
         } as unknown as PluginManifestRegistry["plugins"][number],
       ],
     }));
@@ -134,9 +127,17 @@ describe("ChannelsSchema bundled runtime loading", () => {
     expect(loadPluginManifestRegistryMock.mock.calls).toContainEqual([
       expect.objectContaining({
         includeDisabled: true,
-        bundledChannelConfigCollector: expect.any(Function),
       }),
     ]);
     expect(collectBundledChannelConfigsMock).toHaveBeenCalledTimes(1);
+    expect(collectBundledChannelConfigsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginDir: "/repo/extensions/discord",
+        manifest: expect.objectContaining({
+          id: "discord",
+          channels: ["discord"],
+        }),
+      }),
+    );
   });
 });

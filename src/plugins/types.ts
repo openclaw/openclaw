@@ -1963,6 +1963,8 @@ export type OpenClawPluginCommandDefinition = {
   };
   /** Description shown in /help and command menus */
   description: string;
+  /** Localized descriptions for native command surfaces that support them. */
+  descriptionLocalizations?: Record<string, string>;
   /** Optional system-prompt guidance for agents when this command is registered. */
   agentPromptGuidance?: readonly string[];
   /** Whether this command accepts arguments */

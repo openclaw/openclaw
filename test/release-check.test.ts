@@ -211,7 +211,7 @@ describe("collectBundledExtensionManifestErrors", () => {
         },
       ]),
     ).toEqual([
-      "bundled extension 'broken' manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form \">=x.y.z\"",
+      "bundled extension 'broken' manifest invalid | openclaw.install.minHostVersion must use a semver floor in the form \">=x.y.z[-prerelease][+build]\"",
     ]);
   });
 

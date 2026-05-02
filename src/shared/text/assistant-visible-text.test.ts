@@ -197,6 +197,13 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("strips legacy uppercase TOOL_RESULT blocks with object payloads", () => {
+      expectVisibleText(
+        ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
     it("preserves literal legacy TOOL_CALL examples without tool args payloads", () => {
       expectVisibleText(
         "Use `[TOOL_CALL]` only when describing legacy logs.",

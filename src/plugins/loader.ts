@@ -102,6 +102,10 @@ import {
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
+import {
+  fingerprintPluginDiscoveryContext,
+  resolvePluginDiscoveryContext,
+} from "./plugin-control-plane-context.js";
 import { withProfile } from "./plugin-load-profile.js";
 import {
   getCachedPluginSourceModuleLoader,
@@ -116,7 +120,6 @@ import {
 import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
-import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
@@ -616,11 +619,12 @@ function buildCacheKey(params: {
   coreGatewayMethodNames?: string[];
   activate?: boolean;
 }): string {
-  const { roots, loadPaths } = resolvePluginCacheInputs({
+  const discoveryContext = resolvePluginDiscoveryContext({
     workspaceDir: params.workspaceDir,
     loadPaths: params.plugins.loadPaths,
     env: params.env,
   });
+  const { roots, loadPaths } = discoveryContext;
   const bundledPackage = resolveBundledPackageCacheIdentity(roots.stock);
   const installs = Object.fromEntries(
     Object.entries(params.installs ?? {}).map(([pluginId, install]) => [
@@ -655,6 +659,7 @@ function buildCacheKey(params: {
   const activationMode = params.activate === false ? "snapshot" : "active";
   return `${roots.workspace ?? ""}::${roots.global ?? ""}::${roots.stock ?? ""}::${JSON.stringify({
     bundledPackage,
+    discoveryFingerprint: fingerprintPluginDiscoveryContext(discoveryContext),
     ...params.plugins,
     installs,
     loadPaths,
@@ -1176,6 +1181,26 @@ function activatePluginRegistry(
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
+  const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
+  if (requestedOnlyPluginIdSet && requestedOnlyPluginIdSet.size === 0) {
+    const emptyRegistry = createEmptyPluginRegistry();
+    if (options.activate !== false) {
+      clearAgentHarnesses();
+      clearPluginCommands();
+      clearPluginInteractiveHandlers();
+      clearDetachedTaskLifecycleRuntimeRegistration();
+      clearMemoryPluginState();
+      activatePluginRegistry(
+        emptyRegistry,
+        `empty-plugin-scope::${resolveRuntimeSubagentMode(options.runtimeOptions)}::${options.workspaceDir ?? ""}`,
+        resolveRuntimeSubagentMode(options.runtimeOptions),
+        options.workspaceDir,
+      );
+    }
+    return emptyRegistry;
+  }
+
   const {
     env,
     cfg,
@@ -1196,19 +1221,6 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
   const logger = options.logger ?? defaultLogger();
   const validateOnly = options.mode === "validate";
   const onlyPluginIdSet = createPluginIdScopeSet(onlyPluginIds);
-
-  if (onlyPluginIdSet && onlyPluginIdSet.size === 0) {
-    const emptyRegistry = createEmptyPluginRegistry();
-    if (shouldActivate) {
-      clearAgentHarnesses();
-      clearPluginCommands();
-      clearPluginInteractiveHandlers();
-      clearDetachedTaskLifecycleRuntimeRegistration();
-      clearMemoryPluginState();
-      activatePluginRegistry(emptyRegistry, cacheKey, runtimeSubagentMode, options.workspaceDir);
-    }
-    return emptyRegistry;
-  }
 
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
