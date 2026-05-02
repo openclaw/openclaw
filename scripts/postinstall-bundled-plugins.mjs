@@ -705,9 +705,10 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
 
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
+  const hasPostinstallInventory = pathExists(join(params.packageRoot, DIST_INVENTORY_PATH));
   return (
     (pathExists(join(params.packageRoot, ".git")) ||
-      pathExists(join(params.packageRoot, "pnpm-workspace.yaml"))) &&
+      (pathExists(join(params.packageRoot, "pnpm-workspace.yaml")) && !hasPostinstallInventory)) &&
     pathExists(join(params.packageRoot, "src")) &&
     pathExists(join(params.packageRoot, "extensions"))
   );

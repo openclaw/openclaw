@@ -85,6 +85,10 @@ async function runXaiLiveCase(label: string, run: () => Promise<void>): Promise<
   }
 }
 
+function isRealtimeOpenBillingDrift(error: Error): boolean {
+  return isBillingErrorMessage(error.message) || error.message.includes("server response: 429");
+}
+
 describeLive("xai plugin live", () => {
   it("synthesizes TTS through the registered speech provider", async () => {
     await runXaiLiveCase("tts", async () => {
@@ -189,7 +193,21 @@ describeLive("xai plugin live", () => {
       });
 
       try {
-        await session.connect();
+        try {
+          await session.connect();
+        } catch (error) {
+          const thrown = error instanceof Error ? error : new Error(String(error));
+          if (isRealtimeOpenBillingDrift(thrown)) {
+            console.warn(`[xai:live] skip realtime-open: billing drift: ${thrown.message}`);
+            return;
+          }
+          throw error;
+        }
+        const billingError = errors.find(isRealtimeOpenBillingDrift);
+        if (billingError) {
+          console.warn(`[xai:live] skip realtime-open: billing drift: ${billingError.message}`);
+          return;
+        }
         expect(errors).toEqual([]);
         expect(session.isConnected()).toBe(true);
       } finally {
