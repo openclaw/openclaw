@@ -1291,6 +1291,7 @@
     "check:timed:all-types": "node scripts/check-timed.mjs --include-test-types",
     "check:timed:architecture": "node scripts/check-timed.mjs --include-architecture",
     "check:workflows": "node scripts/check-workflows.mjs",
+    "ci:full-release": "node scripts/full-release-validation-at-sha.mjs",
     "ci:timings": "node scripts/ci-run-timings.mjs --latest-main",
     "ci:timings:recent": "node scripts/ci-run-timings.mjs --recent 10",
     "codex-app-server:protocol:check": "node --import tsx scripts/check-codex-app-server-protocol.ts",
