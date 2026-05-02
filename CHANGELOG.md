@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Plugins/onboarding: let Manual setup install optional official plugins, including ClawHub-backed diagnostics with npm fallback, and expose the external Codex plugin as a selectable provider setup choice. Thanks @vincentkoc.
 - Plugins/CLI: include package dependency install state in `openclaw plugins list --json` so scripts can spot missing plugin dependencies without runtime-loading plugins.
 - Plugins/update: on the beta OpenClaw update channel, default-line npm and ClawHub plugin updates try `@beta` first and fall back to default/latest when no plugin beta release exists.
 - Channels/WhatsApp: support explicit WhatsApp Channel/Newsletter `@newsletter` outbound message targets with channel session metadata instead of DM routing. Fixes #13417; carries forward the narrow outbound target idea from #13424. Thanks @vincentkoc and @agentz-manfred.
@@ -15,6 +16,7 @@ Docs: https://docs.openclaw.ai
 - Control UI/Gateway: avoid full session-list reloads for locally applied message-phase session updates, carry known session keys through transcript-file update events, and defer media provider listing when explicit generation model config is present. Refs #76236, #76203, #76188, #76107, and #76166.
 - CLI/plugins: stop treating the non-plugin `auth` command root as a bundled plugin id, so restrictive `plugins.allow` configs no longer tell users to add stale `auth` plugin entries.
 - Doctor/plugins: update configured plugin installs whose stale manifests still declare channels without `channelConfigs`, so beta upgrades repair old Discord-style package payloads during `doctor --fix`.
+- Active Memory: keep non-empty `memory_search` results from being fast-failed as empty when debug telemetry reports zero hits.
 - Plugins/externalization: repair missing configured plugin installs from npm by default, reserve ClawHub downloads for explicit `clawhubSpec` metadata, and cover agent-runtime/env-selected plugin repair. Thanks @vincentkoc.
 - Upgrade/config: validate configured web-search providers and statically suppressed model/provider pairs against the active plugin set at config load, so stale plugin state fails loud before runtime fallback.
 - Status/update: resolve beta update-channel checks from the installed version when config still says `stable`, and let `status --deep` reuse live gateway channel credential state instead of warning on command-path-only token misses.
@@ -32,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/externalization: add official npm-first catalogs for externalized channel, provider, and generic plugins, keep unpublished ACPX/Google Chat/LINE bundled, and make missing-plugin repair honor npm-first metadata while ClawHub pack files roll out. Thanks @vincentkoc.
 - Plugins/update: detect tracked plugin install records whose package directories disappeared during `openclaw update`, reinstall them before normal plugin updates, and fail the update if any install record still points at missing disk payloads.
 - Plugins/registry: hash manifest and package metadata when validating persisted plugin registries so fast same-size rewrites cannot leave stale plugin metadata trusted.
+- Plugins/registry: canonicalize install-record provenance paths before trust diagnostics, so npm plugins installed under symlinked temp/state roots no longer warn as untracked local code.
 - CLI/infer: reject local `codex/*` one-shot model probes before simple-completion dispatch and point operators at the Codex app-server runtime path instead of ending with an empty-output error.
 - Agents/sessions: preserve terminal lifecycle state when final run metadata persists from a stale in-memory snapshot, preventing `main` sessions from staying stuck as running after completed or timed-out turns.
 - Gateway/CLI: make `openclaw gateway start` repair stale managed service definitions that point at old OpenClaw versions, missing binaries, or temporary installer paths before starting.
@@ -42,6 +45,7 @@ Docs: https://docs.openclaw.ai
 - Setup/TUI: bound the Terminal hatch bootstrap run so a stalled provider request times out instead of leaving first-run hatching stuck behind the watchdog. (#76241) Thanks @joshavant.
 - Plugins/Codex: allow the official npm Codex plugin to install without the unsafe-install override, keep `/codex` command ownership, and cover the real npm Docker live path through managed `.openclaw/npm` dependencies plus uninstall failure proof.
 - Gateway/status: add concrete service, config, listener-owner, and log collection next steps when gateway probes fail and Bonjour finds no local gateway, so frozen or port-conflict reports include the data needed for root-cause triage. Refs #49012. Thanks @vincentkoc.
+- Codex harness: forward OpenClaw workspace bootstrap files such as `SOUL.md` through native Codex config instructions while leaving `AGENTS.md` to Codex project-doc discovery. Fixes #76273. Thanks @zknicker.
 
 ## 2026.5.2
 
