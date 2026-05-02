@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import { refreshChat } from "./app-chat.ts";
@@ -1329,6 +1330,9 @@ export function renderApp(state: AppViewState) {
         : ""} ${navCollapsed ? "shell--nav-collapsed" : ""} ${navDrawerOpen
         ? "shell--nav-drawer-open"
         : ""} ${state.onboarding ? "shell--onboarding" : ""}"
+      style=${styleMap(
+        state.chatMessageMaxWidth ? { "--chat-message-max-width": state.chatMessageMaxWidth } : {},
+      )}
     >
       <button
         type="button"
