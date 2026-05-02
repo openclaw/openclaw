@@ -69,8 +69,8 @@ function delay(ms: number): Promise<void> {
   });
 }
 
-function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
-  const mergedEnv = sanitizeHostExecEnv({ ...process.env, ...config.env });
+export function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
+  const mergedEnv = sanitizeHostExecEnv({ baseEnv: process.env, overrides: config.env ?? null });
   const program = resolveWindowsSpawnProgram({
     command: config.command,
     env: mergedEnv,

@@ -1,7 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-
-// These tests verify the Windows .cmd shim resolution + sanitized env merge
-// in spawnLspServerProcess (pi-bundle-lsp-runtime.ts).
+import { describe, expect, it, vi, beforeEach } from "vitest";
 
 const resolveWindowsSpawnProgramMock = vi.hoisted(() => vi.fn());
 const materializeWindowsSpawnProgramMock = vi.hoisted(() => vi.fn());
@@ -35,16 +32,25 @@ vi.mock("./embedded-pi-lsp.js", () => ({
   loadEmbeddedPiLspConfig: vi.fn().mockReturnValue({ lspServers: {}, diagnostics: [] }),
 }));
 
+const FAKE_CHILD = {
+  stdout: { setEncoding: vi.fn(), on: vi.fn() },
+  stderr: { setEncoding: vi.fn(), on: vi.fn() },
+  on: vi.fn(),
+  pid: 1234,
+} as unknown as import("node:child_process").ChildProcess;
+
 describe("spawnLspServerProcess Windows .cmd shim handling", () => {
-  it("passes merged env through sanitizeHostExecEnv before spawn", async () => {
-    const mockEnv = { PATH: "/usr/bin", CUSTOM: "value" };
-    const sanitizedEnv = { PATH: "/usr/bin", CUSTOM: "value", SANITIZED: "true" };
-    
+  beforeEach(() => {
+    vi.clearAllMocks();
+    spawnMock.mockReturnValue(FAKE_CHILD);
+  });
+
+  it("calls sanitizeHostExecEnv with baseEnv/overrides, not a flat merged object", async () => {
+    const configEnv = { MY_TOKEN: "secret", TOOL_PATH: "/custom" };
+    const sanitizedEnv = { PATH: "/usr/bin", MY_TOKEN: "secret", TOOL_PATH: "/custom" };
+
     sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
-    resolveWindowsSpawnProgramMock.mockReturnValue({
-      resolvedCommand: "typescript-language-server",
-      isShim: false,
-    });
+    resolveWindowsSpawnProgramMock.mockReturnValue({ resolvedCommand: "tls", isShim: false });
     materializeWindowsSpawnProgramMock.mockReturnValue({
       command: "typescript-language-server",
       argv: ["--stdio"],
@@ -52,64 +58,54 @@ describe("spawnLspServerProcess Windows .cmd shim handling", () => {
       windowsHide: true,
     });
 
-    // Import after mocks are set up
     const { spawnLspServerProcess } = await import("./pi-bundle-lsp-runtime.js");
-    
-    // This will call the internal spawnLspServerProcess
-    // We verify through the mock chain that sanitizeHostExecEnv was called
-    expect(sanitizeHostExecEnvMock).toBeDefined();
+    spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"], env: configEnv });
+
+    // Must use structured params so config.env entries are not dropped
+    expect(sanitizeHostExecEnvMock).toHaveBeenCalledWith(
+      expect.objectContaining({ baseEnv: process.env, overrides: configEnv }),
+    );
   });
 
-  it("resolves .cmd shims on Windows via resolveWindowsSpawnProgram", () => {
-    const mergedEnv = { PATH: "C:\\Windows;C:\\nodejs", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
-    sanitizeHostExecEnvMock.mockReturnValue(mergedEnv);
-    
-    resolveWindowsSpawnProgramMock.mockReturnValue({
-      resolvedCommand: "C:\\nodejs\\node_modules\\.bin\\typescript-language-server.cmd",
-      isShim: true,
+  it("passes sanitized env to resolveWindowsSpawnProgram", async () => {
+    const sanitizedEnv = { PATH: "C:\Windows;C:\nodejs", PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+
+    sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
+    resolveWindowsSpawnProgramMock.mockReturnValue({ resolvedCommand: "tls", isShim: false });
+    materializeWindowsSpawnProgramMock.mockReturnValue({
+      command: "typescript-language-server",
+      argv: ["--stdio"],
+      shell: false,
+      windowsHide: true,
     });
+
+    const { spawnLspServerProcess } = await import("./pi-bundle-lsp-runtime.js");
+    spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
+
+    expect(resolveWindowsSpawnProgramMock).toHaveBeenCalledWith(
+      expect.objectContaining({ env: sanitizedEnv, allowShellFallback: true }),
+    );
+  });
+
+  it("passes materialized invocation to spawn with the sanitized env", async () => {
+    const sanitizedEnv = { PATH: "/usr/bin" };
+
+    sanitizeHostExecEnvMock.mockReturnValue(sanitizedEnv);
+    resolveWindowsSpawnProgramMock.mockReturnValue({ resolvedCommand: "tls", isShim: true });
     materializeWindowsSpawnProgramMock.mockReturnValue({
       command: "cmd.exe",
-      argv: ["/c", "C:\\nodejs\\node_modules\\.bin\\typescript-language-server.cmd", "--stdio"],
+      argv: ["/c", "typescript-language-server.cmd", "--stdio"],
       shell: true,
       windowsHide: true,
     });
 
-    // Verify the mock was configured for the Windows path
-    const result = materializeWindowsSpawnProgramMock(
-      resolveWindowsSpawnProgramMock({ command: "typescript-language-server", env: mergedEnv, allowShellFallback: true }),
-      ["--stdio"]
-    );
+    const { spawnLspServerProcess } = await import("./pi-bundle-lsp-runtime.js");
+    spawnLspServerProcess({ command: "typescript-language-server", args: ["--stdio"] });
 
-    expect(result.command).toBe("cmd.exe");
-    expect(result.argv).toContain("/c");
-    expect(result.shell).toBe(true);
-    expect(result.windowsHide).toBe(true);
-  });
-
-  it("passes the merged env (not default process.env) to resolveWindowsSpawnProgram", () => {
-    const customEnv = { PATH: "/custom/path", PATHEXT: ".cmd", MY_VAR: "test" };
-    sanitizeHostExecEnvMock.mockImplementation((env: Record<string, string>) => env);
-    
-    resolveWindowsSpawnProgramMock.mockImplementation((opts: { env?: Record<string, string> }) => {
-      // Verify the env passed includes the custom vars
-      expect(opts.env).toHaveProperty("MY_VAR", "test");
-      expect(opts.env).toHaveProperty("PATH", "/custom/path");
-      return { resolvedCommand: "server", isShim: false };
-    });
-    
-    materializeWindowsSpawnProgramMock.mockReturnValue({
-      command: "server",
-      argv: [],
-      shell: false,
-    });
-
-    // Call the mock chain to verify behavior
-    const env = sanitizeHostExecEnvMock({ ...process.env, ...customEnv });
-    resolveWindowsSpawnProgramMock({ command: "server", env, allowShellFallback: true });
-    
-    expect(resolveWindowsSpawnProgramMock).toHaveBeenCalledWith(
-      expect.objectContaining({ env: expect.objectContaining({ MY_VAR: "test" }) })
+    expect(spawnMock).toHaveBeenCalledWith(
+      "cmd.exe",
+      ["/c", "typescript-language-server.cmd", "--stdio"],
+      expect.objectContaining({ env: sanitizedEnv, shell: true, windowsHide: true }),
     );
   });
 });
