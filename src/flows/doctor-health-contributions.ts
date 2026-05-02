@@ -6,16 +6,16 @@ import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { FlowContribution } from "./types.js";
 
-export type DoctorFlowMode = "local" | "remote";
+type DoctorFlowMode = "local" | "remote";
 
-export type DoctorConfigResult = {
+type DoctorConfigResult = {
   cfg: OpenClawConfig;
   path?: string;
   shouldWriteConfig?: boolean;
   sourceConfigValid?: boolean;
 };
 
-export type DoctorHealthFlowContext = {
+type DoctorHealthFlowContext = {
   runtime: RuntimeEnv;
   options: DoctorOptions;
   prompter: DoctorPrompter;
@@ -30,13 +30,13 @@ export type DoctorHealthFlowContext = {
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
 };
 
-export type DoctorHealthContribution = FlowContribution & {
+type DoctorHealthContribution = FlowContribution & {
   kind: "core";
   surface: "health";
   run: (ctx: DoctorHealthFlowContext) => Promise<void>;
 };
 
-export function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
+function resolveDoctorMode(cfg: OpenClawConfig): DoctorFlowMode {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
