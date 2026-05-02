@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 Docs: https://docs.openclaw.ai
 
@@ -2779,6 +2779,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Feishu/Lark: preserve reply-thread routing when `root_id` is missing by falling back to reply ancestors, so ancestor-only replies stay anchored to the same topic session. Thanks @stevenchouai.
 - CLI/message: skip eager model context warmup and preserve channel-declared gateway execution for Discord and Telegram message actions, avoiding Codex app-server/model discovery during simple send/read commands. Thanks @fuller-stack-dev.
 - Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
 - Plugins/ClawHub: use the ClawHub artifact resolver response as the install decision before downloading, keeping legacy ZIP fallback and future ClawPack npm-pack installs on the same explicit resolver path. Thanks @vincentkoc.
