@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveManifestContractOwnerPluginId } from "../../plugins/plugin-registry.js";
+import { getActiveRuntimeWebToolsMetadata } from "../../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebSearchMetadata } from "../../secrets/runtime-web-tools.types.js";
 import { resolveWebSearchProviderId, runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
@@ -72,20 +73,11 @@ export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  lateBindRuntimeConfig?: boolean;
 }): AnyAgentTool | null {
   if (isWebSearchDisabled(options?.config)) {
     return null;
   }
-  const runtimeProviderId =
-    options?.runtimeWebSearch?.selectedProvider ?? options?.runtimeWebSearch?.providerConfigured;
-  const preferRuntimeProviders =
-    Boolean(runtimeProviderId) &&
-    !resolveManifestContractOwnerPluginId({
-      contract: "webSearchProviders",
-      value: runtimeProviderId,
-      origin: "bundled",
-      config: options?.config,
-    });
 
   return {
     label: "Web Search",
@@ -94,10 +86,25 @@ export function createWebSearchTool(options?: {
       "Search the web. Returns provider-normalized results for current information lookup.",
     parameters: WebSearchSchema,
     execute: async (_toolCallId, args) => {
+      const runtimeWebSearch =
+        options?.lateBindRuntimeConfig === true
+          ? getActiveRuntimeWebToolsMetadata()?.search
+          : options?.runtimeWebSearch;
+      const runtimeProviderId =
+        runtimeWebSearch?.selectedProvider ?? runtimeWebSearch?.providerConfigured;
+      const config = options?.lateBindRuntimeConfig === true ? undefined : options?.config;
+      const preferRuntimeProviders =
+        Boolean(runtimeProviderId) &&
+        !resolveManifestContractOwnerPluginId({
+          contract: "webSearchProviders",
+          value: runtimeProviderId,
+          origin: "bundled",
+          config,
+        });
       const result = await runWebSearch({
-        config: options?.config,
+        config,
         sandboxed: options?.sandboxed,
-        runtimeWebSearch: options?.runtimeWebSearch,
+        runtimeWebSearch,
         preferRuntimeProviders,
         args: asToolParamsRecord(args),
       });
