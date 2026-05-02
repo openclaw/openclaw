@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/CLI: cache plugin CLI registration entries per command program so completion state generation does not repeat the full plugin sweep in one invocation. Thanks @ScientificProgrammer.
 - Plugins: reuse gateway-bindable plugin loader cache entries for later default-mode loads without serving default-built registries to gateway-bound requests, reducing repeated plugin registration during dispatch. Refs #61756. Thanks @DmitryPogodaev.
 - Gateway/secrets: include the caught error message in `secrets.reload` and `secrets.resolve` warning logs while keeping RPC errors generic, so operators can diagnose reload and permission failures. Thanks @davidangularme.
+- Providers/OpenRouter: fill DeepSeek V4 `reasoning_content` replay placeholders for `openrouter/deepseek/deepseek-v4-flash` and `openrouter/deepseek/deepseek-v4-pro`, so thinking/tool follow-up turns do not fail with DeepSeek's replay-shape error. Fixes #76018. Thanks @cloph-dsp.
 - Anthropic-compatible streams: recover text deltas that arrive before their matching content block, so Kimi Code and similar providers do not finish as empty `incomplete_result` replies. Fixes #76007. Thanks @vliuyt.
 - fix(infra): block workspace state-directory env override [AI]. (#75940) Thanks @pgondhi987.
 - MCP/OpenAI: normalize parameter-free tool schemas whose top-level object `properties` is missing, null, or invalid before sending tools to OpenAI, so MCP tools without params stay usable. Fixes #75362. Thanks @tolkonepiu and @SymbolStar.
