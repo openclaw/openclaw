@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { __testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
-import {
-  __testing as subagentAnnounceTesting,
-  runSubagentAnnounceFlow,
-} from "./subagent-announce.js";
+import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import * as mod from "./subagent-registry.js";
 
 const noop = () => {};
@@ -112,6 +109,10 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
   cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
 }));
 
+vi.mock("./pi-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntimeForSessionKey: vi.fn(async () => true),
+}));
+
 vi.mock("./subagent-depth.js", () => ({
   getSubagentDepthFromSessionStore: () => 0,
 }));
@@ -166,11 +167,25 @@ describe("subagent registry lifecycle error grace", () => {
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
-      runSubagentAnnounceFlow: (params) =>
-        runSubagentAnnounceFlow({
-          ...params,
-          timeoutMs: Math.min(params.timeoutMs, 1_000),
-        }),
+      runSubagentAnnounceFlow: async (params) => {
+        await callGatewayMock({
+          method: "agent",
+          params: {
+            inputProvenance: {
+              sourceSessionKey: params.childSessionKey,
+            },
+            internalEvents: [
+              {
+                status: params.outcome?.status === "error" ? "error" : "ok",
+                statusLabel:
+                  params.outcome?.status === "error" ? (params.outcome.error ?? "") : undefined,
+                result: params.roundOneReply ?? params.fallbackReply ?? "",
+              },
+            ],
+          },
+        });
+        return true;
+      },
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
@@ -212,6 +227,7 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceTesting.setDepsForTest();
     mod.__testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
+    vi.clearAllTimers();
     vi.useRealTimers();
     if (previousFastTestEnv === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;

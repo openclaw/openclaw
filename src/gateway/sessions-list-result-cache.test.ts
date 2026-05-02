@@ -311,8 +311,9 @@ describe("collectResolvedConfigSourceStatFingerprintSync", () => {
           OPENCLAW_CONFIG_PATH: configPath,
           OPENCLAW_STATE_DIR: stateDir,
           OPENCLAW_CONFIG_CACHE_MS: "25",
-          OPENCLAW_SESSIONS_LIST_RESULT_CACHE_TTL_MS: "1000",
+          OPENCLAW_SESSIONS_LIST_RESULT_CACHE_TTL_MS: "30000",
           OPENCLAW_DISABLE_CONFIG_CACHE: undefined,
+          OPENCLAW_LOAD_SHELL_ENV: "0",
         },
         async () => {
           const listParams = { includeGlobal: true, includeUnknown: true };
