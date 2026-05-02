@@ -40,10 +40,10 @@ export type ClawHubPackageEnvironmentSummary = {
   knownUnsupported?: string[];
 };
 export type ClawHubPackageArtifactSummary = {
-  kind?: "legacy-zip" | "npm-pack" | null;
+  kind?: string | null;
   sha256?: string | null;
   size?: number | null;
-  format?: "zip" | "tgz" | null;
+  format?: string | null;
   npmIntegrity?: string | null;
   npmShasum?: string | null;
   npmTarballName?: string | null;
