@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   sanitizeAssistantVisibleText,
   sanitizeAssistantVisibleTextWithProfile,
-  stripToolCallXmlTags,
   stripAssistantInternalScaffolding,
+  stripMinimaxToolCallXml,
+  stripToolCallXmlTags,
 } from "./assistant-visible-text.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
 
@@ -555,6 +556,30 @@ describe("stripToolCallXmlTags", () => {
     expect(stripToolCallXmlTags(input, { stripFunctionCallsXmlPayloads: true })).toBe(
       "prefix  suffix",
     );
+  });
+});
+
+describe("stripMinimaxToolCallXml", () => {
+  it("strips minimax tool-call XML outside code regions", () => {
+    const input = [
+      "Before",
+      '<minimax:tool_call><invoke name="exec">payload</invoke></minimax:tool_call>',
+      "After",
+    ].join("\n");
+
+    expect(stripMinimaxToolCallXml(input)).toBe("Before\n\nAfter");
+  });
+
+  it("preserves minimax tool-call XML examples inside inline and fenced code", () => {
+    const inline = 'Use `<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>`.';
+    const fenced = [
+      "```xml",
+      '<minimax:tool_call><invoke name="exec">x</invoke></minimax:tool_call>',
+      "```",
+    ].join("\n");
+
+    expect(stripMinimaxToolCallXml(inline)).toBe(inline);
+    expect(stripMinimaxToolCallXml(fenced)).toBe(fenced);
   });
 });
 
