@@ -315,7 +315,7 @@ jobs:
       - name: Pull root Dockerfile smoke image
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: timeout 300s docker pull "$IMAGE_REF"
+        run: timeout 600s docker pull "$IMAGE_REF"
 
       - name: Run root Dockerfile CLI smoke
         env:
@@ -405,7 +405,7 @@ jobs:
       - name: Pull root Dockerfile smoke image
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: timeout 300s docker pull "$IMAGE_REF"
+        run: timeout 600s docker pull "$IMAGE_REF"
 
       - name: Set up Blacksmith Docker Builder
         uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
@@ -472,7 +472,7 @@ jobs:
       - name: Pull root Dockerfile smoke image
         env:
           IMAGE_REF: ${{ needs.root_dockerfile_image.outputs.image_ref }}
-        run: timeout 300s docker pull "$IMAGE_REF"
+        run: timeout 600s docker pull "$IMAGE_REF"
 
       - name: Setup Node environment for Bun smoke
         uses: ./.github/actions/setup-node-env
