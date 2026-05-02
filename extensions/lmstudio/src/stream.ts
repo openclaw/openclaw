@@ -343,6 +343,13 @@ async function ensureLmstudioModelLoadedBestEffort(params: {
   modelHeaders?: Record<string, string>;
 }): Promise<void> {
   const providerConfig = params.ctx.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
+  // Skip the load API call if sendLoadApi is explicitly set to false.
+  // This allows LM Studio's Just-In-Time (JIT) model loading to work without
+  // OpenClaw interference, letting LM Studio handle automatic loading/unloading
+  // based on its own TTL and unload settings.
+  if (providerConfig?.sendLoadApi === false) {
+    return;
+  }
   const providerHeaders = { ...providerConfig?.headers, ...params.modelHeaders };
   const runtimeApiKey =
     typeof params.options?.apiKey === "string" && params.options.apiKey.trim().length > 0

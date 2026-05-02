@@ -362,6 +362,7 @@ export const ModelProviderSchema = z
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     injectNumCtxForOpenAICompat: z.boolean().optional(),
+    sendLoadApi: z.boolean().optional(),
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,

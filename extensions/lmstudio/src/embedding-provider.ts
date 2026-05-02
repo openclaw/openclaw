@@ -119,21 +119,27 @@ export async function createLmstudioEmbeddingProvider(
     ssrfPolicy,
   };
 
-  try {
-    await ensureLmstudioModelLoaded({
-      baseUrl,
-      apiKey,
-      headers: headerOverrides,
-      ssrfPolicy,
-      modelKey: model,
-      timeoutMs: 120_000,
-    });
-  } catch (error) {
-    log.warn("lmstudio embeddings warmup failed; continuing without preload", {
-      baseUrl,
-      model,
-      error: formatErrorMessage(error),
-    });
+  // Skip the load API call if sendLoadApi is explicitly set to false.
+  // This allows LM Studio's Just-In-Time (JIT) model loading to work without
+  // OpenClaw interference, letting LM Studio handle automatic loading/unloading
+  // based on its own TTL and unload settings.
+  if (providerConfig?.sendLoadApi !== false) {
+    try {
+      await ensureLmstudioModelLoaded({
+        baseUrl,
+        apiKey,
+        headers: headerOverrides,
+        ssrfPolicy,
+        modelKey: model,
+        timeoutMs: 120_000,
+      });
+    } catch (error) {
+      log.warn("lmstudio embeddings warmup failed; continuing without preload", {
+        baseUrl,
+        model,
+        error: formatErrorMessage(error),
+      });
+    }
   }
 
   return {

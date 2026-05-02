@@ -124,6 +124,7 @@ export type ModelProviderConfig = {
   maxTokens?: number;
   timeoutSeconds?: number;
   injectNumCtxForOpenAICompat?: boolean;
+  sendLoadApi?: boolean;
   headers?: Record<string, SecretInput>;
   authHeader?: boolean;
   request?: ConfiguredModelProviderRequest;

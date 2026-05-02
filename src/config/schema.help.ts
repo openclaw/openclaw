@@ -866,6 +866,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-provider model request timeout in seconds. Applies to provider HTTP fetches, including connect, headers, body, and total request abort handling. Use this for slow local or self-hosted model servers instead of changing global agent timeouts.",
   "models.providers.*.injectNumCtxForOpenAICompat":
     "Controls whether OpenClaw injects `options.num_ctx` for Ollama providers configured with the OpenAI-compatible adapter (`openai-completions`). Default is true. Set false only if your proxy/upstream rejects unknown `options` payload fields.",
+  "models.providers.*.sendLoadApi":
+    "Controls whether OpenClaw sends the `/api/v1/models/load` request to LM Studio before inference. When true (default), OpenClaw explicitly loads the model. Set to false to let LM Studio's Just-In-Time (JIT) model loading handle model loading/unloading automatically based on its own TTL and unload settings.",
   "models.providers.*.headers":
     "Static HTTP headers merged into provider requests for tenant routing, proxy auth, or custom gateway requirements. Use this sparingly and keep sensitive header values in secrets.",
   "models.providers.*.authHeader":

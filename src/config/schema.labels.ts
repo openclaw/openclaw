@@ -534,6 +534,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.maxTokens": "Model Provider Max Tokens",
   "models.providers.*.timeoutSeconds": "Model Provider Request Timeout",
   "models.providers.*.injectNumCtxForOpenAICompat": "Model Provider Inject num_ctx (OpenAI Compat)",
+  "models.providers.*.sendLoadApi": "LM Studio Send Load API",
   "models.providers.*.headers": "Model Provider Headers",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
   "models.providers.*.request": "Model Provider Request Overrides",
