@@ -2,6 +2,14 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+### Fixes
+
+- Status: show the `openai-codex` OAuth profile for `openai/gpt-*` sessions running through the native Codex runtime instead of reporting auth as unknown. (#76197) Thanks @mbelinky.
+
 ## 2026.5.2
 
 ### Highlights

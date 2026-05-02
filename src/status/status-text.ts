@@ -136,6 +136,18 @@ async function resolveStatusHarnessId(params: {
   }
 }
 
+function resolveStatusAuthProvider(params: {
+  provider: string;
+  effectiveHarness?: string;
+}): string {
+  const harness = normalizeOptionalLowercaseString(params.effectiveHarness);
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  if (harness === "codex" && provider === "openai") {
+    return "openai-codex";
+  }
+  return params.provider;
+}
+
 function formatAgentTaskCountsLine(agentId: string): string | undefined {
   const snapshot = buildTaskStatusSnapshot(listTasksForAgentIdForStatus(agentId));
   if (snapshot.totalCount === 0) {
@@ -178,10 +190,23 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     selectedModel: model,
     sessionEntry,
   });
+  const effectiveHarness =
+    params.resolvedHarness ??
+    (await resolveStatusHarnessId({
+      cfg,
+      provider,
+      model,
+      agentId: statusAgentId,
+      sessionKey,
+      sessionEntry,
+    }));
   const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
     : resolveModelAuthLabel({
-        provider,
+        provider: resolveStatusAuthProvider({
+          provider,
+          effectiveHarness,
+        }),
         cfg,
         sessionEntry,
         agentDir: statusAgentDir,
@@ -192,7 +217,10 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     ? params.activeModelAuthOverride
     : modelRefs.activeDiffers
       ? resolveModelAuthLabel({
-          provider: modelRefs.active.provider,
+          provider: resolveStatusAuthProvider({
+            provider: modelRefs.active.provider,
+            effectiveHarness,
+          }),
           cfg,
           sessionEntry,
           agentDir: statusAgentDir,
@@ -297,16 +325,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
       agentId: statusAgentId,
       sessionEntry,
     }).enabled;
-  const effectiveHarness =
-    params.resolvedHarness ??
-    (await resolveStatusHarnessId({
-      cfg,
-      provider,
-      model,
-      agentId: statusAgentId,
-      sessionKey,
-      sessionEntry,
-    }));
   const agentFallbacksOverride = resolveAgentModelFallbacksOverride(cfg, statusAgentId);
   const { buildStatusMessage } = await loadStatusMessageRuntime();
   const explicitThinkingDefault =
