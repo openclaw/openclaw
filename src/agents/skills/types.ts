@@ -28,6 +28,7 @@ export type OpenClawSkillMetadata = {
     anyBins?: string[];
     env?: string[];
     config?: string[];
+    anyConfig?: string[];
   };
   install?: SkillInstallSpec[];
 };

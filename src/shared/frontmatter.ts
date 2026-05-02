@@ -53,6 +53,7 @@ export type OpenClawManifestRequires = {
   anyBins: string[];
   env: string[];
   config: string[];
+  anyConfig: string[];
 };
 
 export function resolveOpenClawManifestRequires(
@@ -70,6 +71,7 @@ export function resolveOpenClawManifestRequires(
     anyBins: normalizeStringList(requiresRaw.anyBins),
     env: normalizeStringList(requiresRaw.env),
     config: normalizeStringList(requiresRaw.config),
+    anyConfig: normalizeStringList(requiresRaw.anyConfig),
   };
 }
 

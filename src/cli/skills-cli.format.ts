@@ -88,6 +88,9 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   if (skill.missing.config.length > 0) {
     missing.push(`config: ${skill.missing.config.join(", ")}`);
   }
+  if ((skill.missing.anyConfig ?? []).length > 0) {
+    missing.push(`anyConfig: ${(skill.missing.anyConfig ?? []).join(", ")}`);
+  }
   if (skill.missing.os.length > 0) {
     missing.push(`os: ${skill.missing.os.join(", ")}`);
   }
@@ -218,6 +221,7 @@ export function formatSkillInfo(
     skill.requirements.anyBins.length > 0 ||
     skill.requirements.env.length > 0 ||
     skill.requirements.config.length > 0 ||
+    (skill.requirements.anyConfig ?? []).length > 0 ||
     skill.requirements.os.length > 0;
 
   if (hasRequirements) {
@@ -251,6 +255,14 @@ export function formatSkillInfo(
         return missing ? theme.error(`✗ ${cfg}`) : theme.success(`✓ ${cfg}`);
       });
       lines.push(`${theme.muted("  Config:")} ${configStatus.join(", ")}`);
+    }
+    if ((skill.requirements.anyConfig ?? []).length > 0) {
+      const anyConfigRequired = skill.requirements.anyConfig ?? [];
+      const anyConfigMissing = (skill.missing.anyConfig ?? []).length > 0;
+      const anyConfigStatus = anyConfigRequired.map((cfg) =>
+        anyConfigMissing ? theme.error(`✗ ${cfg}`) : theme.success(`✓ ${cfg}`),
+      );
+      lines.push(`${theme.muted("  Any config:")} ${anyConfigStatus.join(", ")}`);
     }
     if (skill.requirements.os.length > 0) {
       const osStatus = skill.requirements.os.map((osName) => {

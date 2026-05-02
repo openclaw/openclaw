@@ -46,6 +46,7 @@ export type RuntimeRequires = {
   anyBins?: string[];
   env?: string[];
   config?: string[];
+  anyConfig?: string[];
 };
 
 type RuntimeRequirementEvalParams = {
@@ -99,6 +100,16 @@ export function evaluateRuntimeRequires(params: RuntimeRequirementEvalParams): b
       if (!params.isConfigPathTruthy(configPath)) {
         return false;
       }
+    }
+  }
+
+  const requiredAnyConfig = requires.anyConfig ?? [];
+  if (requiredAnyConfig.length > 0) {
+    const anySatisfied = requiredAnyConfig.some((configPath) =>
+      params.isConfigPathTruthy(configPath),
+    );
+    if (!anySatisfied) {
+      return false;
     }
   }
 
