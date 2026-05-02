@@ -9,4 +9,12 @@ export const bluebubblesChannelConfigUiHints = {
     label: "BlueBubbles DM Policy",
     help: 'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
   },
+  allowFrom: {
+    label: "BlueBubbles Allowlist",
+    sensitive: true,
+  },
+  groupAllowFrom: {
+    label: "BlueBubbles Group Allowlist",
+    sensitive: true,
+  },
 } satisfies Record<string, ChannelConfigUiHint>;

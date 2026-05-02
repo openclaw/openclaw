@@ -149,6 +149,70 @@ export function collectSimpleChannelFieldAssignments(params: {
   }
 }
 
+function collectSecretInputArrayAssignments(params: {
+  value: unknown;
+  path: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  active?: boolean;
+  inactiveReason?: string;
+}): void {
+  if (!Array.isArray(params.value)) {
+    return;
+  }
+  const values = params.value;
+  for (let index = 0; index < values.length; index += 1) {
+    collectSecretInputAssignment({
+      value: values[index],
+      path: `${params.path}.${index}`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: params.active,
+      inactiveReason: params.inactiveReason,
+      apply: (value) => {
+        values[index] = value;
+      },
+    });
+  }
+}
+
+export function collectSimpleChannelArrayFieldAssignments(params: {
+  channelKey: string;
+  field: string;
+  channel: Record<string, unknown>;
+  surface: ChannelAccountSurface;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+  topInactiveReason: string;
+  accountInactiveReason: string;
+}): void {
+  collectSecretInputArrayAssignments({
+    value: params.channel[params.field],
+    path: `channels.${params.channelKey}.${params.field}`,
+    defaults: params.defaults,
+    context: params.context,
+    active: isBaseFieldActiveForChannelSurface(params.surface, params.field),
+    inactiveReason: params.topInactiveReason,
+  });
+  if (!params.surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const { accountId, account, enabled } of params.surface.accounts) {
+    if (!hasOwnProperty(account, params.field)) {
+      continue;
+    }
+    collectSecretInputArrayAssignments({
+      value: account[params.field],
+      path: `channels.${params.channelKey}.accounts.${accountId}.${params.field}`,
+      defaults: params.defaults,
+      context: params.context,
+      active: enabled,
+      inactiveReason: params.accountInactiveReason,
+    });
+  }
+}
+
 function isConditionalTopLevelFieldActive(params: {
   surface: ChannelAccountSurface;
   activeWithoutAccounts: boolean;

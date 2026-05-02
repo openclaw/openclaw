@@ -7,7 +7,11 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
 import { sleep } from "../api.js";
-import { validateProviderConfig, type VoiceCallConfig } from "./config.js";
+import {
+  normalizeResolvedVoiceCallPhoneNumber,
+  validateProviderConfig,
+  type VoiceCallConfig,
+} from "./config.js";
 import type { VoiceCallRuntime } from "./runtime.js";
 import { resolveUserPath } from "./utils.js";
 import { resolveWebhookExposureStatus } from "./webhook-exposure.js";
@@ -374,7 +378,7 @@ async function initiateCallViaGatewayOrRuntime(params: {
   }
 
   const rt = await params.ensureRuntime();
-  const to = params.to ?? rt.config.toNumber;
+  const to = params.to ?? normalizeResolvedVoiceCallPhoneNumber(rt.config.toNumber);
   if (!to) {
     throw new Error("Missing --to and no toNumber configured");
   }
@@ -511,11 +515,14 @@ export function registerVoiceCallCli(params: {
       "conversation",
     )
     .action(async (options: { message: string; to?: string; mode?: string }) => {
-      await initiateCallViaGatewayOrRuntime({
-        ensureRuntime,
-        config,
-        method: "voicecall.initiate",
-        to: options.to,
+      const rt = await ensureRuntime();
+      const to = options.to ?? normalizeResolvedVoiceCallPhoneNumber(rt.config.toNumber);
+      if (!to) {
+        throw new Error("Missing --to and no toNumber configured");
+      }
+      await initiateCallAndPrintId({
+        runtime: rt,
+        to,
         message: options.message,
         mode: options.mode,
       });

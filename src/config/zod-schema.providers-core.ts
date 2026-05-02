@@ -62,6 +62,15 @@ const DiscordIdListSchema = z.array(DiscordIdSchema);
 
 const TelegramInlineButtonsScopeSchema = z.enum(["off", "dm", "group", "all", "allowlist"]);
 const TelegramIdListSchema = z.array(z.union([z.string(), z.number()]));
+const SensitiveSecretBackedChannelStringSchema = z
+  .union([z.string(), SecretRefSchema])
+  .register(sensitive);
+const SensitiveSecretBackedChannelIdentifierSchema = z
+  .union([z.string(), z.number(), SecretRefSchema])
+  .register(sensitive);
+const SensitiveSecretBackedChannelIdentifierListSchema = z.array(
+  SensitiveSecretBackedChannelIdentifierSchema,
+);
 
 const TelegramCapabilitiesSchema = z.union([
   z.array(z.string()),
@@ -1079,7 +1088,7 @@ export const SignalAccountSchemaBase = z
     markdown: MarkdownConfigSchema,
     enabled: z.boolean().optional(),
     configWrites: z.boolean().optional(),
-    account: z.string().optional(),
+    account: SensitiveSecretBackedChannelStringSchema.optional(),
     accountUuid: z.string().optional(),
     httpUrl: z.string().optional(),
     httpHost: z.string().optional(),
@@ -1092,9 +1101,9 @@ export const SignalAccountSchemaBase = z
     ignoreStories: z.boolean().optional(),
     sendReadReceipts: z.boolean().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: SensitiveSecretBackedChannelIdentifierListSchema.optional(),
+    defaultTo: SensitiveSecretBackedChannelStringSchema.optional(),
+    groupAllowFrom: SensitiveSecretBackedChannelIdentifierListSchema.optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     contextVisibility: ContextVisibilityModeSchema.optional(),
     groups: SignalGroupsSchema,
@@ -1107,7 +1116,7 @@ export const SignalAccountSchemaBase = z
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaMaxMb: z.number().int().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
-    reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
+    reactionAllowlist: SensitiveSecretBackedChannelIdentifierListSchema.optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),
@@ -1326,9 +1335,9 @@ export const IMessageAccountSchemaBase = z
     service: z.union([z.literal("imessage"), z.literal("sms"), z.literal("auto")]).optional(),
     region: z.string().optional(),
     dmPolicy: DmPolicySchema.optional().default("pairing"),
-    allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-    defaultTo: z.string().optional(),
-    groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+    allowFrom: SensitiveSecretBackedChannelIdentifierListSchema.optional(),
+    defaultTo: SensitiveSecretBackedChannelStringSchema.optional(),
+    groupAllowFrom: SensitiveSecretBackedChannelIdentifierListSchema.optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
     contextVisibility: ContextVisibilityModeSchema.optional(),
     historyLimit: z.number().int().min(0).optional(),
@@ -1419,7 +1428,9 @@ export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   }
 });
 
-const BlueBubblesAllowFromEntry = z.union([z.string(), z.number()]);
+const BlueBubblesAllowFromEntry = z
+  .union([z.string(), z.number(), SecretRefSchema])
+  .register(sensitive);
 
 const BlueBubblesActionSchema = z
   .object({

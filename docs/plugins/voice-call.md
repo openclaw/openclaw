@@ -107,7 +107,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
         enabled: true,
         config: {
           provider: "twilio", // or "telnyx" | "plivo" | "mock"
-          fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
+          fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER / SecretRef for Twilio
           toNumber: "+15550005678",
 
           twilio: {
@@ -191,6 +191,10 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
 
   </Accordion>
 </AccordionGroup>
+
+<Note>
+`fromNumber`, `toNumber`, and `allowFrom` entries accept SecretRef objects when phone numbers should stay outside plaintext config.
+</Note>
 
 ## Realtime voice conversations
 

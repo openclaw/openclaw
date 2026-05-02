@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { SignalConfigSchema } from "../config-api.js";
 
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+
 function expectValidSignalConfig(config: unknown) {
   const res = SignalConfigSchema.safeParse(config);
   expect(res.success).toBe(true);
@@ -109,5 +111,32 @@ describe("signal groups schema", () => {
     });
 
     expect(issues.some((issue) => issue.path.join(".").startsWith("groups"))).toBe(true);
+  });
+
+  it("accepts SecretRefs for phone-number config fields", () => {
+    expectValidSignalConfig({
+      account: envRef("SIGNAL_ACCOUNT"),
+      allowFrom: [envRef("SIGNAL_OWNER")],
+      defaultTo: "${SIGNAL_DEFAULT_TO}",
+      groupAllowFrom: [envRef("SIGNAL_GROUP_OWNER")],
+      reactionAllowlist: [envRef("SIGNAL_REACTION_OWNER")],
+      accounts: {
+        work: {
+          account: "${SIGNAL_WORK_ACCOUNT}",
+          allowFrom: [envRef("SIGNAL_WORK_OWNER")],
+          defaultTo: envRef("SIGNAL_WORK_DEFAULT_TO"),
+          groupAllowFrom: ["${SIGNAL_WORK_GROUP_OWNER}"],
+          reactionAllowlist: ["${SIGNAL_WORK_REACTION_OWNER}"],
+        },
+      },
+    });
+  });
+
+  it("rejects invalid SecretRef shapes", () => {
+    const res = SignalConfigSchema.safeParse({
+      account: { source: "env", id: "SIGNAL_ACCOUNT" },
+      allowFrom: [{ source: "bad", provider: "default", id: "X" }],
+    });
+    expect(res.success).toBe(false);
   });
 });

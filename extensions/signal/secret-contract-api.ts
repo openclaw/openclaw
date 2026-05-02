@@ -1,4 +1,5 @@
-// Signal does not expose secret-contract surfaces.
-export const secretTargetRegistryEntries: readonly [] = [];
-
-export function collectRuntimeConfigAssignments(): void {}
+export {
+  channelSecrets,
+  collectRuntimeConfigAssignments,
+  secretTargetRegistryEntries,
+} from "./src/secret-contract.js";

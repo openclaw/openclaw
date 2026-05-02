@@ -26,17 +26,20 @@
     },
     "fromNumber": {
       "label": "From Number",
-      "placeholder": "+15550001234"
+      "placeholder": "+15550001234",
+      "sensitive": true
     },
     "toNumber": {
       "label": "Default To Number",
-      "placeholder": "+15550001234"
+      "placeholder": "+15550001234",
+      "sensitive": true
     },
     "inboundPolicy": {
       "label": "Inbound Policy"
     },
     "allowFrom": {
-      "label": "Inbound Allowlist"
+      "label": "Inbound Allowlist",
+      "sensitive": true
     },
     "inboundGreeting": {
       "label": "Inbound Greeting",
@@ -251,11 +254,11 @@
         }
       },
       "fromNumber": {
-        "type": "string",
+        "type": ["string", "object"],
         "pattern": "^\\+[1-9]\\d{1,14}$"
       },
       "toNumber": {
-        "type": "string",
+        "type": ["string", "object"],
         "pattern": "^\\+[1-9]\\d{1,14}$"
       },
       "inboundPolicy": {
@@ -265,7 +268,7 @@
       "allowFrom": {
         "type": "array",
         "items": {
-          "type": "string",
+          "type": ["string", "object"],
           "pattern": "^\\+[1-9]\\d{1,14}$"
         }
       },
@@ -780,10 +783,13 @@
     "compatibilityMigrationPaths": ["plugins.entries.voice-call.config"],
     "secretInputs": {
       "paths": [
-        { "path": "twilio.authToken", "expected": "string" },
+        { "path": "allowFrom[]", "expected": "string" },
+        { "path": "fromNumber", "expected": "string" },
         { "path": "realtime.providers.*.apiKey", "expected": "string" },
         { "path": "streaming.providers.*.apiKey", "expected": "string" },
-        { "path": "tts.providers.*.apiKey", "expected": "string" }
+        { "path": "toNumber", "expected": "string" },
+        { "path": "tts.providers.*.apiKey", "expected": "string" },
+        { "path": "twilio.authToken", "expected": "string" }
       ]
     }
   }

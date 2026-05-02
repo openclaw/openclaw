@@ -13,7 +13,11 @@ import {
   requestBodyErrorToText,
 } from "../api.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
-import { normalizeVoiceCallConfig, type VoiceCallConfig } from "./config.js";
+import {
+  normalizeResolvedVoiceCallPhoneNumberList,
+  normalizeVoiceCallConfig,
+  type VoiceCallConfig,
+} from "./config.js";
 import type { CoreAgentDeps, CoreConfig } from "./core-bridge.js";
 import { getHeader } from "./http-headers.js";
 import type { CallManager } from "./manager.js";
@@ -795,7 +799,7 @@ export class VoiceCallWebhookServer {
       case "pairing":
         return isAllowlistedCaller(
           normalizePhoneNumber(params.get("From") ?? undefined),
-          this.config.allowFrom,
+          normalizeResolvedVoiceCallPhoneNumberList(this.config.allowFrom),
         );
       case "disabled":
       default:

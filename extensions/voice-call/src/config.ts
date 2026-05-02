@@ -1,6 +1,7 @@
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildSecretInputSchema,
+  coerceSecretRef,
   hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   type SecretInput,
@@ -18,9 +19,53 @@ import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js
  * E.164 phone number format: +[country code][number]
  * Examples use 555 prefix (reserved for fictional numbers)
  */
-const E164Schema = z
+const E164_PATTERN = /^\+[1-9]\d{1,14}$/;
+export const E164Schema = z
   .string()
-  .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
+  .regex(E164_PATTERN, "Expected E.164 format, e.g. +15550001234");
+
+export const PhoneNumberSecretInputSchema = buildSecretInputSchema().superRefine((value, ctx) => {
+  if (coerceSecretRef(value)) {
+    return;
+  }
+  if (typeof value === "string" && E164_PATTERN.test(value.trim())) {
+    return;
+  }
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: "Expected E.164 format or SecretRef, e.g. +15550001234",
+  });
+});
+export type VoiceCallPhoneNumberInput = SecretInput;
+
+export function normalizeResolvedVoiceCallPhoneNumber(
+  value: VoiceCallPhoneNumberInput | undefined,
+): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || coerceSecretRef(trimmed) || !E164_PATTERN.test(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
+export function hasConfiguredVoiceCallPhoneNumber(value: unknown): boolean {
+  if (typeof value === "string" && E164_PATTERN.test(value.trim())) {
+    return true;
+  }
+  return coerceSecretRef(value) !== null;
+}
+
+export function normalizeResolvedVoiceCallPhoneNumberList(
+  values: readonly VoiceCallPhoneNumberInput[] | undefined,
+): string[] {
+  return (values ?? []).flatMap((value) => {
+    const normalized = normalizeResolvedVoiceCallPhoneNumber(value);
+    return normalized ? [normalized] : [];
+  });
+}
 
 // -----------------------------------------------------------------------------
 // Inbound Policy
@@ -336,16 +381,16 @@ export const VoiceCallConfigSchema = z
     plivo: PlivoConfigSchema.optional(),
 
     /** Phone number to call from (E.164) */
-    fromNumber: E164Schema.optional(),
+    fromNumber: PhoneNumberSecretInputSchema.optional(),
 
     /** Default phone number to call (E.164) */
-    toNumber: E164Schema.optional(),
+    toNumber: PhoneNumberSecretInputSchema.optional(),
 
     /** Inbound call policy */
     inboundPolicy: InboundPolicySchema.default("disabled"),
 
     /** Allowlist of phone numbers for inbound calls (E.164) */
-    allowFrom: z.array(E164Schema).default([]),
+    allowFrom: z.array(PhoneNumberSecretInputSchema).default([]),
 
     /** Greeting message for inbound calls */
     inboundGreeting: z.string().optional(),
@@ -620,7 +665,7 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     errors.push("plugins.entries.voice-call.config.provider is required");
   }
 
-  if (!config.fromNumber && config.provider !== "mock") {
+  if (!hasConfiguredVoiceCallPhoneNumber(config.fromNumber) && config.provider !== "mock") {
     errors.push(
       config.provider === "twilio"
         ? "plugins.entries.voice-call.config.fromNumber is required (or set TWILIO_FROM_NUMBER env)"

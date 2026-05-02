@@ -16,5 +16,22 @@ export const signalChannelConfigUiHints = {
   account: {
     label: "Signal Account",
     help: "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
+    sensitive: true,
+  },
+  allowFrom: {
+    label: "Signal Allowlist",
+    sensitive: true,
+  },
+  defaultTo: {
+    label: "Signal Default Recipient",
+    sensitive: true,
+  },
+  groupAllowFrom: {
+    label: "Signal Group Allowlist",
+    sensitive: true,
+  },
+  reactionAllowlist: {
+    label: "Signal Reaction Allowlist",
+    sensitive: true,
   },
 } satisfies Record<string, ChannelConfigUiHint>;

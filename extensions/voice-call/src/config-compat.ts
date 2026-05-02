@@ -186,7 +186,10 @@ export function migrateVoiceCallLegacyConfigInput(params: {
   if (raw.provider === "log") {
     changes.push(`Moved ${configPathPrefix}.provider "log" → "mock".`);
   }
-  if (typeof twilio?.from === "string" && typeof raw.fromNumber !== "string") {
+  if (
+    typeof twilio?.from === "string" &&
+    (raw.fromNumber === undefined || raw.fromNumber === null)
+  ) {
     changes.push(`Moved ${configPathPrefix}.twilio.from → ${configPathPrefix}.fromNumber.`);
   }
   if (typeof streaming?.sttProvider === "string") {

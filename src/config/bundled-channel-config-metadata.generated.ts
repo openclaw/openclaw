@@ -175,6 +175,72 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               {
                 type: "number",
               },
+              {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
             ],
           },
         },
@@ -187,6 +253,72 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               {
                 type: "number",
+              },
+              {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
               },
             ],
           },
@@ -495,6 +627,72 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     {
                       type: "number",
                     },
+                    {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
+                    },
                   ],
                 },
               },
@@ -507,6 +705,72 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                     {
                       type: "number",
+                    },
+                    {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          oneOf: [
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "env",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                  pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "file",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                            {
+                              type: "object",
+                              properties: {
+                                source: {
+                                  type: "string",
+                                  const: "exec",
+                                },
+                                provider: {
+                                  type: "string",
+                                  pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                                },
+                                id: {
+                                  type: "string",
+                                },
+                              },
+                              required: ["source", "provider", "id"],
+                              additionalProperties: false,
+                            },
+                          ],
+                        },
+                      ],
                     },
                   ],
                 },
@@ -664,6 +928,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       dmPolicy: {
         label: "BlueBubbles DM Policy",
         help: 'Direct message access control ("pairing" recommended). "open" requires channels.bluebubbles.allowFrom=["*"].',
+      },
+      allowFrom: {
+        label: "BlueBubbles Allowlist",
+        sensitive: true,
+      },
+      groupAllowFrom: {
+        label: "BlueBubbles Group Allowlist",
+        sensitive: true,
       },
     },
   },
@@ -5776,11 +6048,133 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               {
                 type: "number",
               },
+              {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
             ],
           },
         },
         defaultTo: {
-          type: "string",
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
         },
         groupAllowFrom: {
           type: "array",
@@ -5791,6 +6185,65 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               {
                 type: "number",
+              },
+              {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
               },
             ],
           },
@@ -6056,11 +6509,133 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     {
                       type: "number",
                     },
+                    {
+                      oneOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "env",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "file",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "exec",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
                   ],
                 },
               },
               defaultTo: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
               },
               groupAllowFrom: {
                 type: "array",
@@ -6071,6 +6646,65 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                     {
                       type: "number",
+                    },
+                    {
+                      oneOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "env",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "file",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "exec",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                      ],
                     },
                   ],
                 },
@@ -6280,6 +6914,18 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       dmPolicy: {
         label: "iMessage DM Policy",
         help: 'Direct message access control ("pairing" recommended). "open" requires channels.imessage.allowFrom=["*"].',
+      },
+      allowFrom: {
+        label: "iMessage Allowlist",
+        sensitive: true,
+      },
+      defaultTo: {
+        label: "iMessage Default Recipient",
+        sensitive: true,
+      },
+      groupAllowFrom: {
+        label: "iMessage Group Allowlist",
+        sensitive: true,
       },
       configWrites: {
         label: "iMessage Config Writes",
@@ -9984,7 +10630,70 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
           type: "boolean",
         },
         account: {
-          type: "string",
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
         },
         accountUuid: {
           type: "string",
@@ -10047,11 +10756,133 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               {
                 type: "number",
               },
+              {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
             ],
           },
         },
         defaultTo: {
-          type: "string",
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
         },
         groupAllowFrom: {
           type: "array",
@@ -10062,6 +10893,65 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               },
               {
                 type: "number",
+              },
+              {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
               },
             ],
           },
@@ -10226,6 +11116,65 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               {
                 type: "number",
               },
+              {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
             ],
           },
         },
@@ -10303,7 +11252,70 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                 type: "boolean",
               },
               account: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
               },
               accountUuid: {
                 type: "string",
@@ -10366,11 +11378,133 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     {
                       type: "number",
                     },
+                    {
+                      oneOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "env",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "file",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "exec",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
                   ],
                 },
               },
               defaultTo: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
               },
               groupAllowFrom: {
                 type: "array",
@@ -10381,6 +11515,65 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     },
                     {
                       type: "number",
+                    },
+                    {
+                      oneOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "env",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "file",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "exec",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                      ],
                     },
                   ],
                 },
@@ -10545,6 +11738,65 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     {
                       type: "number",
                     },
+                    {
+                      oneOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "env",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "file",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "exec",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
                   ],
                 },
               },
@@ -10616,6 +11868,23 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       account: {
         label: "Signal Account",
         help: "Signal account identifier (phone/number handle) used to bind this channel config to a specific Signal identity. Keep this aligned with your linked device/session state.",
+        sensitive: true,
+      },
+      allowFrom: {
+        label: "Signal Allowlist",
+        sensitive: true,
+      },
+      defaultTo: {
+        label: "Signal Default Recipient",
+        sensitive: true,
+      },
+      groupAllowFrom: {
+        label: "Signal Group Allowlist",
+        sensitive: true,
+      },
+      reactionAllowlist: {
+        label: "Signal Reaction Allowlist",
+        sensitive: true,
       },
     },
   },
@@ -15343,16 +16612,205 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
         allowFrom: {
           type: "array",
           items: {
-            type: "string",
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
+            ],
           },
         },
         defaultTo: {
-          type: "string",
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
         },
         groupAllowFrom: {
           type: "array",
           items: {
-            type: "string",
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                oneOf: [
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "env",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                        pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "file",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                  {
+                    type: "object",
+                    properties: {
+                      source: {
+                        type: "string",
+                        const: "exec",
+                      },
+                      provider: {
+                        type: "string",
+                        pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                      },
+                      id: {
+                        type: "string",
+                      },
+                    },
+                    required: ["source", "provider", "id"],
+                    additionalProperties: false,
+                  },
+                ],
+              },
+            ],
           },
         },
         groupPolicy: {
@@ -15633,16 +17091,205 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               allowFrom: {
                 type: "array",
                 items: {
-                  type: "string",
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      oneOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "env",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "file",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "exec",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
+                  ],
                 },
               },
               defaultTo: {
-                type: "string",
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
               },
               groupAllowFrom: {
                 type: "array",
                 items: {
-                  type: "string",
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      oneOf: [
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "env",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "file",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                        {
+                          type: "object",
+                          properties: {
+                            source: {
+                              type: "string",
+                              const: "exec",
+                            },
+                            provider: {
+                              type: "string",
+                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                            },
+                            id: {
+                              type: "string",
+                            },
+                          },
+                          required: ["source", "provider", "id"],
+                          additionalProperties: false,
+                        },
+                      ],
+                    },
+                  ],
                 },
               },
               groupPolicy: {
@@ -15927,6 +17574,18 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       selfChatMode: {
         label: "WhatsApp Self-Phone Mode",
         help: "Same-phone setup (bot uses your personal WhatsApp number).",
+      },
+      allowFrom: {
+        label: "WhatsApp Allowlist",
+        sensitive: true,
+      },
+      defaultTo: {
+        label: "WhatsApp Default Recipient",
+        sensitive: true,
+      },
+      groupAllowFrom: {
+        label: "WhatsApp Group Allowlist",
+        sensitive: true,
       },
       debounceMs: {
         label: "WhatsApp Message Debounce (ms)",

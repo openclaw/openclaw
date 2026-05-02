@@ -16,6 +16,7 @@ type WebProviderSecretConfig = (typeof WEB_PROVIDER_SECRET_CONFIGS)[number];
 function createPluginOpenClawConfigSecretTargetEntry(
   pluginId: string,
   configPath: string,
+  expectedResolvedValue: "string" = "string",
 ): SecretTargetRegistryEntry {
   const pathPattern = ["plugins", "entries", pluginId, "config", ...configPath.split(".")].join(
     ".",
@@ -26,7 +27,7 @@ function createPluginOpenClawConfigSecretTargetEntry(
     configFile: "openclaw.json",
     pathPattern,
     secretShape: SECRET_INPUT_SHAPE,
-    expectedResolvedValue: "string",
+    expectedResolvedValue,
     includeInPlan: true,
     includeInConfigure: true,
     includeInAudit: true,

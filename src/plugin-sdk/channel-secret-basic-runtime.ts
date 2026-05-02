@@ -3,6 +3,7 @@
 export {
   collectConditionalChannelFieldAssignments,
   collectNestedChannelFieldAssignments,
+  collectSimpleChannelArrayFieldAssignments,
   collectSimpleChannelFieldAssignments,
   getChannelRecord,
   getChannelSurface,

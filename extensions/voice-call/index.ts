@@ -15,6 +15,7 @@ import {
   parseVoiceCallPluginConfig,
 } from "./src/config-compat.js";
 import {
+  normalizeResolvedVoiceCallPhoneNumber,
   resolveVoiceCallConfig,
   validateProviderConfig,
   type VoiceCallConfig,
@@ -37,10 +38,10 @@ const voiceCallConfigSchema = {
       label: "Provider",
       help: "Use twilio, telnyx, or mock for dev/no-network.",
     },
-    fromNumber: { label: "From Number", placeholder: "+15550001234" },
-    toNumber: { label: "Default To Number", placeholder: "+15550001234" },
+    fromNumber: { label: "From Number", placeholder: "+15550001234", sensitive: true },
+    toNumber: { label: "Default To Number", placeholder: "+15550001234", sensitive: true },
     inboundPolicy: { label: "Inbound Policy" },
-    allowFrom: { label: "Inbound Allowlist" },
+    allowFrom: { label: "Inbound Allowlist", sensitive: true },
     inboundGreeting: { label: "Inbound Greeting", advanced: true },
     "telnyx.apiKey": { label: "Telnyx API Key", sensitive: true },
     "telnyx.connectionId": { label: "Telnyx Connection ID" },
@@ -372,7 +373,9 @@ export default definePluginEntry({
             return;
           }
           const rt = await ensureRuntime();
-          const to = normalizeOptionalString(params?.to) ?? rt.config.toNumber;
+          const to =
+            normalizeOptionalString(params?.to) ??
+            normalizeResolvedVoiceCallPhoneNumber(rt.config.toNumber);
           if (!to) {
             respondError(respond, "to required", ErrorCodes.INVALID_REQUEST);
             return;
@@ -603,7 +606,9 @@ export default definePluginEntry({
                 if (!message) {
                   throw new Error("message required");
                 }
-                const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
+                const to =
+                  normalizeOptionalString(rawParams.to) ??
+                  normalizeResolvedVoiceCallPhoneNumber(rt.config.toNumber);
                 if (!to) {
                   throw new Error("to required");
                 }
@@ -689,7 +694,9 @@ export default definePluginEntry({
             return json(call ? { found: true, call } : { found: false });
           }
 
-          const to = normalizeOptionalString(rawParams.to) ?? rt.config.toNumber;
+          const to =
+            normalizeOptionalString(rawParams.to) ??
+            normalizeResolvedVoiceCallPhoneNumber(rt.config.toNumber);
           if (!to) {
             throw new Error("to required for call");
           }

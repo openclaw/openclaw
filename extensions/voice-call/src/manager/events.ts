@@ -1,6 +1,10 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
+import {
+  normalizeResolvedVoiceCallPhoneNumber,
+  normalizeResolvedVoiceCallPhoneNumberList,
+} from "../config.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { finalizeCall } from "./lifecycle.js";
@@ -25,7 +29,7 @@ type EventContext = Pick<
 >;
 
 function shouldAcceptInbound(config: EventContext["config"], from: string | undefined): boolean {
-  const { inboundPolicy: policy, allowFrom } = config;
+  const { inboundPolicy: policy } = config;
 
   switch (policy) {
     case "disabled":
@@ -43,7 +47,10 @@ function shouldAcceptInbound(config: EventContext["config"], from: string | unde
         console.log("[voice-call] Inbound call rejected: missing caller ID");
         return false;
       }
-      const allowed = isAllowlistedCaller(normalized, allowFrom);
+      const allowed = isAllowlistedCaller(
+        normalized,
+        normalizeResolvedVoiceCallPhoneNumberList(config.allowFrom),
+      );
       const status = allowed ? "accepted" : "rejected";
       console.log(
         `[voice-call] Inbound call ${status}: ${from} ${allowed ? "is in" : "not in"} allowlist`,
@@ -150,7 +157,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       providerCallId,
       direction: eventDirection === "outbound" ? "outbound" : "inbound",
       from: event.from || "unknown",
-      to: event.to || ctx.config.fromNumber || "unknown",
+      to: event.to || normalizeResolvedVoiceCallPhoneNumber(ctx.config.fromNumber) || "unknown",
     });
 
     // Normalize event to internal ID for downstream consumers.

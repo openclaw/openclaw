@@ -1,5 +1,4 @@
 import {
-  AllowFromListSchema,
   buildChannelConfigSchema,
   buildCatchallMultiAccountChannelSchema,
   DmPolicySchema,
@@ -10,6 +9,13 @@ import {
 import { z } from "openclaw/plugin-sdk/zod";
 import { bluebubblesChannelConfigUiHints } from "./config-ui-hints.js";
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
+
+const secretBackedAllowFromEntrySchema = z.union([
+  z.string(),
+  z.number(),
+  buildSecretInputSchema(),
+]);
+const secretBackedAllowFromListSchema = z.array(secretBackedAllowFromEntrySchema).optional();
 
 const bluebubblesActionSchema = z
   .object({
@@ -78,8 +84,8 @@ const bluebubblesAccountSchema = z
     password: buildSecretInputSchema().optional(),
     webhookPath: z.string().optional(),
     dmPolicy: DmPolicySchema.optional(),
-    allowFrom: AllowFromListSchema,
-    groupAllowFrom: AllowFromListSchema,
+    allowFrom: secretBackedAllowFromListSchema,
+    groupAllowFrom: secretBackedAllowFromListSchema,
     groupPolicy: GroupPolicySchema.optional(),
     enrichGroupParticipantsFromContacts: z.boolean().optional().default(true),
     historyLimit: z.number().int().min(0).optional(),

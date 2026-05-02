@@ -247,7 +247,7 @@ export type PluginManifestDangerousConfigFlag = {
 export type PluginManifestSecretInputPath = {
   /**
    * Dot-separated config path relative to `plugins.entries.<id>.config`.
-   * Supports `*` wildcards for map/array segments.
+   * Supports `*` wildcards and `field[]` array segments.
    */
   path: string;
   /** Expected resolved type for SecretRef materialization. */

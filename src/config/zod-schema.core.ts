@@ -9,6 +9,7 @@ import {
 import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS } from "./types.models.js";
+import { isSecretRef } from "./types.secrets.js";
 import type { MediaToolsConfig } from "./types.tools.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -618,12 +619,12 @@ export const CliBackendSchema = z
   })
   .strict();
 
-export const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
-  normalizeStringEntries(values);
+export const normalizeAllowFrom = (values?: ReadonlyArray<unknown>): string[] =>
+  normalizeStringEntries(values?.filter((v) => !isSecretRef(v)));
 
 export const requireOpenAllowFrom = (params: {
   policy?: string;
-  allowFrom?: Array<string | number>;
+  allowFrom?: ReadonlyArray<unknown>;
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;
@@ -632,7 +633,7 @@ export const requireOpenAllowFrom = (params: {
     return;
   }
   const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.includes("*")) {
+  if (allow.includes("*") || params.allowFrom?.some(isSecretRef)) {
     return;
   }
   params.ctx.addIssue({
@@ -649,7 +650,7 @@ export const requireOpenAllowFrom = (params: {
  */
 export const requireAllowlistAllowFrom = (params: {
   policy?: string;
-  allowFrom?: Array<string | number>;
+  allowFrom?: ReadonlyArray<unknown>;
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;
@@ -658,7 +659,7 @@ export const requireAllowlistAllowFrom = (params: {
     return;
   }
   const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.length > 0) {
+  if (allow.length > 0 || params.allowFrom?.some(isSecretRef)) {
     return;
   }
   params.ctx.addIssue({

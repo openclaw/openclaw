@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { IMessageConfigSchema } from "../config-api.js";
 
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+
 describe("imessage config schema", () => {
   it('accepts dmPolicy="open" with allowFrom "*"', () => {
     const res = IMessageConfigSchema.safeParse({ dmPolicy: "open", allowFrom: ["*"] });
@@ -108,5 +110,30 @@ describe("imessage config schema", () => {
     if (!res.success) {
       expect(res.error.issues[0]?.path.join(".")).toBe("attachmentRoots.0");
     }
+  });
+
+  it("accepts SecretRefs for SMS and handle config fields", () => {
+    const res = IMessageConfigSchema.safeParse({
+      allowFrom: [envRef("IMESSAGE_OWNER")],
+      defaultTo: "${IMESSAGE_DEFAULT_TO}",
+      groupAllowFrom: [envRef("IMESSAGE_GROUP_OWNER")],
+      accounts: {
+        sms: {
+          allowFrom: ["${IMESSAGE_SMS_OWNER}"],
+          defaultTo: envRef("IMESSAGE_SMS_DEFAULT_TO"),
+          groupAllowFrom: [envRef("IMESSAGE_SMS_GROUP_OWNER")],
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects invalid SecretRef shapes", () => {
+    const res = IMessageConfigSchema.safeParse({
+      allowFrom: [{ source: "bad", provider: "default", id: "X" }],
+      defaultTo: { source: "env", id: "MISSING_PROVIDER" },
+    });
+    expect(res.success).toBe(false);
   });
 });
