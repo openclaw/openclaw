@@ -292,6 +292,27 @@ Workflow plugins can persist small JSON-compatible session state with
 through `pluginExtensions`, letting Control UI and other clients render
 plugin-owned status without learning plugin internals.
 
+When a generic session reader needs a stable top-level field, a session
+extension may also declare `sessionEntrySlotKey`. After every successful
+`sessions.pluginPatch`, OpenClaw mirrors the projected value into
+`SessionEntry[sessionEntrySlotKey]`. The mirror uses the same projection source
+as `pluginExtensions`: the synchronous `project()` result when present, or the
+raw JSON-compatible state otherwise. The slot is mirror-only: clients still
+write through `sessions.pluginPatch`, the host overwrites the slot on later
+patches, and `unset: true` clears both the namespace state and the mirror. If
+the projector returns `undefined`, throws, returns a promise, or returns a
+non-JSON value, the host keeps the plugin namespace state and clears the mirror
+to avoid stale top-level data.
+
+Slot keys must be identifier-style names, must not collide with current
+`SessionEntry` fields or prototype keys, and must be unique across registered
+session extensions. Use ordinary `pluginExtensions` for plugin-aware clients
+or plugin-local UI state. Use `sessionEntrySlotKey` only for small, non-secret
+summaries that generic session consumers need without parsing
+`pluginExtensions[pluginId][namespace]`. `sessionEntrySlotSchema` can describe
+the projected slot shape in registration metadata; it is informational, not a
+replacement for JSON-compatible state validation.
+
 Use `api.enqueueNextTurnInjection(...)` when a plugin needs durable context to
 reach the next model turn exactly once. OpenClaw drains queued injections before
 prompt hooks, drops expired injections, and deduplicates by `idempotencyKey`
@@ -302,10 +323,10 @@ the model on the next turn but should not become permanent system prompt text.
 Cleanup semantics are part of the contract. Session extension cleanup and
 runtime lifecycle cleanup callbacks receive `reset`, `delete`, `disable`, or
 `restart`. The host removes the owning plugin's persistent session extension
-state and pending next-turn injections for reset/delete/disable; restart keeps
-durable session state while cleanup callbacks let plugins release scheduler
-jobs, run context, and other out-of-band resources for the old runtime
-generation.
+state, pending next-turn injections, and promoted `SessionEntry` slots for
+reset/delete/disable; restart keeps durable session state while cleanup
+callbacks let plugins release scheduler jobs, run context, and other
+out-of-band resources for the old runtime generation.
 
 ## Message hooks
 

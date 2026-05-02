@@ -120,6 +120,8 @@ export type PluginSessionExtensionRegistration = {
   description: string;
   project?: (ctx: PluginSessionExtensionProjectionContext) => PluginJsonValue | undefined;
   cleanup?: (ctx: { reason: PluginHostCleanupReason; sessionKey?: string }) => void | Promise<void>;
+  sessionEntrySlotKey?: string;
+  sessionEntrySlotSchema?: PluginJsonValue;
 };
 
 export type PluginSessionExtensionProjectionContext = {
@@ -136,6 +138,35 @@ stored value as a `pluginExtensions` row entry with `{ pluginId, namespace,
 value }`. Pass `project()` when you want to _transform_ what clients see (for
 example, hide secrets, or return a different shape than what you persist).
 
+You can also set `sessionEntrySlotKey` when one non-plugin reader needs a
+stable top-level `SessionEntry` field instead of a `pluginExtensions[]`
+projection entry. The host mirrors the projected value into
+`SessionEntry[sessionEntrySlotKey]` after each successful
+`sessions.pluginPatch` call, using the same projection source as
+`pluginExtensions[]`: `project({ sessionKey, sessionId, state })` when present,
+or the raw JSON-compatible state when no projector is registered. The mirror is
+read-only: clients still write through `sessions.pluginPatch`, and the host
+overwrites the slot on the next patch. `sessionEntrySlotSchema` is optional
+JSON-compatible registration metadata describing the projected slot shape; it
+does not replace the patch path's JSON-compatible state validation.
+
+Slot keys are intentionally narrow. They must be identifier-style names, cannot
+collide with current `SessionEntry` fields, cannot use prototype keys such as
+`__proto__`, `constructor`, `prototype`, `toString`, or `hasOwnProperty`, and
+must be unique across all registered session extensions. If `project()` returns
+`undefined`, throws, returns a promise, or returns a non-JSON value, the host
+keeps the namespaced plugin state but clears the top-level mirror so stale
+slot data is not exposed. `unset: true` removes both the namespace state and
+the promoted slot. Reset/delete/disable cleanup clears the owning plugin's
+session extensions, pending next-turn injections, and promoted slots; restart
+cleanup keeps durable session state.
+
+Use ordinary `pluginExtensions[]` when plugin-aware clients can read by
+`pluginId` and `namespace`, when several plugins may expose similar state, or
+when the state is only for your own UI. Use `sessionEntrySlotKey` only for a
+small, non-secret, stable summary that a generic session reader needs without
+knowing your plugin namespace.
+
 **Minimal example**
 
 ```typescript
@@ -150,6 +181,13 @@ export default definePluginEntry({
     api.registerSessionExtension({
       namespace: "review-status",
       description: "Per-session review state: pending | in_review | approved",
+      sessionEntrySlotKey: "reviewStatus",
+      sessionEntrySlotSchema: {
+        type: "object",
+        properties: {
+          status: { type: "string" },
+        },
+      },
       project: ({ state }) => {
         // Show a friendly summary; persist the raw record
         if (!state || typeof state !== "object" || Array.isArray(state)) {
@@ -181,6 +219,7 @@ sequenceDiagram
   Store-->>GW: raw state saved
   GW->>Plugin: build session row, invoke project({sessionKey, sessionId, state})
   Plugin-->>GW: pluginExtensions[] projection entry
+  GW->>Store: mirror projected value to SessionEntry.reviewStatus
   GW-->>UI: live row update
 ```
 
@@ -220,6 +259,15 @@ export default definePluginEntry({
     api.registerSessionExtension({
       namespace: "review-state",
       description: "Files approved or rejected for code review during this session",
+      sessionEntrySlotKey: "reviewSummary",
+      sessionEntrySlotSchema: {
+        type: "object",
+        properties: {
+          approvedCount: { type: "number" },
+          rejectedCount: { type: "number" },
+          totalReviewed: { type: "number" },
+        },
+      },
       project: ({ state }): ReviewStateProjection | undefined => {
         if (!isReviewState(state)) return undefined;
         return {
@@ -249,6 +297,12 @@ export default definePluginEntry({
 - **Cleanup is host-driven for the persisted state.** You don't need to clear
   the namespace from `cleanup()`. Use `cleanup()` for _plugin-owned_
   out-of-band resources only (timers, caches, file watchers).
+- **Promoted slots are not a write API.** `sessionEntrySlotKey` mirrors the
+  projected value into a top-level `SessionEntry` field for readers. Clients
+  still mutate the plugin namespace through `sessions.pluginPatch`.
+- **Reserve promoted slots for stable generic readers.** If the consumer is
+  already plugin-aware, keep the default `pluginExtensions[]` projection and
+  avoid adding a top-level field.
 
 ---
 
