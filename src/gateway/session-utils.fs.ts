@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
+import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
@@ -16,7 +17,7 @@ import {
 } from "./session-transcript-files.fs.js";
 import {
   readSessionTranscriptIndex,
-  type IndexedTranscriptEntry,
+  type IndexedTranscriptRecord,
 } from "./session-transcript-index.fs.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -42,6 +43,7 @@ const transcriptMessageCountCache = new Map<
 >();
 const MAX_TRANSCRIPT_MESSAGE_COUNT_CACHE_ENTRIES = 5000;
 const TRANSCRIPT_ASYNC_READ_CHUNK_BYTES = 64 * 1024;
+const RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
 function readSessionTitleFieldsCacheKey(
   filePath: string,
@@ -178,6 +180,11 @@ const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 type TailTranscriptRecord = {
   id?: string;
   parentId?: string | null;
+  record: Record<string, unknown>;
+};
+
+type TranscriptRecordSource = {
+  seq?: number;
   record: Record<string, unknown>;
 };
 
@@ -355,13 +362,59 @@ function readSelectedTranscriptRecords(filePath: string): TailTranscriptRecord[]
   }
 }
 
-function transcriptRecordsToMessages(records: TailTranscriptRecord[]): unknown[] {
+function isRuntimeContextEntry(entry: Record<string, unknown>): boolean {
+  return entry.type === "custom_message" && entry.customType === RUNTIME_CONTEXT_CUSTOM_TYPE;
+}
+
+function extractRuntimeContextSenderLabel(entry: Record<string, unknown>): string | null {
+  return typeof entry.content === "string" ? extractInboundSenderLabel(entry.content) : null;
+}
+
+function attachSenderLabelToPreviousUser(messages: unknown[], senderLabel: string | null): boolean {
+  if (!senderLabel) {
+    return false;
+  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    const role =
+      typeof record.role === "string" ? normalizeLowercaseStringOrEmpty(record.role) : "";
+    if (!role) {
+      continue;
+    }
+    if (role === "system") {
+      continue;
+    }
+    if (role !== "user") {
+      return false;
+    }
+    if (typeof record.senderLabel === "string" && record.senderLabel.trim()) {
+      return false;
+    }
+    messages[i] = {
+      ...record,
+      senderLabel,
+    };
+    return true;
+  }
+  return false;
+}
+
+function transcriptRecordsToMessages(records: TranscriptRecordSource[]): unknown[] {
   const messages: unknown[] = [];
   let messageSeq = 0;
   for (const entry of records) {
-    const message = parsedSessionEntryToMessage(entry.record, messageSeq + 1);
+    if (isRuntimeContextEntry(entry.record)) {
+      attachSenderLabelToPreviousUser(messages, extractRuntimeContextSenderLabel(entry.record));
+      continue;
+    }
+    const seq = typeof entry.seq === "number" ? entry.seq : messageSeq + 1;
+    const message = parsedSessionEntryToMessage(entry.record, seq);
     if (message) {
-      messageSeq += 1;
+      messageSeq = seq;
       messages.push(message);
     }
   }
@@ -493,7 +546,7 @@ export async function readSessionMessagesAsync(
     return [];
   }
   const index = await readSessionTranscriptIndex(filePath);
-  return index?.entries.flatMap((entry) => indexedTranscriptEntryToMessages(entry)) ?? [];
+  return index ? indexedTranscriptRecordsToMessages(index.records) : [];
 }
 
 export async function visitSessionMessagesAsync(
@@ -511,10 +564,10 @@ export async function visitSessionMessagesAsync(
   if (!index) {
     return 0;
   }
-  for (const entry of index.entries) {
-    const message = indexedTranscriptEntryToMessage(entry);
-    if (message) {
-      visit(message, entry.seq);
+  for (const message of indexedTranscriptRecordsToMessages(index.records)) {
+    const seq = extractOpenClawTranscriptSeq(message);
+    if (typeof seq === "number") {
+      visit(message, seq);
     }
   }
   return index.entries.length;
@@ -676,13 +729,20 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   return null;
 }
 
-function indexedTranscriptEntryToMessage(entry: IndexedTranscriptEntry): unknown {
-  return parsedSessionEntryToMessage(entry.record, entry.seq);
+function indexedTranscriptRecordsToMessages(records: IndexedTranscriptRecord[]): unknown[] {
+  return transcriptRecordsToMessages(records);
 }
 
-function indexedTranscriptEntryToMessages(entry: IndexedTranscriptEntry): unknown[] {
-  const message = indexedTranscriptEntryToMessage(entry);
-  return message ? [message] : [];
+function extractOpenClawTranscriptSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const meta = (message as { __openclaw?: unknown }).__openclaw;
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return undefined;
+  }
+  const seq = (meta as { seq?: unknown }).seq;
+  return typeof seq === "number" && Number.isFinite(seq) ? seq : undefined;
 }
 
 export {

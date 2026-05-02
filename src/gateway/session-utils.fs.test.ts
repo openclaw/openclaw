@@ -62,6 +62,25 @@ function buildBasicSessionTranscript(
   ];
 }
 
+function buildRuntimeContextSenderRow(label?: string): unknown {
+  return {
+    type: "custom_message",
+    customType: "openclaw.runtime-context",
+    display: false,
+    content: label
+      ? [
+          "OpenClaw runtime context for the immediately preceding user message.",
+          "This context is runtime-generated, not user-authored. Keep internal details private.",
+          "",
+          "Sender (untrusted metadata):",
+          "```json",
+          JSON.stringify({ label, id: "358611388488351744" }),
+          "```",
+        ].join("\n")
+      : "OpenClaw runtime context with no parseable sender metadata.",
+  };
+}
+
 describe("readFirstUserMessageFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
@@ -514,6 +533,121 @@ describe("readSessionMessages", () => {
     expect(marker.__openclaw?.id).toBe("comp-1");
     expect(typeof marker.timestamp).toBe("number");
   });
+
+  test.each([
+    {
+      name: "sync",
+      read: async (sessionId: string, currentStorePath: string) =>
+        readSessionMessages(sessionId, currentStorePath),
+    },
+    {
+      name: "async full",
+      read: async (sessionId: string, currentStorePath: string) =>
+        readSessionMessagesAsync(sessionId, currentStorePath, undefined, {
+          mode: "full",
+          reason: "test runtime context sender labels",
+        }),
+    },
+  ])(
+    "attaches sender labels from hidden runtime context rows without exposing the row ($name)",
+    async ({ read }) => {
+      const sessionId = "test-session-runtime-context-sender";
+      writeTranscript(tmpDir, sessionId, [
+        { type: "session", version: 1, id: sessionId },
+        { message: { role: "user", content: "Hello from Discord" } },
+        buildRuntimeContextSenderRow("Yuka"),
+        { message: { role: "assistant", content: "Hello" } },
+      ]);
+      clearSessionTranscriptIndexCache();
+
+      const out = await read(sessionId, storePath);
+      expect(out).toHaveLength(2);
+      expect(out[0]).toMatchObject({
+        role: "user",
+        content: "Hello from Discord",
+        senderLabel: "Yuka",
+        __openclaw: { seq: 1 },
+      });
+      expect(out[1]).toMatchObject({ role: "assistant", __openclaw: { seq: 2 } });
+      expect(out).not.toContainEqual(
+        expect.objectContaining({
+          type: "custom_message",
+          customType: "openclaw.runtime-context",
+        }),
+      );
+    },
+  );
+
+  test("hides runtime context rows when they do not contain sender labels", () => {
+    const sessionId = "test-session-runtime-context-without-sender";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "Hello from Discord" } },
+      buildRuntimeContextSenderRow(),
+      { message: { role: "assistant", content: "Hello" } },
+    ]);
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(2);
+    expect(out[0]).toMatchObject({ role: "user", content: "Hello from Discord" });
+    expect(out[0]).not.toHaveProperty("senderLabel");
+    expect(out).not.toContainEqual(
+      expect.objectContaining({
+        type: "custom_message",
+        customType: "openclaw.runtime-context",
+      }),
+    );
+  });
+
+  test("attaches runtime-context sender labels across system and compaction markers", () => {
+    const sessionId = "test-session-runtime-context-after-markers";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: "Hello from Discord" } },
+      { message: { role: "system", content: "Synthetic marker" } },
+      {
+        type: "compaction",
+        id: "comp-1",
+        timestamp: "2026-02-07T00:00:00.000Z",
+      },
+      buildRuntimeContextSenderRow("Yuka"),
+      { message: { role: "assistant", content: "Hello" } },
+    ]);
+
+    const out = readSessionMessages(sessionId, storePath);
+    expect(out).toHaveLength(4);
+    expect(out[0]).toMatchObject({
+      role: "user",
+      content: "Hello from Discord",
+      senderLabel: "Yuka",
+      __openclaw: { seq: 1 },
+    });
+    expect(out[1]).toMatchObject({ role: "system", content: "Synthetic marker" });
+    expect(out[2]).toMatchObject({
+      role: "system",
+      content: [{ type: "text", text: "Compaction" }],
+      __openclaw: { kind: "compaction", seq: 3 },
+    });
+    expect(out[3]).toMatchObject({ role: "assistant", __openclaw: { seq: 4 } });
+  });
+
+  test.each(["assistant", "tool"] as const)(
+    "does not attach runtime-context sender labels across %s messages",
+    (role) => {
+      const sessionId = `test-session-runtime-context-stale-${role}`;
+      writeTranscript(tmpDir, sessionId, [
+        { type: "session", version: 1, id: sessionId },
+        { message: { role: "user", content: "Hello from Discord" } },
+        { message: { role, content: "Conversation boundary" } },
+        buildRuntimeContextSenderRow("Late Sender"),
+      ]);
+
+      const out = readSessionMessages(sessionId, storePath);
+      expect(out).toHaveLength(2);
+      expect(out[0]).toMatchObject({ role: "user", content: "Hello from Discord" });
+      expect(out[0]).not.toHaveProperty("senderLabel");
+    },
+  );
 
   test("reads recent messages from the transcript tail without loading the whole file", () => {
     const sessionId = "test-session-recent-tail";

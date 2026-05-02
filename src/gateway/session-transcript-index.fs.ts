@@ -14,12 +14,22 @@ export type IndexedTranscriptEntry = {
   record: ParsedTranscriptRecord;
 };
 
+export type IndexedTranscriptRecord = {
+  seq?: number;
+  id?: string;
+  offset: number;
+  byteLength: number;
+  record: ParsedTranscriptRecord;
+  visible: boolean;
+};
+
 type SessionTranscriptIndex = {
   filePath: string;
   mtimeMs: number;
   size: number;
   hasTreeEntries: boolean;
   leafId?: string;
+  records: IndexedTranscriptRecord[];
   entries: IndexedTranscriptEntry[];
 };
 
@@ -154,23 +164,36 @@ function buildActiveTreeEntries(params: {
   return out.toReversed();
 }
 
-function toIndexedEntries(rawEntries: IndexedRawEntry[]): IndexedTranscriptEntry[] {
+function toIndexedRecords(rawEntries: IndexedRawEntry[]): {
+  records: IndexedTranscriptRecord[];
+  entries: IndexedTranscriptEntry[];
+} {
+  const records: IndexedTranscriptRecord[] = [];
   const entries: IndexedTranscriptEntry[] = [];
   let seq = 0;
   for (const entry of rawEntries) {
     if (!isVisibleTranscriptRecord(entry.record)) {
+      records.push({
+        ...(entry.id ? { id: entry.id } : {}),
+        offset: entry.offset,
+        byteLength: entry.byteLength,
+        record: entry.record,
+        visible: false,
+      });
       continue;
     }
     seq += 1;
-    entries.push({
+    const indexedEntry: IndexedTranscriptEntry = {
       seq,
       ...(entry.id ? { id: entry.id } : {}),
       offset: entry.offset,
       byteLength: entry.byteLength,
       record: entry.record,
-    });
+    };
+    entries.push(indexedEntry);
+    records.push({ ...indexedEntry, visible: true });
   }
-  return entries;
+  return { records, entries };
 }
 
 async function buildSessionTranscriptIndex(
@@ -214,13 +237,15 @@ async function buildSessionTranscriptIndex(
   });
 
   const activeRawEntries = hasTreeEntries ? buildActiveTreeEntries({ byId, leafId }) : rawEntries;
+  const indexed = toIndexedRecords(activeRawEntries);
   return {
     filePath,
     mtimeMs: stat.mtimeMs,
     size: stat.size,
     hasTreeEntries,
     ...(leafId ? { leafId } : {}),
-    entries: toIndexedEntries(activeRawEntries),
+    records: indexed.records,
+    entries: indexed.entries,
   };
 }
 
