@@ -1230,10 +1230,12 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     if (blockedOwnershipPluginIds.has(pluginId)) {
-      warnings.push({
-        path,
-        message: `plugin ${pluginId} present but blocked by file ownership; run \`chown root:root <plugin-path>\` to allow load`,
-      });
+      const ownershipMessage = `plugin ${pluginId} present but blocked by file ownership; run \`chown root:root <plugin-path>\` to allow load`;
+      if (opts?.warnOnly) {
+        warnings.push({ path, message: ownershipMessage });
+      } else {
+        issues.push({ path, message: ownershipMessage });
+      }
       return;
     }
     if (opts?.warnOnly) {
