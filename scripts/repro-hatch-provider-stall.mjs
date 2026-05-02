@@ -11,6 +11,7 @@ const DEFAULT_MODEL = "openai/gpt-5.5";
 const DEFAULT_PROBE_OBSERVE_MS = 10_000;
 const DEFAULT_STARTUP_TIMEOUT_MS = 45_000;
 const DEFAULT_WALL_TIMEOUT_MS = 20_000;
+const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])`, "g");
 
 function usage() {
   return `Usage: node scripts/repro-hatch-provider-stall.mjs [options]
@@ -465,7 +466,7 @@ async function main() {
       tuiLog = "";
     }
     const normalizedTuiLog = `${Buffer.concat(stdoutChunks).toString("utf8")}\n${tuiLog}`
-      .replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, "")
+      .replace(ANSI_ESCAPE_RE, "")
       .replace(/\r/g, "\n");
     const sawWakeMessage = normalizedTuiLog.includes(options.message);
     const sawWatchdog = normalizedTuiLog.includes("streaming watchdog: no stream updates");
