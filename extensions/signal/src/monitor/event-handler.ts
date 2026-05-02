@@ -59,6 +59,7 @@ import { normalizeSignalMessagingTarget } from "../normalize.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import { handleSignalDirectMessageAccess, resolveSignalAccessState } from "./access-policy.js";
 import type {
+  SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
   SignalReactionMessage,
@@ -522,21 +523,73 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    // Check if the message is from our own account to prevent loop/self-reply
-    // This handles both phone number and UUID based identification
+    // Identify the operator's own account (used for both loop protection and
+    // self-chat detection below). Handles phone number and UUID identification.
     const normalizedAccount = deps.account ? normalizeE164(deps.account) : undefined;
-    const isOwnMessage =
+    const isOwnAccount =
       (sender.kind === "phone" && normalizedAccount != null && sender.e164 === normalizedAccount) ||
       (sender.kind === "uuid" && deps.accountUuid != null && sender.raw === deps.accountUuid);
-    if (isOwnMessage) {
-      return;
-    }
 
-    // Filter all sync messages (sentTranscript, readReceipts, etc.).
-    // signal-cli may set syncMessage to null instead of omitting it, so
-    // check property existence rather than truthiness to avoid replaying
-    // the bot's own sent messages on daemon restart.
-    if ("syncMessage" in envelope) {
+    // Self-chat mode: implicitly opt-in via allowFrom containing the operator's
+    // own number. Same pattern as WhatsApp's selfChatMode — see
+    // extensions/whatsapp/src/targets-runtime.ts `isSelfChatMode`. When this is
+    // on, Note-to-Self syncMessages are promoted to dataMessage so the user can
+    // chat with their agent via Note-to-Self while signal-cli runs as a linked
+    // device on their personal Signal account. When off, all syncMessages are
+    // dropped (existing behavior — preserves loop protection for dedicated-bot
+    // deployments where allowFrom contains other people's numbers).
+    const isSelfChatMode =
+      normalizedAccount != null &&
+      deps.allowFrom.some((entry) => {
+        if (entry === "*") {
+          return false;
+        }
+        try {
+          return normalizeE164(entry) === normalizedAccount;
+        } catch {
+          return false;
+        }
+      });
+
+    // signal-cli's `syncMessage` envelope is typed as `unknown` since its shape
+    // varies across versions; cast through a narrow shape we care about. The
+    // `sentMessage` shape is the same as a regular dataMessage plus the
+    // destination* fields that identify the recipient of the sent message.
+    //
+    // signal-cli may set syncMessage to null instead of omitting it, so the
+    // `"syncMessage" in envelope` check uses property existence rather than
+    // truthiness — required to avoid replaying the bot's own sent messages on
+    // daemon restart (loop-protection for sentTranscripts).
+    type SyncSentMessage = SignalDataMessage & {
+      destinationNumber?: string | null;
+      destination?: string | null;
+      destinationUuid?: string | null;
+    };
+    const syncMessage = envelope.syncMessage as
+      | { sentMessage?: SyncSentMessage | null }
+      | null
+      | undefined;
+    const sentSyncMessage = syncMessage?.sentMessage;
+    if (sentSyncMessage && isSelfChatMode) {
+      // Promote sentTranscript syncMessages where destination === source
+      // (Note-to-Self) to dataMessage. Other sentTranscripts (to third
+      // parties) are still dropped via the syncMessage branch below.
+      const destNum = sentSyncMessage.destinationNumber ?? sentSyncMessage.destination;
+      const srcNum = envelope.sourceNumber;
+      const destUuid = sentSyncMessage.destinationUuid;
+      const srcUuid = envelope.sourceUuid;
+      const isNoteToSelf =
+        (!!destNum && !!srcNum && destNum === srcNum) ||
+        (!!destUuid && !!srcUuid && destUuid === srcUuid);
+      if (isNoteToSelf) {
+        envelope.dataMessage = sentSyncMessage;
+        // fall through to normal inbound processing
+      } else {
+        return;
+      }
+    } else if ("syncMessage" in envelope) {
+      return;
+    } else if (isOwnAccount) {
       return;
     }
 

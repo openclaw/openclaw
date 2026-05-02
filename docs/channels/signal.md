@@ -71,8 +71,12 @@ Disable with:
 ## The number model (important)
 
 - The gateway connects to a **Signal device** (the `signal-cli` account).
-- If you run the bot on **your personal Signal account**, it will ignore your own messages (loop protection).
-- For "I text the bot and it replies," use a **separate bot number**.
+- For "I text the bot and it replies," the cleanest option is still a **separate bot number** — fully isolates bot identity from your personal traffic.
+- If you run the bot as a **linked device on your personal Signal account**, by default it ignores your own messages and all sync messages (loop protection — prevents the bot from replying to its own outbound).
+- You can **opt in to Note-to-Self chat** by adding your own number to `channels.signal.allowFrom`. When the operator's E.164 number appears in `allowFrom`, Note-to-Self syncMessages (`destination === source`) are promoted to inbound and processed by the agent. This is the same implicit-opt-in pattern WhatsApp uses (`channels.whatsapp.selfChatMode`).
+- Other syncMessages (sentTranscripts to third parties, read receipts, etc.) and direct own-account messages are still dropped — loop protection for outbound replies is preserved.
+
+> **Privacy note:** when self-chat is on, your Note-to-Self thread becomes a real channel into the agent. Tune `dmPolicy` and per-agent permissions accordingly. To opt out at any time, remove your own number from `allowFrom`.
 
 ## Setup path A: link existing Signal account (QR)
 
