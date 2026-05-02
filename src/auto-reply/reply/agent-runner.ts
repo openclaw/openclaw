@@ -1842,21 +1842,6 @@ export async function runReplyAgent(params: {
       runFollowupTurn,
     );
 
-    // After a successful (or at least non-throwing) finalize call, we can
-    // clear the pending flag.  In a real implementation, we'd wait for
-    // channel-level ACK, but this provides a baseline of durability.
-    if (sessionKey && storePath) {
-      void updateSessionStoreEntry({
-        storePath,
-        sessionKey,
-        update: async () => ({
-          pendingFinalDelivery: undefined,
-          pendingFinalDeliveryText: undefined,
-          updatedAt: Date.now(),
-        }),
-      }).catch(() => {});
-    }
-
     return result;
   } catch (error) {
     if (

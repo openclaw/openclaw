@@ -319,9 +319,10 @@ export async function getReplyFromConfig(
     // For now, let's just return the lost reply if it's a heartbeat.
     if (opts?.isHeartbeat) {
       const updatedAt = Date.now();
-      sessionEntry.pendingFinalDelivery = undefined;
-      sessionEntry.pendingFinalDeliveryText = undefined;
-      sessionEntry.pendingFinalDeliveryContext = undefined;
+      const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+      sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
+      sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
+      sessionEntry.pendingFinalDeliveryLastError = null;
       sessionEntry.updatedAt = updatedAt;
       if (sessionKey && sessionStore) {
         sessionStore[sessionKey] = sessionEntry;
@@ -332,9 +333,9 @@ export async function getReplyFromConfig(
           storePath,
           sessionKey,
           update: async () => ({
-            pendingFinalDelivery: undefined,
-            pendingFinalDeliveryText: undefined,
-            pendingFinalDeliveryContext: undefined,
+            pendingFinalDeliveryLastAttemptAt: updatedAt,
+            pendingFinalDeliveryAttemptCount: attemptCount,
+            pendingFinalDeliveryLastError: null,
             updatedAt,
           }),
         });

@@ -307,9 +307,12 @@ describe("main-session-restart-recovery", () => {
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:main"]?.abortedLastRun).toBe(false);
-    expect(store["agent:main:main"]?.pendingFinalDelivery).toBeUndefined();
-    expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBeUndefined();
-    expect(store["agent:main:main"]?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(store["agent:main:main"]?.pendingFinalDelivery).toBe(true);
+    expect(store["agent:main:main"]?.pendingFinalDeliveryText).toBe(pendingPayload);
+    expect(store["agent:main:main"]?.pendingFinalDeliveryCreatedAt).toBeDefined();
+    expect(store["agent:main:main"]?.pendingFinalDeliveryAttemptCount).toBe(1);
+    expect(store["agent:main:main"]?.pendingFinalDeliveryLastAttemptAt).toBeDefined();
+    expect(store["agent:main:main"]?.pendingFinalDeliveryLastError).toBeNull();
   });
 
   it("does not scan ordinary running sessions without the restart-aborted marker", async () => {

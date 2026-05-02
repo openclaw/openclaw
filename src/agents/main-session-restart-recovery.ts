@@ -181,15 +181,15 @@ async function resumeMainSession(params: {
         if (!entry) {
           return;
         }
+        const now = Date.now();
         entry.abortedLastRun = false;
-        entry.updatedAt = Date.now();
-        entry.pendingFinalDelivery = undefined;
-        entry.pendingFinalDeliveryText = undefined;
-        entry.pendingFinalDeliveryCreatedAt = undefined;
-        entry.pendingFinalDeliveryLastAttemptAt = undefined;
-        entry.pendingFinalDeliveryAttemptCount = undefined;
-        entry.pendingFinalDeliveryLastError = undefined;
-        entry.pendingFinalDeliveryContext = undefined;
+        entry.updatedAt = now;
+        if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
+          entry.pendingFinalDeliveryLastAttemptAt = now;
+          entry.pendingFinalDeliveryAttemptCount =
+            (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+          entry.pendingFinalDeliveryLastError = null;
+        }
         store[params.sessionKey] = entry;
       },
       { skipMaintenance: true },
