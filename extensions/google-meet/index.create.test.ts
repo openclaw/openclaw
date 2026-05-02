@@ -62,6 +62,7 @@ function setup(
         unknown
       >,
   );
+  googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
 }
 
@@ -106,6 +107,7 @@ describe("google-meet create flow", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     googleMeetPluginTesting.setCallGatewayFromCliForTests();
+    googleMeetPluginTesting.setPlatformForTests();
   });
 
   it("CLI create can configure API-created space access", async () => {

@@ -86,6 +86,7 @@ function setup(
         unknown
       >,
   );
+  googleMeetPluginTesting.setPlatformForTests(() => options?.registerPlatform ?? "darwin");
   return harness;
 }
 
@@ -303,6 +304,7 @@ describe("google-meet plugin", () => {
     vi.unstubAllGlobals();
     chromeTransportTesting.setDepsForTest(null);
     googleMeetPluginTesting.setCallGatewayFromCliForTests();
+    googleMeetPluginTesting.setPlatformForTests();
   });
 
   it("defaults to chrome realtime with safe read-only tools", () => {
@@ -505,6 +507,42 @@ describe("google-meet plugin", () => {
         handle: expect.any(Function),
       }),
     );
+  });
+
+  it("keeps the agent tool visible on non-macOS hosts but blocks local Chrome realtime joins", async () => {
+    const { cliRegistrations, methods, tools } = setup(undefined, { registerPlatform: "linux" });
+    const tool = tools[0] as {
+      execute: (id: string, params: unknown) => Promise<{ isError?: boolean; content: unknown }>;
+    };
+
+    expect(tools).toHaveLength(1);
+    expect(cliRegistrations).toHaveLength(1);
+    expect(methods.has("googlemeet.setup")).toBe(true);
+    expect(
+      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
+        config: resolveGoogleMeetConfig({}),
+        raw: { action: "join" },
+        platform: "linux",
+      }),
+    ).toBe(true);
+
+    const blocked = await tool.execute("id", { action: "join" });
+    expect(JSON.stringify(blocked)).toContain("local Chrome realtime audio is macOS-only");
+
+    expect(
+      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
+        config: resolveGoogleMeetConfig({}),
+        raw: { action: "join", mode: "transcribe" },
+        platform: "linux",
+      }),
+    ).toBe(false);
+    expect(
+      googleMeetPluginTesting.isGoogleMeetAgentToolActionUnsupportedOnHost({
+        config: resolveGoogleMeetConfig({}),
+        raw: { action: "join", transport: "chrome-node" },
+        platform: "linux",
+      }),
+    ).toBe(false);
   });
 
   it("returns structured gateway errors for missing session ids", async () => {

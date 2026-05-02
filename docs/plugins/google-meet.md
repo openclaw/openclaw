@@ -119,6 +119,13 @@ Or let an agent join through the `google_meet` tool:
 }
 ```
 
+The agent-facing `google_meet` tool stays available on non-macOS hosts for
+artifact, calendar, setup, transcribe, Twilio, and `chrome-node` flows. Local
+Chrome realtime actions are blocked there because the bundled realtime Chrome
+audio path currently depends on macOS `BlackHole 2ch`. On Linux, use
+`mode: "transcribe"`, Twilio dial-in, or a macOS `chrome-node` host for realtime
+Chrome participation.
+
 Create a new meeting and join it:
 
 ```bash
@@ -1266,6 +1273,12 @@ openclaw googlemeet setup
 If you just edited `plugins.entries.google-meet`, restart or reload the Gateway.
 The running agent only sees plugin tools registered by the current Gateway
 process.
+
+On non-macOS Gateway hosts, the agent-facing `google_meet` tool stays visible,
+but local Chrome realtime actions are blocked before they hit the audio bridge.
+Local Chrome realtime audio currently depends on macOS `BlackHole 2ch`, so
+Linux agents should use `mode: "transcribe"`, Twilio dial-in, or a macOS
+`chrome-node` host instead of the default local Chrome realtime path.
 
 ### No connected Google Meet-capable node
 

@@ -345,12 +345,17 @@ function shouldJoinCreatedMeet(raw: Record<string, unknown>): boolean {
 
 const googleMeetToolDeps = {
   callGatewayFromCli,
+  platform: () => process.platform,
 };
 
 export const __testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     googleMeetToolDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
+  setPlatformForTests(next?: () => NodeJS.Platform): void {
+    googleMeetToolDeps.platform = next ?? (() => process.platform);
+  },
+  isGoogleMeetAgentToolActionUnsupportedOnHost,
 };
 
 type GoogleMeetGatewayToolAction =
@@ -380,6 +385,43 @@ function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolActio
     default:
       return `googlemeet.${action}`;
   }
+}
+
+function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
+  config: GoogleMeetConfig;
+  raw: Record<string, unknown>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  const platform = params.platform ?? googleMeetToolDeps.platform();
+  if (platform === "darwin") {
+    return false;
+  }
+  const action = params.raw.action;
+  if (
+    action !== "join" &&
+    action !== "test_speech" &&
+    !(action === "create" && shouldJoinCreatedMeet(params.raw))
+  ) {
+    return false;
+  }
+  const transport = normalizeTransport(params.raw.transport) ?? params.config.defaultTransport;
+  const mode =
+    action === "test_speech"
+      ? "realtime"
+      : (normalizeMode(params.raw.mode) ?? params.config.defaultMode);
+  return transport === "chrome" && mode === "realtime";
+}
+
+function assertGoogleMeetAgentToolActionSupported(params: {
+  config: GoogleMeetConfig;
+  raw: Record<string, unknown>;
+}): void {
+  if (!isGoogleMeetAgentToolActionUnsupportedOnHost(params)) {
+    return;
+  }
+  throw new Error(
+    "Google Meet local Chrome realtime audio is macOS-only. On this host, use mode: transcribe, transport: twilio, or transport: chrome-node backed by a macOS node.",
+  );
 }
 
 function resolveGoogleMeetToolGatewayTimeoutMs(config: GoogleMeetConfig): number {
@@ -944,11 +986,12 @@ export default definePluginEntry({
       name: "google_meet",
       label: "Google Meet",
       description:
-        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline or local audio missing, surface that blocker instead of retrying or switching transports. Offline nodes are diagnostics only, not usable candidates. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
+        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline or local audio missing, surface that blocker instead of retrying or switching transports. Offline nodes are diagnostics only, not usable candidates. If local Chrome realtime audio is unsupported on this OS, use mode=transcribe, transport=twilio, or a macOS chrome-node for realtime Chrome. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);
         try {
+          assertGoogleMeetAgentToolActionSupported({ config, raw });
           switch (raw.action) {
             case "join": {
               return json(await callGoogleMeetGatewayFromTool({ config, action: "join", raw }));
