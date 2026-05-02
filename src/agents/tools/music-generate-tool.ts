@@ -129,7 +129,7 @@ const MusicGenerateToolSchema = Type.Object({
   ),
 });
 
-export function resolveMusicGenerationModelConfigForTool(params: {
+function resolveMusicGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;

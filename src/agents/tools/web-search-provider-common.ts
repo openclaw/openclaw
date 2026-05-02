@@ -194,7 +194,7 @@ export const FRESHNESS_TO_RECENCY: Record<string, string> = {
   pm: "month",
   py: "year",
 };
-export const RECENCY_TO_FRESHNESS: Record<string, string> = {
+const RECENCY_TO_FRESHNESS: Record<string, string> = {
   day: "pd",
   week: "pw",
   month: "pm",
