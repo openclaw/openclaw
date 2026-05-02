@@ -145,6 +145,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/Microsoft Foundry: skip Anthropic (Claude) deployments during onboard since the built-in Foundry provider only speaks the OpenAI-compatible API surface, and apply the same filter to the persisted deployment catalog so mixed GPT+Claude resources no longer leak Claude entries into `models.providers.microsoft-foundry` after the picker hides them. Fixes #60546. Thanks @ottodeng.
 - OpenAI/Codex: install the Codex runtime plugin from npm during OpenAI onboarding and load it automatically for implicit OpenAI model routes, while preserving manual PI runtime overrides. Fixes #79358.
 - OpenAI/realtime voice: defer `response.create` while a realtime response is still active, retry after `response.done`/`response.cancelled`, and align GA input transcription/noise-reduction defaults with the Codex realtime reference so Discord/Voice Call consult results can resume speaking instead of tripping the active-response race.
 - OpenAI/realtime voice: avoid duplicate barge-in cancellation requests, log realtime model interruption/cutoff events in Discord voice logs, and treat OpenAI's no-active-response cancellation reply as a completed cancel so Discord voice sessions do not wedge pending speech after fast interruptions.
