@@ -419,6 +419,12 @@ type InFlightToolCall = {
   partialJson: string;
 };
 
+type CompletedToolCall = {
+  name: string;
+  toolCallId: string;
+  args: Record<string, unknown>;
+};
+
 export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
@@ -430,6 +436,7 @@ export function createCliJsonlStreamingParser(params: {
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   const inFlightTools = new Map<number, InFlightToolCall>();
+  const completedTools: CompletedToolCall[] = [];
 
   const handleParsedRecord = (parsed: Record<string, unknown>) => {
     sessionId = pickCliSessionId(parsed, params.backend) ?? sessionId;
@@ -499,12 +506,7 @@ export function createCliJsonlStreamingParser(params: {
             toolCallId: tool.toolCallId,
             args: sanitized,
           });
-          params.onToolEvent({
-            phase: "result",
-            name: tool.name,
-            toolCallId: tool.toolCallId,
-            args: sanitized,
-          });
+          completedTools.push({ name: tool.name, toolCallId: tool.toolCallId, args: sanitized });
         }
         return;
       }
@@ -563,6 +565,16 @@ export function createCliJsonlStreamingParser(params: {
     },
     finish() {
       flushLines(true);
+      if (params.onToolEvent) {
+        for (const tool of completedTools) {
+          params.onToolEvent({
+            phase: "result",
+            name: tool.name,
+            toolCallId: tool.toolCallId,
+            args: tool.args,
+          });
+        }
+      }
     },
   };
 }
