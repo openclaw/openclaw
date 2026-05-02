@@ -853,25 +853,28 @@ function isActiveTaskRestartBlockerStatus(
 }
 
 export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
-  return reconcileInspectableTasks()
-    .filter((task) => isActiveTaskRestartBlockerStatus(task.status))
-    .map((task) => {
-      const blocker: ActiveTaskRestartBlocker = {
-        taskId: task.taskId,
-        status: task.status,
-        runtime: task.runtime,
-      };
-      if (task.runId) {
-        blocker.runId = task.runId;
-      }
-      if (task.label) {
-        blocker.label = task.label;
-      }
-      if (task.task) {
-        blocker.title = task.task;
-      }
-      return blocker;
-    });
+  const blockers: ActiveTaskRestartBlocker[] = [];
+  for (const task of reconcileInspectableTasks()) {
+    if (!isActiveTaskRestartBlockerStatus(task.status)) {
+      continue;
+    }
+    const blocker: ActiveTaskRestartBlocker = {
+      taskId: task.taskId,
+      status: task.status,
+      runtime: task.runtime,
+    };
+    if (task.runId) {
+      blocker.runId = task.runId;
+    }
+    if (task.label) {
+      blocker.label = task.label;
+    }
+    if (task.task) {
+      blocker.title = task.task;
+    }
+    blockers.push(blocker);
+  }
+  return blockers;
 }
 
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {

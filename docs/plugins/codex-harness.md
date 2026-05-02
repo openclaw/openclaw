@@ -259,6 +259,20 @@ For live and Docker smoke tests, auth usually comes from the Codex CLI account
 or an OpenClaw `openai-codex` auth profile. Local stdio app-server launches can
 also fall back to `CODEX_API_KEY` / `OPENAI_API_KEY` when no account is present.
 
+## Workspace bootstrap files
+
+Codex handles `AGENTS.md` itself through native project-doc discovery. OpenClaw
+does not write synthetic Codex project-doc files or depend on Codex fallback
+filenames for persona files, because Codex fallbacks only apply when
+`AGENTS.md` is missing.
+
+For OpenClaw workspace parity, the Codex harness resolves the other bootstrap
+files (`SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`,
+`BOOTSTRAP.md`, and `MEMORY.md` when present) and forwards them through Codex
+config instructions on `thread/start` and `thread/resume`. This keeps
+`SOUL.md` and related workspace persona/profile context visible without
+duplicating `AGENTS.md`.
+
 ## Add Codex alongside other models
 
 Do not set `agentRuntime.id: "codex"` globally if the same agent should freely switch
