@@ -97,6 +97,7 @@ Docs: https://docs.openclaw.ai
 - Process/diagnostics: stop counting the active processing turn as queued backlog in liveness warnings so transient max-only event-loop spikes do not surface as gateway warnings.
 - Agents/replies: classify provider conversation-state rejections and return a clear message-channel error instead of auto-resetting or falling back to a generic runner failure. (#82616) Thanks @dutifulbob.
 - Browser plugin: trust managed Chrome CDP diagnostics when launch HTTP probes race cold-start readiness, avoiding false startup failures. Fixes #82904. (#82986) Thanks @kmanan and @hclsys.
+- Sessions/transcripts: when the active transcript file is missing on async read paths (`chat.history` and session title fields), fall back to the latest `.reset.<timestamp>` archive sibling so reset-archived sessions stay readable through the production async API; active transcripts still win when present, and only the single newest archive is returned without merging or chaining. Refs #56131 #43929 #45003 #60409 #73883.
 
 ## 2026.5.17
 
