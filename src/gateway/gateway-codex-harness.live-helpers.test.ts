@@ -189,6 +189,23 @@ describe("gateway codex harness live helpers", () => {
     expect(isExpectedCodexModelsCommandText(text)).toBe(true);
   });
 
+  it("accepts the GPT-5.5 Docker harness shell fallback", () => {
+    const text = [
+      "I couldn’t get `/codex models` from the shell here.",
+      "",
+      "What happened:",
+      "- In the sandbox, `codex models` failed because the kernel disallows unprivileged user namespaces.",
+      "- Outside the sandbox, `codex` is not on `PATH`.",
+      "",
+      "Current session model from OpenClaw status is `openai/gpt-5.5`.",
+    ].join("\n");
+
+    expect(
+      EXPECTED_CODEX_MODELS_COMMAND_TEXT.some((expectedText) => text.includes(expectedText)),
+    ).toBe(true);
+    expect(isExpectedCodexModelsCommandText(text)).toBe(true);
+  });
+
   it("accepts missing codex CLI fallback output", () => {
     const texts = [
       [
