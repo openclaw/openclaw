@@ -149,9 +149,107 @@ export function evaluateGroundedness(
   return { score, decision, partition };
 }
 
+// ─── Tag parser ──────────────────────────────────────────────────────────────
+
+/**
+ * Parse inline [G]/[U]/[X]/[K] claim tags from a self-annotated reply.
+ *
+ * Fast path: works when the primary model follows the annotation protocol.
+ * Returns an empty partition (all zeros) when no tags are found — use this
+ * as a signal to fall back to buildLlmJudgeScorer.
+ */
+export function parseTaggedPartition(text: string): ClaimPartition {
+  function countTag(t: string, tag: string): number {
+    const re = new RegExp(`\\[${tag}\\]`, "gi");
+    return (t.match(re) ?? []).length;
+  }
+  return {
+    grounded: countTag(text, "G") + countTag(text, "grounded"),
+    ungrounded: countTag(text, "U") + countTag(text, "ungrounded"),
+    contradicted: countTag(text, "X") + countTag(text, "contradicted"),
+    complementary: countTag(text, "K") + countTag(text, "complementary"),
+  };
+}
+
 // ─── TerminationCondition integration ────────────────────────────────────────
 
 export type GSARScorerFn = (replyText: string) => Awaitable<ClaimPartition>;
+
+/**
+ * Provider-agnostic LLM completion function.
+ * Takes a plain-text prompt, returns a plain-text response.
+ * Wire in completeSimple, OpenAI client, or any other backend.
+ */
+export type LlmCompleteFn = (prompt: string) => Awaitable<string>;
+
+/**
+ * Build a scorer that asks an LLM judge to classify claims.
+ *
+ * Robust path: works regardless of whether the primary model self-annotates.
+ * The judge receives only the reply text and returns a JSON partition.
+ * Combine with buildHybridScorer to prefer cheap tag parsing when available.
+ */
+export function buildLlmJudgeScorer(complete: LlmCompleteFn): GSARScorerFn {
+  return async (replyText: string): Promise<ClaimPartition> => {
+    const prompt = [
+      "Classify every factual claim in the text below into four buckets.",
+      "Return ONLY a JSON object with integer counts — no explanation, no markdown:",
+      '{"grounded":N,"ungrounded":N,"contradicted":N,"complementary":N}',
+      "",
+      "grounded      — verifiable fact supported by evidence or a cited source",
+      "ungrounded    — uncertain, speculative, or unverified claim",
+      "contradicted  — claim actively contradicted by known facts",
+      "complementary — logical inference or reasoning step, not direct evidence",
+      "",
+      "Text:",
+      replyText,
+    ].join("\n");
+
+    const raw = await complete(prompt);
+    const match = raw.match(/\{[^}]+\}/);
+    if (!match) {
+      return { grounded: 0, ungrounded: 1, contradicted: 0, complementary: 0 };
+    }
+    try {
+      const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+      return {
+        grounded: toNonNegativeInt(parsed["grounded"]),
+        ungrounded: toNonNegativeInt(parsed["ungrounded"]),
+        contradicted: toNonNegativeInt(parsed["contradicted"]),
+        complementary: toNonNegativeInt(parsed["complementary"]),
+      };
+    } catch {
+      return { grounded: 0, ungrounded: 1, contradicted: 0, complementary: 0 };
+    }
+  };
+}
+
+function toNonNegativeInt(v: unknown): number {
+  const n = typeof v === "number" ? Math.floor(v) : Number.parseInt(String(v ?? ""), 10);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+
+/**
+ * Build a hybrid scorer: tag parsing first, LLM judge fallback.
+ *
+ * When the primary model self-annotates (produces [G]/[U]/[X]/[K] tags),
+ * claim extraction is free and instant. When it doesn't, the fallback
+ * scorer (typically an LLM judge) takes over.
+ *
+ * Usage:
+ *   const scorer = buildHybridScorer(buildLlmJudgeScorer(myCompleteFn));
+ *   new GroundednessCondition(scorer).or(MaxIterations(K_max))
+ */
+export function buildHybridScorer(fallback: GSARScorerFn): GSARScorerFn {
+  return async (replyText: string): Promise<ClaimPartition> => {
+    const tagged = parseTaggedPartition(replyText);
+    const total = tagged.grounded + tagged.ungrounded + tagged.contradicted + tagged.complementary;
+    if (total > 0) {
+      return tagged;
+    }
+    return fallback(replyText);
+  };
+}
 
 /**
  * TerminationCondition that fires when GSAR says "proceed".
