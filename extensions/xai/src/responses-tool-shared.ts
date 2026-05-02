@@ -1,5 +1,23 @@
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object";
+}
+
+function extractUrlCitations(annotations: unknown): string[] {
+  if (!Array.isArray(annotations)) {
+    return [];
+  }
+  return annotations
+    .filter(
+      (annotation) =>
+        isRecord(annotation) &&
+        annotation.type === "url_citation" &&
+        typeof annotation.url === "string",
+    )
+    .map((annotation) => annotation.url as string);
+}
+
 export const XAI_RESPONSES_ENDPOINT = "https://api.x.ai/v1/responses";
 
 export function buildXaiResponsesToolBody(params: {
@@ -21,26 +39,24 @@ export function extractXaiWebSearchContent(data: XaiWebSearchResponse): {
   annotationCitations: string[];
 } {
   for (const output of data.output ?? []) {
+    if (!isRecord(output)) {
+      continue;
+    }
     if (output.type === "message") {
-      for (const block of output.content ?? []) {
+      const content = Array.isArray(output.content) ? output.content : [];
+      for (const block of content) {
+        if (!isRecord(block)) {
+          continue;
+        }
         if (block.type === "output_text" && typeof block.text === "string" && block.text) {
-          const urls = (block.annotations ?? [])
-            .filter(
-              (annotation) =>
-                annotation.type === "url_citation" && typeof annotation.url === "string",
-            )
-            .map((annotation) => annotation.url as string);
+          const urls = extractUrlCitations(block.annotations);
           return { text: block.text, annotationCitations: [...new Set(urls)] };
         }
       }
     }
 
     if (output.type === "output_text" && typeof output.text === "string" && output.text) {
-      const urls = (output.annotations ?? [])
-        .filter(
-          (annotation) => annotation.type === "url_citation" && typeof annotation.url === "string",
-        )
-        .map((annotation) => annotation.url as string);
+      const urls = extractUrlCitations(output.annotations);
       return { text: output.text, annotationCitations: [...new Set(urls)] };
     }
   }

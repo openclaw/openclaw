@@ -68,6 +68,23 @@ export function resolveXaiInlineCitations(searchConfig?: Record<string, unknown>
   return resolveXaiSearchConfig(searchConfig).inlineCitations === true;
 }
 
+function isAbortError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.name === "AbortError" || error.message === "This operation was aborted")
+  );
+}
+
+export function wrapXaiWebSearchError(error: unknown, timeoutSeconds: number): never {
+  if (isAbortError(error)) {
+    throw new Error(
+      `xAI web search timed out after ${timeoutSeconds}s. Increase tools.web.search.timeoutSeconds if queries are complex.`,
+      { cause: error },
+    );
+  }
+  throw error;
+}
+
 export async function requestXaiWebSearch(params: {
   query: string;
   model: string;
@@ -91,5 +108,5 @@ export async function requestXaiWebSearch(params: {
       const data = (await response.json()) as XaiWebSearchResponse;
       return resolveXaiResponseTextCitationsAndInline(data, params.inlineCitations);
     },
-  );
+  ).catch((error: unknown) => wrapXaiWebSearchError(error, params.timeoutSeconds));
 }

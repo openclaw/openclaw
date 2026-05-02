@@ -93,6 +93,10 @@ returns one synthesized answer with citations rather than an N-result list.
 
 Provider-specific filters are not currently supported.
 
+Grok uses a provider-specific 60 second default timeout because xAI Responses
+web-grounded searches can run longer than the shared `web_search` default. Set
+`tools.web.search.timeoutSeconds` to override it.
+
 ## Related
 
 - [Web Search overview](/tools/web) -- all providers and auto-detection

@@ -1,6 +1,5 @@
 import {
   DEFAULT_CACHE_TTL_MINUTES,
-  DEFAULT_TIMEOUT_SECONDS,
   formatCliCommand,
   getScopedCredentialValue,
   mergeScopedSearchConfig,
@@ -29,6 +28,7 @@ const XAI_WEB_SEARCH_CACHE = new Map<
   string,
   { value: Record<string, unknown>; insertedAt: number; expiresAt: number }
 >();
+const XAI_WEB_SEARCH_DEFAULT_TIMEOUT_SECONDS = 60;
 
 const X_SEARCH_MODEL_OPTIONS = [
   {
@@ -176,6 +176,13 @@ function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): 
   });
 }
 
+function resolveXaiWebSearchTimeoutSeconds(searchConfig?: Record<string, unknown>): number {
+  return resolveTimeoutSeconds(
+    searchConfig?.timeoutSeconds,
+    XAI_WEB_SEARCH_DEFAULT_TIMEOUT_SECONDS,
+  );
+}
+
 export async function executeXaiWebSearchProviderTool(
   ctx: { config?: Record<string, unknown>; searchConfig?: Record<string, unknown> },
   args: Record<string, unknown>,
@@ -199,7 +206,7 @@ export async function executeXaiWebSearchProviderTool(
     query,
     model: resolveXaiWebSearchModel(searchConfig),
     apiKey,
-    timeoutSeconds: resolveTimeoutSeconds(searchConfig?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS),
+    timeoutSeconds: resolveXaiWebSearchTimeoutSeconds(searchConfig),
     inlineCitations: resolveXaiInlineCitations(searchConfig),
     cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
   });
@@ -212,5 +219,6 @@ export const __testing = {
   resolveXaiInlineCitations,
   resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
+  resolveXaiWebSearchTimeoutSeconds,
   requestXaiWebSearch,
 };

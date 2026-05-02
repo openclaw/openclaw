@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
+import { wrapXaiWebSearchError } from "./src/web-search-shared.js";
 import { __testing } from "./test-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
@@ -15,6 +16,7 @@ const {
   resolveXaiToolSearchConfig,
   resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
+  resolveXaiWebSearchTimeoutSeconds,
 } = __testing;
 
 describe("xai web search config resolution", () => {
@@ -253,6 +255,12 @@ describe("xai web search config resolution", () => {
     expect(resolveXaiWebSearchModel(undefined)).toBe("grok-4-1-fast");
   });
 
+  it("uses a Grok-specific 60s default timeout while preserving overrides", () => {
+    expect(resolveXaiWebSearchTimeoutSeconds({})).toBe(60);
+    expect(resolveXaiWebSearchTimeoutSeconds(undefined)).toBe(60);
+    expect(resolveXaiWebSearchTimeoutSeconds({ timeoutSeconds: 15 })).toBe(15);
+  });
+
   it("uses config model when provided", () => {
     expect(resolveXaiWebSearchModel({ grok: { model: "grok-4-fast-reasoning" } })).toBe(
       "grok-4-fast",
@@ -300,6 +308,20 @@ describe("xai web search config resolution", () => {
       citations: ["https://a.test"],
       externalContent: expect.objectContaining({ wrapped: true }),
     });
+  });
+
+  it("converts internal xAI timeout aborts into structured tool errors", () => {
+    const abort = new DOMException("This operation was aborted", "AbortError");
+
+    expect(() => wrapXaiWebSearchError(abort, 60)).toThrow("xAI web search timed out after 60s");
+
+    try {
+      wrapXaiWebSearchError(abort, 60);
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).name).toBe("Error");
+      expect((error as Error).cause).toBe(abort);
+    }
   });
 });
 
