@@ -225,7 +225,11 @@ export function buildLlmJudgeScorer(complete: LlmCompleteFn): GSARScorerFn {
 }
 
 function toNonNegativeInt(v: unknown): number {
-  const n = typeof v === "number" ? Math.floor(v) : Number.parseInt(String(v ?? ""), 10);
+  if (typeof v === "number") {
+    const n = Math.floor(v);
+    return Number.isFinite(n) && n >= 0 ? n : 0;
+  }
+  const n = Number.parseInt(typeof v === "string" ? v : "", 10);
   return Number.isFinite(n) && n >= 0 ? n : 0;
 }
 
