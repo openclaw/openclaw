@@ -174,7 +174,6 @@ const TalkProviderEntrySchema = z
     outputFormat: z.string().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
   })
-  .catchall(z.never())
   .transform((data, _ctx) => {
     // Log unknown fields for debugging but don't fail validation
     const knownFields = new Set(["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"]);
@@ -229,7 +228,6 @@ const McpServerSchema = z
     workingDirectory: z.string().optional(),
     url: HttpUrlSchema.optional(),
   })
-  .catchall(z.never())
   .transform((data, _ctx) => {
     // Log unknown fields for debugging but don't fail validation
     const knownFields = new Set(["command", "args", "env", "cwd", "workingDirectory", "url"]);

@@ -386,6 +386,7 @@ import sys
 import json
 import urllib.request
 import urllib.error
+import shlex
 
 # Bridge configuration
 BRIDGE_PORT = ${bridgePort}
@@ -467,7 +468,9 @@ async def exec_process(command: str, args: list = None, cwd: str = None, timeout
 # Glob helper
 async def glob_files(pattern: str, path: str = ".") -> list:
     """Find files matching a glob pattern"""
-    cmd = f"find {path} -name '{pattern}' -type f 2>/dev/null"
+    safe_path = shlex.quote(path)
+    safe_pattern = shlex.quote(pattern)
+    cmd = f"find {safe_path} -name {safe_pattern} -type f 2>/dev/null"
     result = await exec_bash(cmd)
     if result.get("success"):
         stdout = result.get("stdout", "")
@@ -589,9 +592,22 @@ All tool calls are tracked and limited to ${opts?.maxToolCalls ?? 100} per execu
               "PYENV_VERSION",
               "VIRTUAL_ENV",
             ]);
+            const SAFE_PY_VARS = new Set([
+              "PYTHONPATH",
+              "PYENV_VERSION",
+              "PYENV_ROOT",
+              "PYENV_DIR",
+              "PYTHONHOME",
+              "PYTHONIOENCODING",
+              "PYTHONUNBUFFERED",
+              "PYTHONDONTWRITEBYTECODE",
+              "PYTHONSTARTUP",
+              "PYTHONNOUSERSITE",
+              "VIRTUAL_ENV",
+            ]);
             const filteredEnv: Record<string, string> = {};
             for (const [key, value] of Object.entries(process.env)) {
-              if (SAFE_ENV_VARS.has(key) || key.startsWith("PY")) {
+              if (SAFE_ENV_VARS.has(key) || SAFE_PY_VARS.has(key)) {
                 filteredEnv[key] = value ?? "";
               }
             }

@@ -9893,96 +9893,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             propertyNames: {
               type: "string",
             },
-            additionalProperties: {
-              type: "object",
-              properties: {
-                voiceId: {
-                  type: "string",
-                },
-                voiceAliases: {
-                  type: "object",
-                  propertyNames: {
-                    type: "string",
-                  },
-                  additionalProperties: {
-                    type: "string",
-                  },
-                },
-                modelId: {
-                  type: "string",
-                },
-                outputFormat: {
-                  type: "string",
-                },
-                apiKey: {
-                  anyOf: [
-                    {
-                      type: "string",
-                    },
-                    {
-                      oneOf: [
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "env",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                              pattern: "^[A-Z][A-Z0-9_]{0,127}$",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "file",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                        {
-                          type: "object",
-                          properties: {
-                            source: {
-                              type: "string",
-                              const: "exec",
-                            },
-                            provider: {
-                              type: "string",
-                              pattern: "^[a-z][a-z0-9_-]{0,63}$",
-                            },
-                            id: {
-                              type: "string",
-                            },
-                          },
-                          required: ["source", "provider", "id"],
-                          additionalProperties: false,
-                        },
-                      ],
-                    },
-                  ],
-                },
-              },
-              additionalProperties: {},
-            },
+            additionalProperties: {},
           },
           voiceId: {
             type: "string",
@@ -11182,50 +11093,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
             propertyNames: {
               type: "string",
             },
-            additionalProperties: {
-              type: "object",
-              properties: {
-                command: {
-                  type: "string",
-                },
-                args: {
-                  type: "array",
-                  items: {
-                    type: "string",
-                  },
-                },
-                env: {
-                  type: "object",
-                  propertyNames: {
-                    type: "string",
-                  },
-                  additionalProperties: {
-                    anyOf: [
-                      {
-                        type: "string",
-                      },
-                      {
-                        type: "number",
-                      },
-                      {
-                        type: "boolean",
-                      },
-                    ],
-                  },
-                },
-                cwd: {
-                  type: "string",
-                },
-                workingDirectory: {
-                  type: "string",
-                },
-                url: {
-                  type: "string",
-                  format: "uri",
-                },
-              },
-              additionalProperties: {},
-            },
+            additionalProperties: {},
           },
         },
         additionalProperties: false,
@@ -15205,7 +15073,6 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
       label: "Talk Provider API Key",
       help: "Provider API key for Talk mode.",
       tags: ["security", "auth", "media"],
-      sensitive: true,
     },
     "talk.apiKey": {
       label: "Talk API Key",
