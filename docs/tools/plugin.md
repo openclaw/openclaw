@@ -90,7 +90,7 @@ If you prefer chat-native control, enable `commands.plugins: true` and use:
 
 The install path uses the same resolver as the CLI: local path/archive, explicit
 `clawhub:<pkg>`, explicit `npm:<pkg>`, explicit `git:<repo>`, or bare package
-spec (ClawHub first, then npm fallback).
+spec through npm.
 
 If config is invalid, install normally fails closed and points you at
 `openclaw doctor --fix`. The only recovery exception is a narrow bundled-plugin
@@ -467,7 +467,7 @@ openclaw plugins registry                  # inspect persisted registry state
 openclaw plugins registry --refresh        # rebuild persisted registry
 openclaw doctor --fix                      # repair plugin registry state
 
-openclaw plugins install <package>         # install (readiness-gated ClawHub, then npm)
+openclaw plugins install <package>         # install from npm by default
 openclaw plugins install clawhub:<pkg>     # install from ClawHub only
 openclaw plugins install npm:<pkg>         # install from npm only
 openclaw plugins install git:<repo>        # install from git

@@ -66,16 +66,15 @@ Site: [clawhub.ai](https://clawhub.ai)
     ```
 
     `plugins search` queries the ClawHub plugin catalog and prints install-ready
-    package names. Bare npm-safe plugin specs use ClawHub only after package
-    readiness says the package is install-ready for OpenClaw; otherwise OpenClaw
-    preserves npm fallback:
+    package names. Use `clawhub:<package>` when you want ClawHub resolution.
+    Bare npm-safe plugin specs install from npm during the launch cutover:
 
     ```bash
     openclaw plugins install openclaw-codex-app-server
     ```
 
-    Use `npm:<package>` when you want npm-only resolution without a
-    ClawHub lookup:
+    `npm:<package>` is also npm-only and is useful when a spec could otherwise
+    be ambiguous:
 
     ```bash
     openclaw plugins install npm:openclaw-codex-app-server

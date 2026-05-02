@@ -19,9 +19,7 @@ vi.mock("../../cli/npm-resolution.js", () => ({
 
 vi.mock("../../cli/plugins-command-helpers.js", () => ({
   createPluginInstallLogger: vi.fn(() => ({})),
-  decidePreferredClawHubFallback: vi.fn(() => "fallback_to_npm"),
   resolveFileNpmSpecToLocalPath: vi.fn(() => null),
-  resolvePreferredClawHubSpec: vi.fn(() => null),
 }));
 
 vi.mock("../../cli/plugins-install-persist.js", () => ({

@@ -11,8 +11,6 @@ type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 type LoadConfigFn = (typeof import("../config/config.js"))["loadConfig"];
 type ParseClawHubPluginSpecFn = (typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"];
-type FetchClawHubPackageReadinessFn =
-  (typeof import("../infra/clawhub.js"))["fetchClawHubPackageReadiness"];
 type InstallPluginFromMarketplaceFn =
   (typeof import("../plugins/marketplace.js"))["installPluginFromMarketplace"];
 type InstallPluginFromGitSpecFn =
@@ -80,7 +78,6 @@ export const installPluginFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installPluginFromPath: AsyncUnknownMock = vi.fn();
 export const installPluginFromClawHub: AsyncUnknownMock = vi.fn();
 export const parseClawHubPluginSpec: Mock<ParseClawHubPluginSpecFn> = vi.fn();
-export const fetchClawHubPackageReadiness: Mock<FetchClawHubPackageReadinessFn> = vi.fn();
 export const installHooksFromNpmSpec: AsyncUnknownMock = vi.fn();
 export const installHooksFromPath: AsyncUnknownMock = vi.fn();
 export const recordHookInstall: UnknownMock = vi.fn();
@@ -563,16 +560,6 @@ vi.mock("../plugins/clawhub.js", () => ({
 }));
 
 vi.mock("../infra/clawhub.js", () => ({
-  fetchClawHubPackageReadiness: ((
-    ...args: Parameters<(typeof import("../infra/clawhub.js"))["fetchClawHubPackageReadiness"]>
-  ) =>
-    invokeMock<
-      Parameters<(typeof import("../infra/clawhub.js"))["fetchClawHubPackageReadiness"]>,
-      ReturnType<(typeof import("../infra/clawhub.js"))["fetchClawHubPackageReadiness"]>
-    >(
-      fetchClawHubPackageReadiness,
-      ...args,
-    )) as (typeof import("../infra/clawhub.js"))["fetchClawHubPackageReadiness"],
   parseClawHubPluginSpec: ((
     ...args: Parameters<(typeof import("../infra/clawhub.js"))["parseClawHubPluginSpec"]>
   ) =>
@@ -634,7 +621,6 @@ export function resetPluginsCliTestState() {
   installPluginFromPath.mockReset();
   installPluginFromClawHub.mockReset();
   parseClawHubPluginSpec.mockReset();
-  fetchClawHubPackageReadiness.mockReset();
   installHooksFromNpmSpec.mockReset();
   installHooksFromPath.mockReset();
   recordHookInstall.mockReset();

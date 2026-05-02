@@ -17,7 +17,7 @@ Docs: https://docs.openclaw.ai
 ### Highlights
 
 - Alpha prerelease support adds the `vYYYY.M.D-alpha.N` tag shape, npm `alpha` dist-tag, release workflow inputs, package acceptance, Telegram package checks, and upgrade-survivor validation paths.
-- ClawHub-first plugin installation now covers diagnostics, onboarding, doctor repair, channel setup, install/update records, and artifact metadata while keeping npm fallback for cutovers. Thanks @vincentkoc.
+- External plugin installation now covers diagnostics, onboarding, doctor repair, channel setup, install/update records, and artifact metadata while keeping bare package installs on npm for the first cutover. Thanks @vincentkoc.
 - Gateway startup, session listing, task maintenance, prompt prep, plugin loading, and filesystem hot paths get targeted cache and fanout reductions for large or plugin-heavy installs.
 - Control UI and WebChat reliability improves across Sessions, Cron, long-running Gateway WebSockets, grouped-message width, slash-command feedback, iOS PWA bounds, selection contrast, and Talk diagnostics.
 - Channel and provider fixes cover Telegram topic commands and networking, Discord delivery and startup edge cases, OpenAI-compatible TTS/Realtime, OpenRouter/DeepSeek replay, Anthropic-compatible streaming, Brave/SearXNG/Firecrawl web search, and voice-call routing.
@@ -26,7 +26,7 @@ Docs: https://docs.openclaw.ai
 
 - Release: add first-class alpha prerelease support across version parsing, release workflows, package specs, published-package validation, plugin publish planning, and release docs.
 - Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
-- Plugins/ClawHub: make diagnostics, onboarding, doctor repair, and channel setup prefer ClawHub installs while carrying ClawPack metadata through install records and npm fallback paths. Thanks @vincentkoc.
+- Plugins/ClawHub: make diagnostics, onboarding, doctor repair, and channel setup carry ClawPack metadata through install records while keeping explicit `clawhub:` installs on ClawHub and bare package installs on npm for the launch cutover. Thanks @vincentkoc.
 - Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
 - Agents/runtime: reuse the startup-loaded plugin registry for request-time providers, tools, channel actions, web/capability/memory/migration helpers, and memoized provider extra-params so stable embedded-run inputs no longer repeat plugin registry resolution while model-specific transport hook patches stay isolated. Thanks @DmitryPogodaev.
 - Agents/runtime: memoize transcript replay-policy resolution for stable config and process-env runs while preserving custom-env provider hook behavior. Thanks @DmitryPogodaev.
@@ -46,8 +46,8 @@ Docs: https://docs.openclaw.ai
 - Google Meet: add `googlemeet test-listen` and the matching `google_meet` `test_listen` action so transcribe-mode joins wait for real caption or transcript movement before reporting listen-first health. Refs #72478. Thanks @DougButdorf.
 - Plugins/ClawHub: prefer versioned ClawPack artifacts when ClawHub publishes digest metadata, verifying the ClawPack response header and downloaded bytes before installing. Thanks @vincentkoc.
 - Plugins/ClawHub: persist ClawPack digest metadata on ClawHub plugin install and update records so registry refreshes and download verification can reuse stored artifact facts. Thanks @vincentkoc.
-- Plugins/ClawHub: allow official bundled-plugin cutovers to prefer ClawHub installs with npm fallback only when the ClawHub package or version is absent. Thanks @vincentkoc.
-- Plugins/onboarding: allow install-on-demand provider setup entries to prefer ClawHub packages before npm/local fallback and persist ClawHub artifact metadata after install. Thanks @vincentkoc.
+- Plugins/ClawHub: allow official bundled-plugin cutovers to record ClawHub artifact metadata while preserving npm as the launch default for bare package specs. Thanks @vincentkoc.
+- Plugins/onboarding: allow install-on-demand provider setup entries to persist ClawHub artifact metadata after explicit ClawHub installs while retaining npm/local fallback paths. Thanks @vincentkoc.
 - Plugins/Crestodian: add ClawHub plugin search plus Crestodian plugin list/search/install/uninstall operations, with approval and audit coverage for install and uninstall.
 - Channels/thread bindings: replace split subagent/ACP thread-spawn toggles with `threadBindings.spawnSessions`, default thread-bound spawns on, and let `openclaw doctor --fix` migrate the legacy keys. (#75943)
 - Providers/OpenAI: add `extraBody`/`extra_body` passthrough for OpenAI-compatible TTS endpoints, so custom speech servers can receive fields such as `lang` in `/audio/speech` requests. Fixes #39900. Thanks @R3NK0R.
@@ -60,7 +60,7 @@ Docs: https://docs.openclaw.ai
 
 - Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
 - Plugins/ClawHub: use the ClawHub artifact resolver response as the install decision before downloading, keeping legacy ZIP fallback and future ClawPack npm-pack installs on the same explicit resolver path. Thanks @vincentkoc.
-- Plugins/ClawHub: gate bare plugin specs on ClawHub readiness before preferring ClawHub, so packages without deployed ClawPack readiness keep the npm fallback path instead of failing through a half-ready registry route. Thanks @vincentkoc.
+- Plugins/ClawHub: keep bare plugin package specs on npm for the launch cutover and reserve ClawHub resolution for explicit `clawhub:` specs until ClawHub pack readiness is deployed. Thanks @vincentkoc.
 - Plugins/source checkout: discover source-only plugins such as Codex from the `extensions/*` workspace while using npm package excludes as the packaged-core boundary, removing the stale core-bundle metadata path.
 - Plugins/ClawHub: install ClawPack artifacts from the explicit npm-pack `.tgz` resolver path and persist artifact kind, npm integrity, shasum, and tarball metadata for update and diagnostics flows. Thanks @vincentkoc.
 - Control UI: allow deployments to configure grouped chat message max-width with a validated `gateway.controlUi.chatMessageMaxWidth` setting instead of patching bundled CSS after upgrades. Fixes #67935. Thanks @xiew4589-lang.
@@ -73,7 +73,7 @@ Docs: https://docs.openclaw.ai
 - Agents/failover: exempt run-level timeouts that fire during tool execution from model fallback, timeout-triggered compaction, and generic timeout payload synthesis, avoiding misleading "LLM request timed out" errors after the primary model has already responded. Fixes #52147. (#75873) Thanks @simonusa.
 - Docker: copy Bun 1.3.13 from a digest-pinned image and keep CI on the same version. Fixes #74356. Thanks @fede-kamel and @sallyom.
 - Agents/compaction: keep prior context on consecutive turns against z.ai-style providers (z.ai direct, openrouter z-ai/\*, in-house GLM gateways), avoiding accidental Pi state reset after successful turns. (#76056) Thanks @openperf.
-- Doctor/plugins: run a one-time 2026.5.2 configured-plugin install repair based on `meta.lastTouchedVersion`, installing actively used downloadable OpenClaw plugins from ClawHub with npm fallback before marking the config touched for the release.
+- Doctor/plugins: run a one-time 2026.5.2 configured-plugin install repair based on `meta.lastTouchedVersion`, installing actively used downloadable OpenClaw plugins through the configured external source before marking the config touched for the release.
 - Sessions/transcripts: use one `session.writeLock.acquireTimeoutMs` policy for session transcript lock acquisitions and raise the default wait to 60 seconds, avoiding user-visible lock timeouts during legitimate slow prep, cleanup, compaction, and mirror work. Fixes #75894. Thanks @shandutta.
 - Control UI: contain the standalone iOS PWA viewport with safe-area-aware document locking, so Add-to-Home-Screen launches cannot scroll past the device bounds. Refs #76072. Thanks @kvncrw.
 - Agents/restart recovery: match cleaned transcript locks by exact transcript lock paths plus the canonical session fallback, so interrupted main sessions using topic-suffixed transcripts resume after gateway restart. Refs #76052. Thanks @anyech.

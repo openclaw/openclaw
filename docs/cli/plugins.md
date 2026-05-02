@@ -68,7 +68,7 @@ Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON Sch
 
 ```bash
 openclaw plugins search "calendar"                   # search ClawHub plugins
-openclaw plugins install <package>                      # ClawHub first, then npm
+openclaw plugins install <package>                      # npm by default
 openclaw plugins install clawhub:<package>              # ClawHub only
 openclaw plugins install npm:<package>                  # npm only
 openclaw plugins install git:github.com/<owner>/<repo>  # git repo
@@ -83,7 +83,7 @@ openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo
 ```
 
 <Warning>
-Bare package names are checked against ClawHub first, then npm. Treat plugin installs like running code. Prefer pinned versions.
+Bare package names install from npm by default during the launch cutover. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
 
 `plugins search` queries ClawHub for installable plugin packages and prints
@@ -129,7 +129,7 @@ current OpenClaw or a local checkout until a newer npm package is published.
 
     Npm specs are **registry-only** (package name + optional **exact version** or **dist-tag**). Git/URL/file specs and semver ranges are rejected. Dependency installs run project-local with `--ignore-scripts` for safety, even when your shell has global npm install settings.
 
-    Use `npm:<package>` when you want to skip ClawHub lookup and install directly from npm. Bare package specs still prefer ClawHub and only fall back to npm when ClawHub does not have that package or version.
+    Use `npm:<package>` when you want to make npm resolution explicit. Bare package specs also install directly from npm during the launch cutover.
 
     Bare specs and `@latest` stay on the stable track. If npm resolves either of those to a prerelease, OpenClaw stops and asks you to opt in explicitly with a prerelease tag such as `@beta`/`@rc` or an exact prerelease version such as `@1.2.3-beta.4`.
 
@@ -159,13 +159,13 @@ openclaw plugins install clawhub:openclaw-codex-app-server
 openclaw plugins install clawhub:openclaw-codex-app-server@1.2.3
 ```
 
-OpenClaw now also prefers ClawHub for bare npm-safe plugin specs. It only falls back to npm if ClawHub does not have that package or version:
+Bare npm-safe plugin specs install from npm by default during the launch cutover:
 
 ```bash
 openclaw plugins install openclaw-codex-app-server
 ```
 
-Use `npm:` to force npm-only resolution, for example when ClawHub is unreachable or you know the package exists only on npm:
+Use `npm:` to make npm-only resolution explicit:
 
 ```bash
 openclaw plugins install npm:openclaw-codex-app-server

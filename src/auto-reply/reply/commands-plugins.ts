@@ -2,9 +2,7 @@ import fs from "node:fs";
 import { buildNpmInstallRecordFields } from "../../cli/npm-resolution.js";
 import {
   createPluginInstallLogger,
-  decidePreferredClawHubFallback,
   resolveFileNpmSpecToLocalPath,
-  resolvePreferredClawHubSpec,
 } from "../../cli/plugins-command-helpers.js";
 import { persistPluginInstall } from "../../cli/plugins-install-persist.js";
 import type { ConfigSnapshotForInstallPersist } from "../../cli/plugins-install-persist.js";
@@ -254,36 +252,6 @@ async function installPluginFromPluginsCommand(params: {
       },
     });
     return { ok: true, pluginId: result.pluginId };
-  }
-
-  const preferredClawHubSpec = await resolvePreferredClawHubSpec(params.raw);
-  if (preferredClawHubSpec) {
-    const clawhubResult = await installPluginFromClawHub({
-      spec: preferredClawHubSpec,
-      logger: createPluginInstallLogger(),
-    });
-    if (clawhubResult.ok) {
-      await persistPluginInstall({
-        snapshot: params.snapshot,
-        pluginId: clawhubResult.pluginId,
-        install: {
-          source: "clawhub",
-          spec: preferredClawHubSpec,
-          installPath: clawhubResult.targetDir,
-          version: clawhubResult.version,
-          integrity: clawhubResult.clawhub.integrity,
-          resolvedAt: clawhubResult.clawhub.resolvedAt,
-          clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-          clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-          clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-          clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-        },
-      });
-      return { ok: true, pluginId: clawhubResult.pluginId };
-    }
-    if (decidePreferredClawHubFallback(clawhubResult) !== "fallback_to_npm") {
-      return { ok: false, error: clawhubResult.error };
-    }
   }
 
   const result = await installPluginFromNpmSpec({
