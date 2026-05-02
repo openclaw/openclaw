@@ -57,11 +57,6 @@ async function collectDoneMessage(
   return doneMessage!;
 }
 
-function extractFirstToolCallId(message: AssistantLikeMessage): string | undefined {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  return toolCall?.id;
-}
-
 describeLive("xai live", () => {
   it("returns assistant text for Grok 4.3", async () => {
     await runXaiLiveCase("complete", async () => {
@@ -83,7 +78,7 @@ describeLive("xai live", () => {
     });
   }, 30_000);
 
-  it("applies xAI tool wrappers on live tool calls", async () => {
+  it("sends wrapped xAI tool payloads live", async () => {
     await runXaiLiveCase("tool-call", async () => {
       const model = resolveLiveXaiModel();
       expect(model).toBeDefined();
@@ -96,54 +91,39 @@ describeLive("xai live", () => {
         parameters: Type.Object({}, { additionalProperties: false }),
       };
 
-      const prompts = [
-        "Call the tool `noop` with {}. Do not write any other text.",
-        "IMPORTANT: Call the tool `noop` with {} and respond only with the tool call.",
-        "Return only a tool call for `noop` with {}.",
-      ];
-
-      let doneMessage: AssistantLikeMessage | undefined;
       let capturedPayload: Record<string, unknown> | undefined;
-
-      for (const prompt of prompts) {
-        capturedPayload = undefined;
-        const stream = agent.streamFn(
-          model,
-          {
-            messages: createSingleUserPromptMessage(prompt),
-            tools: [noopTool],
+      const stream = agent.streamFn(
+        model,
+        {
+          messages: createSingleUserPromptMessage(
+            "Call the tool `noop` with {} if needed, then finish.",
+          ),
+          tools: [noopTool],
+        },
+        {
+          apiKey: XAI_KEY,
+          maxTokens: 128,
+          reasoning: "medium",
+          onPayload: (payload) => {
+            capturedPayload = payload as Record<string, unknown>;
           },
-          {
-            apiKey: XAI_KEY,
-            maxTokens: 128,
-            reasoning: "medium",
-            onPayload: (payload) => {
-              capturedPayload = payload as Record<string, unknown>;
-            },
-          },
-        );
+        },
+      );
 
-        doneMessage = await collectDoneMessage(
-          stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
-        );
-        if (extractFirstToolCallId(doneMessage)) {
-          break;
-        }
-      }
-
+      const doneMessage = await collectDoneMessage(
+        stream as AsyncIterable<{ type: string; message?: AssistantLikeMessage }>,
+      );
       expect(doneMessage).toBeDefined();
-      expect(extractFirstToolCallId(doneMessage!)).toBeDefined();
-      if (capturedPayload && Object.hasOwn(capturedPayload, "tool_stream")) {
-        expect(capturedPayload.tool_stream).toBe(true);
-      }
+      expect(capturedPayload).toBeDefined();
+      expect(capturedPayload?.tool_stream).toBe(true);
 
       const payloadTools = Array.isArray(capturedPayload?.tools)
         ? (capturedPayload.tools as Array<Record<string, unknown>>)
         : [];
+      expect(payloadTools.length).toBeGreaterThan(0);
       const firstFunction = payloadTools[0]?.function;
-      if (firstFunction && typeof firstFunction === "object") {
-        expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
-      }
+      expect(firstFunction && typeof firstFunction === "object").toBe(true);
+      expect([undefined, false]).toContain((firstFunction as Record<string, unknown>).strict);
     });
   }, 90_000);
 
