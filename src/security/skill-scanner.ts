@@ -219,6 +219,20 @@ function truncateEvidence(evidence: string, maxLen = 120): string {
   return `${evidence.slice(0, maxLen)}…`;
 }
 
+function isBenignMemberExecMatch(line: string, match: RegExpExecArray): boolean {
+  const command = match[1];
+  if (command !== "exec") {
+    return false;
+  }
+
+  const matchIndex = match.index;
+  if (matchIndex <= 0 || line[matchIndex - 1] !== ".") {
+    return false;
+  }
+
+  return !/\b(?:cp|childProcess|child_process)\s*\.\s*exec\s*\(/.test(line);
+}
+
 export function scanSource(source: string, filePath: string): SkillScanFinding[] {
   const findings: SkillScanFinding[] = [];
   const lines = source.split("\n");
@@ -239,6 +253,10 @@ export function scanSource(source: string, filePath: string): SkillScanFinding[]
       const line = lines[i];
       const match = rule.pattern.exec(line);
       if (!match) {
+        continue;
+      }
+
+      if (rule.ruleId === "dangerous-exec" && isBenignMemberExecMatch(line, match)) {
         continue;
       }
 
