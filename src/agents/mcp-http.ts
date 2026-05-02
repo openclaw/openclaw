@@ -12,7 +12,7 @@ type HttpMcpServerLaunchConfig = {
   headers?: Record<string, string>;
 };
 
-type HttpMcpServerLaunchResult =
+export type HttpMcpServerLaunchResult =
   | { ok: true; config: HttpMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
