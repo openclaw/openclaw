@@ -365,6 +365,13 @@ export function isTransientFileWatchError(err: unknown): boolean {
     return false;
   }
 
+  const hasFileWatchSignal = (message: string) =>
+    message.includes("inotify") ||
+    message.includes("watcher") ||
+    message.includes("file watcher") ||
+    message.includes("watch limit") ||
+    message.includes("max watches");
+
   for (const candidate of collectNestedUnhandledErrorCandidates(err)) {
     // Skip non-object candidates early
     if (!candidate || typeof candidate !== "object") {
@@ -379,13 +386,7 @@ export function isTransientFileWatchError(err: unknown): boolean {
     // ENOSPC requires both the code AND a watch/inotify message indicator
     // to avoid misclassifying general disk-full errors as transient watcher errors.
     if (code === "ENOSPC") {
-      if (
-        message.includes("inotify") ||
-        message.includes("watcher") ||
-        message.includes("file watcher") ||
-        message.includes("watch limit") ||
-        message.includes("max watches")
-      ) {
+      if (hasFileWatchSignal(message)) {
         return true;
       }
       // ENOSPC without watch indicator is not classified here
@@ -397,8 +398,8 @@ export function isTransientFileWatchError(err: unknown): boolean {
       continue;
     }
     if (
-      message.includes("no space left on device") ||
-      message.includes("enosp") ||
+      ((message.includes("no space left on device") || message.includes("enosp")) &&
+        hasFileWatchSignal(message)) ||
       message.includes("inotify watches") ||
       message.includes("file watcher") ||
       message.includes("watcher error")

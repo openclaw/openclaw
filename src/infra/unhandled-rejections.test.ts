@@ -289,6 +289,13 @@ describe("isTransientFileWatchError", () => {
     expect(isTransientFileWatchError(error)).toBe(false);
   });
 
+  it("returns false for message-only disk full without watch indicator", () => {
+    expect(isTransientFileWatchError(new Error("write failed: no space left on device"))).toBe(
+      false,
+    );
+    expect(isTransientFileWatchError(new Error("ENOSPC: no space left on device"))).toBe(false);
+  });
+
   it("returns true for 'no space left on device' message with watcher context", () => {
     const error = new Error("file watcher: no space left on device");
     expect(isTransientFileWatchError(error)).toBe(true);
@@ -385,5 +392,14 @@ describe("isTransientUnhandledRejectionError", () => {
       code: "ENOSPC",
     });
     expect(isTransientUnhandledRejectionError(error)).toBe(false);
+  });
+
+  it("returns false for code-less disk full messages without watch indicator", () => {
+    expect(
+      isTransientUnhandledRejectionError(new Error("write failed: no space left on device")),
+    ).toBe(false);
+    expect(isTransientUnhandledRejectionError(new Error("ENOSPC: no space left on device"))).toBe(
+      false,
+    );
   });
 });
