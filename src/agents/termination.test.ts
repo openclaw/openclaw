@@ -299,7 +299,9 @@ describe("illustrated proof — 'where is the nearest coffee shop?'", () => {
     for (let turn = 1; turn <= max; turn++) {
       const replyText = replies[turn - 1] ?? "";
       const [stop, reason] = await cond.check({ turn, replyText, startedAt });
-      if (stop) return { turns: turn, reason };
+      if (stop) {
+        return { turns: turn, reason };
+      }
     }
     return { turns: max, reason: null };
   }

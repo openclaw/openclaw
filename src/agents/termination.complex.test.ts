@@ -478,7 +478,7 @@ describe("multi-provider tournament — behavioral proof", () => {
       .reduce((s, r, i) => s + r.turns - algebra[i].turns, 0);
     const gptSavings = flat
       .filter((r) => r.provider.startsWith("gpt"))
-      .reduce((s, r, i) => {
+      .reduce((s, r, _i) => {
         const algTurns = algebra.find((a) => a.provider === r.provider)?.turns ?? r.turns;
         return s + r.turns - algTurns;
       }, 0);
