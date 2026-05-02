@@ -4,7 +4,7 @@ import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-ke
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { enforceSessionDiskBudget } from "./disk-budget.js";
+import { enforceSessionDiskBudget, sweepOrphanedSessionArtifacts } from "./disk-budget.js";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -55,6 +55,7 @@ export type SessionCleanupSummary = {
   pruned: number;
   capped: number;
   diskBudget: Awaited<ReturnType<typeof enforceSessionDiskBudget>>;
+  orphanedArtifacts: Awaited<ReturnType<typeof sweepOrphanedSessionArtifacts>> | null;
   wouldMutate: boolean;
   applied?: true;
   appliedCount?: number;
@@ -195,12 +196,18 @@ async function previewStoreCleanup(params: {
   }
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
+  const orphanedArtifacts = await sweepOrphanedSessionArtifacts({
+    store: beforeStore,
+    storePath: params.target.storePath,
+    dryRun: true,
+  });
   const wouldMutate =
     missing > 0 ||
     pruned > 0 ||
     capped > 0 ||
     (diskBudget?.removedEntries ?? 0) > 0 ||
-    (diskBudget?.removedFiles ?? 0) > 0;
+    (diskBudget?.removedFiles ?? 0) > 0 ||
+    orphanedArtifacts.removedFiles > 0;
 
   const summary: SessionCleanupSummary = {
     agentId: params.target.agentId,
@@ -213,6 +220,7 @@ async function previewStoreCleanup(params: {
     pruned,
     capped,
     diskBudget,
+    orphanedArtifacts,
     wouldMutate,
   };
 
@@ -281,6 +289,13 @@ export async function runSessionsCleanup(params: {
         },
       );
       const afterStore = loadSessionStore(target.storePath, { skipCache: true });
+      // Sweep orphaned artifacts against the post-maintenance store so entries pruned
+      // during this run are already excluded from the "referenced" set.
+      const appliedOrphanedArtifacts = await sweepOrphanedSessionArtifacts({
+        store: afterStore,
+        storePath: target.storePath,
+        dryRun: false,
+      });
       const preview = previewResults.find(
         (result) => result.summary.storePath === target.storePath,
       );
@@ -299,8 +314,10 @@ export async function runSessionsCleanup(params: {
                 pruned: 0,
                 capped: 0,
                 diskBudget: null,
+                orphanedArtifacts: null,
                 wouldMutate: false,
               }),
+              orphanedArtifacts: appliedOrphanedArtifacts,
               dryRun: false,
               applied: true,
               appliedCount: Object.keys(afterStore).length,
@@ -316,12 +333,14 @@ export async function runSessionsCleanup(params: {
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               diskBudget: appliedReport.diskBudget,
+              orphanedArtifacts: appliedOrphanedArtifacts,
               wouldMutate:
                 missingApplied > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
                 (appliedReport.diskBudget?.removedEntries ?? 0) > 0 ||
-                (appliedReport.diskBudget?.removedFiles ?? 0) > 0,
+                (appliedReport.diskBudget?.removedFiles ?? 0) > 0 ||
+                appliedOrphanedArtifacts.removedFiles > 0,
               applied: true,
               appliedCount: Object.keys(afterStore).length,
             };

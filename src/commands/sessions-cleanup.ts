@@ -141,6 +141,12 @@ function renderAppliedSummaries(params: {
     }
     params.runtime.log(`Session store: ${summary.storePath}`);
     params.runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
+    const orphaned = summary.orphanedArtifacts;
+    if (orphaned && orphaned.removedFiles > 0) {
+      params.runtime.log(
+        `Removed ${orphaned.removedFiles} orphaned session artifact file(s) (${orphaned.freedBytes} bytes).`,
+      );
+    }
   }
 }
 
