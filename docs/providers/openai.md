@@ -42,14 +42,16 @@ When you want OpenAI to handle coding or tool-heavy execution, say **Codex**,
 not generic **OpenAI**. Generic `openai/*` usually means direct OpenAI Platform
 API-key traffic unless you also select the native Codex runtime.
 
-A common split is to keep a strong planner/personality model in front and route
-mechanical coding work to a subscription-backed coding executor:
+A common split is to keep orchestration on your preferred default model and
+route mechanical coding work to a subscription-backed coding executor. Use
+Claude CLI as an explicit writing or second-review lane when you want that
+model's taste or critique, not as an implied orchestration default:
 
-| Pattern                    | Planner / reviewer                                                    | Coding executor                                  | Billing/auth path                                                |
-| -------------------------- | --------------------------------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------- |
-| Claude plans, Codex codes  | `anthropic/claude-*` using API key or `agentRuntime.id: "claude-cli"` | `openai/gpt-5.5` with `agentRuntime.id: "codex"` | Claude API/CLI for planning; ChatGPT/Codex sign-in for execution |
-| Codex-only coding agent    | `openai/gpt-5.5`                                                      | `agentRuntime.id: "codex"`                       | ChatGPT/Codex sign-in                                            |
-| PI runner with Codex OAuth | Any planner                                                           | `openai-codex/gpt-5.5`                           | ChatGPT/Codex OAuth through PI                                   |
+| Pattern                    | Orchestrator / reviewer                                               | Coding executor                                  | Billing/auth path                                      |
+| -------------------------- | --------------------------------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------ |
+| Codex-default agent        | `openai/gpt-5.5` with `agentRuntime.id: "codex"`                      | `agentRuntime.id: "codex"`                       | ChatGPT/Codex sign-in                                  |
+| Claude review, Codex codes | `anthropic/claude-*` using API key or `agentRuntime.id: "claude-cli"` | `openai/gpt-5.5` with `agentRuntime.id: "codex"` | Claude for review; ChatGPT/Codex sign-in for execution |
+| PI runner with Codex OAuth | Any orchestrator                                                      | `openai-codex/gpt-5.5`                           | ChatGPT/Codex OAuth through PI                         |
 
 Use the native Codex runtime for repo edits, shell work, debugging, and agentic
 coding sessions when you want subscription-backed Codex behavior. Use
