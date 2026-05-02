@@ -222,7 +222,7 @@ function resolveInstallInfo(params: {
     localPath = path.relative(params.workspaceDir, params.packageDir) || undefined;
   }
   const requestedDefaultChoice = params.install?.defaultChoice;
-  const defaultChoice =
+  const defaultChoice: NonNullable<PluginPackageInstall["defaultChoice"]> =
     requestedDefaultChoice === "clawhub" && clawhubSpec
       ? "clawhub"
       : requestedDefaultChoice === "npm" && npmSpec
