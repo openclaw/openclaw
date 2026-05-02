@@ -12,9 +12,10 @@ import {
 import { compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
-import { runSessionsCleanup } from "../../commands/sessions-cleanup.js";
 import {
   loadSessionStore,
+  runSessionsCleanup,
+  serializeSessionCleanupResult,
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -680,15 +681,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           fixMissing: params.fixMissing,
         },
       });
-      const result =
-        appliedSummaries.length === 1
-          ? (appliedSummaries[0] ?? {})
-          : {
-              allAgents: true,
-              mode,
-              dryRun: false,
-              stores: appliedSummaries,
-            };
+      const result = serializeSessionCleanupResult({
+        mode,
+        dryRun: false,
+        summaries: appliedSummaries,
+      });
       respond(true, result, undefined);
       for (const summary of appliedSummaries) {
         emitSessionsChanged(context, {
