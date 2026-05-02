@@ -47,7 +47,7 @@ function resolveCurrentChannel(params: Parameters<CommandHandler>[0], raw: strin
       params.command.channelId ??
       normalizeAnyChannelId(params.command.channel) ??
       normalizeChannelId(params.command.channel) ??
-      null
+      normalizeSafeChannelId(params.command.channel)
     );
   }
   return normalizeAnyChannelId(raw) ?? normalizeChannelId(raw) ?? normalizeSafeChannelId(raw);

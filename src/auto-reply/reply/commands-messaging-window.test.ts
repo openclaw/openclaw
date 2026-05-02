@@ -121,6 +121,26 @@ describe("handleMessagingWindowCommand", () => {
     });
   });
 
+  it("sets the current channel via safe fallback when channelId is missing", async () => {
+    const params = buildParams("/messaging_window current 4s");
+    params.command.channel = "custom-sms";
+    params.command.channelId = undefined;
+    params.command.surface = "custom-sms";
+
+    const result = await handleMessagingWindowCommand(params, true);
+
+    expect(result?.reply?.text).toContain("custom-sms set to 4s");
+    expect(resolveConfigWriteDeniedTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target: { kind: "channel", scope: { channelId: "custom-sms" } },
+      }),
+    );
+    expect(replaceConfigFileMock).toHaveBeenCalledWith({
+      nextConfig: { messages: { inbound: { byChannel: { "custom-sms": 4000 } } } },
+      afterWrite: { mode: "auto" },
+    });
+  });
+
   it("sets a named channel inbound debounce window with shorthand", async () => {
     const result = await handleMessagingWindowCommand(
       buildParams("/messaging_window telegram 5s"),
