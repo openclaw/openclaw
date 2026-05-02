@@ -696,7 +696,7 @@ describe("preflightDiscordMessage", () => {
       id: "m-webhook-proxy-1",
       channelId: threadId,
       content: "proxied user message",
-      webhook_id: "pluralkit-webhook-1",
+      webhookId: "pluralkit-webhook-1",
       author: {
         id: "relay-bot-1",
         bot: true,

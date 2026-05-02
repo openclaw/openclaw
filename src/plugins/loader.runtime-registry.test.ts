@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { __testing, clearPluginLoaderCache, resolveRuntimePluginRegistry } from "./loader.js";
+import {
+  __testing,
+  clearPluginLoaderCache,
+  loadOpenClawPlugins,
+  resolveRuntimePluginRegistry,
+} from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
 import {
   getMemoryEmbeddingProvider,
@@ -391,6 +396,28 @@ describe("resolveRuntimePluginRegistry", () => {
     const scopedEmpty = resolveRuntimePluginRegistry({ ...loadOptions, onlyPluginIds: [] });
     expect(scopedEmpty).not.toBe(registry);
     expect(scopedEmpty?.plugins).toEqual([]);
+  });
+
+  it("keeps the full workspace registry warm when scoped cron registries churn", () => {
+    __testing.setMaxPluginRegistryCacheEntriesForTest(2);
+    try {
+      const loadOptions = {
+        config: {
+          plugins: {
+            allow: ["alpha", "bravo", "charlie"],
+          },
+        },
+        workspaceDir: "/tmp/workspace-a",
+      };
+      const fullRegistry = loadOpenClawPlugins(loadOptions);
+
+      loadOpenClawPlugins({ ...loadOptions, onlyPluginIds: ["alpha"] });
+      loadOpenClawPlugins({ ...loadOptions, onlyPluginIds: ["bravo"] });
+
+      expect(resolveRuntimePluginRegistry(loadOptions)).toBe(fullRegistry);
+    } finally {
+      __testing.setMaxPluginRegistryCacheEntriesForTest();
+    }
   });
 });
 

@@ -28,6 +28,7 @@ export function describeSessionsHistoryTool(): string {
 export function describeSessionsSendTool(): string {
   return [
     "Send a message into another visible session by sessionKey or label.",
+    "Thread-scoped chat sessions are rejected; target the parent channel session for inter-agent coordination.",
     "Use this to delegate follow-up work to an existing session; waits for the target run and returns the updated assistant reply when available.",
   ].join(" ");
 }

@@ -5,9 +5,21 @@ import {
   setCurrentPluginMetadataSnapshotState,
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { resolvePluginMetadataSnapshotConfigFingerprint } from "./plugin-metadata-config-fingerprint.js";
+import {
+  resolvePluginControlPlaneFingerprint,
+  type ResolvePluginControlPlaneContextParams,
+} from "./plugin-control-plane-context.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-export { resolvePluginMetadataSnapshotConfigFingerprint } from "./plugin-metadata-config-fingerprint.js";
+
+export function resolvePluginMetadataSnapshotConfigFingerprint(
+  config?: OpenClawConfig,
+  options: Omit<ResolvePluginControlPlaneContextParams, "config"> = {},
+): string {
+  return resolvePluginControlPlaneFingerprint({
+    config,
+    ...options,
+  });
+}
 
 // Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
 // never accumulate historical metadata snapshots here.

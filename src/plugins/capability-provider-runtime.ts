@@ -6,14 +6,14 @@ import {
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
 import {
-  resolveConfigScopedRuntimeCacheValue,
-  type ConfigScopedRuntimeCache,
-} from "./config-scoped-runtime-cache.js";
-import {
   resolvePluginRegistryLoadCacheKey,
   resolveRuntimePluginRegistry,
   type PluginLoadOptions,
 } from "./loader.js";
+import {
+  resolveConfigScopedRuntimeCacheValue,
+  type ConfigScopedRuntimeCache,
+} from "./plugin-cache-primitives.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 import type { PluginRegistry } from "./registry-types.js";
 

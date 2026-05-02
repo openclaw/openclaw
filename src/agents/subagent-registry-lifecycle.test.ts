@@ -1,7 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { CallGatewayOptions } from "../gateway/call.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+type LifecycleControllerParams = Parameters<typeof createSubagentRegistryLifecycleController>[0];
 
 const taskExecutorMocks = vi.hoisted(() => ({
   completeTaskRunByRunId: vi.fn(),
@@ -109,7 +112,7 @@ function createLifecycleController({
   entry: SubagentRunRecord;
   runs?: Map<string, SubagentRunRecord>;
 } & Partial<Parameters<typeof createSubagentRegistryLifecycleController>[0]>) {
-  return createSubagentRegistryLifecycleController({
+  const params: LifecycleControllerParams = {
     runs,
     resumedRuns: new Set(),
     subagentAnnounceTimeoutMs: 1_000,
@@ -121,12 +124,15 @@ function createLifecycleController({
     emitSubagentEndedHookForRun: vi.fn(async () => {}),
     notifyContextEngineSubagentEnded: vi.fn(async () => {}),
     resumeSubagentRun: vi.fn(),
-    callGateway: gatewayMocks.callGateway,
+    callGateway: gatewayMocks.callGateway as <T = Record<string, unknown>>(
+      opts: CallGatewayOptions,
+    ) => Promise<T>,
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     runSubagentAnnounceFlow: vi.fn(async () => true),
     warn: vi.fn(),
-    ...overrides,
-  });
+  };
+  Object.assign(params, overrides);
+  return createSubagentRegistryLifecycleController(params);
 }
 
 describe("subagent registry lifecycle hardening", () => {
