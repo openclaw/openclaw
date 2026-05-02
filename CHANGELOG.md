@@ -7,6 +7,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
+- Performance/plugins: add optional `discovery` parameter to `loadBundledCapabilityRuntimeRegistry`, `resolveBundledPluginSources`, and `listChannelCatalogEntries` so callers that already hold a `PluginDiscoveryResult` can skip redundant filesystem walks; reuse discovery across retry attempts in the scoped capability loader. Thanks @SebTardif.
 - Plugins/diagnostics: make diagnostics OpenTelemetry and Prometheus ClawHub-first installs while keeping npm fallback metadata for release cutovers. Thanks @vincentkoc.
 - Plugins/onboarding: carry ClawHub install metadata through channel setup catalogs so missing channel plugins can install from ClawHub before npm/local fallback. Thanks @vincentkoc.
 - Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
