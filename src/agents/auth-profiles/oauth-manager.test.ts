@@ -153,7 +153,7 @@ describe("createOAuthManager", () => {
     const cfg = {
       models: {
         providers: {
-          "openai-codex": { auth: "oauth", models: [] },
+          "openai-codex": { auth: "oauth", baseUrl: "", models: [] },
         },
       },
     } satisfies OpenClawConfig;

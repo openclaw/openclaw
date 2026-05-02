@@ -367,6 +367,8 @@ export function createOpenClawCodingTools(options?: {
   authProfileStore?: AuthProfileStore;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
+  /** Optional instrumentation callback for tool preparation stage timing. */
+  recordToolPrepStage?: (name: string) => void;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
