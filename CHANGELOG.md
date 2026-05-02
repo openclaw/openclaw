@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 - Control UI: contain the standalone iOS PWA viewport with safe-area-aware document locking, so Add-to-Home-Screen launches cannot scroll past the device bounds. Refs #76072. Thanks @kvncrw.
 - Agents/restart recovery: match cleaned transcript locks by exact transcript lock paths plus the canonical session fallback, so interrupted main sessions using topic-suffixed transcripts resume after gateway restart. Refs #76052. Thanks @anyech.
+- Agents/runtime: cache the stable system-prompt prefix and reuse prompt-report tool schema stats during dispatch prep, reducing repeated CPU work before streaming starts. Fixes #75999; supersedes #76061. Thanks @zackchiutw and @STLI69.
 - Telegram/native commands: pass persisted session files into plugin commands for topic-bound sessions, so `/codex bind` works from Telegram forum topics. Refs #75845 and #76049. Thanks @MatthewSchleder.
 - Security audit/plugins: ignore plugin install backup, disabled, and dependency debris directories when enumerating installed plugin roots, avoiding false-positive findings for `.openclaw-install-backups` after plugin updates. Fixes #75456.
 - Telegram: honor runtime conversation bindings for native slash commands in bound top-level groups, so commands like `/status@bot` route to the active non-`main` session instead of falling back to the default route. Fixes #75405; supersedes #75558. Thanks @ziptbm and @yfge.
