@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { __testing as externalAuthTesting } from "./external-auth.js";
 import {
@@ -146,6 +147,44 @@ describe("OAuthManagerRefreshError", () => {
 });
 
 describe("createOAuthManager", () => {
+  it("passes active config to OAuth API-key formatting", async () => {
+    const profileId = "openai-codex:default";
+    const credential = createCredential({ expires: Date.now() + 10 * 60_000 });
+    const cfg = {
+      models: {
+        providers: {
+          "openai-codex": { auth: "oauth", models: [] },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const buildApiKey = vi.fn(async (_provider, value: OAuthCredential) => value.access);
+    const manager = createOAuthManager({
+      buildApiKey,
+      refreshCredential: vi.fn(async () => null),
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    await expect(
+      manager.resolveOAuthAccess({
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: credential,
+          },
+        },
+        profileId,
+        credential,
+        cfg,
+      }),
+    ).resolves.toMatchObject({ apiKey: "access-token" });
+
+    expect(buildApiKey).toHaveBeenCalledWith("openai-codex", credential, {
+      cfg,
+      agentDir: undefined,
+    });
+  });
+
   it("does not overlay external auth while checking main-store adoption", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-main-adopt-"));
     tempDirs.push(tempRoot);
