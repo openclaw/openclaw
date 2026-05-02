@@ -973,6 +973,9 @@ async function compactEmbeddedPiSessionDirectOnce(
         cfg: params.config,
         contextTokenBudget: ctxInfo.tokens,
       });
+      // contextEngineInfo is intentionally omitted: this guard runs inside the
+      // compaction LLM session, which is not the user-facing agent session and
+      // has no associated context engine.
       applyPiAutoCompactionGuard({
         settingsManager,
         silentOverflowProneProvider: isSilentOverflowProneModel({

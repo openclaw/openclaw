@@ -378,10 +378,16 @@ describe("isSilentOverflowProneModel", () => {
   // openclaw#75799 reporter's setup: an OpenAI-compatible in-house gateway
   // exposing Zhipu's GLM family directly (model id `glm-5.1`, no `z-ai/`
   // qualifier, custom baseUrl that is not api.z.ai). Catch the bare GLM
-  // family name so direct gateway deployments hit the guard.
-  it("flags bare glm- model ids without a namespace prefix", () => {
+  // family name so direct gateway deployments hit the guard regardless of
+  // what `provider` field the user picked — gateways relabel the upstream
+  // identity, so `provider` here can be anything from `openai` to a custom
+  // string. False positives only disable Pi's secondary compaction path;
+  // OpenClaw's preemptive compaction continues to handle real overflow.
+  it("flags bare glm- model ids without a namespace prefix, regardless of provider", () => {
     expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-5.1" })).toBe(true);
     expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-4.7" })).toBe(true);
+    expect(isSilentOverflowProneModel({ provider: "openai", modelId: "glm-5.1" })).toBe(true);
+    expect(isSilentOverflowProneModel({ provider: "openrouter", modelId: "glm-5.1" })).toBe(true);
   });
 
   // Detection is intentionally narrow to z.ai-style accounting. Namespaced GLM
