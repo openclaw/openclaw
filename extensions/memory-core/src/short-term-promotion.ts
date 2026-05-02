@@ -203,6 +203,7 @@ type ApplyShortTermPromotionsOptions = {
   nowMs?: number;
   timezone?: string;
   currentAgentId?: string;
+  sessionKey?: string;
 };
 
 type ApplyShortTermPromotionsResult = {
@@ -1733,6 +1734,7 @@ export async function applyShortTermPromotions(
     const provenanceEntries: ProvenanceEntry[] = rehydratedSelected.map((candidate) => ({
       id: candidate.key,
       agentId: options.currentAgentId,
+      sessionKey: options.sessionKey,
       promotedAt: nowIso,
       score: candidate.score,
       contentHash: hashContent(candidate.snippet || ""),

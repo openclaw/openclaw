@@ -186,6 +186,35 @@ describe("Bug #65374: Layer 3 — provenance sidecar", () => {
     };
     expect(entry.agentId).toBeUndefined();
   });
+
+  it("provenance entry includes sessionKey when provided", () => {
+    const entry = {
+      id: "test-key",
+      agentId: "emmi",
+      sessionKey: "session-abc123",
+      promotedAt: "2026-05-02T15:00:00Z",
+      score: 0.85,
+      contentHash: "abc123",
+      sourcePath: "memory/2026-05-02.md",
+      sourceLineRange: "10-20",
+    };
+    expect(entry.sessionKey).toBe("session-abc123");
+    expect(entry.agentId).toBe("emmi");
+  });
+
+  it("provenance entry has undefined sessionKey when not provided", () => {
+    const entry = {
+      id: "test-key",
+      agentId: "emmi",
+      sessionKey: undefined,
+      promotedAt: "2026-05-02T15:00:00Z",
+      score: 0.85,
+      contentHash: "abc123",
+      sourcePath: "memory/2026-05-02.md",
+      sourceLineRange: "10-20",
+    };
+    expect(entry.sessionKey).toBeUndefined();
+  });
 });
 
 // ---------------------------------------------------------------------------

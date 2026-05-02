@@ -499,6 +499,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
   currentAgentId?: string;
+  sessionKey?: string;
 }): Promise<{ handled: true; reason: string } | undefined> {
   if (params.trigger !== "heartbeat" && params.trigger !== "cron") {
     return undefined;
@@ -621,6 +622,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         timezone: params.config.timezone,
         nowMs: sweepNowMs,
         currentAgentId: params.currentAgentId,
+        sessionKey: params.sessionKey,
       });
       totalApplied += applied.applied;
       reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
@@ -923,6 +925,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         logger: api.logger,
         subagent: config.enabled ? api.runtime?.subagent : undefined,
         currentAgentId: ctx.agentId,
+        sessionKey: ctx.sessionKey,
       });
     } catch (err) {
       api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
