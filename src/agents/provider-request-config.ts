@@ -137,7 +137,7 @@ export type ResolvedProviderRequestConfig = {
 
 type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
-export type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
+type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
   allowPrivateNetwork: boolean;
   capabilities: ProviderRequestCapabilities;
 };
