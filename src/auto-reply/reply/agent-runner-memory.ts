@@ -98,7 +98,7 @@ export function setAgentRunnerMemoryTestDeps(overrides?: Partial<typeof memoryDe
   });
 }
 
-export function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
+function estimatePromptTokensForMemoryFlush(prompt?: string): number | undefined {
   const trimmed = normalizeOptionalString(prompt);
   if (!trimmed) {
     return undefined;
@@ -111,7 +111,7 @@ export function estimatePromptTokensForMemoryFlush(prompt?: string): number | un
   return Math.ceil(tokens);
 }
 
-export function resolveEffectivePromptTokens(
+function resolveEffectivePromptTokens(
   basePromptTokens?: number,
   lastOutputTokens?: number,
   promptTokenEstimate?: number,
@@ -124,7 +124,7 @@ export function resolveEffectivePromptTokens(
   return base + output + estimate;
 }
 
-export function resolveMemoryFlushModelFallbackOptions(
+function resolveMemoryFlushModelFallbackOptions(
   run: FollowupRun["run"],
   model?: string,
   configOverride: FollowupRun["run"]["config"] = run.config,
