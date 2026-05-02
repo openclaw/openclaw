@@ -87,7 +87,6 @@ import {
 } from "./plugin-install-config-migration.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import {
-  clearRuntimeConfigSnapshot as clearRuntimeConfigSnapshotState,
   createRuntimeConfigWriteNotification,
   finalizeRuntimeSnapshotWrite,
   getRuntimeConfigSnapshotMetadata as getRuntimeConfigSnapshotMetadataState,
