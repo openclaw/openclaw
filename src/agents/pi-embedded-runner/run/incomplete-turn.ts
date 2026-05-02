@@ -390,7 +390,7 @@ export function resolveRunLivenessState(params: {
   return "working";
 }
 
-export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
+function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
