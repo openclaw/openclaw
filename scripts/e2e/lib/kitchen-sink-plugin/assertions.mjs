@@ -157,6 +157,7 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
     "context engine registration missing id",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
+    "plugin must declare contracts.tools for: kitchen-sink-tool",
     "memory prompt supplement registration missing builder",
   ]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
