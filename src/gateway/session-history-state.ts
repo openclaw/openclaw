@@ -5,7 +5,9 @@ import {
 import {
   attachOpenClawTranscriptMeta,
   readRecentSessionMessagesWithStats,
+  readRecentSessionMessagesWithStatsAsync,
   readSessionMessages,
+  readSessionMessagesAsync,
 } from "./session-utils.js";
 
 type SessionHistoryTranscriptMeta = {
@@ -272,6 +274,25 @@ export class SessionHistorySseState {
     return snapshot.history;
   }
 
+  async refreshAsync(): Promise<PaginatedSessionHistory> {
+    const rawSnapshot = await this.readRawSnapshotAsync();
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: rawSnapshot.rawMessages,
+      maxChars: this.maxChars,
+      limit: this.limit,
+      cursor: this.cursor,
+      ...(typeof rawSnapshot.rawTranscriptSeq === "number"
+        ? { rawTranscriptSeq: rawSnapshot.rawTranscriptSeq }
+        : {}),
+      ...(typeof rawSnapshot.totalRawMessages === "number"
+        ? { totalRawMessages: rawSnapshot.totalRawMessages }
+        : {}),
+    });
+    this.rawTranscriptSeq = snapshot.rawTranscriptSeq;
+    this.sentHistory = snapshot.history;
+    return snapshot.history;
+  }
+
   private readRawSnapshot(): SessionHistoryRawSnapshot {
     if (this.cursor === undefined && typeof this.limit === "number") {
       const snapshot = readRecentSessionMessagesWithStats(
@@ -297,5 +318,28 @@ export class SessionHistorySseState {
       this.target.storePath,
       this.target.sessionFile,
     );
+  }
+
+  private async readRawSnapshotAsync(): Promise<SessionHistoryRawSnapshot> {
+    if (this.cursor === undefined && typeof this.limit === "number") {
+      const snapshot = await readRecentSessionMessagesWithStatsAsync(
+        this.target.sessionId,
+        this.target.storePath,
+        this.target.sessionFile,
+        resolveSessionHistoryTailReadOptions(this.limit),
+      );
+      return {
+        rawMessages: snapshot.messages,
+        rawTranscriptSeq: snapshot.totalMessages,
+        totalRawMessages: snapshot.totalMessages,
+      };
+    }
+    return {
+      rawMessages: await readSessionMessagesAsync(
+        this.target.sessionId,
+        this.target.storePath,
+        this.target.sessionFile,
+      ),
+    };
   }
 }
