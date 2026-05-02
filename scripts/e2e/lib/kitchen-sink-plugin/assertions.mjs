@@ -392,6 +392,12 @@ function assertInstalled() {
     if (!record.clawpackSha256 || typeof record.clawpackSize !== "number") {
       throw new Error(`missing kitchen-sink ClawPack metadata: ${JSON.stringify(record)}`);
     }
+    if (record.artifactKind !== "npm-pack" || record.artifactFormat !== "tgz") {
+      throw new Error(`missing kitchen-sink ClawHub artifact metadata: ${JSON.stringify(record)}`);
+    }
+    if (!record.npmIntegrity || !record.npmShasum || !record.npmTarballName) {
+      throw new Error(`missing kitchen-sink npm artifact metadata: ${JSON.stringify(record)}`);
+    }
   }
   if (typeof record.installPath !== "string" || record.installPath.length === 0) {
     throw new Error("missing kitchen-sink install path");

@@ -2,6 +2,7 @@ import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catal
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { parseRegistryNpmSpec } from "../../../infra/npm-registry-spec.js";
+import { buildClawHubPluginInstallRecordFields } from "../../../plugins/clawhub-install-records.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../../../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
@@ -169,21 +170,10 @@ async function installCandidate(params: {
         records: {
           ...params.records,
           [pluginId]: {
-            source: "clawhub",
+            ...buildClawHubPluginInstallRecordFields(clawhubResult.clawhub),
             spec: candidate.clawhubSpec,
             installPath: clawhubResult.targetDir,
-            version: clawhubResult.version,
             installedAt: new Date().toISOString(),
-            integrity: clawhubResult.clawhub.integrity,
-            resolvedAt: clawhubResult.clawhub.resolvedAt,
-            clawhubUrl: clawhubResult.clawhub.clawhubUrl,
-            clawhubPackage: clawhubResult.clawhub.clawhubPackage,
-            clawhubFamily: clawhubResult.clawhub.clawhubFamily,
-            clawhubChannel: clawhubResult.clawhub.clawhubChannel,
-            clawpackSha256: clawhubResult.clawhub.clawpackSha256,
-            clawpackSpecVersion: clawhubResult.clawhub.clawpackSpecVersion,
-            clawpackManifestSha256: clawhubResult.clawhub.clawpackManifestSha256,
-            clawpackSize: clawhubResult.clawhub.clawpackSize,
           },
         },
         changes: [

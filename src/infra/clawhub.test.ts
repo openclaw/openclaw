@@ -247,6 +247,7 @@ describe("clawhub helpers", () => {
   it("downloads ClawPack package artifacts from the version route and verifies response headers", async () => {
     const bytes = new Uint8Array([7, 8, 9]);
     const sha256Hex = createHash("sha256").update(bytes).digest("hex");
+    const sha1Hex = createHash("sha1").update(bytes).digest("hex");
     let requestedUrl = "";
     const archive = await downloadClawHubPackageArchive({
       name: "demo",
@@ -273,6 +274,7 @@ describe("clawhub helpers", () => {
       expect(archive.sha256Hex).toBe(sha256Hex);
       expect(archive.clawpackHeaderSha256).toBe(sha256Hex);
       expect(archive.npmIntegrity).toMatch(/^sha512-/);
+      expect(archive.npmShasum).toBe(sha1Hex);
       await expect(fs.readFile(archive.archivePath)).resolves.toEqual(Buffer.from(bytes));
     } finally {
       const archiveDir = path.dirname(archive.archivePath);

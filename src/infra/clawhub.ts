@@ -504,6 +504,10 @@ function formatSha512Integrity(bytes: Uint8Array): string {
   return `sha512-${digest}`;
 }
 
+function formatSha1Hex(bytes: Uint8Array): string {
+  return createHash("sha1").update(bytes).digest("hex");
+}
+
 function normalizeHeaderValue(value: string | null): string | undefined {
   const normalized = normalizeOptionalString(value);
   return normalized && normalized.length > 0 ? normalized : undefined;
@@ -701,6 +705,7 @@ export async function downloadClawHubPackageArchive(params: {
     const bytes = new Uint8Array(await response.arrayBuffer());
     const sha256Hex = formatSha256Hex(bytes);
     const npmIntegrity = formatSha512Integrity(bytes);
+    const npmShasum = formatSha1Hex(bytes);
     const headerSha256 = normalizeClawHubSha256Hex(
       response.headers.get("X-ClawHub-Artifact-Sha256") ??
         response.headers.get("X-ClawHub-ClawPack-Sha256") ??
@@ -724,6 +729,12 @@ export async function downloadClawHubPackageArchive(params: {
         `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm integrity ${headerNpmIntegrity}, got ${npmIntegrity}.`,
       );
     }
+    const headerNpmShasum = normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Shasum"));
+    if (headerNpmShasum && headerNpmShasum !== npmShasum) {
+      throw new Error(
+        `ClawHub ClawPack download for "${params.name}@${params.version}" declared npm shasum ${headerNpmShasum}, got ${npmShasum}.`,
+      );
+    }
     const npmTarballName =
       normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Tarball-Name")) ??
       safePackageTarballName(params.name, params.version);
@@ -745,9 +756,7 @@ export async function downloadClawHubPackageArchive(params: {
         ? { clawpackHeaderSpecVersion: specVersion }
         : {}),
       npmIntegrity,
-      ...(normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Shasum"))
-        ? { npmShasum: normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Shasum")) }
-        : {}),
+      npmShasum,
       npmTarballName,
       cleanup: target.cleanup,
     };

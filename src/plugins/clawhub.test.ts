@@ -352,6 +352,8 @@ describe("installPluginFromClawHub", () => {
       artifact: "clawpack",
       clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
       npmIntegrity: "sha512-clawpack",
+      npmShasum: "1".repeat(40),
+      npmTarballName: "demo-2026.3.22.tgz",
       cleanup: archiveCleanupMock,
     });
 
@@ -364,6 +366,11 @@ describe("installPluginFromClawHub", () => {
       ok: true,
       clawhub: {
         integrity: DEMO_CLAWPACK_INTEGRITY,
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        npmTarballName: "demo-2026.3.22.tgz",
         clawpackSha256: DEMO_CLAWPACK_SHA256,
         clawpackSize: 4096,
       },

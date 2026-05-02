@@ -32,6 +32,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
+import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromArchive, type InstallPluginResult } from "./install.js";
 
@@ -55,22 +56,6 @@ export type ClawHubInstallErrorCode =
 type PluginInstallLogger = {
   info?: (message: string) => void;
   warn?: (message: string) => void;
-};
-
-export type ClawHubPluginInstallRecordFields = {
-  source: "clawhub";
-  clawhubUrl: string;
-  clawhubPackage: string;
-  clawhubFamily: Exclude<ClawHubPackageFamily, "skill">;
-  clawhubChannel?: ClawHubPackageChannel;
-  version?: string;
-  integrity?: string;
-  resolvedAt?: string;
-  installedAt?: string;
-  clawpackSha256?: string;
-  clawpackSpecVersion?: number;
-  clawpackManifestSha256?: string;
-  clawpackSize?: number;
 };
 
 type ClawHubInstallFailure = {
@@ -132,7 +117,15 @@ function normalizeClawHubClawPackInstallFields(
   clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
 ): Pick<
   ClawHubPluginInstallRecordFields,
-  "clawpackSha256" | "clawpackSpecVersion" | "clawpackManifestSha256" | "clawpackSize"
+  | "artifactKind"
+  | "artifactFormat"
+  | "npmIntegrity"
+  | "npmShasum"
+  | "npmTarballName"
+  | "clawpackSha256"
+  | "clawpackSpecVersion"
+  | "clawpackManifestSha256"
+  | "clawpackSize"
 > {
   const isNpmPackArtifact =
     clawpack && "kind" in clawpack && normalizeOptionalString(clawpack.kind) === "npm-pack";
@@ -158,7 +151,15 @@ function normalizeClawHubClawPackInstallFields(
     typeof clawpack.size === "number" && Number.isSafeInteger(clawpack.size) && clawpack.size >= 0
       ? clawpack.size
       : undefined;
+  const npmIntegrity = normalizeOptionalString(clawpack.npmIntegrity);
+  const npmShasum = normalizeOptionalString(clawpack.npmShasum);
+  const npmTarballName = normalizeOptionalString(clawpack.npmTarballName);
   return {
+    artifactKind: "npm-pack",
+    artifactFormat: "tgz",
+    ...(npmIntegrity ? { npmIntegrity } : {}),
+    ...(npmShasum ? { npmShasum } : {}),
+    ...(npmTarballName ? { npmTarballName } : {}),
     ...(clawpackSha256 ? { clawpackSha256 } : {}),
     ...(clawpackSpecVersion !== undefined ? { clawpackSpecVersion } : {}),
     ...(clawpackManifestSha256 ? { clawpackManifestSha256 } : {}),
@@ -194,6 +195,18 @@ function resolveClawHubNpmIntegrity(
   clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
 ): string | null {
   return normalizeOptionalString(clawpack?.npmIntegrity) ?? null;
+}
+
+function resolveClawHubNpmShasum(
+  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
+): string | null {
+  return normalizeOptionalString(clawpack?.npmShasum) ?? null;
+}
+
+function resolveClawHubNpmTarballName(
+  clawpack: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null | undefined,
+): string | null {
+  return normalizeOptionalString(clawpack?.npmTarballName) ?? null;
 }
 
 function resolveClawHubNpmPackArtifact(
@@ -956,6 +969,13 @@ export async function installPluginFromClawHub(
           CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
         );
       }
+      const expectedNpmShasum = resolveClawHubNpmShasum(versionState.clawpack);
+      if (expectedNpmShasum && archive.npmShasum !== expectedNpmShasum) {
+        return buildClawHubInstallFailure(
+          `ClawHub ClawPack npm shasum mismatch for "${parsed.name}@${versionState.version}": expected ${expectedNpmShasum}, got ${archive.npmShasum ?? "unknown"}.`,
+          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+        );
+      }
     } else if (versionState.verification?.kind === "archive-integrity") {
       if (archive.integrity !== versionState.verification.integrity) {
         return buildClawHubInstallFailure(
@@ -1005,6 +1025,20 @@ export async function installPluginFromClawHub(
 
     const pkg = detail.package!;
     const clawpackFields = normalizeClawHubClawPackInstallFields(versionState.clawpack);
+    const observedClawPackArtifactFields =
+      archive.artifact === "clawpack"
+        ? ({
+            artifactKind: "npm-pack",
+            artifactFormat: "tgz",
+            ...(archive.npmIntegrity ? { npmIntegrity: archive.npmIntegrity } : {}),
+            ...(archive.npmShasum ? { npmShasum: archive.npmShasum } : {}),
+            ...(archive.npmTarballName ? { npmTarballName: archive.npmTarballName } : {}),
+          } satisfies Partial<ClawHubPluginInstallRecordFields>)
+        : ({
+            artifactKind: "legacy-zip",
+            artifactFormat: "zip",
+          } satisfies Partial<ClawHubPluginInstallRecordFields>);
+    const expectedTarballName = resolveClawHubNpmTarballName(versionState.clawpack);
     const clawhubFamily =
       pkg.family === "code-plugin" || pkg.family === "bundle-plugin" ? pkg.family : null;
     if (!clawhubFamily) {
@@ -1031,6 +1065,10 @@ export async function installPluginFromClawHub(
         integrity: archive.integrity,
         resolvedAt: new Date().toISOString(),
         ...clawpackFields,
+        ...observedClawPackArtifactFields,
+        ...(expectedTarballName && !archive.npmTarballName
+          ? { npmTarballName: expectedTarballName }
+          : {}),
       },
     };
   } finally {

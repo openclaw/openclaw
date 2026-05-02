@@ -8,6 +8,7 @@ import {
   findBundledPluginSourceInMap,
   resolveBundledPluginSources,
 } from "../plugins/bundled-sources.js";
+import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
 import { enablePluginInConfig, type PluginEnableResult } from "../plugins/enable.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
@@ -823,20 +824,9 @@ export async function ensureOnboardingPluginInstalled(params: {
       next = enableResult.config;
       next = recordPluginInstall(next, {
         pluginId: result.pluginId,
-        source: "clawhub",
+        ...buildClawHubPluginInstallRecordFields(result.clawhub),
         spec: clawhubSpec,
         installPath: result.targetDir,
-        version: result.version,
-        integrity: result.clawhub.integrity,
-        resolvedAt: result.clawhub.resolvedAt,
-        clawhubUrl: result.clawhub.clawhubUrl,
-        clawhubPackage: result.clawhub.clawhubPackage,
-        clawhubFamily: result.clawhub.clawhubFamily,
-        clawhubChannel: result.clawhub.clawhubChannel,
-        clawpackSha256: result.clawhub.clawpackSha256,
-        clawpackSpecVersion: result.clawhub.clawpackSpecVersion,
-        clawpackManifestSha256: result.clawhub.clawpackManifestSha256,
-        clawpackSize: result.clawhub.clawpackSize,
       });
       return {
         cfg: next,
