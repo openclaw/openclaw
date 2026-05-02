@@ -247,7 +247,15 @@ export function parseFeishuMessageEvent(
     chatType: event.message.chat_type,
     mentionedBot,
     hasAnyMention,
-    rootId: event.message.root_id || undefined,
+    // Feishu thread reply events can omit root_id while still carrying a
+    // stable ancestor/reply target. Keep root_id precedence, then fall back
+    // to the best available message anchor so threaded replies stay grouped.
+    rootId:
+      event.message.root_id?.trim() ||
+      event.message.reply_target_message_id?.trim() ||
+      event.message.parent_id?.trim() ||
+      event.message.upper_message_id?.trim() ||
+      undefined,
     parentId: event.message.parent_id || undefined,
     threadId: event.message.thread_id || undefined,
     content,

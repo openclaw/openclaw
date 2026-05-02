@@ -4,7 +4,7 @@ import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage } from "./bot.js";
+import { handleFeishuMessage, parseFeishuMessageEvent } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 type ConfiguredBindingRoute = ReturnType<typeof ConversationRuntime.resolveConfiguredBindingRoute>;
@@ -2203,6 +2203,45 @@ describe("handleFeishuMessage command authorization", () => {
         parentPeer: { kind: "group", id: "oc-group" },
       }),
     );
+  });
+
+  it("falls back to reply ancestors for thread root when Feishu omits root_id", () => {
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_topic_reply_message",
+        chat_id: "oc-group",
+        chat_type: "group",
+        reply_target_message_id: "om_reply_target_root",
+        parent_id: "om_parent_message",
+        upper_message_id: "om_upper_message",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic reply" }),
+      },
+    };
+
+    const ctx = parseFeishuMessageEvent(event);
+
+    expect(ctx.rootId).toBe("om_reply_target_root");
+  });
+
+  it("falls back to parent_id before upper_message_id when root_id and reply target are missing", () => {
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-user" } },
+      message: {
+        message_id: "om_topic_reply_message",
+        chat_id: "oc-group",
+        chat_type: "group",
+        parent_id: "om_parent_message",
+        upper_message_id: "om_upper_message",
+        message_type: "text",
+        content: JSON.stringify({ text: "topic reply" }),
+      },
+    };
+
+    const ctx = parseFeishuMessageEvent(event);
+
+    expect(ctx.rootId).toBe("om_parent_message");
   });
 
   it("keeps root_id as topic key when root_id and thread_id both exist", async () => {
