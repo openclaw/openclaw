@@ -237,11 +237,17 @@ openclaw plugins search <query> --json
   Switch from the table view to per-plugin detail lines with source/origin/version/activation metadata.
 </ParamField>
 <ParamField path="--json" type="boolean">
-  Machine-readable inventory plus registry diagnostics.
+  Machine-readable inventory plus registry diagnostics and package dependency install state.
 </ParamField>
 
 <Note>
 `plugins list` reads the persisted local plugin registry first, with a manifest-only derived fallback when the registry is missing or invalid. It is useful for checking whether a plugin is installed, enabled, and visible to cold startup planning, but it is not a live runtime probe of an already-running Gateway process. After changing plugin code, enablement, hook policy, or `plugins.load.paths`, restart the Gateway that serves the channel before expecting new `register(api)` code or hooks to run. For remote/container deployments, verify you are restarting the actual `openclaw gateway run` child, not only a wrapper process.
+
+`plugins list --json` includes each plugin's `dependencyStatus` from `package.json`
+`dependencies` and `optionalDependencies`. OpenClaw checks whether those package
+names are present along the plugin's normal Node `node_modules` lookup path; it
+does not import plugin runtime code, run a package manager, or repair missing
+dependencies.
 </Note>
 
 `plugins search` is a remote ClawHub catalog lookup. It does not inspect local

@@ -120,6 +120,8 @@ installed under OpenClaw's managed plugin roots. npm dependencies may be hoisted
 within OpenClaw's managed npm root; install/update scans that managed root before
 trust and uninstall removes npm-managed packages through npm. External plugins
 and custom load paths must still be installed through `openclaw plugins install`.
+Use `openclaw plugins list --json` to see the static `dependencyStatus` for each
+visible plugin without importing runtime code or repairing dependencies.
 See [Plugin dependency resolution](/plugins/dependency-resolution) for the
 install-time lifecycle.
 

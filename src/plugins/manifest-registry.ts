@@ -46,6 +46,7 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.js";
 
 /**
  * Resolve a plugin source path, falling back from .ts to .js when the
@@ -130,6 +131,8 @@ export type PluginManifestRecord = {
   activation?: PluginManifestActivation;
   setup?: PluginManifestSetup;
   packageManifest?: OpenClawPackageManifest;
+  packageDependencies?: PluginDependencySpecMap;
+  packageOptionalDependencies?: PluginDependencySpecMap;
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
   qaRunners?: PluginManifestQaRunner[];
@@ -316,6 +319,8 @@ function buildRecord(params: {
     activation: params.manifest.activation,
     setup: params.manifest.setup,
     packageManifest: params.candidate.packageManifest,
+    packageDependencies: params.candidate.packageDependencies,
+    packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
     qaRunners: params.manifest.qaRunners,
@@ -385,6 +390,8 @@ function buildBundleRecord(params: {
     packageVersion: params.candidate.packageVersion,
     packageDescription: params.candidate.packageDescription,
     packageManifest: params.candidate.packageManifest,
+    packageDependencies: params.candidate.packageDependencies,
+    packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
     format: "bundle",
