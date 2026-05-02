@@ -6,9 +6,9 @@ import {
   type PluginChannelCatalogEntry,
 } from "../../plugins/channel-catalog-registry.js";
 import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../../plugins/jiti-loader-cache.js";
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../../plugins/plugin-module-loader-cache.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
@@ -29,7 +29,7 @@ type ChannelPackageStateMetadata = {
 export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
 const log = createSubsystemLogger("channels");
-const sourcePackageStateLoaderCache: PluginJitiLoaderCache = new Map();
+const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
 
 function isSourceModulePath(modulePath: string): boolean {
   return /\.(?:c|m)?tsx?$/iu.test(modulePath);
@@ -42,7 +42,7 @@ function loadChannelPackageStateModule(params: { modulePath: string; rootDir: st
     if (!isSourceModulePath(params.modulePath)) {
       throw error;
     }
-    const loader = getCachedPluginJitiLoader({
+    const loader = getCachedPluginModuleLoader({
       cache: sourcePackageStateLoaderCache,
       modulePath: params.modulePath,
       importerUrl: import.meta.url,

@@ -13,12 +13,12 @@ import {
   type BundledChannelPluginMetadata,
 } from "../../plugins/bundled-channel-runtime.js";
 import { normalizePluginsConfig } from "../../plugins/config-state.js";
-import {
-  getCachedPluginJitiLoader,
-  type PluginJitiLoaderCache,
-} from "../../plugins/jiti-loader-cache.js";
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { unwrapDefaultModuleExport } from "../../plugins/module-export.js";
+import {
+  getCachedPluginModuleLoader,
+  type PluginModuleLoaderCache,
+} from "../../plugins/plugin-module-loader-cache.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
@@ -94,7 +94,7 @@ type BundledChannelLoadContext = {
 const log = createSubsystemLogger("channels");
 const MAX_BUNDLED_CHANNEL_LOAD_CONTEXTS = 32;
 const bundledChannelLoadContextsByRoot = new Map<string, BundledChannelLoadContext>();
-const sourceBundledEntryLoaderCache: PluginJitiLoaderCache = new Map();
+const sourceBundledEntryLoaderCache: PluginModuleLoaderCache = new Map();
 
 function isSourceModulePath(modulePath: string): boolean {
   return /\.(?:c|m)?tsx?$/iu.test(modulePath);
@@ -223,7 +223,7 @@ function loadGeneratedBundledChannelModule(params: {
     if (!isSourceModulePath(modulePath)) {
       throw error;
     }
-    const loader = getCachedPluginJitiLoader({
+    const loader = getCachedPluginModuleLoader({
       cache: sourceBundledEntryLoaderCache,
       modulePath,
       importerUrl: import.meta.url,
