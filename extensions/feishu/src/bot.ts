@@ -604,6 +604,7 @@ export async function handleFeishuMessage(params: {
       accountId: account.accountId,
       groupId: ctx.chatId,
       groupPolicy,
+      isTopic: Boolean(ctx.threadId),
     }));
 
     if (requireMention && !ctx.mentionedBot) {

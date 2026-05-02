@@ -307,3 +307,46 @@ describe("FeishuConfigSchema defaultAccount", () => {
     }
   });
 });
+
+describe("FeishuConfigSchema topicRequireMention", () => {
+  it("accepts topicRequireMention at top level", () => {
+    const result = FeishuConfigSchema.safeParse({ topicRequireMention: false });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.topicRequireMention).toBe(false);
+    }
+  });
+
+  it("accepts topicRequireMention inside a group entry", () => {
+    const result = FeishuGroupSchema.safeParse({
+      requireMention: true,
+      topicRequireMention: false,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.topicRequireMention).toBe(false);
+    }
+  });
+
+  it("accepts topicRequireMention inside an account config", () => {
+    const result = FeishuConfigSchema.safeParse({
+      accounts: {
+        main: { topicRequireMention: true },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.accounts?.main?.topicRequireMention).toBe(true);
+    }
+  });
+
+  it("rejects non-boolean topicRequireMention at top level", () => {
+    const result = FeishuConfigSchema.safeParse({ topicRequireMention: "yes" });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects non-boolean topicRequireMention in group entry", () => {
+    const result = FeishuGroupSchema.safeParse({ topicRequireMention: 1 });
+    expect(result.success).toBe(false);
+  });
+});

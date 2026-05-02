@@ -332,3 +332,102 @@ describe("isFeishuGroupAllowed", () => {
     ).toBe(false);
   });
 });
+
+describe("resolveFeishuReplyPolicy — topicRequireMention", () => {
+  it("overrides requireMention with topicRequireMention=false for topic messages", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        cfg: createCfg({
+          groupPolicy: "allowlist",
+          groups: {
+            oc_xxx: { requireMention: true, topicRequireMention: false },
+          },
+        }),
+        groupPolicy: "allowlist",
+        groupId: "oc_xxx",
+        isTopic: true,
+      }),
+    ).toEqual({ requireMention: false });
+  });
+
+  it("falls back to requireMention in topic thread when topicRequireMention is absent", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        cfg: createCfg({
+          groupPolicy: "allowlist",
+          groups: { oc_xxx: { requireMention: true } },
+        }),
+        groupPolicy: "allowlist",
+        groupId: "oc_xxx",
+        isTopic: true,
+      }),
+    ).toEqual({ requireMention: true });
+  });
+
+  it("ignores topicRequireMention for non-topic messages", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        cfg: createCfg({
+          groupPolicy: "allowlist",
+          groups: {
+            oc_xxx: { requireMention: true, topicRequireMention: false },
+          },
+        }),
+        groupPolicy: "allowlist",
+        groupId: "oc_xxx",
+        isTopic: false,
+      }),
+    ).toEqual({ requireMention: true });
+  });
+
+  it("DM short-circuits to false regardless of topicRequireMention", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: true,
+        cfg: createCfg({
+          requireMention: true,
+          topicRequireMention: true,
+          groups: { oc_xxx: { requireMention: true, topicRequireMention: true } },
+        }),
+        groupPolicy: "allowlist",
+        groupId: "oc_xxx",
+        isTopic: true,
+      }),
+    ).toEqual({ requireMention: false });
+  });
+
+  it("resolves top-level topicRequireMention when no per-group entry exists", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        cfg: createCfg({
+          groupPolicy: "allowlist",
+          requireMention: true,
+          topicRequireMention: false,
+        }),
+        groupPolicy: "allowlist",
+        groupId: "oc_xxx",
+        isTopic: true,
+      }),
+    ).toEqual({ requireMention: false });
+  });
+
+  it("per-group topicRequireMention beats top-level topicRequireMention", () => {
+    expect(
+      resolveFeishuReplyPolicy({
+        isDirectMessage: false,
+        cfg: createCfg({
+          groupPolicy: "allowlist",
+          topicRequireMention: true,
+          groups: { oc_xxx: { topicRequireMention: false } },
+        }),
+        groupPolicy: "allowlist",
+        groupId: "oc_xxx",
+        isTopic: true,
+      }),
+    ).toEqual({ requireMention: false });
+  });
+});
