@@ -42,6 +42,8 @@ Docs: https://docs.openclaw.ai
 - Discord/DMs: keep no-guild inbound messages on direct-message routing when Discord channel lookup is temporarily unavailable, preventing degraded DMs from forking into channel sessions. Fixes #59817. Thanks @DooPeePey.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
+- Memory: split restoreMemoryPluginState into a destructive restore path and an additive merge path so cache-hit plugin re-resolves preserve memoryPluginState capability and the bridge does not silently prune previously-published artifacts. Repro: openclaw@2026.4.16 with memory-wiki.vaultMode=bridge dropped bridgePublicArtifactCount 559 to 0 within ~400ms on a benign re-resolve.
+
 
 ## 2026.4.30
 
