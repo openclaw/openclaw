@@ -749,8 +749,12 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    const applied = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
-    if (applied && isSessionMessagePhasePayload(evt.payload)) {
+    const applyResult = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (
+      applyResult.applied &&
+      applyResult.change === "updated" &&
+      isSessionMessagePhasePayload(evt.payload)
+    ) {
       return;
     }
     void loadSessions(host as unknown as SessionsState);

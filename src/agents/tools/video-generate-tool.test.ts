@@ -906,6 +906,7 @@ describe("createVideoGenerateTool", () => {
 
     expect(generateSpy).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         providerOptions: { seed: 42, draft: true },
       }),
     );

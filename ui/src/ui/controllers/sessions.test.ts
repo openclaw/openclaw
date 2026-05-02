@@ -420,7 +420,7 @@ describe("applySessionsChangedEvent", () => {
       model: "gpt-5.4",
     });
 
-    expect(applied).toBe(true);
+    expect(applied).toEqual({ applied: true, change: "updated" });
     expect(state.sessionsResult?.ts).toBe(2);
     expect(state.sessionsResult?.sessions[0]).toMatchObject({
       key: "agent:main:main",
@@ -460,5 +460,32 @@ describe("applySessionsChangedEvent", () => {
     expect(state.sessionsResult?.sessions[0]?.totalTokens).toBeUndefined();
     expect(state.sessionsResult?.sessions[0]?.totalTokensFresh).toBe(false);
     expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(200_000);
+  });
+
+  it("reports when websocket event payloads insert new rows", () => {
+    const state = createState(async () => undefined, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 0,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [],
+      },
+    });
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:main:new",
+      ts: 2,
+      kind: "direct",
+      updatedAt: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "inserted" });
+    expect(state.sessionsResult?.count).toBe(1);
+    expect(state.sessionsResult?.sessions[0]).toMatchObject({
+      key: "agent:main:new",
+      kind: "direct",
+      updatedAt: 2,
+    });
   });
 });

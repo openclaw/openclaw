@@ -115,7 +115,7 @@ function createHost() {
 describe("handleGatewayEvent sessions.changed", () => {
   it("reloads sessions when the gateway pushes a sessions.changed event", () => {
     loadSessionsMock.mockReset();
-    applySessionsChangedEventMock.mockReset().mockReturnValue(false);
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
     const host = createHost();
 
     handleGatewayEvent(host, {
@@ -129,9 +129,9 @@ describe("handleGatewayEvent sessions.changed", () => {
     expect(loadSessionsMock).toHaveBeenCalledWith(host);
   });
 
-  it("does not reload sessions for applied message-phase session patches", () => {
+  it("does not reload sessions for applied message-phase session patches to existing rows", () => {
     loadSessionsMock.mockReset();
-    applySessionsChangedEventMock.mockReset().mockReturnValue(true);
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: true, change: "updated" });
     const host = createHost();
 
     handleGatewayEvent(host, {
@@ -150,9 +150,33 @@ describe("handleGatewayEvent sessions.changed", () => {
     expect(loadSessionsMock).not.toHaveBeenCalled();
   });
 
+  it("reloads sessions when an applied message-phase event inserts a session row", () => {
+    loadSessionsMock.mockReset();
+    applySessionsChangedEventMock
+      .mockReset()
+      .mockReturnValue({ applied: true, change: "inserted" });
+    const host = createHost();
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload: {
+        sessionKey: "agent:main:new",
+        phase: "message",
+        updatedAt: 123,
+        totalTokens: 456,
+      },
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
+    expect(loadSessionsMock).toHaveBeenCalledWith(host);
+  });
+
   it("reloads sessions when a message-phase event cannot patch local state", () => {
     loadSessionsMock.mockReset();
-    applySessionsChangedEventMock.mockReset().mockReturnValue(false);
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
     const host = createHost();
 
     handleGatewayEvent(host, {

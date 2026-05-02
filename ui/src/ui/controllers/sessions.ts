@@ -230,9 +230,16 @@ async function runCompactionMutation<T>(
   }
 }
 
-export function applySessionsChangedEvent(state: SessionsState, payload: unknown): boolean {
+export type SessionsChangedApplyResult =
+  | { applied: false }
+  | { applied: true; change: "inserted" | "updated" };
+
+export function applySessionsChangedEvent(
+  state: SessionsState,
+  payload: unknown,
+): SessionsChangedApplyResult {
   if (!isRecord(payload) || !state.sessionsResult) {
-    return false;
+    return { applied: false };
   }
   const eventSession = isRecord(payload.session) ? payload.session : null;
   const source = eventSession ?? payload;
@@ -242,7 +249,7 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
     (typeof payload.key === "string" && payload.key.trim()) ||
     "";
   if (!key) {
-    return false;
+    return { applied: false };
   }
 
   const previousRows = state.sessionsResult.sessions;
@@ -286,7 +293,7 @@ export function applySessionsChangedEvent(state: SessionsState, payload: unknown
   if (previousCheckpointSignature !== checkpointSummarySignature(nextRow)) {
     invalidateCheckpointCacheForKey(state, key);
   }
-  return true;
+  return { applied: true, change: existingIndex >= 0 ? "updated" : "inserted" };
 }
 
 export async function subscribeSessions(state: SessionsState) {

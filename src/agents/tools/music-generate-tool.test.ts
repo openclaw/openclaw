@@ -219,6 +219,11 @@ describe("createMusicGenerateTool", () => {
       }),
     ).resolves.toBeTruthy();
     expect(listProviders).not.toHaveBeenCalled();
+    expect(musicGenerationRuntime.generateMusic).toHaveBeenCalledWith(
+      expect.objectContaining({
+        autoProviderFallback: false,
+      }),
+    );
   });
 
   it("generates tracks, saves them, and emits MEDIA paths without a session-backed detach", async () => {
@@ -345,6 +350,7 @@ describe("createMusicGenerateTool", () => {
 
     expect(generateSpy).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         timeoutMs: 10_000,
       }),
     );
@@ -448,6 +454,7 @@ describe("createMusicGenerateTool", () => {
     await scheduledWork?.();
     expect(musicGenerationRuntime.generateMusic).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         timeoutMs: 10_000,
       }),
     );

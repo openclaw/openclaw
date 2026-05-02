@@ -1143,6 +1143,7 @@ describe("createImageGenerateTool", () => {
 
     expect(generateImage).toHaveBeenCalledWith(
       expect.objectContaining({
+        autoProviderFallback: false,
         aspectRatio: "16:9",
         inputImages: expect.arrayContaining([
           expect.objectContaining({ buffer: Buffer.from("input-image"), mimeType: "image/png" }),
