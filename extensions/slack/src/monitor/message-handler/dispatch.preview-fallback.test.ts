@@ -32,6 +32,16 @@ class TestSlackStreamNotDeliveredError extends Error {
 let mockedNativeStreaming = false;
 let mockedBlockStreamingEnabled: boolean | undefined = false;
 let capturedReplyOptions: { disableBlockStreaming?: boolean } | undefined;
+let capturedStatusReactionOptions: { enabled?: boolean; initialEmoji?: string } | undefined;
+const statusReactionControllerMock = {
+  setQueued: vi.fn(async () => {}),
+  setThinking: vi.fn(async () => {}),
+  setTool: vi.fn(async () => {}),
+  setError: vi.fn(async () => {}),
+  setDone: vi.fn(async () => {}),
+  clear: vi.fn(async () => {}),
+  restoreInitial: vi.fn(async () => {}),
+};
 let mockedReplyThreadTs: string | undefined = THREAD_TS;
 let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
 let capturedTyping:
@@ -87,6 +97,8 @@ function createPreparedSlackMessage(params?: {
     status: string;
   }) => Promise<void>;
   typingReaction?: string;
+  ackReactionMessageTs?: string;
+  ackReactionPromise?: Promise<boolean> | null;
 }) {
   return {
     ctx: {
@@ -136,7 +148,8 @@ function createPreparedSlackMessage(params?: {
     historyKey: "history-key",
     preview: "",
     ackReactionValue: "eyes",
-    ackReactionPromise: null,
+    ackReactionMessageTs: params?.ackReactionMessageTs,
+    ackReactionPromise: params?.ackReactionPromise ?? null,
   } as never;
 }
 
@@ -149,15 +162,10 @@ vi.mock("openclaw/plugin-sdk/channel-feedback", () => ({
     doneHoldMs: 0,
     errorHoldMs: 0,
   },
-  createStatusReactionController: () => ({
-    setQueued: async () => {},
-    setThinking: async () => {},
-    setTool: async () => {},
-    setError: async () => {},
-    setDone: async () => {},
-    clear: async () => {},
-    restoreInitial: async () => {},
-  }),
+  createStatusReactionController: (params: { enabled?: boolean; initialEmoji?: string }) => {
+    capturedStatusReactionOptions = params;
+    return statusReactionControllerMock;
+  },
   logAckFailure: () => {},
   logTypingFailure: () => {},
   removeAckReactionAfterReply: () => {},
@@ -408,9 +416,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     stopSlackStreamMock.mockReset();
     reactSlackMessageMock.mockReset();
     removeSlackReactionMock.mockReset();
+    for (const value of Object.values(statusReactionControllerMock)) {
+      value.mockClear();
+    }
     mockedNativeStreaming = false;
     mockedBlockStreamingEnabled = false;
     capturedReplyOptions = undefined;
+    capturedStatusReactionOptions = undefined;
     capturedTyping = undefined;
     mockedReplyThreadTs = THREAD_TS;
     mockedReplyThreadTsSequence = undefined;
@@ -518,6 +530,32 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       "hourglass_flowing_sand",
       expect.objectContaining({ token: "xoxb-test" }),
     );
+  });
+
+  it("keeps Slack status reactions when channel replies are message-tool-only", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          messages: {
+            groupChat: { visibleReplies: "message_tool" },
+            statusReactions: { enabled: true },
+          },
+        },
+        ctxPayload: { ChatType: "channel" },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+    expect(capturedStatusReactionOptions).toEqual(
+      expect.objectContaining({
+        enabled: true,
+        initialEmoji: "eyes",
+      }),
+    );
+    expect(statusReactionControllerMock.setQueued).toHaveBeenCalledTimes(1);
+    expect(statusReactionControllerMock.setDone).toHaveBeenCalledTimes(1);
   });
 
   it("escapes Slack mrkdwn in tool progress preview labels", async () => {

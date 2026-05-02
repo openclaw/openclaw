@@ -563,7 +563,7 @@ export async function prepareSlackMessage(params: {
   const sourceRepliesAreToolOnly =
     resolveChannelSourceReplyDeliveryMode({ cfg, ctx: { ChatType: chatType } }) ===
     "message_tool_only";
-
+  const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const shouldAckReaction = () =>
     Boolean(
       ackReaction &&
@@ -580,7 +580,11 @@ export async function prepareSlackMessage(params: {
     );
 
   const ackReactionMessageTs = message.ts;
-  const shouldSendAckReaction = !sourceRepliesAreToolOnly && shouldAckReaction();
+  const allowToolOnlyStatusReaction =
+    statusReactionsExplicitlyEnabled &&
+    (effectiveWasMentioned || mentionDecision.shouldBypassMention === true);
+  const shouldSendAckReaction =
+    shouldAckReaction() && (!sourceRepliesAreToolOnly || allowToolOnlyStatusReaction);
   const statusReactionsWillHandle =
     Boolean(ackReactionMessageTs) &&
     cfg.messages?.statusReactions?.enabled !== false &&

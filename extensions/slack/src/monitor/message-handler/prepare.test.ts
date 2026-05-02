@@ -399,6 +399,42 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared?.ackReactionPromise).toBeNull();
   });
 
+  it("primes Slack status reactions when channel replies are message-tool-only", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        messages: {
+          ackReaction: "eyes",
+          groupChat: { visibleReplies: "message_tool" },
+          statusReactions: { enabled: true },
+        },
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            replyToMode: "all",
+          },
+        },
+      } as OpenClawConfig,
+      replyToMode: "all",
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareMessageWith(slackCtx, defaultAccount, {
+      channel: "C123",
+      channel_type: "channel",
+      user: "U1",
+      text: "<@B1> hi",
+      ts: "1.000",
+    } as SlackMessageEvent);
+
+    expect(prepared).toBeTruthy();
+    expect(prepared?.ackReactionMessageTs).toBe("1.000");
+    expect(prepared?.ackReactionValue).toBe("eyes");
+    expect(prepared?.ackReactionPromise).toBeTruthy();
+    expect(await prepared!.ackReactionPromise).toBe(true);
+  });
+
   it("includes forwarded shared attachment text in raw body", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({

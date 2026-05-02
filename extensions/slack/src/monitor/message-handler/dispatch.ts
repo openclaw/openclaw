@@ -306,7 +306,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const incomingThreadTs = message.thread_ts;
   let didSetStatus = false;
   const statusReactionsEnabled =
-    !sourceRepliesAreToolOnly &&
     Boolean(prepared.ackReactionPromise) &&
     Boolean(reactionMessageTs) &&
     cfg.messages?.statusReactions?.enabled !== false;
