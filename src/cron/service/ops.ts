@@ -508,9 +508,8 @@ function tryCreateManualTaskRun(params: {
   state: CronServiceState;
   job: CronJob;
   startedAt: number;
-  runId?: string;
 }): string | undefined {
-  const runId = params.runId ?? createCronExecutionId(params.job.id, params.startedAt);
+  const runId = createCronExecutionId(params.job.id, params.startedAt);
   try {
     createRunningTaskRun({
       runtime: "cron",
@@ -662,7 +661,6 @@ async function prepareManualRun(
       state,
       job,
       startedAt: preflight.now,
-      runId: opts?.runId,
     });
     const executionJob = structuredClone(job);
     return {
