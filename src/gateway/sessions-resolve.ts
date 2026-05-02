@@ -148,42 +148,34 @@ export async function resolveSessionKeyFromResolveParams(params: {
   }
 
   if (hasSessionId) {
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    const list = listSessionsFromStore({
-      cfg,
-      storePath,
-      store,
-      opts: {
-        includeGlobal: p.includeGlobal === true,
-        includeUnknown: p.includeUnknown === true,
-        spawnedBy: p.spawnedBy,
-        agentId: p.agentId,
-      },
-    });
-    const matches = list.sessions.filter(
-      (session) => session.sessionId === sessionId || session.key === sessionId,
-    );
-    if (matches.length === 0) {
+    const { store } = loadCombinedSessionStoreForGateway(cfg);
+    const matchKeys = Object.entries(store)
+      .filter(([key, entry]) => {
+        if (!p.includeGlobal && key === "global") return false;
+        if (!p.includeUnknown && key === "unknown") return false;
+        return entry?.sessionId === sessionId || key === sessionId;
+      })
+      .map(([key]) => key);
+    if (matchKeys.length === 0) {
       return {
         ok: false,
         error: errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${sessionId}`),
       };
     }
-    if (matches.length > 1) {
-      const keys = matches.map((session) => session.key).join(", ");
+    if (matchKeys.length > 1) {
       return {
         ok: false,
         error: errorShape(
           ErrorCodes.INVALID_REQUEST,
-          `Multiple sessions found for sessionId: ${sessionId} (${keys})`,
+          `Multiple sessions found for sessionId: ${sessionId} (${matchKeys.join(", ")})`,
         ),
       };
     }
-    const agentCheckSessionId = validateSessionAgentExists(cfg, matches[0].key);
+    const agentCheckSessionId = validateSessionAgentExists(cfg, matchKeys[0]);
     if (agentCheckSessionId) {
       return agentCheckSessionId;
     }
-    return { ok: true, key: matches[0].key };
+    return { ok: true, key: matchKeys[0] };
   }
 
   const parsedLabel = parseSessionLabel(p.label);

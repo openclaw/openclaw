@@ -43,7 +43,26 @@ function mergeSessionEntryIntoCombined(params: {
   }
 }
 
+let _combinedStoreCache: {
+  result: { storePath: string; store: Record<string, SessionEntry> };
+  ts: number;
+} | null = null;
+const COMBINED_STORE_CACHE_TTL_MS = 2_000;
+
 export function loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
+  storePath: string;
+  store: Record<string, SessionEntry>;
+} {
+  const now = Date.now();
+  if (_combinedStoreCache && now - _combinedStoreCache.ts < COMBINED_STORE_CACHE_TTL_MS) {
+    return _combinedStoreCache.result;
+  }
+  const result = _loadCombinedSessionStoreForGateway(cfg);
+  _combinedStoreCache = { result, ts: now };
+  return result;
+}
+
+function _loadCombinedSessionStoreForGateway(cfg: OpenClawConfig): {
   storePath: string;
   store: Record<string, SessionEntry>;
 } {
