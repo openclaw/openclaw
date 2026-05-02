@@ -13,9 +13,9 @@ import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordAccount } from "./accounts.js";
-import { resolveDiscordTransport, type DiscordTransport } from "./fetch.js";
+import type { DiscordTransport } from "./fetch.js";
 import type { RequestClient } from "./internal/discord.js";
-import { resolveDiscordProxyFetchForAccount } from "./proxy-fetch.js";
+import { resolveDiscordProxyTransportForAccount } from "./proxy-fetch.js";
 import { parseAndResolveRecipient } from "./recipient-resolution.js";
 import { buildDiscordSendError, createDiscordClient, resolveChannelId } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
@@ -88,8 +88,7 @@ export async function sendVoiceMessageDiscord(
       cfg,
       accountId: opts.accountId,
     });
-    const proxyFetch = resolveDiscordProxyFetchForAccount(accountInfo, cfg);
-    voiceTransport = resolveDiscordTransport(proxyFetch);
+    voiceTransport = resolveDiscordProxyTransportForAccount(accountInfo, cfg);
     const client = createDiscordClient({ ...opts, cfg });
     token = client.token;
     rest = client.rest;

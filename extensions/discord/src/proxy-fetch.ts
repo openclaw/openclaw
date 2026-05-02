@@ -5,7 +5,9 @@ import type { ResolvedDiscordAccount } from "./accounts.js";
 import {
   hasDiscordManagedProxyConfig,
   resolveDiscordFetch,
+  resolveDiscordTransport,
   validateDiscordProxyUrl,
+  type DiscordTransport,
 } from "./fetch.js";
 import { makeProxyFetch } from "./proxy.js";
 
@@ -23,6 +25,35 @@ function resolveDiscordProxyUrl(
   }
   const trimmed = channelProxy.trim();
   return trimmed || undefined;
+}
+
+export function resolveDiscordProxyTransportByUrl(
+  proxyUrl: string | undefined,
+  runtime?: Pick<RuntimeEnv, "error">,
+): DiscordTransport | undefined {
+  const explicitProxy = proxyUrl?.trim();
+  if (explicitProxy) {
+    return withValidatedDiscordProxy(explicitProxy, runtime, (proxy) =>
+      resolveDiscordTransport(makeProxyFetch(proxy)),
+    );
+  }
+  if (!hasDiscordManagedProxyConfig()) {
+    return undefined;
+  }
+  try {
+    return resolveDiscordTransport(undefined);
+  } catch (err) {
+    runtime?.error?.(danger(`discord: invalid proxy: ${String(err)}`));
+    return undefined;
+  }
+}
+
+export function resolveDiscordProxyTransportForAccount(
+  account: Pick<ResolvedDiscordAccount, "config">,
+  cfg: OpenClawConfig,
+  runtime?: Pick<RuntimeEnv, "error">,
+): DiscordTransport | undefined {
+  return resolveDiscordProxyTransportByUrl(resolveDiscordProxyUrl(account, cfg), runtime);
 }
 
 export function resolveDiscordProxyFetchByUrl(
