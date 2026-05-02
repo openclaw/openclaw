@@ -1,6 +1,5 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
 import {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -401,9 +400,7 @@ export async function runCodexAppServerAttempt(
     },
   });
   const hadSessionFile = await fileExists(params.sessionFile);
-  const sessionManager = activeContextEngine ? SessionManager.open(params.sessionFile) : undefined;
-  let historyMessages =
-    (await readMirroredSessionHistoryMessages(params.sessionFile, sessionManager)) ?? [];
+  let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
@@ -421,7 +418,6 @@ export async function runCodexAppServerAttempt(
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       sessionFile: params.sessionFile,
-      sessionManager,
       runtimeContext: buildHarnessContextEngineRuntimeContext({
         attempt: runtimeParams,
         workspaceDir: effectiveWorkspace,
@@ -1121,7 +1117,6 @@ export async function runCodexAppServerAttempt(
           promptCache: result.promptCache,
         }),
         runMaintenance: runHarnessContextEngineMaintenance,
-        sessionManager,
         warn: (message) => embeddedAgentLog.warn(message),
       });
     }
@@ -1557,9 +1552,8 @@ function readString(record: JsonObject, key: string): string | undefined {
 
 async function readMirroredSessionHistoryMessages(
   sessionFile: string,
-  sessionManager?: Pick<SessionManager, "buildSessionContext">,
 ): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile, sessionManager);
+  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
   if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
       sessionFile,

@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import type { SessionEntry, SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionEntry } from "@mariozechner/pi-coding-agent";
 import {
   buildSessionContext,
   migrateSessionEntries,
@@ -18,12 +18,8 @@ function isMissingFileError(error: unknown): boolean {
 
 export async function readCodexMirroredSessionHistoryMessages(
   sessionFile: string,
-  sessionManager?: Pick<SessionManager, "buildSessionContext">,
 ): Promise<AgentMessage[] | undefined> {
   try {
-    if (sessionManager) {
-      return sessionManager.buildSessionContext().messages;
-    }
     const raw = await fs.readFile(sessionFile, "utf-8");
     const entries = parseSessionEntries(raw);
     const firstEntry = entries[0] as { type?: unknown; id?: unknown } | undefined;
