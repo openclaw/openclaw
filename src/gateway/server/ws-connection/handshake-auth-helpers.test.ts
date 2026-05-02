@@ -343,7 +343,7 @@ describe("handshake auth helpers", () => {
     ).toBe("shared_secret_loopback_local");
   });
 
-  it("skips backend self-pairing only for direct-local backend clients", () => {
+  it("skips backend self-pairing only for direct-local backend clients with dedicated credentials", () => {
     const connectParams = {
       client: {
         id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
@@ -358,7 +358,16 @@ describe("handshake auth helpers", () => {
         sharedAuthOk: true,
         authMethod: "token",
       }),
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "password",
+      }),
+    ).toBe(false);
     expect(
       shouldSkipLocalBackendSelfPairing({
         connectParams,
@@ -382,15 +391,6 @@ describe("handshake auth helpers", () => {
         connectParams,
         locality: "direct_local",
         hasBrowserOriginHeader: false,
-        sharedAuthOk: false,
-        authMethod: "device-token",
-      }),
-    ).toBe(true);
-    expect(
-      shouldSkipLocalBackendSelfPairing({
-        connectParams,
-        locality: "direct_local",
-        hasBrowserOriginHeader: false,
         sharedAuthOk: true,
         authMethod: "bootstrap-token",
       }),
@@ -401,6 +401,15 @@ describe("handshake auth helpers", () => {
         locality: "direct_local",
         hasBrowserOriginHeader: false,
         sharedAuthOk: true,
+        authMethod: "device-token",
+      }),
+    ).toBe(true);
+    expect(
+      shouldSkipLocalBackendSelfPairing({
+        connectParams,
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
         authMethod: "device-token",
       }),
     ).toBe(true);

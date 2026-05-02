@@ -649,10 +649,9 @@ export function attachGatewayWsMessageHandler(params: {
             hasSharedAuth,
             isLocalClient,
           });
-          // Shared token/password auth can bypass pairing for trusted operators.
           // Device-less clients still clear self-declared scopes by default, with
-          // one narrow exception: the direct-local backend gateway-client shared-
-          // auth handoff used for in-process control-plane coordination.
+          // one narrow exception: the direct-local backend gateway-client handoff
+          // that proves a dedicated bootstrap or device credential.
           if (
             !device &&
             !skipLocalBackendSelfPairing &&
