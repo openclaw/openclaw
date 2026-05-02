@@ -84,13 +84,13 @@ export function getQQBotMediaDir(...subPaths: string[]): string {
  * `saveMediaBuffer(..., "outbound", ...)`) or `inbound/`, while still keeping
  * the check anchored to a single, well-known directory.
  */
-export function getOpenClawMediaDir(): string {
+function getOpenClawMediaDir(): string {
   return path.join(getHomeDir(), ".openclaw", "media");
 }
 
 // ---- Basic platform information ----
 
-export type PlatformType = "darwin" | "linux" | "win32" | "other";
+type PlatformType = "darwin" | "linux" | "win32" | "other";
 
 export function getPlatform(): PlatformType {
   const p = process.platform;
@@ -185,12 +185,6 @@ function testExecutable(cmd: string, args: string[]): Promise<boolean> {
   });
 }
 
-/** Reset ffmpeg detection state, mainly for tests. */
-export function resetFfmpegCache(): void {
-  _ffmpegPath = undefined;
-  _ffmpegCheckPromise = null;
-}
-
 // ---- silk-wasm detection ----
 
 let _silkWasmAvailable: boolean | null = null;
@@ -215,7 +209,7 @@ export async function checkSilkWasmAvailable(): Promise<boolean> {
 // ---- Tilde expansion and path normalization ----
 
 /** Expand `~` to the current user's home directory. */
-export function expandTilde(p: string): string {
+function expandTilde(p: string): string {
   if (!p) {
     return p;
   }
@@ -271,14 +265,6 @@ export function isLocalPath(p: string): boolean {
     return true;
   }
   return false;
-}
-
-/** Looser local-path heuristic used for markdown-extracted paths. */
-export function looksLikeLocalPath(p: string): boolean {
-  if (isLocalPath(p)) {
-    return true;
-  }
-  return /^(?:Users|home|tmp|var|private|[A-Z]:)/i.test(p);
 }
 
 // ---- QQBot media path resolution ----

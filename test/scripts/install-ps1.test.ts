@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { createScriptTestHarness } from "./test-helpers";
 
 const SCRIPT_PATH = "scripts/install.ps1";
+const ENTRYPOINT_RE =
+  /\r?\n\$mainResults = @\(Main\)\r?\n\$installSucceeded = \$mainResults\.Count -gt 0 -and \$mainResults\[-1\] -eq \$true\r?\nComplete-Install -Succeeded:\$installSucceeded\s*$/m;
 
 function extractFunctionBody(source: string, name: string): string {
   const match = source.match(
@@ -35,10 +37,7 @@ function toPowerShellSingleQuotedLiteral(value: string): string {
 }
 
 function createFailingNodeFixture(source: string): string {
-  const scriptWithoutEntryPoint = source.replace(
-    /\r?\n\$installSucceeded = Main\r?\nComplete-Install -Succeeded:\$installSucceeded\s*$/m,
-    "",
-  );
+  const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
   expect(scriptWithoutEntryPoint).not.toBe(source);
 
   return [
@@ -48,7 +47,8 @@ function createFailingNodeFixture(source: string): string {
     "function Ensure-ExecutionPolicy { return $true }",
     "function Ensure-Node { return $false }",
     "",
-    "$installSucceeded = Main",
+    "$mainResults = @(Main)",
+    "$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true",
     "Complete-Install -Succeeded:$installSucceeded",
     "",
   ].join("\n");
@@ -71,6 +71,44 @@ describe("install.ps1 failure handling", () => {
     expect(completeInstallBody).toMatch(/\$PSCommandPath/);
     expect(completeInstallBody).toMatch(/\bexit \$script:InstallExitCode\b/);
     expect(completeInstallBody).toMatch(/\bthrow "OpenClaw installation failed with exit code/);
+  });
+
+  it("runs npm capture commands from a writable installer temp directory", () => {
+    const nativeCaptureBody = extractFunctionBody(source, "Invoke-NativeCommandCapture");
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClawNpm");
+    const mainBody = extractFunctionBody(source, "Main");
+    expect(source).toContain("function Get-NpmWorkingDirectory {");
+    expect(nativeCaptureBody).toContain('[string]$WorkingDirectory = ""');
+    expect(nativeCaptureBody).toContain("$startProcessArgs.WorkingDirectory = $WorkingDirectory");
+    expect(npmInstallBody).toContain("-WorkingDirectory (Get-NpmWorkingDirectory)");
+    expect(mainBody).toContain("-WorkingDirectory (Get-NpmWorkingDirectory)");
+  });
+
+  runIfPowerShell("creates a temp npm working directory", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "$result = Get-NpmWorkingDirectory",
+        'if (!(Test-Path -LiteralPath $result)) { throw "missing $result" }',
+        'if ($result -notmatch "openclaw-installer") { throw "unexpected $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = spawnSync(
+      powershell!,
+      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
   });
 
   runIfPowerShell("exits non-zero when run as a script file", () => {
@@ -114,10 +152,7 @@ describe("install.ps1 failure handling", () => {
   runIfPowerShell("keeps npm chatter out of Main's success return value", () => {
     const tempDir = harness.createTempDir("openclaw-install-ps1-");
     const scriptPath = join(tempDir, "install.ps1");
-    const scriptWithoutEntryPoint = source.replace(
-      /\r?\n\$installSucceeded = Main\r?\nComplete-Install -Succeeded:\$installSucceeded\s*$/m,
-      "",
-    );
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
     writeFileSync(
       scriptPath,
       [
@@ -128,13 +163,55 @@ describe("install.ps1 failure handling", () => {
         "function Ensure-Node { return $true }",
         "function Add-ToPath { param([string]$Path) }",
         "function Invoke-NativeCommandCapture {",
-        "  param([string]$FilePath, [string[]]$Arguments)",
+        "  param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory = '')",
         "  return @{ ExitCode = 0; Stdout = 'npm stdout'; Stderr = 'npm stderr' }",
         "}",
         "$NoOnboard = $true",
         "$result = Main",
         "if ($result -is [array]) { throw 'Main returned an array' }",
         'if ($result -ne $true) { throw "Main returned $result" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = spawnSync(
+      powershell!,
+      ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+  });
+
+  runIfPowerShell("uses Main's final boolean result when helper output precedes success", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "function Write-Banner { }",
+        "function Ensure-ExecutionPolicy { return $true }",
+        "function Ensure-Node { return $true }",
+        "function Ensure-Git { return $true }",
+        "function Add-ToPath { param([string]$Path) }",
+        "function Install-OpenClawNpm {",
+        "  param([string]$Target = 'latest')",
+        "  Write-Output 'native chatter'",
+        "  return $true",
+        "}",
+        "function Invoke-NativeCommandCapture {",
+        "  param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory = '')",
+        "  return @{ ExitCode = 0; Stdout = 'npm prefix'; Stderr = '' }",
+        "}",
+        "$NoOnboard = $true",
+        "$mainResults = @(Main)",
+        "$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true",
+        "Complete-Install -Succeeded:$installSucceeded",
         "",
       ].join("\n"),
     );

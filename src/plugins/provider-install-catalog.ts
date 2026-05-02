@@ -52,7 +52,7 @@ function isPreferredOrigin(candidate: PluginOrigin, current: PluginOrigin | unde
 }
 
 function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
-  return value === "npm" || value === "local" ? value : undefined;
+  return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
 }
 
 function resolveInstallInfoFromInstallRecord(
@@ -63,6 +63,12 @@ function resolveInstallInfoFromInstallRecord(
   }
   const npmSpec = (record.resolvedSpec ?? record.spec)?.trim();
   const localPath = (record.installPath ?? record.sourcePath)?.trim();
+  if (record.source === "clawhub" && record.spec?.trim()) {
+    return {
+      clawhubSpec: record.spec.trim(),
+      defaultChoice: "clawhub",
+    };
+  }
   if (record.source === "npm" && npmSpec) {
     return {
       npmSpec,
@@ -87,15 +93,26 @@ function resolveInstallInfoFromPackageSource(params: {
     params.origin === "bundled" || params.origin === "config"
       ? params.source?.npm?.spec
       : undefined;
+  const clawhubSpec =
+    params.origin === "bundled" || params.origin === "config"
+      ? params.source?.clawhub?.spec
+      : undefined;
   const localPath = params.source?.local?.path;
-  if (!npmSpec && !localPath) {
+  if (!clawhubSpec && !npmSpec && !localPath) {
     return null;
   }
   const defaultChoice = normalizeDefaultChoice(params.source?.defaultChoice);
   return {
+    ...(clawhubSpec ? { clawhubSpec } : {}),
     ...(npmSpec ? { npmSpec } : {}),
     ...(localPath ? { localPath } : {}),
-    ...(defaultChoice ? { defaultChoice } : npmSpec ? { defaultChoice: "npm" as const } : {}),
+    ...(defaultChoice
+      ? { defaultChoice }
+      : clawhubSpec
+        ? { defaultChoice: "clawhub" as const }
+        : npmSpec
+          ? { defaultChoice: "npm" as const }
+          : {}),
     ...(npmSpec && params.source?.npm?.expectedIntegrity
       ? { expectedIntegrity: params.source.npm.expectedIntegrity }
       : {}),
@@ -122,13 +139,16 @@ function resolveInstallInfoFromProviderIndex(
   if (!install) {
     return null;
   }
+  const clawhubSpec = install.clawhubSpec?.trim();
   const npmSpec = install.npmSpec?.trim();
-  if (!npmSpec) {
+  if (!clawhubSpec && !npmSpec) {
     return null;
   }
-  const defaultChoice = normalizeDefaultChoice(install.defaultChoice) ?? "npm";
+  const defaultChoice =
+    normalizeDefaultChoice(install.defaultChoice) ?? (clawhubSpec ? "clawhub" : "npm");
   return {
-    npmSpec,
+    ...(clawhubSpec ? { clawhubSpec } : {}),
+    ...(npmSpec ? { npmSpec } : {}),
     defaultChoice,
     ...(install.minHostVersion ? { minHostVersion: install.minHostVersion } : {}),
     ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),

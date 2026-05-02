@@ -1,7 +1,7 @@
 import { buildAttemptReplayMetadata } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
-export const DEFAULT_OVERFLOW_ERROR_MESSAGE =
+const DEFAULT_OVERFLOW_ERROR_MESSAGE =
   "request_too_large: Request size exceeds model context window";
 
 export function makeOverflowError(message: string = DEFAULT_OVERFLOW_ERROR_MESSAGE): Error {
@@ -37,6 +37,7 @@ export function makeAttemptResult(
   const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
   const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
   const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
+  const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
   return {
     aborted: false,
@@ -44,6 +45,7 @@ export function makeAttemptResult(
     timedOut: false,
     idleTimedOut: false,
     timedOutDuringCompaction: false,
+    timedOutDuringToolExecution: false,
     promptError: null,
     promptErrorSource: null,
     sessionIdUsed: "test-session",
@@ -58,6 +60,7 @@ export function makeAttemptResult(
         didSendViaMessagingTool,
         messagingToolSentTexts,
         messagingToolSentMediaUrls,
+        messagingToolSentTargets,
         successfulCronAdds,
       }),
     itemLifecycle: {
@@ -68,7 +71,7 @@ export function makeAttemptResult(
     didSendViaMessagingTool,
     messagingToolSentTexts,
     messagingToolSentMediaUrls,
-    messagingToolSentTargets: [],
+    messagingToolSentTargets,
     cloudCodeAssistFormatError: false,
     ...overrides,
   };

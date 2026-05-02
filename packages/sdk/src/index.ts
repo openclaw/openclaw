@@ -42,5 +42,7 @@ export type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
+  ToolInvokeParams,
+  ToolInvokeResult,
   WorkspaceSelection,
 } from "./types.js";

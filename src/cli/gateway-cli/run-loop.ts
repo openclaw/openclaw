@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -17,10 +18,11 @@ type RestartDrainTimeoutMs = number | undefined;
 
 type GatewayLifecycleRuntimeModule = typeof import("./lifecycle.runtime.js");
 
-let gatewayLifecycleRuntimeModule: Promise<GatewayLifecycleRuntimeModule> | undefined;
+const gatewayLifecycleRuntimeLoader = createLazyImportLoader<GatewayLifecycleRuntimeModule>(
+  () => import("./lifecycle.runtime.js"),
+);
 
-const loadGatewayLifecycleRuntimeModule = () =>
-  (gatewayLifecycleRuntimeModule ??= import("./lifecycle.runtime.js"));
+const loadGatewayLifecycleRuntimeModule = () => gatewayLifecycleRuntimeLoader.load();
 
 function createRestartIterationHook(onRestart: () => Promise<void> | void): () => Promise<boolean> {
   let isFirstIteration = true;
@@ -317,18 +319,16 @@ export async function runGatewayLoop(params: {
         if (isRestart) {
           const {
             abortEmbeddedPiRun,
-            getActiveBundledRuntimeDepsInstallCount,
             getActiveEmbeddedRunCount,
             getActiveTaskCount,
             markGatewayDraining,
             waitForActiveEmbeddedRuns,
             waitForActiveTasks,
-            waitForBundledRuntimeDepsInstallIdle,
           } = await loadGatewayLifecycleRuntimeModule();
           const createStillPendingDrainLogger = () =>
             setInterval(() => {
               gatewayLog.warn(
-                `still draining ${getActiveTaskCount()} active task(s), ${getActiveEmbeddedRunCount()} active embedded run(s), and ${getActiveBundledRuntimeDepsInstallCount()} runtime deps install(s) before restart`,
+                `still draining ${getActiveTaskCount()} active task(s) and ${getActiveEmbeddedRunCount()} active embedded run(s) before restart`,
               );
             }, RESTART_DRAIN_STILL_PENDING_WARN_MS);
 
@@ -337,7 +337,6 @@ export async function runGatewayLoop(params: {
           markGatewayDraining();
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
-          const activeRuntimeDepsInstalls = getActiveBundledRuntimeDepsInstallCount();
 
           // Best-effort abort for compacting runs so long compaction operations
           // don't hold session write locks across restart boundaries.
@@ -345,23 +344,20 @@ export async function runGatewayLoop(params: {
             abortEmbeddedPiRun(undefined, { mode: "compacting" });
           }
 
-          if (activeTasks > 0 || activeRuns > 0 || activeRuntimeDepsInstalls > 0) {
+          if (activeTasks > 0 || activeRuns > 0) {
             gatewayLog.info(
-              `draining ${activeTasks} active task(s), ${activeRuns} active embedded run(s), and ${activeRuntimeDepsInstalls} runtime deps install(s) before restart ${formatRestartDrainBudget()}`,
+              `draining ${activeTasks} active task(s) and ${activeRuns} active embedded run(s) before restart ${formatRestartDrainBudget()}`,
             );
             const stillPendingDrainLogger = createStillPendingDrainLogger();
-            const [tasksDrain, runsDrain, runtimeDepsDrain] = await Promise.all([
+            const [tasksDrain, runsDrain] = await Promise.all([
               activeTasks > 0
                 ? waitForActiveTasks(restartDrainTimeoutMs)
                 : Promise.resolve({ drained: true }),
               activeRuns > 0
                 ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
                 : Promise.resolve({ drained: true }),
-              activeRuntimeDepsInstalls > 0
-                ? waitForBundledRuntimeDepsInstallIdle(restartDrainTimeoutMs)
-                : Promise.resolve({ drained: true }),
             ]).finally(() => clearInterval(stillPendingDrainLogger));
-            if (tasksDrain.drained && runsDrain.drained && runtimeDepsDrain.drained) {
+            if (tasksDrain.drained && runsDrain.drained) {
               gatewayLog.info("all active work drained");
             } else {
               gatewayLog.warn("drain timeout reached; proceeding with restart");

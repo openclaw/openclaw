@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { renderCodexPromptOverlay } from "../../prompt-overlay.js";
 import { isModernCodexModel } from "../../provider.js";
-import type { CodexAppServerClient } from "./client.js";
+import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
 import { codexSandboxPolicyForTurn, type CodexAppServerRuntimeOptions } from "./config.js";
 import {
   assertCodexThreadResumeResponse,
@@ -86,6 +86,9 @@ export async function startOrResumeThread(params: {
           dynamicToolsFingerprint,
         };
       } catch (error) {
+        if (isCodexAppServerConnectionClosedError(error)) {
+          throw error;
+        }
         embeddedAgentLog.warn("codex app-server thread resume failed; starting a new thread", {
           error,
         });
@@ -222,7 +225,7 @@ function stabilizeJsonValue(value: JsonValue): JsonValue {
 export function buildDeveloperInstructions(params: EmbeddedRunAttemptParams): string {
   const promptOverlay = renderCodexRuntimePromptOverlay(params);
   const sections = [
-    "You are running inside OpenClaw. Use OpenClaw dynamic tools for messaging, cron, sessions, and host actions when available.",
+    "You are running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-specific integrations such as messaging, cron, sessions, media, gateway, and nodes when available.",
     "Preserve the user's existing channel/session context. If sending a channel reply, use the OpenClaw messaging tool instead of describing that you would reply.",
     promptOverlay,
     params.extraSystemPrompt,

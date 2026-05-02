@@ -9,12 +9,14 @@ import {
 } from "../../commands/doctor-completion.js";
 import { doctorCommand } from "../../commands/doctor.js";
 import {
+  ConfigMutationConflictError,
   readConfigFileSnapshot,
   replaceConfigFile,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -101,6 +103,10 @@ const SERVICE_REFRESH_PATH_ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
 ] as const;
+const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
+  ...SERVICE_REFRESH_PATH_ENV_KEYS,
+  "OPENCLAW_PROFILE",
+] as const;
 
 const UPDATE_QUIPS = [
   "Leveled up! New skills unlocked. You're welcome.",
@@ -156,6 +162,9 @@ export function shouldUseLegacyProcessRestartAfterUpdate(params: {
 
 type PrePackageServiceStop = {
   stopped: boolean;
+  inspected: boolean;
+  runtimeInspected: boolean;
+  running: boolean;
   serviceEnv?: NodeJS.ProcessEnv;
 };
 
@@ -169,11 +178,19 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
     service = resolveGatewayService();
     serviceState = await readGatewayServiceState(service, { env: process.env });
   } catch {
-    return { stopped: false };
+    return { stopped: false, inspected: false, runtimeInspected: false, running: false };
   }
 
+  const runtimeStatus = serviceState.runtime?.status;
+  const runtimeInspected = runtimeStatus === "running" || runtimeStatus === "stopped";
   if (!serviceState.installed) {
-    return { stopped: false };
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected,
+      running: serviceState.running,
+      serviceEnv: serviceState.env,
+    };
   }
 
   if (!params.shouldRestart) {
@@ -184,18 +201,46 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
         ),
       );
     }
-    return { stopped: false, serviceEnv: serviceState.env };
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected,
+      running: serviceState.running,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  if (!runtimeInspected) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: false,
+      running: false,
+      serviceEnv: serviceState.env,
+    };
   }
 
   if (!serviceState.running) {
-    return { stopped: false, serviceEnv: serviceState.env };
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      running: false,
+      serviceEnv: serviceState.env,
+    };
   }
 
   if (!params.jsonMode) {
     defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
   }
   await service.stop({ env: serviceState.env, stdout: process.stdout });
-  return { stopped: true, serviceEnv: serviceState.env };
+  return {
+    stopped: true,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    serviceEnv: serviceState.env,
+  };
 }
 
 async function maybeRestartServiceAfterFailedPackageUpdate(params: {
@@ -231,6 +276,25 @@ function isRunningInsideGatewayService(
   }
   const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
   return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+}
+
+function shouldBlockPackageUpdateFromGatewayServiceEnv(params: {
+  prePackageServiceStop: PrePackageServiceStop | undefined;
+}): boolean {
+  if (!isRunningInsideGatewayService()) {
+    return false;
+  }
+  const stopState = params.prePackageServiceStop;
+  if (!stopState?.inspected) {
+    return true;
+  }
+  if (stopState.stopped) {
+    return false;
+  }
+  if (!stopState.runtimeInspected) {
+    return true;
+  }
+  return stopState.running;
 }
 
 function formatCommandFailure(stdout: string, stderr: string): string {
@@ -311,11 +375,46 @@ function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.Pr
   };
 }
 
+function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const resolvedEnv = { ...env };
+  delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
+  delete resolvedEnv.OPENCLAW_SERVICE_KIND;
+  return resolvedEnv;
+}
+
 function resolveUpdatedInstallCommandEnv(
   env: NodeJS.ProcessEnv,
   invocationCwd?: string,
 ): NodeJS.ProcessEnv {
   return disableUpdatedPackageCompileCacheEnv(resolveServiceRefreshEnv(env, invocationCwd));
+}
+
+export function resolvePostInstallDoctorEnv(params?: {
+  baseEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
+}): NodeJS.ProcessEnv {
+  const resolvedEnv = disableUpdatedPackageCompileCacheEnv(params?.baseEnv ?? process.env);
+  if (!params?.serviceEnv) {
+    return resolvedEnv;
+  }
+
+  const serviceEnv = resolveServiceRefreshEnv(params.serviceEnv, params.invocationCwd);
+  for (const key of POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS) {
+    const value = serviceEnv[key]?.trim();
+    if (value) {
+      resolvedEnv[key] = serviceEnv[key];
+    }
+  }
+  return resolvedEnv;
+}
+
+export function resolveUpdatedGatewayRestartPort(params: {
+  config?: OpenClawConfig;
+  processEnv?: NodeJS.ProcessEnv;
+  serviceEnv?: NodeJS.ProcessEnv;
+}): number {
+  return resolveGatewayPort(params.config, params.serviceEnv ?? params.processEnv ?? process.env);
 }
 
 type UpdateDryRunPreview = {
@@ -505,6 +604,8 @@ async function runPackageInstallUpdate(params: {
   startedAt: number;
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   jsonMode: boolean;
+  managedServiceEnv?: NodeJS.ProcessEnv;
+  invocationCwd?: string;
 }): Promise<UpdateRunResult> {
   const manager = await resolveGlobalManager({
     root: params.root,
@@ -569,7 +670,10 @@ async function runPackageInstallUpdate(params: {
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
           env: {
-            ...disableUpdatedPackageCompileCacheEnv(process.env),
+            ...resolvePostInstallDoctorEnv({
+              serviceEnv: params.managedServiceEnv,
+              invocationCwd: params.invocationCwd,
+            }),
             OPENCLAW_UPDATE_IN_PROGRESS: "1",
             [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
           },
@@ -942,7 +1046,7 @@ async function maybeRestartService(params: {
     const diagnosticLines = [
       "Gateway did not become healthy after restart.",
       ...renderRestartDiagnostics(health),
-      `Restart log: ${resolveGatewayRestartLogPath(process.env)}`,
+      `Restart log: ${resolveGatewayRestartLogPath(params.serviceEnv ?? process.env)}`,
       `Run \`${replaceCliName(formatCliCommand("openclaw gateway status --deep"), CLI_NAME)}\` for details.`,
     ];
     if (params.opts.json) {
@@ -1117,12 +1221,49 @@ async function persistRequestedUpdateChannel(params: {
       channel: params.requestedChannel,
     },
   };
+  try {
+    await replaceConfigFile({
+      nextConfig: next,
+      baseHash: params.configSnapshot.hash,
+    });
+    return createUpdatedChannelSnapshot(params.configSnapshot, next);
+  } catch (error) {
+    if (!(error instanceof ConfigMutationConflictError)) {
+      throw error;
+    }
+  }
+
+  const refreshed = await readConfigFileSnapshot();
+  if (!refreshed.valid) {
+    return refreshed;
+  }
+  const refreshedChannel = normalizeUpdateChannel(refreshed.config.update?.channel);
+  if (refreshedChannel === params.requestedChannel) {
+    return refreshed;
+  }
+  const refreshedNext = {
+    ...refreshed.sourceConfig,
+    update: {
+      ...refreshed.sourceConfig.update,
+      channel: params.requestedChannel,
+    },
+  };
   await replaceConfigFile({
-    nextConfig: next,
-    baseHash: params.configSnapshot.hash,
+    nextConfig: refreshedNext,
+    baseHash: refreshed.hash,
   });
+  return createUpdatedChannelSnapshot(refreshed, refreshedNext);
+}
+
+function createUpdatedChannelSnapshot(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+  next: OpenClawConfig,
+): Awaited<ReturnType<typeof readConfigFileSnapshot>> {
+  if (!snapshot.valid) {
+    return snapshot;
+  }
   return {
-    ...params.configSnapshot,
+    ...snapshot,
     hash: undefined,
     parsed: next,
     sourceConfig: asResolvedSourceConfig(next),
@@ -1195,7 +1336,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
     const child = spawn(resolveNodeRunner(), argv, {
       stdio: "inherit",
       env: {
-        ...disableUpdatedPackageCompileCacheEnv(process.env),
+        ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel
@@ -1479,18 +1620,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  if (updateInstallKind === "package" && isRunningInsideGatewayService()) {
-    defaultRuntime.error(
-      [
-        "Package updates cannot run from inside the gateway service process.",
-        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-        `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
-      ].join("\n"),
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
-
   if (downgradeRisk && !opts.yes) {
     if (!process.stdin.isTTY || opts.json) {
       defaultRuntime.error(
@@ -1558,6 +1687,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.exit(1);
       return;
     }
+
+    if (shouldBlockPackageUpdateFromGatewayServiceEnv({ prePackageServiceStop })) {
+      stop();
+      defaultRuntime.error(
+        [
+          "Package updates cannot run from inside the gateway service process.",
+          "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+          `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
+        ].join("\n"),
+      );
+      defaultRuntime.exit(1);
+      return;
+    }
   }
 
   let result: UpdateRunResult;
@@ -1572,6 +1714,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
             startedAt,
             progress,
             jsonMode: Boolean(opts.json),
+            managedServiceEnv: prePackageServiceStop?.serviceEnv,
+            invocationCwd,
           })
         : await runGitUpdate({
             root,
@@ -1732,10 +1876,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   let restartScriptPath: string | null = null;
   let refreshGatewayServiceEnv = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
-  const gatewayPort = resolveGatewayPort(
-    postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
-    process.env,
-  );
+  let gatewayPort = resolveUpdatedGatewayRestartPort({
+    config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+    processEnv: process.env,
+  });
   if (shouldRestart) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
@@ -1749,6 +1893,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         })
       ) {
         gatewayServiceEnv = serviceState.env;
+        gatewayPort = resolveUpdatedGatewayRestartPort({
+          config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
+          processEnv: process.env,
+          serviceEnv: gatewayServiceEnv,
+        });
         restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
         refreshGatewayServiceEnv = true;
       }

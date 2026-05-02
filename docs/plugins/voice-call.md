@@ -96,7 +96,7 @@ skips starting the runtime. Commands, RPC calls, and agent tools still
 return the exact missing provider configuration when used.
 
 <Note>
-Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken` and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
+Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twilio.authToken`, `plugins.entries.voice-call.config.realtime.providers.*.apiKey`, `plugins.entries.voice-call.config.streaming.providers.*.apiKey`, and `plugins.entries.voice-call.config.tts.providers.*.apiKey` resolve through the standard SecretRef surface; see [SecretRef credential surface](/reference/secretref-credential-surface).
 </Note>
 
 ```json5
@@ -109,6 +109,18 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
           provider: "twilio", // or "telnyx" | "plivo" | "mock"
           fromNumber: "+15550001234", // or TWILIO_FROM_NUMBER for Twilio
           toNumber: "+15550005678",
+          sessionScope: "per-phone", // per-phone | per-call
+          numbers: {
+            "+15550009999": {
+              inboundGreeting: "Silver Fox Cards, how can I help?",
+              responseSystemPrompt: "You are a concise baseball card specialist.",
+              tts: {
+                providers: {
+                  openai: { voice: "alloy" },
+                },
+              },
+            },
+          },
 
           twilio: {
             accountSid: "ACxxxxxxxx",
@@ -192,6 +204,14 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
   </Accordion>
 </AccordionGroup>
 
+## Session scope
+
+By default, Voice Call uses `sessionScope: "per-phone"` so repeat calls from
+the same caller keep conversation memory. Set `sessionScope: "per-call"` when
+each carrier call should start with fresh context, for example reception,
+booking, IVR, or Google Meet bridge flows where the same phone number may
+represent different meetings.
+
 ## Realtime voice conversations
 
 `realtime` selects a full-duplex realtime voice provider for live call
@@ -210,8 +230,9 @@ Current runtime behaviour:
 - Bundled realtime voice providers: Google Gemini Live (`google`) and OpenAI (`openai`), registered by their provider plugins.
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
+- `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
-- Consult session keys reuse the existing voice session when available, then fall back to the caller/callee phone number so follow-up consult calls keep context during the call.
+- Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
 
 ### Tool policy
 
@@ -490,6 +511,57 @@ identity.
 Auto-responses use the agent system. Tune with `responseModel`,
 `responseSystemPrompt`, and `responseTimeoutMs`.
 
+### Per-number Routing
+
+Use `numbers` when one Voice Call plugin receives calls for multiple phone
+numbers and each number should behave like a different line. For example, one
+number can use a casual personal assistant while another uses a business
+persona, a different response agent, and a different TTS voice.
+
+Routes are selected from the provider-supplied dialed `To` number. Keys must be
+E.164 numbers. When a call arrives, Voice Call resolves the matching route once,
+stores the matched route on the call record, and reuses that effective config
+for the greeting, classic auto-response path, realtime consult path, and TTS
+playback. If no route matches, the global Voice Call config is used.
+Outbound calls do not use `numbers`; pass the outbound target, message, and
+session explicitly when initiating the call.
+
+Route overrides currently support:
+
+- `inboundGreeting`
+- `tts`
+- `agentId`
+- `responseModel`
+- `responseSystemPrompt`
+- `responseTimeoutMs`
+
+The `tts` route value deep-merges over the global Voice Call `tts` config, so
+you can usually override only the provider voice:
+
+```json5
+{
+  inboundGreeting: "Hello from the main line.",
+  responseSystemPrompt: "You are the default voice assistant.",
+  tts: {
+    provider: "openai",
+    providers: {
+      openai: { voice: "coral" },
+    },
+  },
+  numbers: {
+    "+15550001111": {
+      inboundGreeting: "Silver Fox Cards, how can I help?",
+      responseSystemPrompt: "You are a concise baseball card specialist.",
+      tts: {
+        providers: {
+          openai: { voice: "alloy" },
+        },
+      },
+    },
+  },
+}
+```
+
 ### Spoken output contract
 
 For auto-responses, Voice Call appends a strict spoken-output contract to
@@ -624,27 +696,31 @@ for turn latency and listen-wait times.
 
 Tool name: `voice_call`.
 
-| Action          | Args                      |
-| --------------- | ------------------------- |
-| `initiate_call` | `message`, `to?`, `mode?` |
-| `continue_call` | `callId`, `message`       |
-| `speak_to_user` | `callId`, `message`       |
-| `send_dtmf`     | `callId`, `digits`        |
-| `end_call`      | `callId`                  |
-| `get_status`    | `callId`                  |
+| Action          | Args                                       |
+| --------------- | ------------------------------------------ |
+| `initiate_call` | `message`, `to?`, `mode?`, `dtmfSequence?` |
+| `continue_call` | `callId`, `message`                        |
+| `speak_to_user` | `callId`, `message`                        |
+| `send_dtmf`     | `callId`, `digits`                         |
+| `end_call`      | `callId`                                   |
+| `get_status`    | `callId`                                   |
 
 This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
 
 ## Gateway RPC
 
-| Method               | Args                      |
-| -------------------- | ------------------------- |
-| `voicecall.initiate` | `to?`, `message`, `mode?` |
-| `voicecall.continue` | `callId`, `message`       |
-| `voicecall.speak`    | `callId`, `message`       |
-| `voicecall.dtmf`     | `callId`, `digits`        |
-| `voicecall.end`      | `callId`                  |
-| `voicecall.status`   | `callId`                  |
+| Method               | Args                                       |
+| -------------------- | ------------------------------------------ |
+| `voicecall.initiate` | `to?`, `message`, `mode?`, `dtmfSequence?` |
+| `voicecall.continue` | `callId`, `message`                        |
+| `voicecall.speak`    | `callId`, `message`                        |
+| `voicecall.dtmf`     | `callId`, `digits`                         |
+| `voicecall.end`      | `callId`                                   |
+| `voicecall.status`   | `callId`                                   |
+
+`dtmfSequence` is only valid with `mode: "conversation"`. Notify-mode calls
+should use `voicecall.dtmf` after the call exists if they need post-connect
+digits.
 
 ## Troubleshooting
 
@@ -662,6 +738,12 @@ configured `publicUrl` still fails when it points at local or private network
 space, because the carrier cannot call back into those addresses. Do not use
 `localhost`, `127.0.0.1`, `0.0.0.0`, `10.x`, `172.16.x`-`172.31.x`,
 `192.168.x`, `169.254.x`, `fc00::/7`, or `fd00::/8` as `publicUrl`.
+
+Twilio notify-mode outbound calls send their initial `<Say>` TwiML directly in
+the create-call request, so the first spoken message does not depend on Twilio
+fetching webhook TwiML. A public webhook is still required for status callbacks,
+conversation calls, pre-connect DTMF, realtime streams, and post-connect call
+control.
 
 Use one public exposure path:
 
@@ -719,6 +801,7 @@ Then inspect runtime state:
 ```bash
 openclaw voicecall status --call-id <id>
 openclaw voicecall tail
+openclaw logs --follow
 ```
 
 Common causes:
@@ -766,10 +849,23 @@ If Voice Call is green but the Meet participant never joins, check the Meet
 dial-in number, PIN, and `--dtmf-sequence`. The phone call can be healthy while
 the meeting rejects or ignores an incorrect DTMF sequence.
 
-Google Meet starts Voice Call silently, sends DTMF, then asks Voice Call to
-speak the intro after `voiceCall.postDtmfSpeechDelayMs`. Increase that delay in
-the Google Meet plugin config if the first line is spoken before Meet admits the
-phone participant.
+Google Meet passes the Meet DTMF sequence and intro text to `voicecall.start`.
+For Twilio calls, Voice Call serves the DTMF TwiML first, redirects back to the
+webhook, then opens the realtime media stream so the saved intro is generated
+after the phone participant has joined the meeting.
+
+Use `openclaw logs --follow` for the live phase trace. A healthy Twilio Meet
+join logs this order:
+
+- Google Meet delegates the Twilio join to Voice Call.
+- Voice Call stores pre-connect DTMF TwiML.
+- Twilio initial TwiML is consumed and served before realtime handling.
+- Voice Call serves realtime TwiML for the Twilio call.
+- The realtime bridge starts with the initial greeting queued.
+
+`openclaw voicecall tail` still shows persisted call records; it is useful for
+call state and transcripts, but not every webhook/realtime transition appears
+there.
 
 ### Realtime call has no speech
 
@@ -781,8 +877,8 @@ For realtime Twilio calls, also verify:
 - A realtime provider plugin is loaded and registered.
 - `realtime.provider` is unset or names a registered provider.
 - The provider API key is available to the Gateway process.
-- `openclaw voicecall tail` shows the media stream accepted and realtime
-  provider readiness before the initial greeting.
+- `openclaw logs --follow` shows realtime TwiML served, the realtime bridge
+  started, and the initial greeting queued.
 
 ## Related
 

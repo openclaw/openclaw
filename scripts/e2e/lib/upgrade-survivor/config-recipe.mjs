@@ -35,6 +35,28 @@ function readConfigSection(fileName) {
   return JSON.stringify(JSON.parse(fs.readFileSync(fileUrl, "utf8")));
 }
 
+function parseReleaseVersion(version) {
+  const match = /^([0-9]{4})\.([0-9]+)\.([0-9]+)/u.exec(String(version ?? ""));
+  if (!match) {
+    return null;
+  }
+  return match.slice(1).map((part) => Number.parseInt(part, 10));
+}
+
+function isReleaseBefore(version, minimum) {
+  const parsed = parseReleaseVersion(version);
+  const minimumParsed = parseReleaseVersion(minimum);
+  if (!parsed || !minimumParsed) {
+    return false;
+  }
+  for (let index = 0; index < parsed.length; index += 1) {
+    if (parsed[index] !== minimumParsed[index]) {
+      return parsed[index] < minimumParsed[index];
+    }
+  }
+  return false;
+}
+
 function configSetJsonFile(id, intent, configPath, fileName) {
   return {
     id,
@@ -68,6 +90,31 @@ const representativeConfigSteps = [
   ),
 ];
 
+const scenarioConfigSteps = new Map([
+  [
+    "feishu-channel",
+    [
+      configSetJsonFile("plugins-feishu", "plugins", "plugins", "plugins-feishu.json"),
+      configSetJsonFile(
+        "channels-feishu",
+        "feishu-channel",
+        "channels.feishu",
+        "channels-feishu.json",
+      ),
+    ],
+  ],
+  [
+    "tilde-log-path",
+    [
+      {
+        id: "logging-file",
+        intent: "logging",
+        argv: ["config", "set", "logging.file", "~/openclaw-upgrade-survivor/gateway.jsonl"],
+      },
+    ],
+  ],
+]);
+
 const recipe = [
   {
     id: "update-channel",
@@ -82,6 +129,49 @@ const recipe = [
     argv: ["config", "validate"],
   },
 ];
+
+function selectedScenario() {
+  return process.env.OPENCLAW_UPGRADE_SURVIVOR_SCENARIO || "base";
+}
+
+function adaptStepForBaseline(step, baselineVersion, summary) {
+  if (!isReleaseBefore(baselineVersion, "2026.4.0")) {
+    return step;
+  }
+  if (step.id === "plugins-feishu" || step.id === "channels-feishu") {
+    if (!summary.skippedIntents.includes("feishu-channel")) {
+      summary.skippedIntents.push("feishu-channel");
+    }
+    return null;
+  }
+  if (step.id === "agents") {
+    const agents = JSON.parse(step.argv[3]);
+    delete agents.defaults?.skills;
+    for (const agent of agents.list ?? []) {
+      delete agent.thinkingDefault;
+      delete agent.fastModeDefault;
+      delete agent.skills;
+    }
+    summary.skippedIntents.push("agent-modern-preferences");
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify(agents), ...step.argv.slice(4)],
+    };
+  }
+  if (step.intent === "plugins") {
+    const plugins = JSON.parse(step.argv[3]);
+    plugins.allow = (plugins.allow ?? []).filter((id) => id !== "memory");
+    delete plugins.entries?.memory;
+    if (!summary.skippedIntents.includes("memory-plugin-allow")) {
+      summary.skippedIntents.push("memory-plugin-allow");
+    }
+    return {
+      ...step,
+      argv: [...step.argv.slice(0, 3), JSON.stringify(plugins), ...step.argv.slice(4)],
+    };
+  }
+  return step;
+}
 
 function runOpenClaw(step) {
   const result = spawnSync("openclaw", step.argv, {
@@ -103,10 +193,13 @@ function runOpenClaw(step) {
 function applyRecipe() {
   const summaryPath = option("--summary");
   const baselineVersion = option("--baseline-version", null);
+  const scenario = selectedScenario();
+  const scenarioSteps = scenarioConfigSteps.get(scenario) ?? [];
   const summary = {
     source: "baseline-cli-command-recipe",
     recipe: "upgrade-survivor-v1",
     baselineVersion,
+    scenario,
     acceptedIntents: [
       "update",
       "gateway",
@@ -117,13 +210,18 @@ function applyRecipe() {
       "discord-channel",
       "telegram-channel",
       "whatsapp-channel",
+      ...scenarioSteps.map((step) => step.intent),
     ],
     skippedIntents: [],
     steps: [],
   };
 
-  for (const step of recipe) {
-    const outcome = runOpenClaw(step);
+  for (const step of [...recipe.slice(0, -1), ...scenarioSteps, recipe.at(-1)]) {
+    const adaptedStep = adaptStepForBaseline(step, baselineVersion, summary);
+    if (!adaptedStep) {
+      continue;
+    }
+    const outcome = runOpenClaw(adaptedStep);
     summary.steps.push(outcome);
     writeJson(summaryPath, summary);
     if (!outcome.ok) {

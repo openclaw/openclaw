@@ -1,15 +1,16 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { GoogleMeetConfig, GoogleMeetMode, GoogleMeetTransport } from "./config.js";
 
-export type SetupCheck = {
+type SetupCheck = {
   id: string;
   ok: boolean;
   message: string;
 };
 
-export type GoogleMeetSetupStatus = {
+type GoogleMeetSetupStatus = {
   ok: boolean;
   checks: SetupCheck[];
 };
@@ -24,31 +25,10 @@ function resolveUserPath(input: string): string {
   return input;
 }
 
-function isLocalOnlyWebhookHost(hostname: string): boolean {
-  const host = hostname.trim().toLowerCase();
-  if (!host) {
-    return false;
-  }
-  if (
-    host === "localhost" ||
-    host === "0.0.0.0" ||
-    host === "::" ||
-    host === "::1" ||
-    host.startsWith("127.")
-  ) {
-    return true;
-  }
-  if (host.startsWith("10.") || host.startsWith("192.168.") || host.startsWith("169.254.")) {
-    return true;
-  }
-  const private172 = /^172\.(1[6-9]|2\d|3[0-1])\./.test(host);
-  return private172 || host.startsWith("fc") || host.startsWith("fd");
-}
-
 function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
   try {
     const parsed = new URL(webhookUrl);
-    return isLocalOnlyWebhookHost(parsed.hostname);
+    return isBlockedHostnameOrIp(parsed.hostname);
   } catch {
     return false;
   }
@@ -107,6 +87,7 @@ export function getGoogleMeetSetupStatus(
     fullConfig?: unknown;
     mode?: GoogleMeetMode;
     transport?: GoogleMeetTransport;
+    twilioDialInNumber?: string;
   },
 ): {
   ok: boolean;
@@ -119,6 +100,7 @@ export function getGoogleMeetSetupStatus(
     fullConfig?: unknown;
     mode?: GoogleMeetMode;
     transport?: GoogleMeetTransport;
+    twilioDialInNumber?: string;
   },
 ) {
   const checks: SetupCheck[] = [];
@@ -210,6 +192,21 @@ export function getGoogleMeetSetupStatus(
         config.chrome.waitForInCallMs > 0
           ? `Realtime intro waits up to ${config.chrome.waitForInCallMs}ms for the Meet tab to be in-call`
           : "Set chrome.waitForInCallMs to delay realtime intro until the Meet tab is in-call",
+    });
+  }
+
+  if (transport === "twilio") {
+    const hasRequestDialPlan = Boolean(options?.twilioDialInNumber);
+    const hasDefaultDialPlan = Boolean(config.twilio.defaultDialInNumber);
+    const hasDialPlan = hasRequestDialPlan || hasDefaultDialPlan;
+    checks.push({
+      id: "twilio-dial-plan",
+      ok: hasDialPlan,
+      message: hasRequestDialPlan
+        ? "Twilio request includes a Meet dial-in number"
+        : hasDefaultDialPlan
+          ? "Twilio default Meet dial-in number is configured"
+          : "Twilio joins require a Meet dial-in phone number; pass dialInNumber with optional pin/dtmfSequence or configure twilio.defaultDialInNumber",
     });
   }
 

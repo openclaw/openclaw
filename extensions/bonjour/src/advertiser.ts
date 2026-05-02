@@ -400,7 +400,11 @@ export async function startGatewayBonjourAdvertiser(
         );
       } else {
         const label =
-          classification.kind === "netmask-assertion" ? "netmask assertion" : "interface assertion";
+          classification.kind === "netmask-assertion"
+            ? "netmask assertion"
+            : classification.kind === "self-probe"
+              ? "self-probe race"
+              : "interface assertion";
         logger.warn(`bonjour: suppressing ciao ${label}: ${classification.formatted}`);
         requestCiaoRecovery?.(classification);
       }

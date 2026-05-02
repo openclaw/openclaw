@@ -1464,6 +1464,36 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionsCleanupParams: Codable, Sendable {
+    public let agent: String?
+    public let allagents: Bool?
+    public let enforce: Bool?
+    public let activekey: String?
+    public let fixmissing: Bool?
+
+    public init(
+        agent: String?,
+        allagents: Bool?,
+        enforce: Bool?,
+        activekey: String?,
+        fixmissing: Bool?)
+    {
+        self.agent = agent
+        self.allagents = allagents
+        self.enforce = enforce
+        self.activekey = activekey
+        self.fixmissing = fixmissing
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agent
+        case allagents = "allAgents"
+        case enforce
+        case activekey = "activeKey"
+        case fixmissing = "fixMissing"
+    }
+}
+
 public struct SessionsPreviewParams: Codable, Sendable {
     public let keys: [String]
     public let limit: Int?
@@ -1483,6 +1513,28 @@ public struct SessionsPreviewParams: Codable, Sendable {
         case keys
         case limit
         case maxchars = "maxChars"
+    }
+}
+
+public struct SessionsDescribeParams: Codable, Sendable {
+    public let key: String
+    public let includederivedtitles: Bool?
+    public let includelastmessage: Bool?
+
+    public init(
+        key: String,
+        includederivedtitles: Bool?,
+        includelastmessage: Bool?)
+    {
+        self.key = key
+        self.includederivedtitles = includederivedtitles
+        self.includelastmessage = includelastmessage
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case includederivedtitles = "includeDerivedTitles"
+        case includelastmessage = "includeLastMessage"
     }
 }
 
@@ -2343,6 +2395,7 @@ public struct WizardStep: Codable, Sendable {
     public let type: AnyCodable
     public let title: String?
     public let message: String?
+    public let format: AnyCodable?
     public let options: [[String: AnyCodable]]?
     public let initialvalue: AnyCodable?
     public let placeholder: String?
@@ -2354,6 +2407,7 @@ public struct WizardStep: Codable, Sendable {
         type: AnyCodable,
         title: String?,
         message: String?,
+        format: AnyCodable?,
         options: [[String: AnyCodable]]?,
         initialvalue: AnyCodable?,
         placeholder: String?,
@@ -2364,6 +2418,7 @@ public struct WizardStep: Codable, Sendable {
         self.type = type
         self.title = title
         self.message = message
+        self.format = format
         self.options = options
         self.initialvalue = initialvalue
         self.placeholder = placeholder
@@ -2376,6 +2431,7 @@ public struct WizardStep: Codable, Sendable {
         case type
         case title
         case message
+        case format
         case options
         case initialvalue = "initialValue"
         case placeholder
@@ -2785,6 +2841,24 @@ public struct ChannelsStatusResult: Codable, Sendable {
 }
 
 public struct ChannelsStartParams: Codable, Sendable {
+    public let channel: String
+    public let accountid: String?
+
+    public init(
+        channel: String,
+        accountid: String?)
+    {
+        self.channel = channel
+        self.accountid = accountid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case channel
+        case accountid = "accountId"
+    }
+}
+
+public struct ChannelsStopParams: Codable, Sendable {
     public let channel: String
     public let accountid: String?
 
@@ -3830,6 +3904,100 @@ public struct ToolsEffectiveResult: Codable, Sendable {
     }
 }
 
+public struct ToolsInvokeParams: Codable, Sendable {
+    public let name: String
+    public let args: [String: AnyCodable]?
+    public let sessionkey: String?
+    public let agentid: String?
+    public let confirm: Bool?
+    public let idempotencykey: String?
+
+    public init(
+        name: String,
+        args: [String: AnyCodable]?,
+        sessionkey: String?,
+        agentid: String?,
+        confirm: Bool?,
+        idempotencykey: String?)
+    {
+        self.name = name
+        self.args = args
+        self.sessionkey = sessionkey
+        self.agentid = agentid
+        self.confirm = confirm
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case args
+        case sessionkey = "sessionKey"
+        case agentid = "agentId"
+        case confirm
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct ToolsInvokeError: Codable, Sendable {
+    public let code: String
+    public let message: String
+    public let details: AnyCodable?
+
+    public init(
+        code: String,
+        message: String,
+        details: AnyCodable?)
+    {
+        self.code = code
+        self.message = message
+        self.details = details
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code
+        case message
+        case details
+    }
+}
+
+public struct ToolsInvokeResult: Codable, Sendable {
+    public let ok: Bool
+    public let toolname: String
+    public let output: AnyCodable?
+    public let requiresapproval: Bool?
+    public let approvalid: String?
+    public let source: AnyCodable?
+    public let error: [String: AnyCodable]?
+
+    public init(
+        ok: Bool,
+        toolname: String,
+        output: AnyCodable?,
+        requiresapproval: Bool?,
+        approvalid: String?,
+        source: AnyCodable?,
+        error: [String: AnyCodable]?)
+    {
+        self.ok = ok
+        self.toolname = toolname
+        self.output = output
+        self.requiresapproval = requiresapproval
+        self.approvalid = approvalid
+        self.source = source
+        self.error = error
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case toolname = "toolName"
+        case output
+        case requiresapproval = "requiresApproval"
+        case approvalid = "approvalId"
+        case source
+        case error
+    }
+}
+
 public struct SkillsBinsParams: Codable, Sendable {}
 
 public struct SkillsBinsResult: Codable, Sendable {
@@ -4840,6 +5008,7 @@ public struct ChatHistoryParams: Codable, Sendable {
 
 public struct ChatSendParams: Codable, Sendable {
     public let sessionkey: String
+    public let sessionid: String?
     public let message: String
     public let thinking: String?
     public let deliver: Bool?
@@ -4855,6 +5024,7 @@ public struct ChatSendParams: Codable, Sendable {
 
     public init(
         sessionkey: String,
+        sessionid: String?,
         message: String,
         thinking: String?,
         deliver: Bool?,
@@ -4869,6 +5039,7 @@ public struct ChatSendParams: Codable, Sendable {
         idempotencykey: String)
     {
         self.sessionkey = sessionkey
+        self.sessionid = sessionid
         self.message = message
         self.thinking = thinking
         self.deliver = deliver
@@ -4885,6 +5056,7 @@ public struct ChatSendParams: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case sessionkey = "sessionKey"
+        case sessionid = "sessionId"
         case message
         case thinking
         case deliver

@@ -15,6 +15,7 @@ export function resolveSourceReplyDeliveryMode(params: {
   ctx: SourceReplyDeliveryModeContext;
   requested?: SourceReplyDeliveryMode;
   messageToolAvailable?: boolean;
+  defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   if (params.requested) {
     // When the bot was directly @mentioned, override message_tool_only
@@ -40,8 +41,8 @@ export function resolveSourceReplyDeliveryMode(params: {
       params.cfg.messages?.groupChat?.visibleReplies ?? params.cfg.messages?.visibleReplies;
     mode = configuredMode === "automatic" ? "automatic" : "message_tool_only";
   } else {
-    mode =
-      params.cfg.messages?.visibleReplies === "message_tool" ? "message_tool_only" : "automatic";
+    const configuredMode = params.cfg.messages?.visibleReplies ?? params.defaultVisibleReplies;
+    mode = configuredMode === "message_tool" ? "message_tool_only" : "automatic";
   }
   // When the bot is directly @mentioned, always deliver replies automatically
   // so users get a visible response to their mention. This override applies
@@ -76,12 +77,14 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   explicitSuppressTyping?: boolean;
   shouldSuppressTyping?: boolean;
   messageToolAvailable?: boolean;
+  defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyVisibilityPolicy {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode({
     cfg: params.cfg,
     ctx: params.ctx,
     requested: params.requested,
     messageToolAvailable: params.messageToolAvailable,
+    defaultVisibleReplies: params.defaultVisibleReplies,
   });
   const sendPolicyDenied = params.sendPolicy === "deny";
   const suppressAutomaticSourceDelivery = sourceReplyDeliveryMode === "message_tool_only";

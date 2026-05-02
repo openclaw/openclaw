@@ -1061,6 +1061,9 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        "Session selection cleared. New replies use the agent's configured default.",
+      );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1205,6 +1208,9 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
         `${CHECK_MARK_EMOJI} Model reset to default`,
       );
+      expect(editMessageTextSpy.mock.calls[0]?.[2]).toContain(
+        "Session selection cleared. New replies use the agent's configured default.",
+      );
 
       const entry = Object.values(loadSessionStore(storePath, { skipCache: true }))[0];
       expect(entry?.providerOverride).toBeUndefined();
@@ -1275,7 +1281,7 @@ describe("createTelegramBot", () => {
       expect(editMessageTextSpy).toHaveBeenCalledWith(
         1234,
         17,
-        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nThis model will be used for your next message.`,
+        `${CHECK_MARK_EMOJI} Model changed to <b>openai/gpt-5.4</b>\n\nSession-only selection. The agent default in openclaw.json is unchanged; /reset or a new session may return to that default.`,
         expect.objectContaining({ parse_mode: "HTML" }),
       );
 
@@ -2234,7 +2240,7 @@ describe("createTelegramBot", () => {
       undefined,
     );
   });
-  it("sets command target session key for dm topic commands", async () => {
+  it("keeps unconfigured dm topic commands on the flat dm session", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
     commandSpy.mockClear();
@@ -2273,7 +2279,7 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
-    expect(payload.CommandTargetSessionKey).toBe("agent:main:main:thread:12345:99");
+    expect(payload.CommandTargetSessionKey).toBe("agent:main:main");
   });
 
   it("allows native DM commands for paired users", async () => {
