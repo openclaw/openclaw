@@ -358,6 +358,28 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
+  it("skips plugin dependency cleanup for baselines without packaged plugin dirs", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.4.29 2026.3.13",
+      upgradeSurvivorScenarios: "reported-issues",
+    });
+
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.29-feishu-channel",
+      "published-upgrade-survivor-2026.4.29-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.29-plugin-deps-cleanup",
+      "published-upgrade-survivor-2026.4.29-tilde-log-path",
+      "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.3.13",
+      "published-upgrade-survivor-2026.3.13-feishu-channel",
+      "published-upgrade-survivor-2026.3.13-bootstrap-persona",
+      "published-upgrade-survivor-2026.3.13-tilde-log-path",
+      "published-upgrade-survivor-2026.3.13-versioned-runtime-deps",
+    ]);
+  });
+
   it("expands update migration across baselines and cleanup scenarios", () => {
     const plan = planFor({
       selectedLaneNames: ["update-migration"],
