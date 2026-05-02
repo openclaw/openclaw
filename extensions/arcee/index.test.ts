@@ -69,6 +69,14 @@ describe("arcee provider plugin", () => {
       "arcee/trinity-large-preview",
       "arcee/trinity-large-thinking",
     ]);
+    expect(
+      config?.models?.providers?.arcee?.models?.find(
+        (model) => model.id === "arcee/trinity-large-thinking",
+      )?.compat,
+    ).toMatchObject({
+      supportsReasoningEffort: false,
+      supportsTools: false,
+    });
   });
 
   it("keeps direct Arcee auth env candidates separate from OpenRouter", () => {
