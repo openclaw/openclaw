@@ -87,7 +87,7 @@ function freezeOwnerMap(owners: Map<string, string[]>): ReadonlyMap<string, read
   );
 }
 
-export function buildPluginMetadataOwnerMaps(
+function buildPluginMetadataOwnerMaps(
   plugins: readonly PluginManifestRecord[],
 ): PluginMetadataSnapshotOwnerMaps {
   const channels = new Map<string, string[]>();
