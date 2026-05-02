@@ -70,6 +70,18 @@ describe("tool-policy", () => {
     expect(group).toContain("tts");
   });
 
+  it("keeps PDF covered by the media group", () => {
+    expect(TOOL_GROUPS["group:media"]).toEqual(
+      expect.arrayContaining([
+        "image",
+        "image_generate",
+        "music_generate",
+        "pdf",
+        "video_generate",
+      ]),
+    );
+  });
+
   it("normalizes tool names and aliases", () => {
     expect(normalizeToolName(" BASH ")).toBe("exec");
     expect(normalizeToolName("apply-patch")).toBe("apply_patch");
