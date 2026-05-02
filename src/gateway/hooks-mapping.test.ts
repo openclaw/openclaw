@@ -227,6 +227,33 @@ describe("hooks mapping", () => {
     }
   });
 
+  it("preserves wake session routing metadata", async () => {
+    const mappings = resolveHookMappings({
+      mappings: [
+        {
+          id: "wake-session-key",
+          match: { path: "gmail" },
+          action: "wake",
+          agentId: "hooks",
+          textTemplate: "Wake: {{messages[0].subject}}",
+          sessionKey: "hook:gmail:{{messages[0].subject}}",
+        },
+      ],
+    });
+    const result = await applyHookMappings(mappings, {
+      payload: gmailPayload,
+      headers: {},
+      url: baseUrl,
+      path: "gmail",
+    });
+    expect(result?.ok).toBe(true);
+    if (result?.ok && result.action?.kind === "wake") {
+      expect(result.action.agentId).toBe("hooks");
+      expect(result.action.sessionKey).toBe("hook:gmail:Hello");
+      expect(result.action.sessionKeySource).toBe("templated");
+    }
+  });
+
   it("runs transform module", async () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-"));
     const transformsRoot = path.join(configDir, "hooks", "transforms");

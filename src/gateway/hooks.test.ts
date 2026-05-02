@@ -366,6 +366,21 @@ describe("gateway hooks helpers", () => {
     ).toBe("agent:hooks:slack:channel:c123");
   });
 
+  test("normalizeHookDispatchSessionKey scopes legacy and non-agent keys to the target agent", () => {
+    expect(
+      normalizeHookDispatchSessionKey({
+        sessionKey: "hook:wake:custom",
+        targetAgentId: "hooks",
+      }),
+    ).toBe("agent:hooks:hook:wake:custom");
+    expect(
+      normalizeHookDispatchSessionKey({
+        sessionKey: "main",
+        targetAgentId: "hooks",
+      }),
+    ).toBe("agent:hooks:main");
+  });
+
   test("resolveHooksConfig validates defaultSessionKey and generated fallback against prefixes", () => {
     expect(() =>
       resolveHooksConfig({
@@ -404,6 +419,28 @@ describe("gateway hooks helpers", () => {
               action: "agent",
               messageTemplate: "Subject: {{messages[0].subject}}",
               sessionKey: "hook:gmail:{{messages[0].id}}",
+            },
+          ],
+        },
+      } as OpenClawConfig),
+    ).toThrow(
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
+    );
+  });
+
+  test("resolveHooksConfig requires prefixes for templated wake mapping session keys", () => {
+    expect(() =>
+      resolveHooksConfig({
+        hooks: {
+          enabled: true,
+          token: "secret",
+          allowRequestSessionKey: true,
+          mappings: [
+            {
+              match: { path: "github" },
+              action: "wake",
+              textTemplate: "CI: {{payload.conclusion}}",
+              sessionKey: "hook:github:{{payload.runId}}",
             },
           ],
         },
@@ -458,7 +495,7 @@ describe("gateway hooks helpers", () => {
     ).not.toThrow();
   });
 
-  test("resolveHooksConfig ignores templated session keys on wake mappings", () => {
+  test("resolveHooksConfig enforces templated session keys on wake mappings", () => {
     expect(() =>
       resolveHooksConfig({
         hooks: {
@@ -474,7 +511,9 @@ describe("gateway hooks helpers", () => {
           ],
         },
       } as OpenClawConfig),
-    ).not.toThrow();
+    ).toThrow(
+      "hooks.allowedSessionKeyPrefixes is required when a hook mapping sessionKey uses templates, even if hooks.allowRequestSessionKey=true",
+    );
   });
 
   test("resolveHooksConfig treats '/' match.path as a catch-all for shadowing", () => {

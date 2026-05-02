@@ -4,7 +4,11 @@ import { listAgentIds, resolveDefaultAgentId } from "../agents/agent-scope-confi
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readJsonBodyWithLimit, requestBodyErrorToText } from "../infra/http-body.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import type { HookExternalContentSource } from "../security/external-content.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -197,17 +201,29 @@ export function normalizeHookHeaders(req: IncomingMessage) {
   return headers;
 }
 
-export function normalizeWakePayload(
-  payload: Record<string, unknown>,
-):
-  | { ok: true; value: { text: string; mode: "now" | "next-heartbeat" } }
+export function normalizeWakePayload(payload: Record<string, unknown>):
+  | {
+      ok: true;
+      value: {
+        text: string;
+        mode: "now" | "next-heartbeat";
+        sessionKey?: string;
+      };
+    }
   | { ok: false; error: string } {
   const normalizedText = normalizeOptionalString(payload.text) ?? "";
   if (!normalizedText) {
     return { ok: false, error: "text required" };
   }
   const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
-  return { ok: true, value: { text: normalizedText, mode } };
+  return {
+    ok: true,
+    value: {
+      text: normalizedText,
+      mode,
+      sessionKey: resolveSessionKey(normalizeOptionalString(payload.sessionKey)),
+    },
+  };
 }
 
 type HookAgentPayload = {
@@ -322,6 +338,7 @@ export function resolveHookSessionKey(params: {
   source: HookSessionKeySource;
   sessionKey?: string;
   idFactory?: () => string;
+  allowGlobalSessionKey?: boolean;
 }): { ok: true; value: string } | { ok: false; error: string } {
   const requested = resolveSessionKey(params.sessionKey);
   if (requested) {
@@ -332,7 +349,11 @@ export function resolveHookSessionKey(params: {
       return { ok: false, error: getHookSessionKeyRequestPolicyError() };
     }
     const allowedPrefixes = params.hooksConfig.sessionPolicy.allowedSessionKeyPrefixes;
-    if (allowedPrefixes && !isSessionKeyAllowedByPrefix(requested, allowedPrefixes)) {
+    if (
+      allowedPrefixes &&
+      !(params.allowGlobalSessionKey && requested === "global") &&
+      !isSessionKeyAllowedByPrefix(requested, allowedPrefixes)
+    ) {
       return { ok: false, error: getHookSessionKeyPrefixError(allowedPrefixes) };
     }
     return { ok: true, value: requested };
@@ -362,7 +383,7 @@ function hasEffectiveTemplatedHookSessionKeyMapping(mappings: HookMappingResolve
       continue;
     }
     effectiveMappings.push(mapping);
-    if (mapping.action === "agent" && hasTemplatedHookSessionKey(mapping.sessionKey)) {
+    if (hasTemplatedHookSessionKey(mapping.sessionKey)) {
       return true;
     }
   }
@@ -389,12 +410,15 @@ export function normalizeHookDispatchSessionKey(params: {
   if (!trimmed || !params.targetAgentId) {
     return trimmed;
   }
-  const parsed = parseAgentSessionKey(trimmed);
-  if (!parsed) {
-    return trimmed;
-  }
   const targetAgentId = normalizeAgentId(params.targetAgentId);
-  return `agent:${targetAgentId}:${parsed.rest}`;
+  const parsed = parseAgentSessionKey(trimmed);
+  if (parsed) {
+    return `agent:${targetAgentId}:${parsed.rest}`;
+  }
+  return toAgentStoreSessionKey({
+    agentId: targetAgentId,
+    requestKey: trimmed,
+  });
 }
 
 export function normalizeAgentPayload(payload: Record<string, unknown>):

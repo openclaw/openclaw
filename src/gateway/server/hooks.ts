@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
+import { loadConfig } from "../../config/config.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import {
   resolveAgentMainSessionKey,
@@ -15,6 +16,7 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
+import { loadSessionEntry } from "../session-utils.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -47,11 +49,20 @@ export function createGatewayHooksRequestHandler(params: {
 }) {
   const { deps, getHooksConfig, getClientIpConfig, bindHost, port, logHooks } = params;
 
-  const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
-    const sessionKey = resolveMainSessionKeyFromConfig();
+  const dispatchWakeHook = (value: {
+    text: string;
+    mode: "now" | "next-heartbeat";
+    sessionKey?: string;
+  }) => {
+    const cfg = loadConfig();
+    const requestedSessionKey =
+      cfg.session?.scope === "global"
+        ? "global"
+        : value.sessionKey || resolveMainSessionKeyFromConfig();
+    const { canonicalKey: sessionKey } = loadSessionEntry(requestedSessionKey);
     enqueueSystemEvent(value.text, { sessionKey, trusted: false });
     if (value.mode === "now") {
-      requestHeartbeatNow({ reason: "hook:wake" });
+      requestHeartbeatNow({ reason: "hook:wake", sessionKey });
     }
   };
 
