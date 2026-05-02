@@ -33,9 +33,10 @@ describe("loadManifestContractSnapshot", () => {
     };
     mocks.getCurrentPluginMetadataSnapshot.mockReturnValue(current);
 
-    expect(loadManifestContractSnapshot({ config: {}, workspaceDir: "/workspace", env })).toBe(
-      current,
-    );
+    expect(loadManifestContractSnapshot({ config: {}, workspaceDir: "/workspace", env })).toEqual({
+      index: current.index,
+      plugins: current.plugins,
+    });
 
     expect(mocks.getCurrentPluginMetadataSnapshot).toHaveBeenCalledWith({
       config: {},
