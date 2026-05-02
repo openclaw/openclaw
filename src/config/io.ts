@@ -61,7 +61,9 @@ import {
   maybeRecoverSuspiciousConfigReadSync,
   promoteConfigSnapshotToLastKnownGood as promoteConfigSnapshotToLastKnownGoodWithDeps,
   recoverConfigFromLastKnownGood as recoverConfigFromLastKnownGoodWithDeps,
+  resolveLastKnownGoodConfigPath,
 } from "./io.observe-recovery.js";
+export { resolveLastKnownGoodConfigPath } from "./io.observe-recovery.js";
 import { persistGeneratedOwnerDisplaySecret } from "./io.owner-display-secret.js";
 import {
   collectChangedPaths,

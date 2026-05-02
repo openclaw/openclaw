@@ -22866,6 +22866,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
               },
+              recovery: {
+                type: "string",
+                enum: ["on", "off"],
+                title: "Config Reload Recovery",
+                description:
+                  'Whether to restore the last-known-good config when an invalid config is written to disk: "on" (default) restores automatically; "off" logs validation errors and leaves the file untouched. Automatically "off" when mode is "off".',
+              },
               debounceMs: {
                 type: "integer",
                 minimum: 0,
@@ -26076,6 +26083,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "gateway.reload.mode": {
       label: "Config Reload Mode",
       help: 'Controls how config edits are applied: "off" ignores live edits, "restart" always restarts, "hot" applies in-process, and "hybrid" tries hot then restarts if required. Keep "hybrid" for safest routine updates.',
+      tags: ["network", "reliability"],
+    },
+    "gateway.reload.recovery": {
+      label: "Config Reload Recovery",
+      help: 'Whether to restore the last-known-good config when an invalid config is written to disk: "on" (default) restores automatically; "off" logs validation errors and leaves the file untouched. Automatically "off" when mode is "off".',
       tags: ["network", "reliability"],
     },
     "gateway.reload.debounceMs": {

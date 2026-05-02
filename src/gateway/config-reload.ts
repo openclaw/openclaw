@@ -30,11 +30,13 @@ export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 type GatewayReloadSettings = {
   mode: GatewayReloadMode;
   debounceMs: number;
+  recovery: "on" | "off";
 };
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
   debounceMs: 300,
+  recovery: "on",
 };
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
 const MISSING_CONFIG_MAX_RETRIES = 2;
@@ -151,7 +153,14 @@ export function resolveGatewayReloadSettings(cfg: OpenClawConfig): GatewayReload
     typeof debounceRaw === "number" && Number.isFinite(debounceRaw)
       ? Math.max(0, Math.floor(debounceRaw))
       : DEFAULT_RELOAD_SETTINGS.debounceMs;
-  return { mode, debounceMs };
+  const rawRecovery = cfg.gateway?.reload?.recovery;
+  const recovery: "on" | "off" =
+    rawRecovery === "on" || rawRecovery === "off"
+      ? rawRecovery
+      : mode === "off"
+        ? "off"
+        : DEFAULT_RELOAD_SETTINGS.recovery;
+  return { mode, debounceMs, recovery };
 }
 
 type GatewayConfigReloader = {
@@ -245,20 +254,32 @@ export function startGatewayConfigReloader(opts: {
     return true;
   };
 
+  const formatSnapshotIssueLines = (snapshot: ConfigFileSnapshot): string[] =>
+    formatConfigIssueLines([...snapshot.issues, ...snapshot.legacyIssues], "-");
+
   const handleInvalidSnapshot = (snapshot: ConfigFileSnapshot): boolean => {
     if (snapshot.valid) {
       return false;
     }
-    const issues = formatConfigIssueLines(snapshot.issues, "").join(", ");
-    opts.log.warn(`config reload skipped (invalid config): ${issues}`);
+    const issueLines = formatSnapshotIssueLines(snapshot);
+    opts.log.warn(
+      `config reload skipped, invalid config (${issueLines.length} issue${issueLines.length === 1 ? "" : "s"}): ${issueLines.join("; ")}`,
+    );
     return true;
   };
 
   const recoverAndReadSnapshot = async (
     snapshot: ConfigFileSnapshot,
     reason: string,
-  ): Promise<ConfigFileSnapshot | null> => {
-    if (!opts.recoverSnapshot) {
+  ): Promise<ConfigFileSnapshot | "logged-and-skipped" | null> => {
+    if (!opts.recoverSnapshot || settings.recovery === "off") {
+      if (settings.recovery === "off") {
+        const issueLines = formatSnapshotIssueLines(snapshot);
+        opts.log.warn(
+          `config reload skipped, invalid config, recovery disabled (${issueLines.length} issue${issueLines.length === 1 ? "" : "s"}): ${issueLines.join("; ")}`,
+        );
+        return "logged-and-skipped";
+      }
       return null;
     }
     if (!shouldAttemptLastKnownGoodRecovery(snapshot)) {
@@ -433,6 +454,9 @@ export function startGatewayConfigReloader(opts: {
       let degradedPluginSnapshot = false;
       if (!snapshot.valid) {
         const recoveredSnapshot = await recoverAndReadSnapshot(snapshot, "invalid-config");
+        if (recoveredSnapshot === "logged-and-skipped") {
+          return;
+        }
         if (!recoveredSnapshot) {
           const pluginLocalSnapshot = resolvePluginLocalInvalidReloadSnapshot({
             snapshot,

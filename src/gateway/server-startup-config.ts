@@ -1,8 +1,11 @@
+import { promises as fsPromises } from "node:fs";
+import JSON5 from "json5";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
   readConfigFileSnapshotWithPluginMetadata,
   recoverConfigFromLastKnownGood,
   recoverConfigFromJsonRootSuffix,
+  resolveLastKnownGoodConfigPath,
 } from "../config/io.js";
 import { formatConfigIssueLines, formatConfigIssueSummary } from "../config/issue-format.js";
 import { asResolvedSourceConfig, materializeRuntimeConfig } from "../config/materialize.js";
@@ -41,6 +44,19 @@ type GatewayStartupLog = {
   warn: (message: string) => void;
   error?: (message: string) => void;
 };
+
+async function readLKGRecoverySetting(configPath: string): Promise<"on" | "off" | undefined> {
+  try {
+    const lkgPath = resolveLastKnownGoodConfigPath(configPath);
+    const raw = await fsPromises.readFile(lkgPath, "utf-8");
+    const parsed = JSON5.parse(raw) as { gateway?: { reload?: { recovery?: string } } };
+    const v = parsed?.gateway?.reload?.recovery;
+    if (v === "on" || v === "off") return v;
+  } catch {
+    // LKG file missing or unreadable — no setting available
+  }
+  return undefined;
+}
 
 type GatewaySecretsStateEventCode = "SECRETS_RELOADER_DEGRADED" | "SECRETS_RELOADER_RECOVERED";
 
@@ -240,14 +256,23 @@ export async function loadGatewayStartupConfigSnapshot(params: {
     if (!configSnapshot.valid) {
       const rejectedSnapshot = configSnapshot;
       const rejectedConfigIssues = collectConfigSnapshotIssueDetails(rejectedSnapshot);
-      const canRecoverFromLastKnownGood = shouldAttemptLastKnownGoodRecovery(configSnapshot);
+      const recoveryFromSource = rejectedSnapshot.sourceConfig?.gateway?.reload?.recovery;
+      const effectiveRecovery =
+        recoveryFromSource ?? (await readLKGRecoverySetting(rejectedSnapshot.path));
+      const startupRecoveryEnabled = effectiveRecovery !== "off";
+      const canRecoverFromLastKnownGood =
+        startupRecoveryEnabled && shouldAttemptLastKnownGoodRecovery(configSnapshot);
       const recovered = canRecoverFromLastKnownGood
         ? await recoverConfigFromLastKnownGood({
             snapshot: configSnapshot,
             reason: "startup-invalid-config",
           })
         : false;
-      if (!canRecoverFromLastKnownGood) {
+      if (!startupRecoveryEnabled) {
+        params.log.warn(
+          `gateway: last-known-good recovery skipped at startup (gateway.reload.recovery=off): ${configSnapshot.path}`,
+        );
+      } else if (!canRecoverFromLastKnownGood) {
         params.log.warn(
           `gateway: last-known-good recovery skipped for plugin-local config invalidity: ${configSnapshot.path}`,
         );
