@@ -6,10 +6,12 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/compaction: validate identifier survival after summarization — extract opaque identifiers from the full pre-compaction transcript (including tool call arguments and tool result content, but not stripped `toolResult.details`), compare against the post-compaction summary, and retry with a preservation hint when more than two identifiers are lost under the strict identifier policy, within the existing quality guard retry budget. Thanks @SebTardif.
 - Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
 - Plugins/diagnostics: make diagnostics OpenTelemetry and Prometheus ClawHub-first installs while keeping npm fallback metadata for release cutovers. Thanks @vincentkoc.
 - Plugins/onboarding: carry ClawHub install metadata through channel setup catalogs so missing channel plugins can install from ClawHub before npm/local fallback. Thanks @vincentkoc.
 - Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
+- Agents/compaction: validate identifier survival after summarization — extract opaque identifiers from the full pre-compaction transcript (including tool call arguments and tool result content, but not stripped `toolResult.details`), compare against the post-compaction summary, and retry with a preservation hint when more than two identifiers are lost under the strict identifier policy, within the existing quality guard retry budget. Thanks @SebTardif.
 
 ### Fixes
 
