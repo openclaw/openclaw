@@ -1069,7 +1069,7 @@ describe("TelegramPollingSession", () => {
 
     await session.runUntilAbort();
 
-    // Dirty-rebuild closes transport1 (fire-and-forget via #closeTransportAsync).
+    // Dirty-rebuild closes transport1 before the next polling cycle continues.
     // dispose() closes transport2 since it becomes the held transport after the rebuild.
     expect(transport1.close).toHaveBeenCalled();
     expect(transport2.close).toHaveBeenCalled();

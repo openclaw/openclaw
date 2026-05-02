@@ -22,27 +22,20 @@ function anyLogMatches(log: LogSpy, fragment: string): boolean {
   });
 }
 
-async function flushMicrotasks() {
-  // The dirty-rebuild path fires close() without awaiting it so the polling
-  // cycle is not blocked; tests must flush microtasks before asserting on it.
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 describe("TelegramPollingTransportState", () => {
   let log: LogSpy;
   beforeEach(() => {
     log = vi.fn<LogFn>();
   });
 
-  it("returns the initial transport when not dirty", () => {
+  it("returns the initial transport when not dirty", async () => {
     const initial = makeMockTransport("initial");
     const state = new TelegramPollingTransportState({
       log,
       initialTransport: initial,
     });
 
-    const acquired = state.acquireForNextCycle();
+    const acquired = await state.acquireForNextCycle();
 
     expect(acquired).toBe(initial);
     expect(initial.close).not.toHaveBeenCalled();
@@ -59,10 +52,9 @@ describe("TelegramPollingTransportState", () => {
     });
 
     state.markDirty();
-    const acquired = state.acquireForNextCycle();
+    const acquired = await state.acquireForNextCycle();
 
     expect(acquired).toBe(rebuilt);
-    await flushMicrotasks();
     expect(initial.close).toHaveBeenCalledTimes(1);
     expect(rebuilt.close).not.toHaveBeenCalled();
     expect(anyLogMatches(log, "closing stale transport")).toBe(true);
@@ -79,9 +71,8 @@ describe("TelegramPollingTransportState", () => {
     });
 
     state.markDirty();
-    state.acquireForNextCycle();
+    await state.acquireForNextCycle();
 
-    await flushMicrotasks();
     expect(initial.close).not.toHaveBeenCalled();
   });
 
@@ -92,7 +83,7 @@ describe("TelegramPollingTransportState", () => {
       initialTransport: initial,
     });
     // Force the state to promote the initial transport into the held slot.
-    state.acquireForNextCycle();
+    await state.acquireForNextCycle();
 
     let closeResolved = false;
     initial.close.mockImplementationOnce(async () => {
@@ -119,7 +110,7 @@ describe("TelegramPollingTransportState", () => {
       log,
       initialTransport: initial,
     });
-    state.acquireForNextCycle();
+    await state.acquireForNextCycle();
 
     await expect(state.dispose()).resolves.toBeUndefined();
     expect(anyLogMatches(log, "failed to close transport during dispose")).toBe(true);
@@ -136,12 +127,12 @@ describe("TelegramPollingTransportState", () => {
 
     await state.dispose();
 
-    const acquired = state.acquireForNextCycle();
+    const acquired = await state.acquireForNextCycle();
     expect(acquired).toBeUndefined();
     expect(createTelegramTransport).not.toHaveBeenCalled();
   });
 
-  it("clears the dirty flag even when no factory is configured", () => {
+  it("clears the dirty flag even when no factory is configured", async () => {
     const initial = makeMockTransport("initial");
     const state = new TelegramPollingTransportState({
       log,
@@ -149,11 +140,11 @@ describe("TelegramPollingTransportState", () => {
     });
     state.markDirty();
 
-    const acquired = state.acquireForNextCycle();
+    const acquired = await state.acquireForNextCycle();
 
     expect(acquired).toBe(initial);
     // Next cycle without markDirty should not trigger another rebuild log.
-    state.acquireForNextCycle();
+    await state.acquireForNextCycle();
     const rebuildLogs = log.mock.calls.filter((call) => {
       const line = call[0];
       return typeof line === "string" && line.includes("rebuilding transport");

@@ -179,7 +179,7 @@ export class TelegramPollingSession {
   async #createPollingBot(): Promise<TelegramBot | undefined> {
     const fetchAbortController = new AbortController();
     this.#activeFetchAbort = fetchAbortController;
-    const telegramTransport = this.#transportState.acquireForNextCycle();
+    const telegramTransport = await this.#transportState.acquireForNextCycle();
     try {
       return createTelegramBot({
         token: this.opts.token,
