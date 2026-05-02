@@ -158,6 +158,21 @@ function isFatalError(err: unknown): boolean {
   return code !== undefined && FATAL_ERROR_CODES.has(code);
 }
 
+/**
+ * Checks if an error is a benign uncaught exception that shouldn't crash the gateway.
+ * Currently covers FileHandle objects closed during garbage collection, which Node.js
+ * emits as uncaughtException but are harmless and expected during normal operation.
+ */
+export function isBenignUncaughtExceptionError(err: unknown): boolean {
+  if (
+    err instanceof Error &&
+    err.message?.includes("FileHandle object was closed during garbage collection")
+  ) {
+    return true;
+  }
+  return false;
+}
+
 function isConfigError(err: unknown): boolean {
   const code = extractErrorCodeWithCause(err);
   return code !== undefined && CONFIG_ERROR_CODES.has(code);
