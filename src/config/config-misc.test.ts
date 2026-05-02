@@ -824,7 +824,7 @@ describe("config strict validation", () => {
     }
   });
 
-  it("accepts top-level memorySearch via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level memorySearch without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         memorySearch: {
@@ -836,19 +836,19 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.issues).toEqual([]);
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "memorySearch")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toMatchObject({
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.path === "memorySearch")).toBe(true);
+      expect(snap.legacyIssues).toEqual([]);
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toMatchObject({
         provider: "local",
         fallback: "none",
         query: { maxResults: 7 },
       });
-      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toBeUndefined();
+      expect(snap.sourceConfig.agents?.defaults?.memorySearch).toBeUndefined();
     });
   });
 
-  it("accepts top-level heartbeat agent settings via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level heartbeat agent settings without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         heartbeat: {
@@ -859,17 +859,18 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.heartbeat).toMatchObject({
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      expect(snap.legacyIssues).toEqual([]);
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
       });
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
+      expect(snap.sourceConfig.agents?.defaults?.heartbeat).toBeUndefined();
     });
   });
 
-  it("accepts top-level heartbeat visibility via auto-migration and reports legacyIssues", async () => {
+  it("rejects top-level heartbeat visibility without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         heartbeat: {
@@ -881,14 +882,15 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "heartbeat")).toBe(true);
-      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toMatchObject({
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.path === "heartbeat")).toBe(true);
+      expect(snap.legacyIssues).toEqual([]);
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toMatchObject({
         showOk: true,
         showAlerts: false,
         useIndicator: true,
       });
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toBeUndefined();
+      expect(snap.sourceConfig.channels?.defaults?.heartbeat).toBeUndefined();
     });
   });
 
@@ -930,7 +932,7 @@ describe("config strict validation", () => {
     expect(next?.messages?.tts?.elevenlabs).toBeUndefined();
   });
 
-  it("accepts legacy sandbox perSession via auto-migration and reports legacyIssues", async () => {
+  it("rejects legacy sandbox perSession without read-time auto-migration", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         agents: {
@@ -952,21 +954,16 @@ describe("config strict validation", () => {
 
       const snap = await readConfigFileSnapshot();
 
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(
-        true,
-      );
-      expect(snap.legacyIssues.some((issue) => issue.path === "agents.list")).toBe(true);
-      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({
-        scope: "session",
-      });
-      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({
-        scope: "shared",
-      });
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.path === "agents.defaults.sandbox")).toBe(true);
+      expect(snap.issues.some((issue) => issue.path === "agents.list")).toBe(true);
+      expect(snap.legacyIssues).toEqual([]);
+      expect(snap.sourceConfig.agents?.defaults?.sandbox).toEqual({ perSession: true });
+      expect(snap.sourceConfig.agents?.list?.[0]?.sandbox).toEqual({ perSession: false });
     });
   });
 
-  it("does not treat resolved-only gateway.bind aliases as source-literal legacy or invalid", async () => {
+  it("rejects resolved-only gateway.bind aliases as invalid schema values, not legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         gateway: { bind: "${OPENCLAW_BIND}" },
@@ -976,9 +973,9 @@ describe("config strict validation", () => {
       process.env.OPENCLAW_BIND = "0.0.0.0";
       try {
         const snap = await readConfigFileSnapshot();
-        expect(snap.valid).toBe(true);
+        expect(snap.valid).toBe(false);
         expect(snap.legacyIssues).toHaveLength(0);
-        expect(snap.issues).toHaveLength(0);
+        expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
       } finally {
         if (prev === undefined) {
           delete process.env.OPENCLAW_BIND;
@@ -989,15 +986,16 @@ describe("config strict validation", () => {
     });
   });
 
-  it("still marks literal gateway.bind host aliases as legacy", async () => {
+  it("rejects literal gateway.bind host aliases as legacy", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {
         gateway: { bind: "0.0.0.0" },
       });
 
       const snap = await readConfigFileSnapshot();
-      expect(snap.valid).toBe(true);
-      expect(snap.legacyIssues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      expect(snap.valid).toBe(false);
+      expect(snap.issues.some((issue) => issue.path === "gateway.bind")).toBe(true);
+      expect(snap.legacyIssues).toEqual([]);
     });
   });
 });
