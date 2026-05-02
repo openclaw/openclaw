@@ -22,7 +22,8 @@ Google Meet participant support for OpenClaw — the plugin is explicit by desig
 - There is no automatic consent announcement.
 - The default Chrome audio backend is `BlackHole 2ch`.
 - Chrome can run locally or on a paired node host.
-- Twilio accepts a dial-in number plus optional PIN or DTMF sequence.
+- Twilio accepts a dial-in number plus optional PIN or DTMF sequence; it
+  cannot dial a Meet URL directly.
 - The CLI command is `googlemeet`; `meet` is reserved for broader agent
   teleconference workflows.
 

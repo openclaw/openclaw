@@ -226,9 +226,17 @@ export class GoogleMeetRuntime {
     return session ? { found: true, session } : { found: false };
   }
 
-  async setupStatus(options: { transport?: GoogleMeetTransport; mode?: GoogleMeetMode } = {}) {
+  async setupStatus(
+    options: {
+      transport?: GoogleMeetTransport;
+      mode?: GoogleMeetMode;
+      dialInNumber?: string;
+    } = {},
+  ) {
     const transport = resolveTransport(options.transport, this.params.config);
     const mode = resolveMode(options.mode, this.params.config);
+    const twilioDialInNumber =
+      transport === "twilio" ? normalizeDialInNumber(options.dialInNumber) : undefined;
     const shouldCheckChromeNode =
       transport === "chrome-node" ||
       (!options.transport && Boolean(this.params.config.chromeNode.node));
@@ -236,6 +244,7 @@ export class GoogleMeetRuntime {
       fullConfig: this.params.fullConfig,
       mode,
       transport,
+      twilioDialInNumber,
     });
     if (shouldCheckChromeNode) {
       try {
@@ -440,7 +449,9 @@ export class GoogleMeetRuntime {
           request.dialInNumber ?? this.params.config.twilio.defaultDialInNumber,
         );
         if (!dialInNumber) {
-          throw new Error("dialInNumber required for twilio transport");
+          throw new Error(
+            "Twilio transport requires a Meet dial-in phone number. Google Meet URLs do not include dial-in details; pass dialInNumber with optional pin/dtmfSequence, configure twilio.defaultDialInNumber, or use chrome/chrome-node transport.",
+          );
         }
         const dtmfSequence = buildMeetDtmfSequence({
           pin: request.pin ?? this.params.config.twilio.defaultPin,
