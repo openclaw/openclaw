@@ -8,6 +8,7 @@ on:
       - ".github/workflows/plugin-npm-release.yml"
       - "extensions/**"
       - "package.json"
+      - "scripts/lib/plugin-npm-package-manifest.mjs"
       - "scripts/lib/plugin-npm-release.ts"
       - "scripts/plugin-npm-publish.sh"
       - "scripts/plugin-npm-release-check.ts"
@@ -168,8 +169,7 @@ jobs:
         run: bash scripts/plugin-npm-publish.sh --dry-run "${{ matrix.plugin.packageDir }}"
 
       - name: Preview npm pack contents
-        working-directory: ${{ matrix.plugin.packageDir }}
-        run: npm pack --dry-run --json --ignore-scripts
+        run: bash scripts/plugin-npm-publish.sh --pack-dry-run "${{ matrix.plugin.packageDir }}"
 
   publish_plugins_npm:
     needs: [preview_plugins_npm, preview_plugin_pack]

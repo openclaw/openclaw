@@ -5,8 +5,8 @@ set -euo pipefail
 mode="${1:-}"
 package_dir="${2:-}"
 
-if [[ "${mode}" != "--dry-run" && "${mode}" != "--publish" ]]; then
-  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--publish] <package-dir>" >&2
+if [[ "${mode}" != "--dry-run" && "${mode}" != "--pack-dry-run" && "${mode}" != "--publish" ]]; then
+  echo "usage: bash scripts/plugin-npm-publish.sh [--dry-run|--pack-dry-run|--publish] <package-dir>" >&2
   exit 2
 fi
 
@@ -18,6 +18,13 @@ fi
 package_name="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.name)' "${package_dir}")"
 package_version="$(node -e 'const pkg = require(require("node:path").resolve(process.argv[1], "package.json")); console.log(pkg.version)' "${package_dir}")"
 current_beta_version="$(npm view "${package_name}" dist-tags.beta 2>/dev/null || true)"
+log() {
+  if [[ "${mode}" == "--pack-dry-run" ]]; then
+    printf '%s\n' "$*" >&2
+  else
+    printf '%s\n' "$*"
+  fi
+}
 publish_plan_output="$(
   PACKAGE_VERSION="${package_version}" CURRENT_BETA_VERSION="${current_beta_version}" PUBLISH_MODE="${mode}" node --input-type=module <<'EOF'
 import {
@@ -55,15 +62,15 @@ mirror_auth_source="${mirror_auth_source:-none}"
 mirror_auth_requirement="${mirror_auth_requirement:-optional}"
 publish_cmd=(npm publish --access public --tag "${publish_tag}" --provenance)
 
-echo "Resolved package dir: ${package_dir}"
-echo "Resolved package name: ${package_name}"
-echo "Resolved package version: ${package_version}"
-echo "Current beta dist-tag: ${current_beta_version:-<missing>}"
-echo "Resolved release channel: ${release_channel}"
-echo "Resolved publish tag: ${publish_tag}"
-echo "Resolved mirror dist-tags: ${mirror_dist_tags_csv:-<none>}"
-echo "Mirror dist-tag auth source: ${mirror_auth_source}"
-echo "Mirror dist-tag auth requirement: ${mirror_auth_requirement}"
+log "Resolved package dir: ${package_dir}"
+log "Resolved package name: ${package_name}"
+log "Resolved package version: ${package_version}"
+log "Current beta dist-tag: ${current_beta_version:-<missing>}"
+log "Resolved release channel: ${release_channel}"
+log "Resolved publish tag: ${publish_tag}"
+log "Resolved mirror dist-tags: ${mirror_dist_tags_csv:-<none>}"
+log "Mirror dist-tag auth source: ${mirror_auth_source}"
+log "Mirror dist-tag auth requirement: ${mirror_auth_requirement}"
 
 mirror_auth_token=""
 case "${mirror_auth_source}" in
@@ -77,9 +84,9 @@ esac
 publish_auth_token="${mirror_auth_token}"
 publish_auth_source="${mirror_auth_source}"
 if [[ -n "${publish_auth_token}" ]]; then
-  echo "Publish auth: ${publish_auth_source} with provenance"
+  log "Publish auth: ${publish_auth_source} with provenance"
 else
-  echo "Publish auth: GitHub OIDC trusted publishing"
+  log "Publish auth: GitHub OIDC trusted publishing"
 fi
 
 if [[ "${mirror_auth_requirement}" == "required" && -z "${mirror_auth_token}" ]]; then
@@ -88,27 +95,43 @@ if [[ "${mirror_auth_requirement}" == "required" && -z "${mirror_auth_token}" ]]
   exit 1
 fi
 
-printf 'Publish command:'
-printf ' %q' "${publish_cmd[@]}"
-printf '\n'
+if [[ "${mode}" == "--pack-dry-run" ]]; then
+  {
+    printf 'Publish command:'
+    printf ' %q' "${publish_cmd[@]}"
+    printf '\n'
+  } >&2
+else
+  printf 'Publish command:'
+  printf ' %q' "${publish_cmd[@]}"
+  printf '\n'
+fi
 
 if [[ "${mode}" == "--dry-run" ]]; then
   exit 0
 fi
 
+if [[ "${mode}" == "--pack-dry-run" ]]; then
+  node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- \
+    npm pack --dry-run --json --ignore-scripts
+  exit 0
+fi
+
 (
-  cd "${package_dir}"
   cleanup_files=()
   trap 'rm -f "${cleanup_files[@]}"' EXIT
+  run_with_manifest_overlay() {
+    node scripts/lib/plugin-npm-package-manifest.mjs --run "${package_dir}" -- "$@"
+  }
   publish_userconfig=""
   if [[ -n "${publish_auth_token}" ]]; then
     publish_userconfig="$(mktemp)"
     cleanup_files+=("${publish_userconfig}")
     chmod 0600 "${publish_userconfig}"
     printf '%s\n' "//registry.npmjs.org/:_authToken=${publish_auth_token}" > "${publish_userconfig}"
-    NPM_CONFIG_USERCONFIG="${publish_userconfig}" "${publish_cmd[@]}"
+    NPM_CONFIG_USERCONFIG="${publish_userconfig}" run_with_manifest_overlay "${publish_cmd[@]}"
   else
-    "${publish_cmd[@]}"
+    run_with_manifest_overlay "${publish_cmd[@]}"
   fi
 
   if [[ -n "${mirror_dist_tags_csv}" ]]; then
