@@ -2800,17 +2800,74 @@ describe("previewRemHarness", () => {
 describe("Bug #65374: Agent isolation in shared workspaces", () => {
   describe("resolveSessionAgentsForWorkspace", () => {
     it("returns empty array for shared workspace without currentAgentId (fail-closed)", () => {
-      const { resolveSessionAgentsForWorkspace: resolve } =
-        jest.requireActual("./dreaming-phases.js");
-      // This test requires direct function access which may not be exported.
-      // Testing the behavior through the exported __testing namespace instead.
+      const fn = __testing.resolveSessionAgentsForWorkspace;
+      if (!fn) return;
+
+      const cfg = {
+        agents: {
+          list: [
+            { id: "emmi", workspace: "/shared" },
+            { id: "anya", workspace: "/shared" },
+          ],
+        },
+      } as OpenClawConfig;
+
+      const result = fn({
+        cfg: cfg as any,
+        workspaceDir: "/shared",
+        currentAgentId: undefined,
+        logger: undefined as any,
+      });
+
+      // Fail-closed: shared workspace with no agent identity = empty
+      expect(result.agentIds).toEqual([]);
+      expect(result.isShared).toBe(true);
     });
 
     it("filters to currentAgentId when workspace is shared", () => {
-      // Tested indirectly through resolveMemoryDreamingWorkspaces (SDK-level)
-      // and through integration with collectSessionIngestionBatches.
-      // The key assertion: when shared=true and currentAgentId is provided,
-      // only that agent's sessions should be ingested.
+      const fn = __testing.resolveSessionAgentsForWorkspace;
+      if (!fn) return;
+
+      const cfg = {
+        agents: {
+          list: [
+            { id: "emmi", workspace: "/shared" },
+            { id: "anya", workspace: "/shared" },
+          ],
+        },
+      } as OpenClawConfig;
+
+      const result = fn({
+        cfg: cfg as any,
+        workspaceDir: "/shared",
+        currentAgentId: "emmi",
+        logger: undefined as any,
+      });
+
+      // Only emmi's sessions should be ingested
+      expect(result.agentIds).toEqual(["emmi"]);
+      expect(result.isShared).toBe(true);
+    });
+
+    it("returns all agents for non-shared workspace", () => {
+      const fn = __testing.resolveSessionAgentsForWorkspace;
+      if (!fn) return;
+
+      const cfg = {
+        agents: {
+          list: [{ id: "emmi", workspace: "/emmi" }],
+        },
+      } as OpenClawConfig;
+
+      const result = fn({
+        cfg: cfg as any,
+        workspaceDir: "/emmi",
+        logger: undefined as any,
+      });
+
+      // Non-shared: all agents (just one) returned
+      expect(result.agentIds).toEqual(["emmi"]);
+      expect(result.isShared).toBe(false);
     });
   });
 
@@ -2821,10 +2878,8 @@ describe("Bug #65374: Agent isolation in shared workspaces", () => {
       const day = "2026-05-02";
 
       // Simulate a shared workspace by calling appendSessionCorpusLines with isShared=true
-      const { appendSessionCorpusLines } = require("./dreaming-phases.js");
-
-      // We test through __testing if available, otherwise through integration
-      const testHelpers = jest.requireActual("./dreaming-phases.js").__testing;
+      // Use __testing which is already imported at the top
+      const testHelpers = __testing;
       if (testHelpers?.appendSessionCorpusLines) {
         const results = await testHelpers.appendSessionCorpusLines({
           workspaceDir,
@@ -2857,9 +2912,19 @@ describe("Bug #65374: Agent isolation in shared workspaces", () => {
         );
 
         // Agent-scoped file should exist
-        await expect(fs.pathExists(agentCorpusPath)).resolves.toBe(true);
+        try {
+          await fs.access(agentCorpusPath);
+        } catch {
+          throw new Error(`Agent-scoped corpus file does not exist: ${agentCorpusPath}`);
+        }
         // Shared file should NOT exist (we wrote to agent-scoped path)
-        await expect(fs.pathExists(sharedCorpusPath)).resolves.toBe(false);
+        try {
+          await fs.access(sharedCorpusPath);
+          throw new Error(`Shared corpus file should not exist but it does: ${sharedCorpusPath}`);
+        } catch (e) {
+          if (e.message.includes("should not exist")) throw e;
+          // Expected: file does not exist
+        }
       }
     });
 
@@ -2867,7 +2932,7 @@ describe("Bug #65374: Agent isolation in shared workspaces", () => {
       const workspaceDir = await createDreamingWorkspace();
       const day = "2026-05-02";
 
-      const testHelpers = jest.requireActual("./dreaming-phases.js").__testing;
+      const testHelpers = __testing;
       if (testHelpers?.appendSessionCorpusLines) {
         const results = await testHelpers.appendSessionCorpusLines({
           workspaceDir,
@@ -2887,17 +2952,16 @@ describe("Bug #65374: Agent isolation in shared workspaces", () => {
           "session-corpus",
           `${day}.txt`,
         );
-        await expect(fs.pathExists(sharedCorpusPath)).resolves.toBe(true);
+        await fs.access(sharedCorpusPath); // Should exist
       }
     });
   });
 
   describe("Read-path isolation (Gunn Finding #1)", () => {
     it("filterRecallEntriesForAgentIsolation excludes non-agent entries in shared workspaces", () => {
-      const { filterRecallEntriesForAgentIsolation } =
-        jest.requireActual("./dreaming-phases.js").__testing || {};
+      const fn = __testing.filterRecallEntriesForAgentIsolation;
 
-      if (!filterRecallEntriesForAgentIsolation) {
+      if (!fn) {
         // Function not exported for testing yet; skip
         return;
       }
@@ -2930,7 +2994,7 @@ describe("Bug #65374: Agent isolation in shared workspaces", () => {
       ];
 
       // In shared workspace with emmi's identity, only emmi's entries should pass
-      const filtered = filterRecallEntriesForAgentIsolation({
+      const filtered = fn({
         entries,
         currentAgentId: "emmi",
         isShared: true,
@@ -2941,10 +3005,9 @@ describe("Bug #65374: Agent isolation in shared workspaces", () => {
     });
 
     it("passes through all entries for non-shared workspaces", () => {
-      const { filterRecallEntriesForAgentIsolation } =
-        jest.requireActual("./dreaming-phases.js").__testing || {};
+      const fn = __testing.filterRecallEntriesForAgentIsolation;
 
-      if (!filterRecallEntriesForAgentIsolation) {
+      if (!fn) {
         return;
       }
 
@@ -2959,7 +3022,7 @@ describe("Bug #65374: Agent isolation in shared workspaces", () => {
         },
       ];
 
-      const filtered = filterRecallEntriesForAgentIsolation({
+      const filtered = fn({
         entries,
         currentAgentId: undefined,
         isShared: false,
