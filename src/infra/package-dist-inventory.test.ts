@@ -250,6 +250,37 @@ describe("package dist inventory", () => {
     });
   });
 
+  it("keeps publishable core-package runtime plugin dist trees in the inventory", async () => {
+    await withTempDir({ prefix: "openclaw-dist-inventory-core-runtime-" }, async (packageRoot) => {
+      const coreRuntime = path.join(packageRoot, "dist", "extensions", "core-chat", "index.js");
+      const corePackageJson = path.join(packageRoot, "extensions", "core-chat", "package.json");
+
+      await fs.mkdir(path.dirname(coreRuntime), { recursive: true });
+      await fs.mkdir(path.dirname(corePackageJson), { recursive: true });
+      await fs.writeFile(coreRuntime, "export {};\n", "utf8");
+      await fs.writeFile(
+        corePackageJson,
+        JSON.stringify({
+          name: "@openclaw/core-chat",
+          openclaw: {
+            bundle: {
+              includeInCore: true,
+            },
+            release: {
+              publishToClawHub: true,
+              publishToNpm: true,
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      await expect(writePackageDistInventory(packageRoot)).resolves.toEqual([
+        "dist/extensions/core-chat/index.js",
+      ]);
+    });
+  });
+
   it("reports runtime-created install staging dirs during installed dist verification", async () => {
     await withTempDir({ prefix: "openclaw-dist-inventory-stage-" }, async (packageRoot) => {
       const realFile = path.join(packageRoot, "dist", "real-AbC123.js");

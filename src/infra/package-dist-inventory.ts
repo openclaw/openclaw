@@ -104,6 +104,14 @@ function isPublishableExternalizedBundledManifest(value: unknown): boolean {
   if (!release || typeof release !== "object") {
     return false;
   }
+  const bundle = (openclaw as { bundle?: unknown }).bundle;
+  if (
+    bundle &&
+    typeof bundle === "object" &&
+    (bundle as { includeInCore?: unknown }).includeInCore === true
+  ) {
+    return false;
+  }
   const typedRelease = release as { publishToClawHub?: unknown; publishToNpm?: unknown };
   return typedRelease.publishToNpm === true || typedRelease.publishToClawHub === true;
 }

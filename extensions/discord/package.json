@@ -68,6 +68,9 @@
     "build": {
       "openclawVersion": "2026.5.1-beta.1"
     },
+    "bundle": {
+      "includeInCore": true
+    },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true
