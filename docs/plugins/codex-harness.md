@@ -632,10 +632,14 @@ Supported `appServer` fields:
 | `serviceTier`       | unset                                    | Optional Codex app-server service tier: `"fast"`, `"flex"`, or `null`. Invalid legacy values are ignored.                                                                                                                            |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`: each Codex `item/tool/call` request must receive
-an OpenClaw response within 30 seconds. On timeout, OpenClaw aborts the tool
-signal where supported and returns a failed dynamic-tool response to Codex so
-the turn can continue instead of leaving the session in `processing`.
+`appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 30 second
+OpenClaw watchdog by default. A positive per-call `timeoutMs` argument extends
+or shortens that specific tool budget, and `image_generate` also uses
+`agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not
+provide its own timeout. Dynamic tool budgets are capped at 600000 ms. On
+timeout, OpenClaw aborts the tool signal where supported and returns a failed
+dynamic-tool response to Codex so the turn can continue instead of leaving the
+session in `processing`.
 
 After OpenClaw responds to a Codex turn-scoped app-server request, the harness
 also expects Codex to finish the native turn with `turn/completed`. If the
