@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { Bot, Context } from "grammy";
 import { resolveDefaultModelForAgent } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
@@ -34,7 +36,9 @@ import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
+  resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
+  resolveSessionTranscriptPathInDir,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -155,6 +159,43 @@ function resolveTelegramProgressPlaceholder(command: {
     command.nativeProgressMessages?.telegram?.trim() ??
     command.nativeProgressMessages?.default?.trim();
   return text ? text : null;
+}
+
+async function resolveTelegramCommandSessionFile(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  threadId?: string | number;
+}): Promise<{ sessionId?: string; sessionFile?: string }> {
+  const sessionKey = params.sessionKey.trim();
+  if (!sessionKey) {
+    return {};
+  }
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const store = loadSessionStore(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey });
+    const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
+    const sessionsDir = path.dirname(storePath);
+    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
+      sessionId,
+      sessionsDir,
+      params.threadId,
+    );
+    const persisted = await resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey: resolved.normalizedKey,
+      sessionStore: store,
+      storePath,
+      sessionEntry: resolved.existing,
+      agentId: params.agentId,
+      sessionsDir,
+      fallbackSessionFile,
+    });
+    return { sessionId, sessionFile: persisted.sessionFile };
+  } catch {
+    return {};
+  }
 }
 
 function resolveTelegramCommandMenuModelContext(params: {
@@ -1228,6 +1269,13 @@ export const registerTelegramNativeCommands = ({
           }
         }
 
+        const sessionFileContext = await resolveTelegramCommandSessionFile({
+          cfg: runtimeCfg,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          threadId: threadSpec.id,
+        });
+
         const result = await nativeCommandRuntime.executePluginCommand({
           command: match.command,
           args: match.args,
@@ -1236,6 +1284,8 @@ export const registerTelegramNativeCommands = ({
           isAuthorizedSender: commandAuthorized,
           senderIsOwner,
           sessionKey: route.sessionKey,
+          sessionId: sessionFileContext.sessionId,
+          sessionFile: sessionFileContext.sessionFile,
           commandBody,
           config: runtimeCfg,
           from,
