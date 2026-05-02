@@ -100,6 +100,14 @@ describe("clawhub helpers", () => {
     expect(satisfiesPluginApiRange("invalid", "^1.2.0")).toBe(false);
   });
 
+  it("accepts legacy bare major.minor plugin api ranges as lower bounds", () => {
+    expect(satisfiesPluginApiRange("2026.5.2", "2026.4")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.4.0", "2026.4")).toBe(true);
+    expect(satisfiesPluginApiRange("2026.3.99", "2026.4")).toBe(false);
+    expect(satisfiesPluginApiRange("2026.5.2", "=2026.4")).toBe(false);
+    expect(satisfiesPluginApiRange("invalid", "2026.4")).toBe(false);
+  });
+
   it.each(["*", "x", "X", "=*", "=x", ">=*", ">=x", "<=*", "^*", "~*"] as const)(
     "accepts plugin api wildcard range %s for valid runtime versions",
     (range) => {

@@ -444,12 +444,25 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
   return undefined;
 }
 
+function normalizePartialComparableVersion(version: string): {
+  version: string;
+  isPartial: boolean;
+} {
+  const trimmed = version.trim();
+  return /^[vV]?[0-9]+\.[0-9]+$/.test(trimmed)
+    ? { version: `${trimmed}.0`, isPartial: true }
+    : { version: trimmed, isPartial: false };
+}
+
 function compareSemver(left: string, right: string): number | null {
-  return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right));
+  return compareComparableSemver(
+    parseComparableSemver(normalizePartialComparableVersion(left).version),
+    parseComparableSemver(normalizePartialComparableVersion(right).version),
+  );
 }
 
 function upperBoundForCaret(version: string): string | null {
-  const parsed = parseComparableSemver(version);
+  const parsed = parseComparableSemver(normalizePartialComparableVersion(version).version);
   if (!parsed) {
     return null;
   }
@@ -492,12 +505,13 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (!match) {
     return false;
   }
-  const operator = match[1] ?? "=";
+  const operator = match[1];
   const target = match[2]?.trim();
   if (!target) {
     return false;
   }
-  const cmp = compareSemver(version, target);
+  const normalizedTarget = normalizePartialComparableVersion(target);
+  const cmp = compareSemver(version, normalizedTarget.version);
   if (cmp == null) {
     return false;
   }
@@ -512,7 +526,7 @@ function satisfiesComparator(version: string, token: string): boolean {
       return cmp < 0;
     case "=":
     default:
-      return cmp === 0;
+      return normalizedTarget.isPartial && !operator ? cmp >= 0 : cmp === 0;
   }
 }
 
