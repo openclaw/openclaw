@@ -571,6 +571,19 @@ const CliBackendWatchdogModeSchema = z
   .strict()
   .optional();
 
+const CliBackendOutputLimitsSchema = z
+  .object({
+    maxTurnRawChars: z
+      .number()
+      .int()
+      .min(1024)
+      .max(64 * 1024 * 1024)
+      .optional(),
+    maxTurnLines: z.number().int().min(100).max(100_000).optional(),
+  })
+  .strict()
+  .optional();
+
 export const CliBackendSchema = z
   .object({
     command: z.string(),
@@ -606,6 +619,7 @@ export const CliBackendSchema = z
     serialize: z.boolean().optional(),
     reliability: z
       .object({
+        outputLimits: CliBackendOutputLimitsSchema,
         watchdog: z
           .object({
             fresh: CliBackendWatchdogModeSchema,
