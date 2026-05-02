@@ -241,7 +241,7 @@ export type ClawHubPackageVersion = {
     distTags?: string[];
     files?: Array<{
       path: string;
-      size: number;
+      size?: number;
       sha256: string;
       contentType?: string;
     }>;
