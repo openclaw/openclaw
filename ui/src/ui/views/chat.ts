@@ -125,6 +125,7 @@ export type ChatProps = {
   onNavigateToAgent?: () => void;
   onSessionSelect?: (sessionKey: string) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
+  onReadAloud?: (text: string) => void | Promise<void>;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
   onChatScroll?: (event: Event) => void;
@@ -936,6 +937,7 @@ export function renderChat(props: ChatProps) {
               }
               return renderMessageGroup(item, {
                 onOpenSidebar: props.onOpenSidebar,
+                onReadAloud: props.onReadAloud,
                 showReasoning,
                 showToolCalls: props.showToolCalls,
                 autoExpandToolCalls: Boolean(props.autoExpandToolCalls),

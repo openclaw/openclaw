@@ -8,6 +8,7 @@ import {
   abortChatRun,
   handleChatEvent,
   loadChatHistory,
+  readAloudAssistantMessage,
   sendChatMessage,
   type ChatEventPayload,
   type ChatState,
@@ -794,6 +795,50 @@ describe("loadChatHistory", () => {
     await loadChatHistory(state);
 
     expect(state.chatMessages).toEqual(messages);
+  });
+});
+
+describe("readAloudAssistantMessage", () => {
+  it("converts assistant text through gateway TTS and plays assistant media", async () => {
+    const request = vi.fn().mockResolvedValue({ audioPath: "/tmp/openclaw/tts/voice.mp3" });
+    const play = vi.fn();
+    const createAudio = vi.fn(() => ({ play }));
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await readAloudAssistantMessage(state, "  hello from assistant  ", {
+      basePath: "/openclaw",
+      authToken: "session-token",
+      createAudio,
+    });
+
+    expect(request).toHaveBeenCalledWith("tts.convert", {
+      text: "hello from assistant",
+      channel: "webchat",
+    });
+    expect(createAudio).toHaveBeenCalledWith(
+      "/openclaw/__openclaw__/assistant-media?source=%2Ftmp%2Fopenclaw%2Ftts%2Fvoice.mp3&token=session-token",
+    );
+    expect(play).toHaveBeenCalledOnce();
+    expect(state.lastError).toBeNull();
+  });
+
+  it("stores a readable error when TTS conversion fails", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValue(
+        new GatewayRequestError({ code: "UNAVAILABLE", message: "provider unavailable" }),
+      );
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    await readAloudAssistantMessage(state, "hello");
+
+    expect(state.lastError).toContain("provider unavailable");
   });
 });
 

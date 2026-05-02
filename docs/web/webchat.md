@@ -37,6 +37,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
   and assistant entries whose whole visible text is only the exact silent
   token `NO_REPLY` / `no_reply` are omitted.
 - Reasoning-flagged reply payloads (`isReasoning: true`) are excluded from WebChat assistant content, transcript replay text, and audio content blocks, so thinking-only payloads do not surface as visible assistant messages or playable audio.
+- Assistant messages can be read aloud from the Control UI through the Gateway `tts.convert` RPC, so playback uses `messages.tts` providers instead of browser speech synthesis.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
 - Aborted runs can keep partial assistant output visible in the UI.
 - Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.

@@ -31,7 +31,7 @@ import {
 } from "./controllers/agents.ts";
 import { setAssistantAvatarOverride } from "./controllers/assistant-identity.ts";
 import { loadChannels } from "./controllers/channels.ts";
-import { loadChatHistory } from "./controllers/chat.ts";
+import { loadChatHistory, readAloudAssistantMessage } from "./controllers/chat.ts";
 import {
   applyConfig,
   ensureAgentConfigEntry,
@@ -2411,6 +2411,16 @@ export function renderApp(state: AppViewState) {
               splitRatio: state.splitRatio,
               canvasHostUrl: state.hello?.canvasHostUrl ?? null,
               onOpenSidebar: (content) => state.handleOpenSidebar(content),
+              onReadAloud:
+                state.connected &&
+                state.client &&
+                (state.hello?.features?.methods ?? []).includes("tts.convert")
+                  ? (text) =>
+                      readAloudAssistantMessage(state, text, {
+                        basePath: state.basePath ?? "",
+                        authToken: resolveAssistantAttachmentAuthToken(state),
+                      })
+                  : undefined,
               onCloseSidebar: () => state.handleCloseSidebar(),
               onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
               assistantName: state.assistantName,

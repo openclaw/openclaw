@@ -255,7 +255,7 @@ afterEach(() => {
 });
 
 describe("grouped chat rendering", () => {
-  it("does not render the stale assistant read-aloud footer action", () => {
+  it("does not render read-aloud without a gateway handler", () => {
     const container = document.createElement("div");
     renderAssistantMessage(container, {
       role: "assistant",
@@ -265,6 +265,29 @@ describe("grouped chat rendering", () => {
 
     expect(container.querySelector(".chat-tts-btn")).toBeNull();
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
+  });
+
+  it("renders gateway-backed read-aloud when a handler is supplied", async () => {
+    const onReadAloud = vi.fn();
+    const container = document.createElement("div");
+    renderAssistantMessage(
+      container,
+      {
+        role: "assistant",
+        content: "hello from assistant",
+        timestamp: 1000,
+      },
+      { onReadAloud },
+    );
+
+    const button = container.querySelector<HTMLButtonElement>('[aria-label="Read aloud"]');
+    expect(button).not.toBeNull();
+    expect(button?.classList.contains("chat-read-aloud-btn")).toBe(true);
+    button?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
+
+    expect(onReadAloud).toHaveBeenCalledWith("hello from assistant");
+    expect(container.querySelector(".chat-tts-btn")).toBeNull();
   });
 
   it("positions delete confirm by message side", () => {

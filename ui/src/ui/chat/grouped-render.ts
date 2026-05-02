@@ -369,6 +369,7 @@ export function renderMessageGroup(
   group: MessageGroup,
   opts: {
     onOpenSidebar?: (content: SidebarContent) => void;
+    onReadAloud?: (text: string) => void | Promise<void>;
     showReasoning: boolean;
     showToolCalls?: boolean;
     autoExpandToolCalls?: boolean;
@@ -453,6 +454,7 @@ export function renderMessageGroup(
               localMediaPreviewRoots: opts.localMediaPreviewRoots,
               assistantAttachmentAuthToken: opts.assistantAttachmentAuthToken,
               embedSandboxMode: opts.embedSandboxMode,
+              onReadAloud: opts.onReadAloud,
             },
             opts.onOpenSidebar,
           ),
@@ -1250,6 +1252,40 @@ function renderExpandButton(markdown: string, onOpenSidebar: (content: SidebarCo
   `;
 }
 
+function renderReadAloudButton(
+  markdown: string,
+  onReadAloud: (text: string) => void | Promise<void>,
+) {
+  return html`
+    <button
+      class="btn btn--xs chat-read-aloud-btn"
+      type="button"
+      title="Read aloud"
+      aria-label="Read aloud"
+      @click=${async (e: Event) => {
+        const btn = e.currentTarget as HTMLButtonElement | null;
+        if (!btn || btn.dataset.reading === "1") {
+          return;
+        }
+        btn.dataset.reading = "1";
+        btn.setAttribute("aria-busy", "true");
+        btn.disabled = true;
+        try {
+          await onReadAloud(markdown);
+        } finally {
+          if (btn.isConnected) {
+            delete btn.dataset.reading;
+            btn.removeAttribute("aria-busy");
+            btn.disabled = false;
+          }
+        }
+      }}
+    >
+      <span class="chat-read-aloud-btn__icon" aria-hidden="true">${icons.volume2}</span>
+    </button>
+  `;
+}
+
 function renderGroupedMessage(
   message: unknown,
   messageKey: string,
@@ -1269,6 +1305,7 @@ function renderGroupedMessage(
     assistantAttachmentAuthToken?: string | null;
     embedSandboxMode?: EmbedSandboxMode;
     allowExternalEmbedUrls?: boolean;
+    onReadAloud?: (text: string) => void | Promise<void>;
   },
   onOpenSidebar?: (content: SidebarContent) => void,
 ) {
@@ -1316,6 +1353,8 @@ function renderGroupedMessage(
   const markdown = markdownBase;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
+  const canReadAloud =
+    role === "assistant" && !opts.isStreaming && Boolean(opts.onReadAloud && markdown?.trim());
 
   // Detect pure-JSON messages and render as collapsible block
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
@@ -1360,13 +1399,14 @@ function renderGroupedMessage(
         : "Tool call"
       : "Tool output";
 
-  const hasActions = canCopyMarkdown || canExpand;
+  const hasActions = canReadAloud || canCopyMarkdown || canExpand;
 
   return html`
     <div class="${bubbleClasses}">
       ${renderReplyPill(normalizedMessage.replyTarget)}
       ${hasActions
         ? html`<div class="chat-bubble-actions">
+            ${canReadAloud ? renderReadAloudButton(markdown!, opts.onReadAloud!) : nothing}
             ${canExpand ? renderExpandButton(markdown!, onOpenSidebar!) : nothing}
             ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
           </div>`

@@ -23,6 +23,7 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const WEBCHAT_TTS_CHANNEL = "webchat";
 
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
@@ -510,6 +511,61 @@ type AssistantMessageNormalizationOptions = {
   requireContentArray?: boolean;
   allowTextField?: boolean;
 };
+
+type AssistantReadAloudOptions = {
+  basePath?: string;
+  authToken?: string | null;
+  createAudio?: (url: string) => { play: () => Promise<void> | void };
+};
+
+function buildAssistantMediaPlaybackUrl(
+  source: string,
+  basePath?: string,
+  authToken?: string | null,
+): string {
+  const normalizedBasePath =
+    basePath && basePath !== "/" ? (basePath.endsWith("/") ? basePath.slice(0, -1) : basePath) : "";
+  const params = new URLSearchParams({ source });
+  const normalizedToken = authToken?.trim();
+  if (normalizedToken) {
+    params.set("token", normalizedToken);
+  }
+  return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
+}
+
+export async function readAloudAssistantMessage(
+  state: ChatState,
+  text: string,
+  options: AssistantReadAloudOptions = {},
+) {
+  const trimmed = text.trim();
+  if (!trimmed || !state.client || !state.connected) {
+    return;
+  }
+
+  try {
+    const result = await state.client.request<{
+      audioPath?: unknown;
+      provider?: unknown;
+      outputFormat?: unknown;
+      voiceCompatible?: unknown;
+    }>("tts.convert", { text: trimmed, channel: WEBCHAT_TTS_CHANNEL });
+    const audioPath = typeof result.audioPath === "string" ? result.audioPath.trim() : "";
+    if (!audioPath) {
+      throw new Error("TTS conversion returned no audio path");
+    }
+    const url = buildAssistantMediaPlaybackUrl(audioPath, options.basePath, options.authToken);
+    const audio =
+      options.createAudio?.(url) ?? (typeof Audio === "function" ? new Audio(url) : undefined);
+    if (!audio) {
+      throw new Error("Audio playback is not available in this browser");
+    }
+    await audio.play();
+    state.lastError = null;
+  } catch (err) {
+    state.lastError = err instanceof GatewayRequestError ? err.message : String(err);
+  }
+}
 
 function normalizeAssistantMessage(
   message: unknown,
