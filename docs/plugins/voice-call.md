@@ -41,9 +41,8 @@ the Gateway, then restart the Gateway to load it.
       </Tab>
     </Tabs>
 
-    If npm reports the OpenClaw-owned package as deprecated, that package version
-    is from an older external package train; use a current packaged OpenClaw
-    build or the local folder path until a newer npm package is published.
+    Use `@openclaw/voice-call@beta` when following the OpenClaw beta channel and
+    npmjs shows `beta` ahead of `latest`.
 
     Restart the Gateway afterwards so the plugin loads.
 

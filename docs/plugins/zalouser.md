@@ -34,9 +34,8 @@ No external `zca`/`openzca` CLI binary is required.
 openclaw plugins install @openclaw/zalouser
 ```
 
-If npm reports the OpenClaw-owned package as deprecated, that package version is
-from an older external package train; use a current packaged OpenClaw build or
-the local folder path until a newer npm package is published.
+Use `@openclaw/zalouser@beta` when following the OpenClaw beta channel and npmjs
+shows `beta` ahead of `latest`.
 
 Restart the Gateway afterwards.
 

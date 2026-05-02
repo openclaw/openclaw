@@ -14,8 +14,8 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
 - `openclaw channels login --channel whatsapp` also offers the install flow when
   the plugin is not present yet.
 - Dev channel + git checkout: defaults to the local plugin path.
-- Stable/Beta: uses the npm package `@openclaw/whatsapp` when a current package
-  is published.
+- Stable/Beta: uses the npm package `@openclaw/whatsapp`; beta-channel updates
+  prefer `@openclaw/whatsapp@beta` when that tag is available.
 
 Manual install stays available:
 
@@ -23,9 +23,8 @@ Manual install stays available:
 openclaw plugins install @openclaw/whatsapp
 ```
 
-If npm reports the OpenClaw-owned package as deprecated or missing, use a
-current packaged OpenClaw build or a local checkout until the npm package train
-catches up.
+Use `@openclaw/whatsapp@beta` when following the OpenClaw beta channel and npmjs
+shows `beta` ahead of `latest`.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">

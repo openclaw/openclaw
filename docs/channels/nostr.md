@@ -19,15 +19,14 @@ builds do not need a separate install.
 
 - Onboarding (`openclaw onboard`) and `openclaw channels add` still surface
   Nostr from the shared channel catalog.
-- If your build excludes bundled Nostr, install a current npm package when one
-  is published.
+- If your build excludes bundled Nostr, install the npm package directly.
 
 ```bash
 openclaw plugins install @openclaw/nostr
 ```
 
-If npm reports the OpenClaw-owned package as deprecated, use a current packaged
-OpenClaw build or a local checkout until a newer npm package is published.
+Use `@openclaw/nostr@beta` when following the OpenClaw beta channel and npmjs
+shows `beta` ahead of `latest`.
 
 Use a local checkout (dev workflows):
 

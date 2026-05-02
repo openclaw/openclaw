@@ -95,12 +95,12 @@ not skills. Use `openclaw skills search` for ClawHub skills.
 
 <Note>
 ClawHub is the primary distribution and discovery surface for most plugins. Npm
-remains a supported fallback and direct-install path. During the migration to
-ClawHub, OpenClaw still ships some OpenClaw-owned `@openclaw/*` plugin packages
-on npm; those package versions can lag the bundled source between plugin release
-trains. If npm reports an OpenClaw-owned plugin package as deprecated, that
-published version is an old external artifact; use the plugin bundled with
-current OpenClaw or a local checkout until a newer npm package is published.
+remains a supported fallback and direct-install path. OpenClaw-owned
+`@openclaw/*` plugin packages are published on npm again; see the current list
+on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
+[plugin inventory](/plugins/plugin-inventory). Stable installs use `latest`.
+Beta-channel installs and updates prefer the npm `beta` dist-tag when that tag
+is available, then fall back to `latest`.
 </Note>
 
 <AccordionGroup>
