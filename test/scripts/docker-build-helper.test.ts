@@ -278,6 +278,7 @@ describe("docker build helper", () => {
     expect(sweep).toContain("scripts/e2e/lib/plugins/clawhub.sh");
     expect(clawhub).toContain("start_clawhub_fixture_server()");
     expect(clawhub).toContain('OPENCLAW_CLAWHUB_URL="http://127.0.0.1:');
+    expect(clawhub).toContain("OPENCLAW_PLUGINS_E2E_LIVE_CLAWHUB");
     expect(clawhub).toContain("live ClawHub can rate-limit CI");
     expect(clawhub).toContain('[[ -z "${OPENCLAW_CLAWHUB_URL:-}" && -z "${CLAWHUB_URL:-}" ]]');
   });
