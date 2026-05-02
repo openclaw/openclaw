@@ -18,7 +18,7 @@ export function createRuntimeSystem(): PluginRuntime["system"] {
   const requestHeartbeatNow: PluginRuntime["system"]["requestHeartbeatNow"] = (opts) =>
     requestHeartbeat({
       source: opts?.source ?? "other",
-      intent: opts?.intent ?? "event",
+      intent: opts?.intent ?? "immediate",
       reason: opts?.reason,
       coalesceMs: opts?.coalesceMs,
       agentId: opts?.agentId,

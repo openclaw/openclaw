@@ -426,6 +426,7 @@ export function emitExecSystemEvent(
     sessionKey,
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
+    trusted: false,
   });
   requestHeartbeat(
     scopedHeartbeatWakeOptions(sessionKey, {
