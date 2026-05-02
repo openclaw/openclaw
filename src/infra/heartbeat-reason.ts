@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 
-type HeartbeatReasonKind =
+export type HeartbeatReasonKind =
   | "retry"
   | "interval"
   | "manual"

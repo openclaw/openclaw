@@ -88,6 +88,7 @@ import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/t
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
+import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
@@ -217,6 +218,12 @@ type HeartbeatAgentState = {
   intervalMs: number;
   phaseMs: number;
   nextDueMs: number;
+  /** Wall-clock start time of the most recent run for this agent. */
+  lastRunStartedAtMs?: number;
+  /** Bounded ring buffer of recent run-start timestamps for flood detection. */
+  recentRunStarts: number[];
+  /** Set true after a flood-defer is logged to avoid log spam. Reset when a run actually fires. */
+  floodLoggedSinceLastRun: boolean;
 };
 
 export type HeartbeatRunner = {
@@ -1752,6 +1759,43 @@ export function startHeartbeatRunner(opts: {
           now + agent.intervalMs;
   };
 
+  // Centralized cooldown gate. Both targeted and broadcast dispatch branches
+  // call this before invoking `runOnce`. Manual wakes are never deferred.
+  // Everything else respects `nextDueMs`, the min-spacing floor, and the flood
+  // guard — see `heartbeat-cooldown.ts` for rationale and #75436.
+  const evaluateWakeDeferral = (
+    agent: HeartbeatAgentState,
+    now: number,
+    reason?: string,
+  ): DeferDecision => {
+    const decision = shouldDeferWake({
+      reason,
+      now,
+      nextDueMs: agent.nextDueMs,
+      lastRunStartedAtMs: agent.lastRunStartedAtMs,
+      recentRunStarts: agent.recentRunStarts,
+    });
+    if (decision.defer && decision.reason === "flood") {
+      if (!agent.floodLoggedSinceLastRun) {
+        log.warn("heartbeat: flood guard tripped, deferring wake", {
+          agentId: agent.agentId,
+          reason: reason ?? "(none)",
+          recentRunCount: agent.recentRunStarts.length,
+        });
+        agent.floodLoggedSinceLastRun = true;
+      }
+    }
+    return decision;
+  };
+
+  // Called immediately before `runOnce` actually executes. Updates the
+  // bookkeeping that the cooldown gate consults on the next wake.
+  const recordRunBookkeeping = (agent: HeartbeatAgentState, now: number) => {
+    agent.lastRunStartedAtMs = now;
+    recordRunStart(agent.recentRunStarts, now);
+    agent.floodLoggedSinceLastRun = false;
+  };
+
   const scheduleNext = () => {
     if (state.stopped) {
       return;
@@ -1817,6 +1861,9 @@ export function startHeartbeatRunner(opts: {
         intervalMs,
         phaseMs,
         nextDueMs,
+        lastRunStartedAtMs: prevState?.lastRunStartedAtMs,
+        recentRunStarts: prevState?.recentRunStarts ?? [],
+        floodLoggedSinceLastRun: prevState?.floodLoggedSinceLastRun ?? false,
       });
     }
 
@@ -1882,6 +1929,10 @@ export function startHeartbeatRunner(opts: {
         if (!targetAgent) {
           return { status: "skipped", reason: "disabled" };
         }
+        const deferral = evaluateWakeDeferral(targetAgent, now, reason);
+        if (deferral.defer) {
+          return { status: "skipped", reason: deferral.reason };
+        }
         try {
           const res = await runOnce({
             cfg: state.cfg,
@@ -1892,9 +1943,16 @@ export function startHeartbeatRunner(opts: {
             deps: { runtime: state.runtime },
           });
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
+            // Retryable busy — do NOT record run bookkeeping. The wake layer
+            // retries the same reason shortly; if we recorded `lastRunStartedAtMs`
+            // here, the retry would falsely defer with `not-due`/`min-spacing`
+            // because the cooldown would treat this skipped attempt as a real run.
             retryableBusySkip = true;
             return res;
           }
+          // Non-retryable outcome (ran, disabled, failed-but-not-busy). Record
+          // bookkeeping so subsequent wakes within the cooldown window defer.
+          recordRunBookkeeping(targetAgent, now);
           if (res.status !== "skipped" || res.reason !== "disabled") {
             advanceAgentSchedule(targetAgent, now, reason);
           }
@@ -1904,13 +1962,18 @@ export function startHeartbeatRunner(opts: {
           log.error(`heartbeat runner: targeted runOnce threw unexpectedly: ${errMsg}`, {
             error: errMsg,
           });
+          // Throw counts as a non-retryable terminal attempt for cooldown
+          // purposes — record bookkeeping so the wake layer doesn't tight-loop
+          // on the same reason.
+          recordRunBookkeeping(targetAgent, now);
           advanceAgentSchedule(targetAgent, now, reason);
           return { status: "failed", reason: errMsg };
         }
       }
 
       for (const agent of state.agents.values()) {
-        if (isInterval && now < agent.nextDueMs) {
+        const deferral = evaluateWakeDeferral(agent, now, reason);
+        if (deferral.defer) {
           continue;
         }
 
@@ -1926,17 +1989,22 @@ export function startHeartbeatRunner(opts: {
         } catch (err) {
           const errMsg = formatErrorMessage(err);
           log.error(`heartbeat runner: runOnce threw unexpectedly: ${errMsg}`, { error: errMsg });
+          // Throw counts as a non-retryable terminal attempt — see comment in
+          // targeted branch above.
+          recordRunBookkeeping(agent, now);
           advanceAgentSchedule(agent, now, reason);
           continue;
         }
         if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
-          // Do not advance the schedule — the main lane is busy and the wake
-          // layer will retry shortly (DEFAULT_RETRY_MS = 1 s).  Calling
-          // scheduleNext() here would register a 0 ms timer that races with
-          // the wake layer's 1 s retry and wins, bypassing the cooldown.
+          // Do not advance the schedule or record run bookkeeping — the main
+          // lane is busy and the wake layer will retry the same reason shortly
+          // (DEFAULT_RETRY_MS = 1 s). Recording here would convert the retry
+          // into a false `not-due`/`min-spacing` defer.
           retryableBusySkip = true;
           return res;
         }
+        // Non-retryable outcome — record bookkeeping for cooldown gates.
+        recordRunBookkeeping(agent, now);
         if (res.status !== "skipped" || res.reason !== "disabled") {
           advanceAgentSchedule(agent, now, reason);
         }
