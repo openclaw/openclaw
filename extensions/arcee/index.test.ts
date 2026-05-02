@@ -295,34 +295,66 @@ describe("arcee provider plugin", () => {
       ],
     });
 
+    const trinityRuntimeModel = {
+      name: "Trinity Large Thinking",
+      api: "openai-completions",
+      reasoning: true,
+      input: ["text"],
+      contextWindow: 262144,
+      maxTokens: 80000,
+      cost: {
+        input: 0.25,
+        output: 0.9,
+        cacheRead: 0.25,
+        cacheWrite: 0.25,
+      },
+      compat: {
+        supportsReasoningEffort: false,
+      },
+    };
+
+    const trinityCompat = {
+      supportsReasoningEffort: false,
+      supportsTools: false,
+    };
+
     expect(
       provider.contributeResolvedModelCompat?.({
         provider: "arcee",
         modelId: "arcee/trinity-large-thinking",
         model: {
+          ...trinityRuntimeModel,
           provider: "arcee",
           id: "arcee/trinity-large-thinking",
-          name: "Trinity Large Thinking",
-          api: "openai-completions",
           baseUrl: "https://openrouter.ai/api/v1",
-          reasoning: true,
-          input: ["text"],
-          contextWindow: 262144,
-          maxTokens: 80000,
-          cost: {
-            input: 0.25,
-            output: 0.9,
-            cacheRead: 0.25,
-            cacheWrite: 0.25,
-          },
-          compat: {
-            supportsReasoningEffort: false,
-          },
         },
       } as never),
-    ).toEqual({
-      supportsReasoningEffort: false,
-      supportsTools: false,
-    });
+    ).toEqual(trinityCompat);
+
+    expect(
+      provider.contributeResolvedModelCompat?.({
+        provider: "arcee",
+        modelId: "trinity-large-thinking",
+        model: {
+          ...trinityRuntimeModel,
+          provider: "arcee",
+          id: "trinity-large-thinking",
+          baseUrl: "https://api.arcee.ai/api/v1",
+        },
+      } as never),
+    ).toEqual(trinityCompat);
+
+    expect(
+      provider.contributeResolvedModelCompat?.({
+        provider: "openrouter",
+        modelId: "trinity-large-thinking",
+        model: {
+          ...trinityRuntimeModel,
+          provider: "openrouter",
+          id: "trinity-large-thinking",
+          baseUrl: "https://openrouter.ai/api/v1",
+        },
+      } as never),
+    ).toBeUndefined();
   });
 });

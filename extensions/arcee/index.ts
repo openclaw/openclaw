@@ -7,7 +7,7 @@ import {
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   ARCEE_TRINITY_LARGE_THINKING_COMPAT,
-  isArceeTrinityLargeThinkingModelId,
+  shouldContributeArceeTrinityLargeThinkingCompat,
 } from "./models.js";
 import {
   applyArceeConfig,
@@ -127,8 +127,8 @@ export default definePluginEntry({
         }),
       normalizeConfig: ({ providerConfig }) => normalizeArceeProviderConfig(providerConfig),
       normalizeResolvedModel: ({ model }) => normalizeArceeResolvedModel(model),
-      contributeResolvedModelCompat: ({ modelId, model }) =>
-        isArceeTrinityLargeThinkingModelId(model.id) || isArceeTrinityLargeThinkingModelId(modelId)
+      contributeResolvedModelCompat: (ctx) =>
+        shouldContributeArceeTrinityLargeThinkingCompat(ctx)
           ? ARCEE_TRINITY_LARGE_THINKING_COMPAT
           : undefined,
       normalizeTransport: ({ api, baseUrl }) => {

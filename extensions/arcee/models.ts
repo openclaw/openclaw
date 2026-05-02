@@ -9,9 +9,49 @@ export const ARCEE_TRINITY_LARGE_THINKING_COMPAT = {
   supportsTools: false,
 } as const satisfies ModelCompatConfig;
 
+const ARCEE_PROVIDER_ID = "arcee";
+const ARCEE_TRINITY_LARGE_THINKING_ID = "trinity-large-thinking";
+const ARCEE_TRINITY_LARGE_THINKING_REF = `${ARCEE_PROVIDER_ID}/${ARCEE_TRINITY_LARGE_THINKING_ID}`;
+
+function normalizeModelId(modelId: string): string {
+  return modelId.trim().toLowerCase();
+}
+
+function normalizeBaseUrl(baseUrl: unknown): string {
+  return typeof baseUrl === "string" ? baseUrl.trim().replace(/\/+$/, "") : "";
+}
+
 export function isArceeTrinityLargeThinkingModelId(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  return normalized === "trinity-large-thinking" || normalized === "arcee/trinity-large-thinking";
+  const normalized = normalizeModelId(modelId);
+  return (
+    normalized === ARCEE_TRINITY_LARGE_THINKING_ID ||
+    normalized === ARCEE_TRINITY_LARGE_THINKING_REF
+  );
+}
+
+export function shouldContributeArceeTrinityLargeThinkingCompat(params: {
+  provider?: unknown;
+  modelId: string;
+  model: { id: string; provider?: unknown; baseUrl?: unknown };
+}): boolean {
+  const modelId = normalizeModelId(params.modelId);
+  const resolvedId = normalizeModelId(params.model.id);
+  if (
+    modelId === ARCEE_TRINITY_LARGE_THINKING_REF ||
+    resolvedId === ARCEE_TRINITY_LARGE_THINKING_REF
+  ) {
+    return true;
+  }
+  if (
+    modelId !== ARCEE_TRINITY_LARGE_THINKING_ID &&
+    resolvedId !== ARCEE_TRINITY_LARGE_THINKING_ID
+  ) {
+    return false;
+  }
+  if (params.provider === ARCEE_PROVIDER_ID || params.model.provider === ARCEE_PROVIDER_ID) {
+    return true;
+  }
+  return normalizeBaseUrl(params.model.baseUrl) === normalizeBaseUrl(ARCEE_BASE_URL);
 }
 
 export const ARCEE_MODEL_CATALOG: ModelDefinitionConfig[] = [
