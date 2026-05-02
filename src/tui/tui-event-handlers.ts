@@ -46,6 +46,8 @@ type EventHandlerContext = {
   /** Reset `streaming` after this much delta silence. Set to 0 to disable. */
   streamingWatchdogMs?: number;
   localMode?: boolean;
+  /** Abort the active chat run (for watchdog timeout recovery). */
+  abortActive?: () => Promise<void>;
 };
 
 const DEFAULT_STREAMING_WATCHDOG_MS = 30_000;
@@ -67,6 +69,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
     localMode,
+    abortActive,
   } = context;
   const finalizedRuns = new Map<string, number>();
   const sessionRuns = new Map<string, number>();
@@ -129,11 +132,24 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       flushPendingHistoryRefreshIfIdle();
-      chatLog.addSystem(
-        `streaming watchdog: no stream updates for ${Math.round(
-          streamingWatchdogMs / 1000,
-        )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
-      );
+
+      // Abort the hanging run if possible
+      if (abortActive && localMode) {
+        void abortActive().catch(() => {
+          // Ignore abort errors; the run is already stuck
+        });
+        chatLog.addSystem(
+          `streaming watchdog: no stream updates for ${Math.round(
+            streamingWatchdogMs / 1000,
+          )}s; aborting stuck run. This may indicate a provider timeout, auth failure, or network issue. Check "openclaw models status" and "openclaw logs --follow" for details.`,
+        );
+      } else {
+        chatLog.addSystem(
+          `streaming watchdog: no stream updates for ${Math.round(
+            streamingWatchdogMs / 1000,
+          )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
+        );
+      }
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;

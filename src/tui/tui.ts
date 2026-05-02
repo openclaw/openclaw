@@ -989,6 +989,7 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     isLocalBtwRunId,
     forgetLocalBtwRunId,
     clearLocalBtwRunIds,
+    abortActive,
   });
 
   let finishTui: (() => void) | null = null;

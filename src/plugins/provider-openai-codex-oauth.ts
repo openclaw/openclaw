@@ -1,7 +1,10 @@
 import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
 import { formatErrorMessage } from "../infra/errors.js";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "../infra/net/undici-global-dispatcher.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { RuntimeEnv } from "../runtime.js";
+
+const log = createSubsystemLogger("plugins/provider-openai-codex-oauth");
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { OAuthPrompt } from "./provider-oauth-flow.js";
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
@@ -14,6 +17,22 @@ const manualInputPromptMessage = "Paste the authorization code (or full redirect
 const openAICodexOAuthOriginator = "openclaw";
 const localManualFallbackDelayMs = 15_000;
 const localManualFallbackGraceMs = 1_000;
+const OAUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => {
+        reject(
+          new Error(
+            `${operation} timed out after ${Math.round(timeoutMs / 1000)}s. This may indicate a network issue, firewall block, or provider outage.`,
+          ),
+        );
+      }, timeoutMs);
+    }),
+  ]);
+}
 
 type OpenAICodexOAuthFailureCode =
   | "callback_timeout"
@@ -165,6 +184,9 @@ export async function loginOpenAICodexOAuth(params: {
     "OpenAI Codex OAuth",
   );
 
+  log.info(
+    `Starting OpenAI Codex OAuth flow (remote: ${isRemote}, timeout: ${OAUTH_TIMEOUT_MS / 1000}s)`,
+  );
   const spin = prompter.progress("Starting OAuth flow…");
   let browserAuthStarted = false;
   let markLoginSettled!: () => void;
@@ -183,28 +205,36 @@ export async function loginOpenAICodexOAuth(params: {
     });
     const onAuth: typeof baseOnAuth = async (event) => {
       browserAuthStarted = true;
+      log.info("OpenAI OAuth browser callback received, exchanging for tokens");
       await baseOnAuth(event);
     };
 
-    const creds = await loginOpenAICodex({
-      onAuth,
-      onPrompt,
-      originator: openAICodexOAuthOriginator,
-      onManualCodeInput: createManualCodeInputHandler({
-        isRemote,
+    const creds = await withTimeout(
+      loginOpenAICodex({
+        onAuth,
         onPrompt,
-        runtime,
-        spin,
-        waitForLoginToSettle,
-        hasBrowserAuthStarted: () => browserAuthStarted,
+        originator: openAICodexOAuthOriginator,
+        onManualCodeInput: createManualCodeInputHandler({
+          isRemote,
+          onPrompt,
+          runtime,
+          spin,
+          waitForLoginToSettle,
+          hasBrowserAuthStarted: () => browserAuthStarted,
+        }),
+        onProgress: (msg: string) => spin.update(msg),
       }),
-      onProgress: (msg: string) => spin.update(msg),
-    });
+      OAUTH_TIMEOUT_MS,
+      "OpenAI OAuth authentication",
+    );
     spin.stop("OpenAI OAuth complete");
+    log.info("OpenAI Codex OAuth completed successfully");
     return creds ?? null;
   } catch (err) {
     spin.stop("OpenAI OAuth failed");
     const rewrittenError = rewriteOpenAICodexOAuthError(err);
+    const errorMessage = rewrittenError.message || String(err);
+    log.error(`OpenAI Codex OAuth failed: ${errorMessage}`);
     runtime.error(String(rewrittenError));
     await prompter.note("Trouble with OAuth? See https://docs.openclaw.ai/start/faq", "OAuth help");
     throw rewrittenError;

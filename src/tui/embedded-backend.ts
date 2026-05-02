@@ -45,8 +45,11 @@ import {
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
+
+const log = createSubsystemLogger("tui/embedded-backend");
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -96,6 +99,10 @@ function payloadText(parts: unknown): string {
     .join("\n\n")
     .trim();
 }
+
+// Default timeout for TUI runs: 5 minutes (much shorter than the 48-hour agent default)
+// to prevent onboarding hangs when providers fail silently
+const DEFAULT_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
@@ -175,7 +182,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       message: opts.message,
       thinking: opts.thinking,
       deliver: opts.deliver,
-      timeoutMs: opts.timeoutMs,
+      timeoutMs: opts.timeoutMs ?? DEFAULT_TUI_TIMEOUT_MS,
       controller,
     });
 
@@ -526,6 +533,10 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }) {
     try {
       const { cfg, canonicalKey, entry } = loadSessionEntry(params.sessionKey);
+      const timeoutSeconds = params.timeoutMs ? Math.ceil(params.timeoutMs / 1000) : "default";
+      log.info(
+        `Starting TUI run ${params.runId} for session ${params.sessionKey} (timeout: ${timeoutSeconds}s)`,
+      );
       const result = await agentCommandFromIngress(
         {
           message: injectTimestamp(params.message, timestampOptsFromConfig(cfg)),
@@ -573,16 +584,20 @@ export class EmbeddedTuiBackend implements TuiBackend {
         }
         this.emitChatFinal(params.runId, run);
       }
+      log.info(`TUI run ${params.runId} completed successfully`);
     } catch (error) {
       const run = this.runs.get(params.runId);
       if (!run) {
+        log.warn(`TUI run ${params.runId} finished but run state was already cleaned up`);
         return;
       }
       if (params.controller.signal.aborted) {
+        log.info(`TUI run ${params.runId} was aborted`);
         this.emitChatAborted(params.runId, run);
         return;
       }
       const errorMessage = error instanceof Error ? error.message : String(error);
+      log.error(`TUI run ${params.runId} failed: ${errorMessage}`);
       this.emitChatError(params.runId, run, errorMessage);
     } finally {
       this.runs.delete(params.runId);
