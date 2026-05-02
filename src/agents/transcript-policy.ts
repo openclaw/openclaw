@@ -177,6 +177,38 @@ function mergeTranscriptPolicy(
   };
 }
 
+// Per-(config, env) memoization for resolveTranscriptPolicy. The result is
+// pure for a given (provider, modelApi, modelId, workspaceDir) tuple within
+// one config + env lifetime, so repeated resolution per turn (~0.9 sec on
+// a stable warm gateway) can reuse the prior result.
+//
+// Outer WeakMap keyed by config + env identity; hot-reload swaps the config
+// object and the bucket is GC'd automatically.
+const __transcriptPolicyCache = new WeakMap<object, Map<string, TranscriptPolicy>>();
+
+function __transcriptPolicyCacheBucketKey(
+  config: OpenClawConfig | undefined,
+  env: NodeJS.ProcessEnv | undefined,
+): object | undefined {
+  // Both must be object-like for WeakMap. Skip caching otherwise.
+  if (!config || !env) return undefined;
+  return config as object;
+}
+
+function __transcriptPolicyCacheKey(params: {
+  modelApi?: string | null;
+  provider?: string | null;
+  modelId?: string | null;
+  workspaceDir?: string;
+}): string {
+  return JSON.stringify({
+    p: params.provider ?? "",
+    a: params.modelApi ?? "",
+    m: params.modelId ?? "",
+    wD: params.workspaceDir ?? "",
+  });
+}
+
 export function resolveTranscriptPolicy(params: {
   modelApi?: string | null;
   provider?: string | null;
@@ -186,6 +218,14 @@ export function resolveTranscriptPolicy(params: {
   env?: NodeJS.ProcessEnv;
   model?: ProviderRuntimeModel;
 }): TranscriptPolicy {
+  const bucketKey = __transcriptPolicyCacheBucketKey(params.config, params.env);
+  const cacheKey = bucketKey ? __transcriptPolicyCacheKey(params) : undefined;
+  if (bucketKey && cacheKey !== undefined) {
+    const cached = __transcriptPolicyCache.get(bucketKey)?.get(cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+  }
   const provider = normalizeProviderId(params.provider ?? "");
   const runtimePlugin = provider
     ? resolveProviderRuntimePlugin({
@@ -208,15 +248,22 @@ export function resolveTranscriptPolicy(params: {
   // Once a provider adopts the replay-policy hook, replay policy should come
   // from the plugin, not from transport-family defaults in core.
   const buildReplayPolicy = runtimePlugin?.buildReplayPolicy;
-  if (buildReplayPolicy) {
-    const pluginPolicy = buildReplayPolicy(context);
-    return mergeTranscriptPolicy(pluginPolicy ?? undefined);
-  }
+  const result: TranscriptPolicy = buildReplayPolicy
+    ? mergeTranscriptPolicy(buildReplayPolicy(context) ?? undefined)
+    : mergeTranscriptPolicy(
+        buildUnownedProviderTransportReplayFallback({
+          modelApi: params.modelApi,
+          modelId: params.modelId,
+        }),
+      );
 
-  return mergeTranscriptPolicy(
-    buildUnownedProviderTransportReplayFallback({
-      modelApi: params.modelApi,
-      modelId: params.modelId,
-    }),
-  );
+  if (bucketKey && cacheKey !== undefined) {
+    let bucket = __transcriptPolicyCache.get(bucketKey);
+    if (!bucket) {
+      bucket = new Map();
+      __transcriptPolicyCache.set(bucketKey, bucket);
+    }
+    bucket.set(cacheKey, result);
+  }
+  return result;
 }
