@@ -47,6 +47,115 @@ describe("internal runtime context codec", () => {
     ).toBe(false);
   });
 
+  it("strips a modern runtime context wrapper and preserves the visible reply", () => {
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "An async command you ran earlier has completed. The command completion details are:",
+      'Exec completed (wild-moo, code 0) :: {"status":"healthy"}',
+      "",
+      "Please relay the command output to the user in a helpful way.",
+      "",
+      "Three async commands completed:",
+      "1. wild-moo — OpenClaw healthy.",
+    ].join("\n");
+
+    expect(hasInternalRuntimeContext(input)).toBe(true);
+    expect(stripInternalRuntimeContext(input)).toBe(
+      ["Three async commands completed:", "1. wild-moo — OpenClaw healthy."].join("\n"),
+    );
+  });
+
+  it("strips modern conversation metadata blocks and preserves surrounding text", () => {
+    const input = [
+      "Visible intro.",
+      "",
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"telegram:-1003710118964","message_id":"14398"}',
+      "```",
+      "",
+      "Sender (untrusted metadata):",
+      "```json",
+      '{"name":"Paul Frederiksen"}',
+      "```",
+      "",
+      "Visible reply.",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe("Visible intro.\n\nVisible reply.");
+  });
+
+  it("preserves a visible JSON reply after an echoed modern preface", () => {
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      '{"status":"ok","message":"done"}',
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe('{"status":"ok","message":"done"}');
+  });
+
+  it("preserves a visible fenced reply after an echoed modern preface", () => {
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "```json",
+      '{"status":"ok"}',
+      "```",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe(
+      ["```json", '{"status":"ok"}', "```"].join("\n"),
+    );
+  });
+
+  it("strips structured metadata before preserving a visible JSON reply", () => {
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "Conversation info (untrusted metadata):",
+      "```json",
+      '{"chat_id":"telegram:-1003710118964"}',
+      "```",
+      "",
+      '{"answer":"visible"}',
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe('{"answer":"visible"}');
+  });
+
+  it("strips markdown-style inbound context and exec state blocks", () => {
+    const input = [
+      "OpenClaw runtime context for the immediately preceding user message.",
+      "This context is runtime-generated, not user-authored. Keep internal details private.",
+      "",
+      "## Inbound Context (trusted metadata)",
+      "```json",
+      '{"channel":"webchat","messageId":"m_123"}',
+      "```",
+      "",
+      "## Current Exec Session State",
+      "",
+      "Current session exec defaults: workdir=/repo, shell=bash",
+      "",
+      "Current elevated level: none",
+      "",
+      "If the user asks to run a command, use the exec tool.",
+      "",
+      "Visible reply.",
+    ].join("\n");
+
+    expect(stripInternalRuntimeContext(input)).toBe("Visible reply.");
+  });
+
   it("fuzzes delimiter injection and nested marker handling deterministically", () => {
     const rng = createDeterministicRng(0xc0ff_ee42);
     const tokenPool = [

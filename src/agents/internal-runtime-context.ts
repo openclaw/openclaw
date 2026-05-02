@@ -157,40 +157,197 @@ function stripLegacyInternalRuntimeContext(text: string): string {
   }
 }
 
-function isRuntimeContextPromptHeader(line: string): boolean {
-  return (
-    line === OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER || line === OPENCLAW_RUNTIME_EVENT_HEADER
+function findRuntimeContextPromptHeader(text: string, from: number): RegExpExecArray | null {
+  const headerRe = new RegExp(
+    `${escapeRegExp(OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER)}|${escapeRegExp(OPENCLAW_RUNTIME_EVENT_HEADER)}`,
+    "g",
+  );
+  headerRe.lastIndex = from;
+  for (;;) {
+    const match = headerRe.exec(text);
+    if (!match) {
+      return null;
+    }
+    const lineStart = match.index === 0 || /\r?\n$/.test(text.slice(0, match.index));
+    const afterHeader = match.index + match[0].length;
+    const lineEnd = afterHeader >= text.length || /^\r?\n/.test(text.slice(afterHeader));
+    if (lineStart && lineEnd) {
+      return match;
+    }
+  }
+}
+
+function findLineEnd(text: string, from: number): number {
+  const newline = text.indexOf("\n", from);
+  return newline === -1 ? text.length : newline;
+}
+
+function skipBlankLines(text: string, from: number): number {
+  let cursor = from;
+  for (;;) {
+    const lineEnd = findLineEnd(text, cursor);
+    const line = text.slice(cursor, lineEnd).replace(/\r$/, "");
+    if (line.trim() !== "") {
+      return cursor;
+    }
+    if (lineEnd >= text.length) {
+      return text.length;
+    }
+    cursor = lineEnd + 1;
+  }
+}
+
+function readParagraph(text: string, from: number): { end: number; text: string } {
+  const nextBreak = text.indexOf("\n\n", from);
+  const end = nextBreak === -1 ? text.length : nextBreak;
+  return { end, text: text.slice(from, end).trim() };
+}
+
+function isMetadataHeading(paragraph: string): boolean {
+  return /^(?:Conversation info \(untrusted metadata\):|Sender \(untrusted metadata\):|Replied message \(untrusted, for context\):|(?:##\s+)?Inbound Context \(trusted metadata\):?)$/u.test(
+    paragraph,
   );
 }
 
-function stripRuntimeContextPromptPreface(text: string): string {
-  const lines = text.split(/\r?\n/);
-  let changed = false;
-  const output: string[] = [];
+function isStructuredMetadataPayload(paragraph: string): boolean {
+  return /^(?:```(?:json)?\s*[\s\S]*```\s*|\{[\s\S]*\}\s*)$/u.test(paragraph);
+}
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index] ?? "";
-    const nextLine = lines[index + 1] ?? "";
-    if (
-      isRuntimeContextPromptHeader(line.trim()) &&
-      nextLine.trim() === OPENCLAW_RUNTIME_CONTEXT_NOTICE
-    ) {
-      changed = true;
-      index += 1;
-      while (index + 1 < lines.length && (lines[index + 1] ?? "").trim() === "") {
-        index += 1;
-      }
-      continue;
-    }
-    output.push(line);
+function consumeMetadataSection(text: string, cursor: number): number | null {
+  const heading = readParagraph(text, cursor);
+  const firstLineEnd = heading.text.indexOf("\n");
+  const firstLine = firstLineEnd === -1 ? heading.text : heading.text.slice(0, firstLineEnd);
+  if (!isMetadataHeading(firstLine)) {
+    return null;
   }
 
-  return changed
-    ? output
-        .join("\n")
-        .replace(/\n{3,}/g, "\n\n")
-        .trim()
-    : text;
+  if (firstLineEnd !== -1) {
+    const inlinePayload = heading.text.slice(firstLineEnd + 1).trim();
+    if (isStructuredMetadataPayload(inlinePayload)) {
+      return heading.end;
+    }
+  }
+
+  let nextCursor = skipBlankLines(text, heading.end);
+  if (nextCursor >= text.length) {
+    return heading.end;
+  }
+
+  const payload = readParagraph(text, nextCursor);
+  if (!isStructuredMetadataPayload(payload.text)) {
+    return heading.end;
+  }
+  nextCursor = payload.end;
+
+  return nextCursor;
+}
+
+function isAsyncCompletionIntro(paragraph: string): boolean {
+  return paragraph.startsWith(
+    "An async command you ran earlier has completed. The command completion details are:",
+  );
+}
+
+function isAsyncCompletionScaffold(paragraph: string): boolean {
+  return (
+    paragraph.startsWith("The command completion details are:") ||
+    paragraph.startsWith("Exec completed (") ||
+    paragraph.startsWith("Please relay the command output to the user")
+  );
+}
+
+function consumeExecStateSection(text: string, cursor: number): number | null {
+  const heading = readParagraph(text, cursor);
+  if (
+    heading.text !== "Current Exec Session State" &&
+    heading.text !== "## Current Exec Session State"
+  ) {
+    return null;
+  }
+
+  let nextCursor = skipBlankLines(text, heading.end);
+  while (nextCursor < text.length) {
+    const paragraph = readParagraph(text, nextCursor);
+    if (
+      !paragraph.text.startsWith("Current session exec defaults:") &&
+      !paragraph.text.startsWith("Current elevated level:") &&
+      !paragraph.text.startsWith("If the user asks to run a command,")
+    ) {
+      break;
+    }
+    nextCursor = skipBlankLines(text, paragraph.end);
+  }
+
+  return nextCursor;
+}
+
+function consumeModernRuntimeContextWrapperSection(
+  text: string,
+  cursor: number,
+  state: { sawAsyncCompletionIntro: boolean },
+): number | null {
+  const metadataEnd = consumeMetadataSection(text, cursor);
+  if (metadataEnd !== null) {
+    return metadataEnd;
+  }
+
+  const execStateEnd = consumeExecStateSection(text, cursor);
+  if (execStateEnd !== null) {
+    return execStateEnd;
+  }
+
+  const paragraph = readParagraph(text, cursor);
+  if (!paragraph.text) {
+    return null;
+  }
+
+  if (isAsyncCompletionIntro(paragraph.text)) {
+    state.sawAsyncCompletionIntro = true;
+    return paragraph.end;
+  }
+
+  if (state.sawAsyncCompletionIntro && isAsyncCompletionScaffold(paragraph.text)) {
+    return paragraph.end;
+  }
+
+  return null;
+}
+
+function stripRuntimeContextPromptBlocks(text: string): string {
+  let next = text;
+  let searchFrom = 0;
+  for (;;) {
+    const match = findRuntimeContextPromptHeader(next, searchFrom);
+    if (!match) {
+      return next;
+    }
+
+    const headerStart = match.index;
+    let cursor = findLineEnd(next, headerStart) + 1;
+    const noticeLineEnd = findLineEnd(next, cursor);
+    const noticeLine = next.slice(cursor, noticeLineEnd).replace(/\r$/, "").trim();
+    if (noticeLine !== OPENCLAW_RUNTIME_CONTEXT_NOTICE) {
+      searchFrom = cursor;
+      continue;
+    }
+
+    cursor = noticeLineEnd >= next.length ? next.length : noticeLineEnd + 1;
+    cursor = skipBlankLines(next, cursor);
+
+    const state = { sawAsyncCompletionIntro: false };
+    for (let consumed = 0; consumed < 50 && cursor < next.length; consumed += 1) {
+      const nextCursor = consumeModernRuntimeContextWrapperSection(next, cursor, state);
+      if (nextCursor === null) {
+        break;
+      }
+      cursor = skipBlankLines(next, nextCursor);
+    }
+
+    const before = next.slice(0, headerStart).trimEnd();
+    const after = next.slice(cursor).trimStart();
+    next = before && after ? `${before}\n\n${after}` : `${before}${after}`;
+    searchFrom = Math.max(0, before.length - 1);
+  }
 }
 
 export function stripInternalRuntimeContext(text: string): string {
@@ -202,9 +359,7 @@ export function stripInternalRuntimeContext(text: string): string {
     INTERNAL_RUNTIME_CONTEXT_BEGIN,
     INTERNAL_RUNTIME_CONTEXT_END,
   );
-  return stripRuntimeContextPromptPreface(
-    stripLegacyInternalRuntimeContext(withoutDelimitedBlocks),
-  );
+  return stripRuntimeContextPromptBlocks(stripLegacyInternalRuntimeContext(withoutDelimitedBlocks));
 }
 
 export function hasInternalRuntimeContext(text: string): boolean {
