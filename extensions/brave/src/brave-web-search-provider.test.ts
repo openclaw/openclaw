@@ -168,6 +168,127 @@ describe("brave web search provider", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts baseUrl in the Brave plugin config schema", () => {
+    if (!braveManifest.configSchema) {
+      throw new Error("Expected Brave manifest config schema");
+    }
+
+    const result = validateJsonSchemaValue({
+      schema: braveManifest.configSchema,
+      cacheKey: "test:brave-config-schema-base-url",
+      value: {
+        webSearch: {
+          baseUrl: "https://api.search.brave.com/proxy",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("uses configured Brave baseUrl for web search requests", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: {
+          baseUrl: "https://api.search.brave.com/proxy/",
+          mode: "web",
+        },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "latest ai news" });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.origin).toBe("https://api.search.brave.com");
+    expect(requestUrl.pathname).toBe("/proxy/res/v1/web/search");
+  });
+
+  it("uses configured Brave baseUrl for llm-context requests", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = installBraveLlmContextFetch();
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: {
+          baseUrl: "https://api.search.brave.com/proxy",
+          mode: "llm-context",
+        },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "latest ai news" });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.pathname).toBe("/proxy/res/v1/llm/context");
+  });
+
+  it("keeps Brave cache entries isolated by baseUrl", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => ({ web: { results: [] } }),
+      } as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const firstTool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: {
+          baseUrl: "https://api.search.brave.com/proxy-one",
+          mode: "web",
+        },
+      },
+    });
+    const secondTool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: {
+          baseUrl: "https://api.search.brave.com/proxy-two",
+          mode: "web",
+        },
+      },
+    });
+    if (!firstTool || !secondTool) {
+      throw new Error("Expected tool definitions");
+    }
+
+    await firstTool.execute({ query: "base url cache identity" });
+    await secondTool.execute({ query: "base url cache identity" });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(new URL(String(mockFetch.mock.calls[0]?.[0])).pathname).toBe(
+      "/proxy-one/res/v1/web/search",
+    );
+    expect(new URL(String(mockFetch.mock.calls[1]?.[0])).pathname).toBe(
+      "/proxy-two/res/v1/web/search",
+    );
+  });
+
   it("rejects invalid Brave mode values in the plugin config schema", () => {
     if (!braveManifest.configSchema) {
       throw new Error("Expected Brave manifest config schema");
