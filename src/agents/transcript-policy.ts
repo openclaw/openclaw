@@ -221,11 +221,12 @@ export function resolveTranscriptPolicy(params: {
   model?: ProviderRuntimeModel;
 }): TranscriptPolicy {
   const provider = normalizeProviderId(params.provider ?? "");
-  const cacheKey = canCacheTranscriptPolicy(params)
-    ? resolveTranscriptPolicyCacheKey({ ...params, provider, config: params.config })
+  const cacheConfig = canCacheTranscriptPolicy(params) ? params.config : undefined;
+  const cacheKey = cacheConfig
+    ? resolveTranscriptPolicyCacheKey({ ...params, provider, config: cacheConfig })
     : undefined;
-  if (cacheKey) {
-    const cached = transcriptPolicyCache.get(params.config)?.get(cacheKey);
+  if (cacheConfig && cacheKey) {
+    const cached = transcriptPolicyCache.get(cacheConfig)?.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -259,11 +260,11 @@ export function resolveTranscriptPolicy(params: {
           modelId: params.modelId,
         }),
       );
-  if (cacheKey) {
-    let configCache = transcriptPolicyCache.get(params.config);
+  if (cacheConfig && cacheKey) {
+    let configCache = transcriptPolicyCache.get(cacheConfig);
     if (!configCache) {
       configCache = new Map();
-      transcriptPolicyCache.set(params.config, configCache);
+      transcriptPolicyCache.set(cacheConfig, configCache);
     }
     configCache.set(cacheKey, policy);
   }
