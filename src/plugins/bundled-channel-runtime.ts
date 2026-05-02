@@ -1,9 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-metadata.js";
-import type { PluginManifestRecord } from "./manifest-registry.js";
+import {
+  listBundledPluginMetadata,
+  resolveBundledPluginGeneratedPath,
+  type BundledPluginMetadata,
+} from "./bundled-plugin-metadata.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 type BundledChannelEntryPathPair = {
   source: string;
@@ -68,27 +70,29 @@ function toBundledChannelEntryPair(source: string | undefined): BundledChannelEn
   return { source, built: source };
 }
 
-function toBundledChannelPluginMetadata(
-  record: PluginManifestRecord,
-): BundledChannelPluginMetadata | null {
-  if (record.origin !== "bundled") {
-    return null;
-  }
-  const source = toBundledChannelEntryPair(record.source);
+function toBundledChannelPluginMetadata(params: {
+  record: BundledPluginMetadata;
+  rootDir?: string;
+  scanDir?: string;
+}): BundledChannelPluginMetadata | null {
+  const { record } = params;
+  const source = toBundledChannelEntryPair(record.source.source);
   if (!source) {
     return null;
   }
-  const setupSource = toBundledChannelEntryPair(record.setupSource);
+  const setupSource = toBundledChannelEntryPair(record.setupSource?.source);
   return {
-    dirName: path.basename(record.rootDir),
+    dirName: record.dirName,
     source,
     ...(setupSource ? { setupSource } : {}),
     manifest: {
-      id: record.id,
-      channels: record.channels,
+      id: record.manifest.id,
+      channels: record.manifest.channels,
     },
     ...(record.packageManifest ? { packageManifest: record.packageManifest } : {}),
-    rootDir: record.rootDir,
+    rootDir: params.scanDir
+      ? path.resolve(params.scanDir, record.dirName)
+      : path.resolve(params.rootDir ?? process.cwd(), "extensions", record.dirName),
   };
 }
 
@@ -102,10 +106,14 @@ export function listBundledChannelPluginMetadata(params?: {
   if (scope.kind === "empty") {
     return [];
   }
-  return loadPluginManifestRegistryForPluginRegistry({
-    env: scope.kind === "env" ? scope.env : undefined,
-    includeDisabled: true,
-  }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
+  const scanDir = params?.scanDir ?? (scope.kind === "env" ? scope.env.OPENCLAW_BUNDLED_PLUGINS_DIR : undefined);
+  const rootDir = params?.rootDir;
+  return listBundledPluginMetadata({
+    ...(scanDir ? { scanDir } : {}),
+    ...(rootDir ? { rootDir } : {}),
+    includeChannelConfigs: params?.includeChannelConfigs,
+    includeSyntheticChannelConfigs: params?.includeSyntheticChannelConfigs,
+  }).flatMap((record) => toBundledChannelPluginMetadata({ record, rootDir, scanDir }) ?? []);
 }
 
 export function resolveBundledChannelGeneratedPath(

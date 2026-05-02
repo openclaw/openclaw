@@ -499,12 +499,13 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
 
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
     expect(
-      moduleLoaderParams.some(
-        (entry) =>
+      moduleLoaderParams.some((entry) => {
+        const modulePath = entry.modulePath.replace(/\\/g, "/");
+        return (
           entry.tryNative === true &&
-          (entry.modulePath.endsWith("/plugins/loader.js") ||
-            entry.modulePath.endsWith("/plugins/loader.ts")),
-      ),
+          (modulePath.endsWith("/plugins/loader.js") || modulePath.endsWith("/plugins/loader.ts"))
+        );
+      }),
     ).toBe(true);
   });
 
