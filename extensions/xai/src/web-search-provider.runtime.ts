@@ -194,7 +194,7 @@ export async function executeXaiWebSearchProviderTool(
     return {
       error: "missing_xai_api_key",
       message:
-        "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
+        "web_search (grok) needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }

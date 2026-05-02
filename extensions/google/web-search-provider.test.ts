@@ -1,9 +1,24 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { withEnv } from "openclaw/plugin-sdk/test-env";
+import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
 import { __testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 describe("google web search provider", () => {
+  it("points missing-key users to fetch/browser alternatives", async () => {
+    await withEnvAsync({ GEMINI_API_KEY: undefined }, async () => {
+      const provider = createGeminiWebSearchProvider();
+      const tool = provider.createTool({ config: {}, searchConfig: {} });
+      if (!tool) {
+        throw new Error("Expected tool definition");
+      }
+
+      await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toMatchObject({
+        error: "missing_gemini_api_key",
+        message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
+      });
+    });
+  });
+
   it("falls back to GEMINI_API_KEY from the environment", () => {
     withEnv({ GEMINI_API_KEY: "AIza-env-test" }, () => {
       expect(__testing.resolveGeminiApiKey()).toBe("AIza-env-test");

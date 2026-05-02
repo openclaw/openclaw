@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 - Providers/xAI: give Grok `web_search` a 60s default timeout, harden malformed xAI Responses parsing, and return structured timeout errors instead of aborting the tool call. Fixes #58063 and #58733. Thanks @dnishimura, @marvcasasola-svg, and @Nanako0129.
 - Providers/configure: preserve the existing default model when adding or reauthing a provider whose plugin returns a default-model config patch. Fixes #50268. Thanks @rixcorp-oc.
 - Slack/message tool: let `read` fetch an exact Slack message timestamp, including a specific thread reply when paired with `threadId`, instead of returning only the parent thread or recent channel history. Fixes #53943. Thanks @zomars.
+- Web search: point missing-key errors to `web_fetch` for known URLs and the browser tool for interactive pages. Thanks @zhaoyang97.
 - Heartbeat: strip legacy `[TOOL_CALL]...[/TOOL_CALL]` and `[TOOL_RESULT]...[/TOOL_RESULT]` pseudo-call blocks from heartbeat replies before channel delivery. Fixes #54138. Thanks @Deniable9570.
 - macOS/Voice Wake: send wake-word and Push-to-Talk transcripts through the selected macOS session target instead of always falling back to main WebChat. Fixes #51040. Thanks @carl-jeffrolc.
 - Providers/xAI: give Grok `web_search` a 60s default timeout, harden malformed xAI Responses parsing, and return structured timeout errors instead of aborting the tool call. Fixes #58063 and #58733. Thanks @dnishimura, @marvcasasola-svg, and @Nanako0129.

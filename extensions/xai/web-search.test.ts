@@ -110,6 +110,7 @@ describe("xai web search config resolution", () => {
 
       await expect(maybeTool.execute({ query: "OpenClaw" })).resolves.toMatchObject({
         error: "missing_xai_api_key",
+        message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
       });
     });
   });
