@@ -72,6 +72,7 @@ Docs: https://docs.openclaw.ai
 - Slack/DMs: honor `dmHistoryLimit` for fresh 1:1 Slack DM sessions by backfilling recent conversation history before the current reply. Fixes #64427. Thanks @brantley-creator.
 - Slack/DMs: keep top-level direct messages on the stable DM session even when `replyToMode` targets Slack thread replies, preserving context across DM turns. Fixes #58832. Thanks @daye-jjeong.
 - Slack/delivery: preserve Slack Web API missing-scope details in outbound delivery errors, so queued retry state identifies the OAuth scope to add. Fixes #62391. Thanks @alexey-pelykh.
+- Slack/capabilities: read granted scopes from `auth.test` response metadata before trying legacy scope APIs, so modern bot tokens no longer report `unknown_method` for channel capabilities. Fixes #44625. Thanks @Qquanwei and @martingarramon.
 - Slack/DMs: send text/block-only proactive DMs directly with `chat.postMessage(channel=<user id>)` while keeping conversation resolution for uploads and threaded sends. Fixes #62042. Thanks @MarkMolina.
 - Slack/routing: match route bindings written with Slack target syntax such as `channel:C...`, `user:U...`, or `<@U...>`, so bound Slack peers route to the configured agent instead of `main`. Fixes #41608. Thanks @Winnsolutionsadmin.
 - Slack/message actions: prefer the account bound to the outbound target peer before falling back to the agent's first channel account, so multi-workspace sends use the intended Slack account. Supersedes #66807. Thanks @rijhsinghani.
