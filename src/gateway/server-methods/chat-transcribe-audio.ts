@@ -1,13 +1,24 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { transcribeAudioFile } from "../../media-understanding/runtime.js";
 import { extensionForMime, normalizeMimeType } from "../../media/mime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+type ChatTranscribeAudioRuntime = typeof import("./chat-transcribe-audio.runtime.js");
+type TranscribeAudioFileResult = Awaited<
+  ReturnType<ChatTranscribeAudioRuntime["transcribeAudioFile"]>
+>;
+
+let chatTranscribeAudioRuntimePromise: Promise<ChatTranscribeAudioRuntime> | null = null;
+
+function loadChatTranscribeAudioRuntime(): Promise<ChatTranscribeAudioRuntime> {
+  chatTranscribeAudioRuntimePromise ??= import("./chat-transcribe-audio.runtime.js");
+  return chatTranscribeAudioRuntimePromise;
+}
 
 const CHAT_TRANSCRIBE_AUDIO_WS_JSON_OVERHEAD_BYTES = 64 * 1024;
 export const MAX_CHAT_TRANSCRIBE_AUDIO_BYTES = Math.floor(
@@ -45,9 +56,7 @@ function extensionForAudioMime(mime?: string): string {
   return extensionForMime(mime) ?? ".audio";
 }
 
-function isMissingMediaUnderstandingProvider(
-  result: Awaited<ReturnType<typeof transcribeAudioFile>>,
-) {
+function isMissingMediaUnderstandingProvider(result: TranscribeAudioFileResult) {
   const decision = result.decision;
   return (
     decision?.outcome === "skipped" &&
@@ -86,6 +95,7 @@ export const chatTranscribeAudioHandlers: GatewayRequestHandlers = {
     const filePath = path.join(tmpDir, `dictation${extensionForAudioMime(decoded.mime)}`);
     try {
       await fs.writeFile(filePath, decoded.data);
+      const { transcribeAudioFile } = await loadChatTranscribeAudioRuntime();
       const result = await transcribeAudioFile({
         filePath,
         cfg: context.getRuntimeConfig(),
