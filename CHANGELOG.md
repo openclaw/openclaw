@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - Slack/message tool: let `read` fetch an exact Slack message timestamp, including a specific thread reply when paired with `threadId`, instead of returning only the parent thread or recent channel history. Fixes #53943. Thanks @zomars.
 - Web search: point missing-key errors to `web_fetch` for known URLs and the browser tool for interactive pages. Thanks @zhaoyang97.
 - Web search: late-bind managed agent `web_search` calls to the current runtime config snapshot, so existing sessions do not keep stale unresolved SecretRefs after secrets reload. Fixes #75420. Thanks @richardmqq.
+- Web search/DuckDuckGo: include the keyless DuckDuckGo provider in the web search setup wizard. Fixes #65862 and supersedes #65940. Thanks @Jah-yee.
 - Web search: honor `baseUrl` overrides for Gemini, Grok, and x_search provider-owned config, so proxy-backed search tools no longer dial hardcoded public endpoints. Supersedes #61972. Thanks @Lanfei.
 - Web search/Brave: point Brave provider metadata at the canonical `/tools/brave-search` docs page and make the legacy `/brave-search` docs page a redirect stub. Fixes #65870 and supersedes #65892. Thanks @Magicray1217 and @Jah-yee.
 - Web search/Brave: allow `freshness` and bounded date ranges in `llm-context` mode, matching Brave's documented LLM Context API support. Supersedes #51005. Thanks @remusao.
