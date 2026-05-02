@@ -37,19 +37,7 @@
       "order": 65
     },
     "install": {
-      "npmSpec": "@openclaw/mattermost",
-      "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
-    },
-    "compat": {
-      "pluginApi": ">=2026.5.2"
-    },
-    "build": {
-      "openclawVersion": "2026.5.2"
-    },
-    "release": {
-      "publishToClawHub": true,
-      "publishToNpm": true
     }
   }
 }

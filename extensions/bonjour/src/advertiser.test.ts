@@ -721,19 +721,19 @@ describe("gateway bonjour advertiser", () => {
       sshPort: 2222,
     });
 
-    await vi.advanceTimersByTimeAsync(105_000);
+    await vi.advanceTimersByTimeAsync(55_000);
 
     expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("disabling advertiser after 3 failed restarts"),
+      expect.stringContaining("disabling advertiser after 1 stuck-state restart"),
     );
-    expect(createService).toHaveBeenCalledTimes(4);
-    expect(advertise).toHaveBeenCalledTimes(4);
-    expect(destroy).toHaveBeenCalledTimes(4);
+    expect(createService).toHaveBeenCalledTimes(2);
+    expect(advertise).toHaveBeenCalledTimes(2);
+    expect(destroy).toHaveBeenCalledTimes(2);
     expect(shutdown).toHaveBeenCalledTimes(1);
 
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(createService).toHaveBeenCalledTimes(4);
-    expect(advertise).toHaveBeenCalledTimes(4);
+    expect(createService).toHaveBeenCalledTimes(2);
+    expect(advertise).toHaveBeenCalledTimes(2);
 
     await started.stop();
     expect(shutdown).toHaveBeenCalledTimes(1);
