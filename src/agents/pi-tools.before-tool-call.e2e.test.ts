@@ -822,6 +822,43 @@ describe("before_tool_call requireApproval handling", () => {
     );
   });
 
+  it("does not fail hooks when sandbox path derivation rejects a target", async () => {
+    const patch = ["*** Begin Patch", "*** Add File: /outside.ts", "+x", "*** End Patch"].join(
+      "\n",
+    );
+    hookRunner.runBeforeToolCall.mockResolvedValue(undefined);
+
+    const result = await runBeforeToolCallHook({
+      toolName: "apply_patch",
+      params: { input: patch },
+      toolCallId: "patch-sandbox-rejected",
+      ctx: {
+        agentId: "main",
+        cwd: "/workspace",
+        sandbox: {
+          root: "/workspace",
+          bridge: {
+            resolvePath: () => {
+              throw new Error("Path escapes sandbox root");
+            },
+          } as never,
+        },
+        sessionKey: "main",
+        runId: "run-patch",
+      },
+    });
+
+    expect(result.blocked).toBe(false);
+    expect(hookRunner.runBeforeToolCall).toHaveBeenCalledWith(
+      expect.not.objectContaining({ derivedPaths: expect.anything() }),
+      expect.objectContaining({
+        toolName: "apply_patch",
+        runId: "run-patch",
+        toolCallId: "patch-sandbox-rejected",
+      }),
+    );
+  });
+
   it("skips derived path extraction when no policies or hooks can consume it", async () => {
     hookRunner.hasHooks.mockReturnValue(false);
     const params = {};

@@ -63,16 +63,20 @@ function normalizePatchPath(
     return undefined;
   }
   const cwd = options.cwd ?? options.sandbox?.root ?? process.cwd();
-  const resolved = options.sandbox
-    ? options.sandbox.bridge.resolvePath({
-        filePath: raw,
-        cwd,
-      })
-    : undefined;
-  const normalized = path.normalize(
-    resolved ? (resolved.hostPath ?? resolved.containerPath) : resolveSandboxInputPath(raw, cwd),
-  );
-  return normalized && normalized !== "." ? normalized : undefined;
+  try {
+    const resolved = options.sandbox
+      ? options.sandbox.bridge.resolvePath({
+          filePath: raw,
+          cwd,
+        })
+      : undefined;
+    const normalized = path.normalize(
+      resolved ? (resolved.hostPath ?? resolved.containerPath) : resolveSandboxInputPath(raw, cwd),
+    );
+    return normalized && normalized !== "." ? normalized : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function pushPath(

@@ -237,6 +237,37 @@ describe("extractApplyPatchTargetPaths", () => {
     ]);
   });
 
+  it("skips sandbox paths the bridge rejects", () => {
+    const patch = [
+      "*** Begin Patch",
+      "*** Add File: /workspace/src/ok.ts",
+      "+x",
+      "*** Add File: /outside.ts",
+      "+y",
+      "*** End Patch",
+    ].join("\n");
+    expect(
+      extractApplyPatchTargetPaths(patch, {
+        cwd: "/workspace",
+        sandbox: {
+          root: "/workspace",
+          bridge: {
+            resolvePath: ({ filePath }: { filePath: string }) => {
+              if (filePath === "/outside.ts") {
+                throw new Error("Path escapes sandbox root");
+              }
+              return {
+                containerPath: filePath,
+                hostPath: filePath.replace("/workspace", "/host/workspace"),
+                relativePath: filePath.replace("/workspace/", ""),
+              };
+            },
+          } as never,
+        },
+      }),
+    ).toEqual(["/host/workspace/src/ok.ts"]);
+  });
+
   it("does not require the begin/end envelope markers to be present", () => {
     const patch = ["*** Add File: loose.ts", "+x"].join("\n");
     expect(extractApplyPatchTargetPaths(patch)).toEqual([cwdPath("loose.ts")]);
