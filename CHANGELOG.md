@@ -33,6 +33,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Telegram/native commands: pass persisted session files into plugin commands for topic-bound sessions, so `/codex bind` works from Telegram forum topics. Refs #75845 and #76049. Thanks @MatthewSchleder.
+- Security audit/plugins: ignore plugin install backup, disabled, and dependency debris directories when enumerating installed plugin roots, avoiding false-positive findings for `.openclaw-install-backups` after plugin updates. Fixes #75456.
 - Telegram: honor runtime conversation bindings for native slash commands in bound top-level groups, so commands like `/status@bot` route to the active non-`main` session instead of falling back to the default route. Fixes #75405; supersedes #75558. Thanks @ziptbm and @yfge.
 - Gateway/tasks: make task registry maintenance use pass-local backing-session lookups and fresh active child-session indexes, avoiding repeated full task snapshots and session-store clones on large stale registries. Fixes #73517 and #75708; supersedes #74406 and #75709. Thanks @Lightningxxl, @glfruit, and @jared-rebel.
 - Models CLI: restore `openclaw models list --provider <id>` catalog and registry fallback rows for unconfigured providers, so provider-specific verification commands no longer report "No models found." Fixes #75517; supersedes #75615. Thanks @lotsoftick and @koshaji.
