@@ -567,15 +567,29 @@ async function dispatchSlashCommand(
       return;
   }
 
-  if (!host.client) {
+  if (!host.client || !host.connected) {
+    host.lastError = "Gateway not connected";
+    injectCommandResult(
+      host,
+      `Cannot run \`/${name}\`: Control UI is not connected to the Gateway.`,
+    );
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
     return;
   }
 
   const targetSessionKey = host.sessionKey;
-  const result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
-    chatModelCatalog: host.chatModelCatalog,
-    sessionsResult: host.sessionsResult,
-  });
+  let result: Awaited<ReturnType<typeof executeSlashCommand>>;
+  try {
+    result = await executeSlashCommand(host.client, targetSessionKey, name, args, {
+      chatModelCatalog: host.chatModelCatalog,
+      sessionsResult: host.sessionsResult,
+    });
+  } catch (err) {
+    host.lastError = String(err);
+    injectCommandResult(host, `Command \`/${name}\` failed unexpectedly.`);
+    scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
+    return;
+  }
 
   if (result.content) {
     injectCommandResult(host, result.content);
