@@ -95,6 +95,7 @@ function withGoogleModelProviderFallbacks(
     return searchConfig;
   }
   const gemini = isRecord(searchConfig?.gemini) ? { ...searchConfig.gemini } : {};
+  const mergedSearchConfig = searchConfig ? { ...searchConfig } : {};
   if (provider.apiKey !== undefined) {
     gemini.providerApiKey = provider.apiKey;
   }
@@ -102,7 +103,7 @@ function withGoogleModelProviderFallbacks(
     gemini.providerBaseUrl = provider.baseUrl;
   }
   return {
-    ...(searchConfig ?? {}),
+    ...mergedSearchConfig,
     gemini,
   };
 }

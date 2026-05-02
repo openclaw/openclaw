@@ -3,6 +3,10 @@ import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
+type TestModelProviderConfig = NonNullable<
+  NonNullable<OpenClawConfig["models"]>["providers"]
+>[string];
+
 function installGeminiFetch() {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
     Promise.resolve({
@@ -22,6 +26,21 @@ function installGeminiFetch() {
   );
   global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
+}
+
+function createGoogleModelProviderConfig(
+  overrides: Partial<TestModelProviderConfig>,
+): TestModelProviderConfig {
+  return {
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/",
+    models: [],
+    ...overrides,
+  };
+}
+
+function getFetchHeaders(mockFetch: ReturnType<typeof installGeminiFetch>): Record<string, string> {
+  const init = mockFetch.mock.calls[0]?.[1] as { headers?: Record<string, string> } | undefined;
+  return init?.headers ?? {};
 }
 
 afterEach(() => {
@@ -118,9 +137,9 @@ describe("google web search provider", () => {
         config: {
           models: {
             providers: {
-              google: {
+              google: createGoogleModelProviderConfig({
                 apiKey: "AIza-provider-test",
-              },
+              }),
             },
           },
         },
@@ -129,9 +148,7 @@ describe("google web search provider", () => {
 
       await tool?.execute({ query: "OpenClaw provider key fallback" });
 
-      expect(
-        (mockFetch.mock.calls[0]?.[1]?.headers as Record<string, string>)["x-goog-api-key"],
-      ).toBe("AIza-provider-test");
+      expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-provider-test");
     });
   });
 
@@ -154,9 +171,9 @@ describe("google web search provider", () => {
           },
           models: {
             providers: {
-              google: {
+              google: createGoogleModelProviderConfig({
                 apiKey: "AIza-provider-test",
-              },
+              }),
             },
           },
         },
@@ -165,9 +182,7 @@ describe("google web search provider", () => {
 
       await tool?.execute({ query: "OpenClaw plugin key precedence" });
 
-      expect(
-        (mockFetch.mock.calls[0]?.[1]?.headers as Record<string, string>)["x-goog-api-key"],
-      ).toBe("AIza-plugin-test");
+      expect(getFetchHeaders(mockFetch)["x-goog-api-key"]).toBe("AIza-plugin-test");
     });
   });
 
@@ -178,10 +193,10 @@ describe("google web search provider", () => {
       config: {
         models: {
           providers: {
-            google: {
+            google: createGoogleModelProviderConfig({
               apiKey: "AIza-provider-test",
               baseUrl: "https://generativelanguage.googleapis.com/provider/v1beta/",
-            },
+            }),
           },
         },
       },
@@ -214,9 +229,9 @@ describe("google web search provider", () => {
         },
         models: {
           providers: {
-            google: {
+            google: createGoogleModelProviderConfig({
               baseUrl: "https://generativelanguage.googleapis.com/provider/v1beta/",
-            },
+            }),
           },
         },
       },

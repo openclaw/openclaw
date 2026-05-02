@@ -183,6 +183,8 @@ describe("web search runtime", () => {
             providers: {
               "custom-search": {
                 apiKey: "custom-provider-key",
+                baseUrl: "https://custom-search.example/v1",
+                models: [],
               },
             },
           },
