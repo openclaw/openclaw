@@ -70,4 +70,8 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
 // Knip can disagree across supported local/CI platforms for files that are
 // only reachable through test-only import graphs. Ignore these when reported,
 // but do not require them to be reported.
-export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = ["src/gateway/test/server-sessions-helpers.ts"];
+export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
+  "src/commands/doctor/shared/legacy-config-runtime-migrate.ts",
+  "src/commands/doctor/shared/runtime-compat-api.ts",
+  "src/gateway/test/server-sessions-helpers.ts",
+];
