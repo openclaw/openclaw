@@ -7,30 +7,17 @@ import {
   collectChangedExtensionIdsFromPaths,
   collectPublishablePluginPackageErrors,
   parsePluginReleaseArgs,
-  parsePluginReleaseSelection,
-  parsePluginReleaseSelectionMode,
   resolvePublishablePluginVersion,
   resolveGitCommitSha,
   resolveChangedPublishablePluginPackages,
   resolveSelectedPublishablePluginPackages,
   type GitRangeSelection,
-  type ParsedPluginReleaseArgs,
   type PluginReleaseSelectionMode,
 } from "./plugin-npm-release.ts";
 
-export {
-  collectChangedExtensionIdsFromPaths,
-  parsePluginReleaseArgs,
-  parsePluginReleaseSelection,
-  parsePluginReleaseSelectionMode,
-  resolveChangedPublishablePluginPackages,
-  resolveSelectedPublishablePluginPackages,
-  type GitRangeSelection,
-  type ParsedPluginReleaseArgs,
-  type PluginReleaseSelectionMode,
-};
+export { parsePluginReleaseArgs };
 
-export type PluginPackageJson = {
+type PluginPackageJson = {
   name?: string;
   version?: string;
   private?: boolean;
@@ -63,17 +50,17 @@ export type PublishablePluginPackage = {
   publishTag: "latest" | "beta";
 };
 
-export type PluginReleasePlanItem = PublishablePluginPackage & {
+type PluginReleasePlanItem = PublishablePluginPackage & {
   alreadyPublished: boolean;
 };
 
-export type PluginReleasePlan = {
+type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
   candidates: PluginReleasePlanItem[];
   skippedPublished: PluginReleasePlanItem[];
 };
 
-export type ClawHubPublishablePluginPackageFilters = {
+type ClawHubPublishablePluginPackageFilters = {
   extensionIds?: readonly string[];
   packageNames?: readonly string[];
 };
