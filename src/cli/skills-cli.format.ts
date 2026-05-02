@@ -374,6 +374,26 @@ export function formatSkillsCheck(report: SkillStatusReport, opts: SkillsCheckOp
   }
   lines.push(`${theme.error("✗")} ${theme.muted("Missing requirements:")} ${missingReqs.length}`);
 
+  if (modelVisible.length > 0 || commandVisible.length > 0 || promptHidden.length > 0) {
+    lines.push("");
+    lines.push(theme.heading("What this means:"));
+    if (modelVisible.length > 0) {
+      lines.push(
+        `  ${theme.muted("Visible to model:")} the agent can see the skill instructions during normal chat.`,
+      );
+    }
+    if (commandVisible.length > 0) {
+      lines.push(
+        `  ${theme.muted("Available as command:")} people, scripts, or cron jobs can call the skill explicitly.`,
+      );
+    }
+    if (promptHidden.length > 0) {
+      lines.push(
+        `  ${theme.muted("Hidden from model prompt:")} installed and ready, but kept out of normal chat unless called explicitly.`,
+      );
+    }
+  }
+
   if (modelVisible.length > 0) {
     lines.push("");
     lines.push(theme.heading("Ready and visible to model:"));

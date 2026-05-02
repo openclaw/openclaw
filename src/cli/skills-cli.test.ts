@@ -269,6 +269,9 @@ describe("skills-cli", () => {
       expect(output).toContain("prompt-hidden");
       expect(output).toContain("Excluded by agent allowlist");
       expect(output).toContain("not-assigned");
+      expect(output).toContain("What this means");
+      expect(output).toContain("people, scripts, or cron jobs can call the skill explicitly");
+      expect(output).toContain("kept out of normal chat unless called explicitly");
     });
 
     it("summarizes a mixed bad skill pack in JSON", () => {
