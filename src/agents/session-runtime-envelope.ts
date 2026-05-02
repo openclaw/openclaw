@@ -4,11 +4,10 @@ import { minimatch } from "minimatch";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   resolveSessionStoreEntry,
-  resolveStorePath,
   type SessionEntry,
   type SessionRuntimeEnvelope,
 } from "../config/sessions.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeToolName } from "./tool-policy.js";
 
@@ -174,17 +173,21 @@ export function readSessionRuntimeEnvelope(sessionKey?: string): SessionRuntimeE
   }
   try {
     const cfg = getRuntimeConfig();
-    const agentId = resolveAgentIdFromSessionKey(normalizedSessionKey);
-    const storePath = resolveStorePath(cfg.session?.store, { agentId });
-    const storeRead = readSessionStoreStrict(storePath);
+    const target = resolveGatewaySessionStoreTarget({ cfg, key: normalizedSessionKey });
+    const storeRead = readSessionStoreStrict(target.storePath);
     if (!storeRead.ok) {
       return storeRead;
     }
-    const { existing } = resolveSessionStoreEntry({
-      store: storeRead.store,
-      sessionKey: normalizedSessionKey,
-    });
-    return { ok: true, envelope: existing?.envelope };
+    for (const storeKey of target.storeKeys) {
+      const { existing } = resolveSessionStoreEntry({
+        store: storeRead.store,
+        sessionKey: storeKey,
+      });
+      if (existing?.envelope) {
+        return { ok: true, envelope: existing.envelope };
+      }
+    }
+    return { ok: true };
   } catch (err) {
     return {
       ok: false,

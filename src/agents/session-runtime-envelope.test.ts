@@ -4,7 +4,10 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeState = vi.hoisted(() => ({
-  config: {} as { session?: { store?: string } },
+  config: {} as {
+    session?: { scope?: "global"; mainKey?: string; store?: string };
+    agents?: { list?: Array<{ id?: string; default?: boolean }> };
+  },
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -46,6 +49,32 @@ describe("session runtime envelope", () => {
     );
 
     expect(readSessionRuntimeEnvelope("agent:main:main")).toEqual({
+      ok: true,
+      envelope: { allowedTools: ["Read"] },
+    });
+  });
+
+  it("reads global envelopes from the configured default agent store", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-envelope-global-"));
+    tempDirs.push(tempDir);
+    const storeTemplate = path.join(tempDir, "{agentId}", "sessions.json");
+    const opsStorePath = path.join(tempDir, "ops", "sessions.json");
+    const mainStorePath = path.join(tempDir, "main", "sessions.json");
+    fs.mkdirSync(path.dirname(opsStorePath), { recursive: true });
+    fs.mkdirSync(path.dirname(mainStorePath), { recursive: true });
+    fs.writeFileSync(
+      opsStorePath,
+      JSON.stringify({
+        global: { envelope: { allowedTools: ["Read"] } },
+      }),
+    );
+    fs.writeFileSync(mainStorePath, JSON.stringify({ global: {} }));
+    runtimeState.config = {
+      session: { scope: "global", store: storeTemplate },
+      agents: { list: [{ id: "ops", default: true }, { id: "main" }] },
+    };
+
+    expect(readSessionRuntimeEnvelope("global")).toEqual({
       ok: true,
       envelope: { allowedTools: ["Read"] },
     });
