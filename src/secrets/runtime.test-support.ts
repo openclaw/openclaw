@@ -68,6 +68,15 @@ function createTestProvider(params: {
     getConfiguredCredentialValue: (config) =>
       (config?.plugins?.entries?.[params.pluginId]?.config as { webSearch?: { apiKey?: unknown } })
         ?.webSearch?.apiKey,
+    getConfiguredCredentialFallback:
+      params.id === "gemini"
+        ? (config) => {
+            const provider = (config?.models?.providers?.google ?? {}) as { apiKey?: unknown };
+            return provider.apiKey !== undefined
+              ? { path: "models.providers.google.apiKey", value: provider.apiKey }
+              : undefined;
+          }
+        : undefined,
     setConfiguredCredentialValue: (configTarget, value) => {
       const plugins = (configTarget.plugins ??= {}) as { entries?: Record<string, unknown> };
       const entries = (plugins.entries ??= {});

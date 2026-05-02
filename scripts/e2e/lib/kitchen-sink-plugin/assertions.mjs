@@ -148,14 +148,16 @@ const INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES = new Set(["full", "conformance", "
 
 function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const expectedErrorMessages = new Set([
-    'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
-    'channel "kitchen-sink-channel-probe" registration missing required config helpers',
     "cli registration missing explicit commands metadata",
     "only bundled plugins can register Codex app-server extension factories",
+    "only bundled plugins can register agent tool result middleware",
     'compaction provider "kitchen-sink-compaction-provider" registration missing summarize',
     "context engine registration missing id",
     "http route registration missing or invalid auth: /kitchen-sink/http-route",
     "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
+    "plugin must declare contracts.tools for: kitchen-sink-tool",
+    'channel "kitchen-sink-channel-probe" registration missing required config helpers',
+    'agent harness "kitchen-sink-agent-harness" registration missing required runtime methods',
     "memory prompt supplement registration missing builder",
   ]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
@@ -171,9 +173,11 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
       throw new Error(`unexpected kitchen-sink diagnostic error: ${message}`);
     }
   }
-  for (const message of expectedErrorMessages) {
-    if (!errorMessages.has(message)) {
-      throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
+  if (surfaceMode === "full") {
+    for (const message of expectedErrorMessages) {
+      if (!errorMessages.has(message)) {
+        throw new Error(`missing expected kitchen-sink diagnostic error: ${message}`);
+      }
     }
   }
 }

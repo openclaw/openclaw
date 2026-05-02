@@ -26,6 +26,12 @@ const baseUrl = option("--base-url");
 const probePath = option("--path");
 const expectKind = option("--expect");
 const out = option("--out");
+const allowFailing = new Set(
+  option("--allow-failing", "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean),
+);
 const timeoutMs = Number.parseInt(
   option("--timeout-ms", process.env.OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS || "60000"),
   10,
@@ -43,7 +49,15 @@ function matchesExpectation(body) {
   if (expectKind === "live") {
     return body?.ok === true && body?.status === "live";
   }
-  return body?.ready === true;
+  if (body?.ready === true) {
+    return true;
+  }
+  const failing = Array.isArray(body?.failing) ? body.failing : [];
+  return (
+    failing.length > 0 &&
+    allowFailing.size > 0 &&
+    failing.every((entry) => allowFailing.has(String(entry)))
+  );
 }
 
 const startedAt = Date.now();
@@ -65,7 +79,8 @@ while (Date.now() - startedAt <= timeoutMs) {
       status: response.status,
       text,
     };
-    if (response.ok && matchesExpectation(body)) {
+    const expectationMet = matchesExpectation(body);
+    if ((response.ok || expectKind === "ready") && expectationMet) {
       writeJson(out, {
         body,
         elapsedMs: Date.now() - startedAt,

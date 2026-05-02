@@ -42,6 +42,7 @@ export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron";
 export type CronJobsLastStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {
   client: GatewayBrowserClient | null;
@@ -89,9 +90,7 @@ export type CronModelSuggestionsState = {
   cronModelSuggestions: string[];
 };
 
-export function supportsAnnounceDelivery(
-  form: Pick<CronFormState, "sessionTarget" | "payloadKind">,
-) {
+function supportsAnnounceDelivery(form: Pick<CronFormState, "sessionTarget" | "payloadKind">) {
   return form.sessionTarget !== "main" && form.payloadKind === "agentTurn";
 }
 
@@ -523,7 +522,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   return normalizeCronFormState(next);
 }
 
-export function buildCronSchedule(form: CronFormState) {
+function buildCronSchedule(form: CronFormState) {
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {
@@ -559,7 +558,7 @@ export function buildCronSchedule(form: CronFormState) {
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
 }
 
-export function buildCronPayload(form: CronFormState) {
+function buildCronPayload(form: CronFormState) {
   if (form.payloadKind === "systemEvent") {
     const text = form.payloadText.trim();
     if (!text) {
@@ -764,19 +763,19 @@ export async function loadCronRuns(
   state: CronState,
   jobId: string | null,
   opts?: { append?: boolean },
-) {
+): Promise<CronRunsLoadStatus> {
   if (!state.client || !state.connected) {
-    return;
+    return "skipped";
   }
   const scope = state.cronRunsScope;
   const activeJobId = jobId ?? state.cronRunsJobId;
   if (scope === "job" && !activeJobId) {
     clearCronRunsPage(state);
-    return;
+    return "skipped";
   }
   const append = opts?.append === true;
   if (append && !state.cronRunsHasMore) {
-    return;
+    return "skipped";
   }
   try {
     if (append) {
@@ -813,8 +812,10 @@ export async function loadCronRuns(
     state.cronRunsTotal = Math.max(meta.total, state.cronRuns.length);
     state.cronRunsHasMore = meta.hasMore;
     state.cronRunsNextOffset = meta.nextOffset;
+    return "ok";
   } catch (err) {
     state.cronError = String(err);
+    return "error";
   } finally {
     if (append) {
       state.cronRunsLoadingMore = false;

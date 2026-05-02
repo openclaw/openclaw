@@ -85,7 +85,7 @@ export function createWebSearchTool(options?: {
     description:
       "Search the web. Returns provider-normalized results for current information lookup.",
     parameters: WebSearchSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const runtimeWebSearch =
         options?.lateBindRuntimeConfig === true
           ? getActiveRuntimeWebToolsMetadata()?.search
@@ -107,6 +107,7 @@ export function createWebSearchTool(options?: {
         runtimeWebSearch,
         preferRuntimeProviders,
         args: asToolParamsRecord(args),
+        signal,
       });
       return jsonResult({
         ...result.result,

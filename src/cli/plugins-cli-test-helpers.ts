@@ -326,6 +326,11 @@ vi.mock("../plugins/plugin-registry.js", () => ({
     invokeMock<unknown[], unknown>(loadPluginManifestRegistry, ...args)) as (
     ...args: unknown[]
   ) => unknown,
+  loadPluginRegistrySnapshotWithMetadata: () => ({
+    source: "derived",
+    snapshot: { plugins: [] },
+    diagnostics: [],
+  }),
   inspectPluginRegistry: ((
     ...args: Parameters<(typeof import("../plugins/plugin-registry.js"))["inspectPluginRegistry"]>
   ) =>

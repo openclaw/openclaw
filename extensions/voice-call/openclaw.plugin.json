@@ -5,6 +5,9 @@
     "onStartup": true,
     "onCommands": ["voicecall"]
   },
+  "contracts": {
+    "tools": ["voice_call"]
+  },
   "channelEnvVars": {
     "voice-call": [
       "TELNYX_API_KEY",
@@ -40,6 +43,11 @@
     },
     "inboundGreeting": {
       "label": "Inbound Greeting",
+      "advanced": true
+    },
+    "numbers": {
+      "label": "Per-number Routing",
+      "help": "Inbound overrides keyed by dialed E.164 number.",
       "advanced": true
     },
     "telnyx.apiKey": {
@@ -186,6 +194,10 @@
       "label": "Call Log Store Path",
       "advanced": true
     },
+    "sessionScope": {
+      "label": "Session Scope",
+      "help": "Use per-phone to preserve caller memory across calls, or per-call to isolate every call into a fresh voice session."
+    },
     "responseModel": {
       "label": "Response Model",
       "help": "Optional override. Falls back to the runtime default model when unset.",
@@ -271,6 +283,38 @@
       },
       "inboundGreeting": {
         "type": "string"
+      },
+      "numbers": {
+        "type": "object",
+        "propertyNames": {
+          "pattern": "^\\+[1-9]\\d{1,14}$"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "inboundGreeting": {
+              "type": "string"
+            },
+            "tts": {
+              "$ref": "#/properties/tts"
+            },
+            "agentId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "responseModel": {
+              "type": "string"
+            },
+            "responseSystemPrompt": {
+              "type": "string"
+            },
+            "responseTimeoutMs": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        }
       },
       "outbound": {
         "type": "object",
@@ -763,6 +807,10 @@
       },
       "store": {
         "type": "string"
+      },
+      "sessionScope": {
+        "type": "string",
+        "enum": ["per-phone", "per-call"]
       },
       "responseModel": {
         "type": "string"

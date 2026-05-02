@@ -1,8 +1,10 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
+import type { callGateway as defaultCallGateway } from "../gateway/call.js";
 import { formatErrorMessage, readErrorName } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
@@ -33,6 +35,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type CaptureSubagentCompletionReply =
   (typeof import("./subagent-announce.js"))["captureSubagentCompletionReply"];
@@ -42,13 +45,14 @@ type BrowserCleanupModule = Pick<
   "cleanupBrowserSessionsForLifecycleEnd"
 >;
 
-let browserCleanupPromise: Promise<BrowserCleanupModule> | null = null;
+const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
+  () => import("../browser-lifecycle-cleanup.js"),
+);
 
 async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
 > {
-  browserCleanupPromise ??= import("../browser-lifecycle-cleanup.js");
-  return (await browserCleanupPromise).cleanupBrowserSessionsForLifecycleEnd;
+  return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
 }
 
 export function createSubagentRegistryLifecycleController(params: {
@@ -76,6 +80,7 @@ export function createSubagentRegistryLifecycleController(params: {
     workspaceDir?: string;
   }): Promise<void>;
   resumeSubagentRun(runId: string): void;
+  callGateway: typeof defaultCallGateway;
   captureSubagentCompletionReply: CaptureSubagentCompletionReply;
   cleanupBrowserSessionsForLifecycleEnd?: typeof cleanupBrowserSessionsForLifecycleEnd;
   runSubagentAnnounceFlow: RunSubagentAnnounceFlow;
@@ -469,6 +474,7 @@ export function createSubagentRegistryLifecycleController(params: {
     didAnnounce: boolean,
     options?: {
       skipAnnounce?: boolean;
+      skipDeliveryStatus?: boolean;
     },
   ) => {
     const entry = params.runs.get(runId);
@@ -480,11 +486,13 @@ export function createSubagentRegistryLifecycleController(params: {
         entry.completionAnnouncedAt = Date.now();
         params.persist();
       }
-      safeSetSubagentTaskDeliveryStatus({
-        runId,
-        childSessionKey: entry.childSessionKey,
-        deliveryStatus: "delivered",
-      });
+      if (!options?.skipDeliveryStatus) {
+        safeSetSubagentTaskDeliveryStatus({
+          runId,
+          childSessionKey: entry.childSessionKey,
+          deliveryStatus: "delivered",
+        });
+      }
       entry.lastAnnounceDeliveryError = undefined;
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
@@ -592,6 +600,36 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (!beginSubagentCleanup(runId)) {
       return false;
+    }
+    if (entry.expectsCompletionMessage === false) {
+      void (async () => {
+        if (entry.cleanup === "delete") {
+          await deleteSubagentSessionForCleanup({
+            callGateway: params.callGateway,
+            childSessionKey: entry.childSessionKey,
+            spawnMode: entry.spawnMode,
+            onError: (error) =>
+              params.warn("sessions.delete failed during subagent cleanup", {
+                error: buildSafeLifecycleErrorMeta(error),
+                runId: maskRunId(runId),
+                childSessionKey: maskSessionKey(entry.childSessionKey),
+              }),
+          });
+        }
+        await finalizeSubagentCleanup(runId, entry.cleanup, true, {
+          skipAnnounce: true,
+          skipDeliveryStatus: true,
+        });
+      })().catch((err) => {
+        defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
+        const current = params.runs.get(runId);
+        if (!current || current.cleanupCompletedAt) {
+          return;
+        }
+        current.cleanupHandled = false;
+        params.persist();
+      });
+      return true;
     }
     const requesterOrigin = normalizeDeliveryContext(entry.requesterOrigin);
     let latestDeliveryError = entry.lastAnnounceDeliveryError;

@@ -144,6 +144,12 @@ function simplePluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, register() {} };`;
 }
 
+function updatePluginManifest(plugin: Pick<TempPlugin, "dir">, patch: Record<string, unknown>) {
+  const manifestPath = path.join(plugin.dir, "openclaw.plugin.json");
+  const raw = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+  fs.writeFileSync(manifestPath, JSON.stringify({ ...raw, ...patch }, null, 2), "utf-8");
+}
+
 function memoryPluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, kind: "memory", register() {} };`;
 }
@@ -2907,6 +2913,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       };`,
     });
+    updatePluginManifest(plugin, { contracts: { tools: ["discovery_tool"] } });
     const config = {
       plugins: {
         load: { paths: [plugin.file] },
@@ -2931,6 +2938,89 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
     expect((globalThis as Record<string, unknown>)[marker]).toEqual(["discovery", "full"]);
     delete (globalThis as Record<string, unknown>)[marker];
+  });
+
+  it("rejects plugin tool registration without manifest tool ownership", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "undeclared-tool-owner",
+      filename: "undeclared-tool-owner.cjs",
+      body: `module.exports = {
+        id: "undeclared-tool-owner",
+        register(api) {
+          api.registerTool({
+            name: "undeclared_tool",
+            description: "Undeclared tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        },
+      };`,
+    });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["undeclared-tool-owner"],
+        },
+      },
+    });
+
+    expect(registry.tools).toEqual([]);
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "undeclared-tool-owner",
+          message: "plugin must declare contracts.tools before registering agent tools",
+        }),
+      ]),
+    );
+  });
+
+  it("rejects plugin tool names outside the manifest tool contract", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "wrong-tool-owner",
+      filename: "wrong-tool-owner.cjs",
+      body: `module.exports = {
+        id: "wrong-tool-owner",
+        register(api) {
+          api.registerTool({
+            name: "runtime_tool",
+            description: "Runtime tool",
+            parameters: {},
+            execute: async () => ({ content: [{ type: "text", text: "ok" }] }),
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { contracts: { tools: ["manifest_tool"] } });
+
+    const registry = loadOpenClawPlugins({
+      activate: false,
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["wrong-tool-owner"],
+        },
+      },
+    });
+
+    expect(registry.tools).toEqual([]);
+    expect(registry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          pluginId: "wrong-tool-owner",
+          message: "plugin must declare contracts.tools for: runtime_tool",
+        }),
+      ]),
+    );
   });
 
   it("caches non-activating snapshots without restoring global side effects", () => {
@@ -3025,6 +3115,45 @@ module.exports = { id: "throws-after-import", register() {} };`,
       config,
     });
 
+    expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
+    delete (globalThis as Record<string, unknown>)[marker];
+  });
+
+  it("reuses a gateway-bindable cache entry for later default-mode loads", () => {
+    useNoBundledPlugins();
+    const marker = "__openclawGatewayBindableCacheRegisterCount";
+    const plugin = writePlugin({
+      id: "gateway-bindable-cache",
+      filename: "gateway-bindable-cache.cjs",
+      body: `module.exports = {
+        id: "gateway-bindable-cache",
+        register() {
+          globalThis.${marker} = (globalThis.${marker} || 0) + 1;
+        },
+      };`,
+    });
+    const options = {
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["gateway-bindable-cache"],
+          entries: {
+            "gateway-bindable-cache": { enabled: true },
+          },
+        },
+      },
+    };
+
+    const gatewayBindable = loadOpenClawPlugins({
+      ...options,
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+    });
+    const defaultMode = loadOpenClawPlugins(options);
+
+    expect(defaultMode).toBe(gatewayBindable);
     expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
     delete (globalThis as Record<string, unknown>)[marker];
   });

@@ -54,11 +54,7 @@ import {
 } from "../config/sessions/main-session.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import { loadSessionStore } from "../config/sessions/store-load.js";
-import {
-  archiveRemovedSessionTranscripts,
-  saveSessionStore,
-  updateSessionStore,
-} from "../config/sessions/store.js";
+import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasActiveCronJobs } from "../cron/active-jobs.js";
@@ -131,9 +127,10 @@ import {
   resolveHeartbeatSenderContext,
 } from "./outbound/targets.js";
 import {
-  consumeSystemEventEntries,
+  consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
   resolveSystemEventDeliveryContext,
+  type SystemEvent,
 } from "./system-events.js";
 
 export type HeartbeatDeps = OutboundSendDeps &
@@ -950,6 +947,28 @@ After completing all due tasks, reply HEARTBEAT_OK.`;
   };
 }
 
+function selectSystemEventsConsumedByHeartbeat(params: {
+  preflight: HeartbeatPreflight;
+  hasExecCompletion: boolean;
+  hasCronEvents: boolean;
+}): SystemEvent[] {
+  const { preflight } = params;
+  if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+    return [];
+  }
+  if (params.hasExecCompletion) {
+    return preflight.pendingEventEntries.filter((event) => isExecCompletionEvent(event.text));
+  }
+  if (params.hasCronEvents) {
+    return preflight.pendingEventEntries.filter(
+      (event) =>
+        (preflight.isCronEventReason || event.contextKey?.startsWith("cron:")) &&
+        isCronSystemEvent(event.text),
+    );
+  }
+  return preflight.pendingEventEntries;
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -1127,6 +1146,11 @@ export async function runHeartbeatOnce(opts: {
   const dueCommitmentIds = hasDueCommitments
     ? preflight.dueCommitments.map((commitment) => commitment.id)
     : [];
+  const inspectedSystemEventsToConsume = selectSystemEventsConsumedByHeartbeat({
+    preflight,
+    hasExecCompletion,
+    hasCronEvents,
+  });
 
   // If no tasks are due, skip heartbeat entirely
   if (prompt === null) {
@@ -1134,8 +1158,8 @@ export async function runHeartbeatOnce(opts: {
     // no reply turn ran, so there is nothing that actually consumed that wake payload.
     const shouldConsumeInspectedEvents =
       !preflight.isWakeReason && preflight.shouldInspectPendingEvents;
-    if (shouldConsumeInspectedEvents && preflight.pendingEventEntries.length > 0) {
-      consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    if (shouldConsumeInspectedEvents && inspectedSystemEventsToConsume.length > 0) {
+      consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
     }
     return { status: "skipped", reason: "no-tasks-due" };
   }
@@ -1151,40 +1175,46 @@ export async function runHeartbeatOnce(opts: {
       configuredSessionKey: configuredSession.sessionKey,
       sessionEntry: entry,
     });
-    const cronSession = resolveCronSession({
-      cfg,
-      sessionKey: isolatedSessionKey,
-      agentId,
-      nowMs: startedAt,
-      forceNew: true,
-    });
+    const isolatedStorePath = resolveStorePath(cfg.session?.store, { agentId });
     const staleIsolatedSessionKey = resolveStaleHeartbeatIsolatedSessionKey({
       sessionKey,
       isolatedSessionKey,
       isolatedBaseSessionKey,
     });
     const removedSessionFiles = new Map<string, string | undefined>();
-    if (staleIsolatedSessionKey) {
-      const staleEntry = cronSession.store[staleIsolatedSessionKey];
-      if (staleEntry?.sessionId) {
-        removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+    let referencedSessionIds = new Set<string>();
+    await updateSessionStore(isolatedStorePath, (store) => {
+      const cronSession = resolveCronSession({
+        cfg,
+        sessionKey: isolatedSessionKey,
+        agentId,
+        nowMs: startedAt,
+        forceNew: true,
+        store,
+      });
+      if (staleIsolatedSessionKey) {
+        const staleEntry = store[staleIsolatedSessionKey];
+        if (staleEntry?.sessionId) {
+          removedSessionFiles.set(staleEntry.sessionId, staleEntry.sessionFile);
+        }
+        delete store[staleIsolatedSessionKey];
       }
-      delete cronSession.store[staleIsolatedSessionKey];
-    }
-    cronSession.sessionEntry.heartbeatIsolatedBaseSessionKey = isolatedBaseSessionKey;
-    cronSession.store[isolatedSessionKey] = cronSession.sessionEntry;
-    await saveSessionStore(cronSession.storePath, cronSession.store);
+      store[isolatedSessionKey] = {
+        ...cronSession.sessionEntry,
+        heartbeatIsolatedBaseSessionKey: isolatedBaseSessionKey,
+      };
+      referencedSessionIds = new Set(
+        Object.values(store)
+          .map((sessionEntry) => sessionEntry?.sessionId)
+          .filter((sessionId): sessionId is string => Boolean(sessionId)),
+      );
+    });
     if (removedSessionFiles.size > 0) {
       try {
-        const referencedSessionIds = new Set(
-          Object.values(cronSession.store)
-            .map((sessionEntry) => sessionEntry?.sessionId)
-            .filter((sessionId): sessionId is string => Boolean(sessionId)),
-        );
         await archiveRemovedSessionTranscripts({
           removedSessionFiles,
           referencedSessionIds,
-          storePath: cronSession.storePath,
+          storePath: isolatedStorePath,
           reason: "deleted",
           restrictToStoreDir: true,
         });
@@ -1214,36 +1244,37 @@ export async function runHeartbeatOnce(opts: {
     if (!preflight.tasks || preflight.tasks.length === 0) {
       return;
     }
+    const tasks = preflight.tasks;
 
-    const store = loadSessionStore(storePath);
-    const current = store[sessionKey];
-    // Initialize stub entry on first run when current doesn't exist
-    const base = current ?? {
-      // Generate valid sessionId - derive from sessionKey without colons
-      sessionId: sessionKey.replace(/:/g, "_"),
-      updatedAt: startedAt,
-      createdAt: startedAt,
-      messageCount: 0,
-      lastMessageAt: startedAt,
-      heartbeatTaskState: {},
-    };
-    const taskState = { ...base.heartbeatTaskState };
+    await updateSessionStore(storePath, (store) => {
+      const current = store[sessionKey];
+      // Initialize stub entry on first run when current doesn't exist.
+      const base = current ?? {
+        // Generate valid sessionId - derive from sessionKey without colons.
+        sessionId: sessionKey.replace(/:/g, "_"),
+        updatedAt: startedAt,
+        createdAt: startedAt,
+        messageCount: 0,
+        lastMessageAt: startedAt,
+        heartbeatTaskState: {},
+      };
+      const taskState = { ...base.heartbeatTaskState };
 
-    for (const task of preflight.tasks) {
-      if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
-        taskState[task.name] = startedAt;
+      for (const task of tasks) {
+        if (isTaskDue(taskState[task.name], task.interval, startedAt)) {
+          taskState[task.name] = startedAt;
+        }
       }
-    }
 
-    store[sessionKey] = { ...base, heartbeatTaskState: taskState };
-    await saveSessionStore(storePath, store);
+      store[sessionKey] = { ...base, heartbeatTaskState: taskState };
+    });
   };
 
   const consumeInspectedSystemEvents = () => {
-    if (!preflight.shouldInspectPendingEvents || preflight.pendingEventEntries.length === 0) {
+    if (!preflight.shouldInspectPendingEvents || inspectedSystemEventsToConsume.length === 0) {
       return;
     }
-    consumeSystemEventEntries(sessionKey, preflight.pendingEventEntries);
+    consumeSelectedSystemEventEntries(sessionKey, inspectedSystemEventsToConsume);
   };
 
   const promptWithHeartbeatTool = appendHeartbeatResponseToolPrompt(prompt);
@@ -1630,16 +1661,17 @@ export async function runHeartbeatOnce(opts: {
 
     // Record last delivered heartbeat payload for dedupe.
     if (!shouldSkipMain && normalized.text.trim()) {
-      const store = loadSessionStore(storePath);
-      const current = store[sessionKey];
-      if (current) {
+      await updateSessionStore(storePath, (store) => {
+        const current = store[sessionKey];
+        if (!current) {
+          return;
+        }
         store[sessionKey] = {
           ...current,
           lastHeartbeatText: normalized.text,
           lastHeartbeatSentAt: startedAt,
         };
-        await saveSessionStore(storePath, store);
-      }
+      });
     }
 
     emitHeartbeatEvent({

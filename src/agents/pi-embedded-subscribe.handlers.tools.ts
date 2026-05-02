@@ -18,6 +18,7 @@ import {
 } from "../infra/agent-events.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString, readStringValue } from "../shared/string-coerce.js";
 import type { ApplyPatchSummary } from "./apply-patch.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
@@ -50,29 +51,33 @@ type HookRunnerGlobalModule = typeof import("../plugins/hook-runner-global.js");
 type MediaParseModule = typeof import("../media/parse.js");
 type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
 
-let execApprovalReplyModulePromise: Promise<ExecApprovalReplyModule> | undefined;
-let hookRunnerGlobalModulePromise: Promise<HookRunnerGlobalModule> | undefined;
-let mediaParseModulePromise: Promise<MediaParseModule> | undefined;
-let beforeToolCallModulePromise: Promise<BeforeToolCallModule> | undefined;
+const execApprovalReplyModuleLoader = createLazyImportLoader<ExecApprovalReplyModule>(
+  () => import("../infra/exec-approval-reply.js"),
+);
+const hookRunnerGlobalModuleLoader = createLazyImportLoader<HookRunnerGlobalModule>(
+  () => import("../plugins/hook-runner-global.js"),
+);
+const mediaParseModuleLoader = createLazyImportLoader<MediaParseModule>(
+  () => import("../media/parse.js"),
+);
+const beforeToolCallModuleLoader = createLazyImportLoader<BeforeToolCallModule>(
+  () => import("./pi-tools.before-tool-call.js"),
+);
 
 function loadExecApprovalReply(): Promise<ExecApprovalReplyModule> {
-  execApprovalReplyModulePromise ??= import("../infra/exec-approval-reply.js");
-  return execApprovalReplyModulePromise;
+  return execApprovalReplyModuleLoader.load();
 }
 
 function loadHookRunnerGlobal(): Promise<HookRunnerGlobalModule> {
-  hookRunnerGlobalModulePromise ??= import("../plugins/hook-runner-global.js");
-  return hookRunnerGlobalModulePromise;
+  return hookRunnerGlobalModuleLoader.load();
 }
 
 function loadMediaParse(): Promise<MediaParseModule> {
-  mediaParseModulePromise ??= import("../media/parse.js");
-  return mediaParseModulePromise;
+  return mediaParseModuleLoader.load();
 }
 
 function loadBeforeToolCall(): Promise<BeforeToolCallModule> {
-  beforeToolCallModulePromise ??= import("./pi-tools.before-tool-call.js");
-  return beforeToolCallModulePromise;
+  return beforeToolCallModuleLoader.load();
 }
 
 type ToolStartRecord = {

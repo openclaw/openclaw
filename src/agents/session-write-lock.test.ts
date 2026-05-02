@@ -138,7 +138,7 @@ describe("acquireSessionWriteLock", () => {
 
   afterEach(() => {
     resetSessionWriteLockStateForTest();
-    vi.restoreAllMocks();
+    vi.clearAllMocks();
   });
   it("reuses locks across symlinked session paths", async () => {
     await withSymlinkedSessionPaths(

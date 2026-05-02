@@ -158,7 +158,10 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
   return result;
 }
 
-async function ensureTranscriptHeader(transcriptPath: string): Promise<void> {
+async function ensureTranscriptHeader(
+  transcriptPath: string,
+  params: { sessionId?: string; cwd?: string } = {},
+): Promise<void> {
   const stat = await fs.stat(transcriptPath).catch(() => null);
   if (stat?.isFile() && stat.size > 0) {
     return;
@@ -167,9 +170,9 @@ async function ensureTranscriptHeader(transcriptPath: string): Promise<void> {
   const header = {
     type: "session",
     version: CURRENT_SESSION_VERSION,
-    id: randomUUID(),
+    id: params.sessionId ?? randomUUID(),
     timestamp: new Date().toISOString(),
-    cwd: process.cwd(),
+    cwd: params.cwd ?? process.cwd(),
   };
   await fs.writeFile(transcriptPath, `${JSON.stringify(header)}\n`, {
     encoding: "utf-8",
@@ -182,6 +185,8 @@ export async function appendSessionTranscriptMessage(params: {
   transcriptPath: string;
   message: unknown;
   now?: number;
+  sessionId?: string;
+  cwd?: string;
   useRawWhenLinear?: boolean;
 }): Promise<{ messageId: string }> {
   const lock = await acquireSessionWriteLock({
@@ -192,7 +197,10 @@ export async function appendSessionTranscriptMessage(params: {
   try {
     const now = params.now ?? Date.now();
     const messageId = randomUUID();
-    await ensureTranscriptHeader(params.transcriptPath);
+    await ensureTranscriptHeader(params.transcriptPath, {
+      ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+      ...(params.cwd ? { cwd: params.cwd } : {}),
+    });
     const stat = await fs.stat(params.transcriptPath).catch(() => null);
     let leafInfo: TranscriptLeafInfo = await readTranscriptLeafInfo(params.transcriptPath).catch(
       () => ({

@@ -1,11 +1,13 @@
 import { withProfile } from "./plugin-load-profile.js";
-import type { PluginModuleLoaderCache } from "./plugin-module-loader-cache.js";
-import { getCachedPluginSourceModuleLoader } from "./plugin-module-loader-cache.js";
+import {
+  createPluginModuleLoaderCache,
+  getCachedPluginSourceModuleLoader,
+} from "./plugin-module-loader-cache.js";
 
 export type PluginSourceLoader = (modulePath: string) => unknown;
 
 export function createPluginSourceLoader(): PluginSourceLoader {
-  const loaders: PluginModuleLoaderCache = new Map();
+  const loaders = createPluginModuleLoaderCache();
   return (modulePath) => {
     const sourceLoader = getCachedPluginSourceModuleLoader({
       cache: loaders,

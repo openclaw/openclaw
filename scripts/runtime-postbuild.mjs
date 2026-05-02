@@ -10,7 +10,7 @@ import { writeOfficialChannelCatalog } from "./write-official-channel-catalog.mj
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const ROOT_RUNTIME_ALIAS_PATTERN = /^(?<base>.+\.(?:runtime|contract))-[A-Za-z0-9_-]+\.js$/u;
-export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
+const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
   {
     dest: "dist/memory-state-CcqRgDZU.js",
     contents: "export function hasMemoryRuntime() {\n  return false;\n}\n",
@@ -27,7 +27,7 @@ export const LEGACY_CLI_EXIT_COMPAT_CHUNKS = [
  *
  * Each entry: { src: repo-root-relative source, dest: dist-relative dest }
  */
-export const STATIC_EXTENSION_ASSETS = [
+const STATIC_EXTENSION_ASSETS = [
   // acpx MCP proxy — co-deployed alongside the acpx index bundle so that
   // `path.resolve(dirname(import.meta.url), "mcp-proxy.mjs")` resolves correctly
   // at runtime from the built ACPX extension directory.

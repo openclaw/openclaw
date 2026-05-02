@@ -23,6 +23,7 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { applyVerboseOverride } from "../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
@@ -51,7 +52,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
-import { loadModelCatalog } from "./model-catalog.js";
+import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import {
   buildAllowedModelSet,
@@ -65,6 +66,7 @@ import {
 } from "./model-selection.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import { hydrateResolvedSkillsAsync } from "./skills/snapshot-hydration.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 import { ensureAgentWorkspace } from "./workspace.js";
@@ -87,95 +89,106 @@ type SkillsFilterRuntime = typeof import("./skills/filter.js");
 type SkillsRefreshStateRuntime = typeof import("./skills/refresh-state.js");
 type SkillsRemoteRuntime = typeof import("../infra/skills-remote.js");
 
-let attemptExecutionRuntimePromise: Promise<AttemptExecutionRuntime> | undefined;
-let acpManagerRuntimePromise: Promise<AcpManagerRuntime> | undefined;
-let acpPolicyRuntimePromise: Promise<AcpPolicyRuntime> | undefined;
-let acpRuntimeErrorsRuntimePromise: Promise<AcpRuntimeErrorsRuntime> | undefined;
-let acpSessionIdentifiersRuntimePromise: Promise<AcpSessionIdentifiersRuntime> | undefined;
-let deliveryRuntimePromise: Promise<DeliveryRuntime> | undefined;
-let sessionStoreRuntimePromise: Promise<SessionStoreRuntime> | undefined;
-let cliCompactionRuntimePromise: Promise<CliCompactionRuntime> | undefined;
-let transcriptResolveRuntimePromise: Promise<TranscriptResolveRuntime> | undefined;
-let cliDepsRuntimePromise: Promise<CliDepsRuntime> | undefined;
-let execDefaultsRuntimePromise: Promise<ExecDefaultsRuntime> | undefined;
-let skillsRuntimePromise: Promise<SkillsRuntime> | undefined;
-let skillsFilterRuntimePromise: Promise<SkillsFilterRuntime> | undefined;
-let skillsRefreshStateRuntimePromise: Promise<SkillsRefreshStateRuntime> | undefined;
-let skillsRemoteRuntimePromise: Promise<SkillsRemoteRuntime> | undefined;
+const attemptExecutionRuntimeLoader = createLazyImportLoader<AttemptExecutionRuntime>(
+  () => import("./command/attempt-execution.runtime.js"),
+);
+const acpManagerRuntimeLoader = createLazyImportLoader<AcpManagerRuntime>(
+  () => import("../acp/control-plane/manager.js"),
+);
+const acpPolicyRuntimeLoader = createLazyImportLoader<AcpPolicyRuntime>(
+  () => import("../acp/policy.js"),
+);
+const acpRuntimeErrorsRuntimeLoader = createLazyImportLoader<AcpRuntimeErrorsRuntime>(
+  () => import("../acp/runtime/errors.js"),
+);
+const acpSessionIdentifiersRuntimeLoader = createLazyImportLoader<AcpSessionIdentifiersRuntime>(
+  () => import("../acp/runtime/session-identifiers.js"),
+);
+const deliveryRuntimeLoader = createLazyImportLoader<DeliveryRuntime>(
+  () => import("./command/delivery.runtime.js"),
+);
+const sessionStoreRuntimeLoader = createLazyImportLoader<SessionStoreRuntime>(
+  () => import("./command/session-store.runtime.js"),
+);
+const cliCompactionRuntimeLoader = createLazyImportLoader<CliCompactionRuntime>(
+  () => import("./command/cli-compaction.js"),
+);
+const transcriptResolveRuntimeLoader = createLazyImportLoader<TranscriptResolveRuntime>(
+  () => import("../config/sessions/transcript-resolve.runtime.js"),
+);
+const cliDepsRuntimeLoader = createLazyImportLoader<CliDepsRuntime>(() => import("../cli/deps.js"));
+const execDefaultsRuntimeLoader = createLazyImportLoader<ExecDefaultsRuntime>(
+  () => import("./exec-defaults.js"),
+);
+const skillsRuntimeLoader = createLazyImportLoader<SkillsRuntime>(() => import("./skills.js"));
+const skillsFilterRuntimeLoader = createLazyImportLoader<SkillsFilterRuntime>(
+  () => import("./skills/filter.js"),
+);
+const skillsRefreshStateRuntimeLoader = createLazyImportLoader<SkillsRefreshStateRuntime>(
+  () => import("./skills/refresh-state.js"),
+);
+const skillsRemoteRuntimeLoader = createLazyImportLoader<SkillsRemoteRuntime>(
+  () => import("../infra/skills-remote.js"),
+);
 
 function loadAttemptExecutionRuntime(): Promise<AttemptExecutionRuntime> {
-  attemptExecutionRuntimePromise ??= import("./command/attempt-execution.runtime.js");
-  return attemptExecutionRuntimePromise;
+  return attemptExecutionRuntimeLoader.load();
 }
 
 function loadAcpManagerRuntime(): Promise<AcpManagerRuntime> {
-  acpManagerRuntimePromise ??= import("../acp/control-plane/manager.js");
-  return acpManagerRuntimePromise;
+  return acpManagerRuntimeLoader.load();
 }
 
 function loadAcpPolicyRuntime(): Promise<AcpPolicyRuntime> {
-  acpPolicyRuntimePromise ??= import("../acp/policy.js");
-  return acpPolicyRuntimePromise;
+  return acpPolicyRuntimeLoader.load();
 }
 
 function loadAcpRuntimeErrorsRuntime(): Promise<AcpRuntimeErrorsRuntime> {
-  acpRuntimeErrorsRuntimePromise ??= import("../acp/runtime/errors.js");
-  return acpRuntimeErrorsRuntimePromise;
+  return acpRuntimeErrorsRuntimeLoader.load();
 }
 
 function loadAcpSessionIdentifiersRuntime(): Promise<AcpSessionIdentifiersRuntime> {
-  acpSessionIdentifiersRuntimePromise ??= import("../acp/runtime/session-identifiers.js");
-  return acpSessionIdentifiersRuntimePromise;
+  return acpSessionIdentifiersRuntimeLoader.load();
 }
 
 function loadDeliveryRuntime(): Promise<DeliveryRuntime> {
-  deliveryRuntimePromise ??= import("./command/delivery.runtime.js");
-  return deliveryRuntimePromise;
+  return deliveryRuntimeLoader.load();
 }
 
 function loadSessionStoreRuntime(): Promise<SessionStoreRuntime> {
-  sessionStoreRuntimePromise ??= import("./command/session-store.runtime.js");
-  return sessionStoreRuntimePromise;
+  return sessionStoreRuntimeLoader.load();
 }
 
 function loadCliCompactionRuntime(): Promise<CliCompactionRuntime> {
-  cliCompactionRuntimePromise ??= import("./command/cli-compaction.js");
-  return cliCompactionRuntimePromise;
+  return cliCompactionRuntimeLoader.load();
 }
 
 function loadTranscriptResolveRuntime(): Promise<TranscriptResolveRuntime> {
-  transcriptResolveRuntimePromise ??= import("../config/sessions/transcript-resolve.runtime.js");
-  return transcriptResolveRuntimePromise;
+  return transcriptResolveRuntimeLoader.load();
 }
 
 function loadCliDepsRuntime(): Promise<CliDepsRuntime> {
-  cliDepsRuntimePromise ??= import("../cli/deps.js");
-  return cliDepsRuntimePromise;
+  return cliDepsRuntimeLoader.load();
 }
 
 function loadExecDefaultsRuntime(): Promise<ExecDefaultsRuntime> {
-  execDefaultsRuntimePromise ??= import("./exec-defaults.js");
-  return execDefaultsRuntimePromise;
+  return execDefaultsRuntimeLoader.load();
 }
 
 function loadSkillsRuntime(): Promise<SkillsRuntime> {
-  skillsRuntimePromise ??= import("./skills.js");
-  return skillsRuntimePromise;
+  return skillsRuntimeLoader.load();
 }
 
 function loadSkillsFilterRuntime(): Promise<SkillsFilterRuntime> {
-  skillsFilterRuntimePromise ??= import("./skills/filter.js");
-  return skillsFilterRuntimePromise;
+  return skillsFilterRuntimeLoader.load();
 }
 
 function loadSkillsRefreshStateRuntime(): Promise<SkillsRefreshStateRuntime> {
-  skillsRefreshStateRuntimePromise ??= import("./skills/refresh-state.js");
-  return skillsRefreshStateRuntimePromise;
+  return skillsRefreshStateRuntimeLoader.load();
 }
 
 function loadSkillsRemoteRuntime(): Promise<SkillsRemoteRuntime> {
-  skillsRemoteRuntimePromise ??= import("../infra/skills-remote.js");
-  return skillsRemoteRuntimePromise;
+  return skillsRemoteRuntimeLoader.load();
 }
 
 async function resolveAgentCommandDeps(deps: CliDeps | undefined): Promise<CliDeps> {
@@ -620,35 +633,38 @@ async function agentCommandInternal(
       shouldRefreshSnapshotForVersion(currentSkillsSnapshot.version, skillsSnapshotVersion) ||
       !matchesSkillFilter(currentSkillsSnapshot.skillFilter, skillFilter);
     const needsSkillsSnapshot = isNewSession || shouldRefreshSkillsSnapshot;
+    const buildSkillsSnapshot = async () => {
+      const [
+        { buildWorkspaceSkillSnapshot },
+        { getRemoteSkillEligibility },
+        { canExecRequestNode },
+      ] = await Promise.all([
+        loadSkillsRuntime(),
+        loadSkillsRemoteRuntime(),
+        loadExecDefaultsRuntime(),
+      ]);
+      return buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: cfg,
+        eligibility: {
+          remote: getRemoteSkillEligibility({
+            advertiseExecNode: canExecRequestNode({
+              cfg,
+              sessionEntry,
+              sessionKey,
+              agentId: sessionAgentId,
+            }),
+          }),
+        },
+        snapshotVersion: skillsSnapshotVersion,
+        skillFilter,
+        agentId: sessionAgentId,
+      });
+    };
     const skillsSnapshot = needsSkillsSnapshot
-      ? await (async () => {
-          const [
-            { buildWorkspaceSkillSnapshot },
-            { getRemoteSkillEligibility },
-            { canExecRequestNode },
-          ] = await Promise.all([
-            loadSkillsRuntime(),
-            loadSkillsRemoteRuntime(),
-            loadExecDefaultsRuntime(),
-          ]);
-          return buildWorkspaceSkillSnapshot(workspaceDir, {
-            config: cfg,
-            eligibility: {
-              remote: getRemoteSkillEligibility({
-                advertiseExecNode: canExecRequestNode({
-                  cfg,
-                  sessionEntry,
-                  sessionKey,
-                  agentId: sessionAgentId,
-                }),
-              }),
-            },
-            snapshotVersion: skillsSnapshotVersion,
-            skillFilter,
-            agentId: sessionAgentId,
-          });
-        })()
-      : currentSkillsSnapshot;
+      ? await buildSkillsSnapshot()
+      : !currentSkillsSnapshot
+        ? undefined
+        : await hydrateResolvedSkillsAsync(currentSkillsSnapshot, buildSkillsSnapshot);
 
     if (skillsSnapshot && sessionStore && sessionKey && needsSkillsSnapshot) {
       const now = Date.now();
@@ -729,12 +745,12 @@ async function agentCommandInternal(
     }
     const needsModelCatalog = Boolean(hasAllowlist);
     let allowedModelKeys = new Set<string>();
-    let allowedModelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> = [];
-    let modelCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | null = null;
+    let allowedModelCatalog: ReturnType<typeof loadManifestModelCatalog> = [];
+    let modelCatalog: ReturnType<typeof loadManifestModelCatalog> | null = null;
     let allowAnyModel = !hasAllowlist;
 
     if (needsModelCatalog) {
-      modelCatalog = await loadModelCatalog({ config: cfg });
+      modelCatalog = loadManifestModelCatalog({ config: cfg, workspaceDir });
       const allowed = buildAllowedModelSet({
         cfg,
         catalog: modelCatalog,
@@ -830,8 +846,11 @@ async function agentCommandInternal(
     }
 
     const catalogForThinking =
-      modelCatalog ??
-      (allowedModelCatalog.length > 0 ? allowedModelCatalog : configuredThinkingCatalog);
+      allowedModelCatalog.length > 0
+        ? allowedModelCatalog
+        : modelCatalog && modelCatalog.length > 0
+          ? modelCatalog
+          : configuredThinkingCatalog;
     const thinkingCatalog = catalogForThinking.length > 0 ? catalogForThinking : undefined;
     if (!resolvedThinkLevel) {
       resolvedThinkLevel = resolveThinkingDefault({
@@ -1025,6 +1044,18 @@ async function agentCommandInternal(
         result = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
+          result = {
+            ...result,
+            meta: {
+              ...result.meta,
+              agentMeta: {
+                ...result.meta.agentMeta,
+                fallbackAttempts: fallbackResult.attempts,
+              },
+            },
+          };
+        }
         if (!lifecycleEnded) {
           const stopReason = result.meta.stopReason;
           if (stopReason && stopReason !== "end_turn") {

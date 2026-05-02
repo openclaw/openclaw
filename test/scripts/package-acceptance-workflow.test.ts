@@ -138,6 +138,20 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("Published upgrade survivor scenarios:");
   });
 
+  it("requires full release child workflows to run at the resolved target SHA", () => {
+    const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+
+    expect(workflow).toContain("TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}");
+    expect(workflow).toContain("--json status,conclusion,url,attempt,headSha,jobs");
+    expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
+    expect(workflow).toContain(
+      "Dispatch Full Release Validation from a ref pinned to the target SHA",
+    );
+    expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
+    expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
+  });
+
   it("keeps exhaustive update migration as a separate manual package gate", () => {
     const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
     const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
@@ -444,6 +458,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain("source: artifact");
+    expect(workflow).toContain(".artifacts/docker-e2e-package/package-candidate.json");
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );

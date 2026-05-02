@@ -9,7 +9,7 @@ import {
   type PluginManifestRecord,
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveOwningPluginIdsForModelRef } from "../plugins/providers.js";
 import { resolvePluginSetupAutoEnableReasons } from "../plugins/setup-registry.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -220,16 +220,13 @@ function resolvePluginsWithOwnedToolConfig(
 
 function resolvePluginIdForConfiguredWebFetchProvider(
   providerId: string | undefined,
-  env: NodeJS.ProcessEnv,
+  registry: PluginManifestRegistry,
 ): string | undefined {
   const normalizedProviderId = normalizeOptionalLowercaseString(providerId);
   if (!normalizedProviderId) {
     return undefined;
   }
-  return loadPluginManifestRegistryForPluginRegistry({
-    env,
-    includeDisabled: true,
-  }).plugins.find(
+  return registry.plugins.find(
     (plugin) =>
       plugin.origin === "bundled" &&
       (plugin.contracts?.webFetchProviders ?? []).some(
@@ -623,7 +620,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
       : undefined;
   const webFetchPluginId = resolvePluginIdForConfiguredWebFetchProvider(
     webFetchProvider,
-    params.env,
+    params.registry,
   );
   if (webFetchPluginId) {
     changes.push({
@@ -869,11 +866,10 @@ export function resolvePluginAutoEnableManifestRegistry(params: {
   return (
     params.manifestRegistry ??
     (configMayNeedPluginManifestRegistry(params.config, params.env)
-      ? loadPluginManifestRegistryForPluginRegistry({
+      ? loadPluginMetadataSnapshot({
           config: params.config,
           env: params.env,
-          includeDisabled: true,
-        })
+        }).manifestRegistry
       : EMPTY_PLUGIN_MANIFEST_REGISTRY)
   );
 }

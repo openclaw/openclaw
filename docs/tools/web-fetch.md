@@ -126,8 +126,9 @@ Legacy `tools.web.fetch.firecrawl.*` config is auto-migrated by `openclaw doctor
 </Note>
 
 <Note>
-  Firecrawl `baseUrl` overrides are locked down: they must use `https://` and
-  the official Firecrawl host (`api.firecrawl.dev`).
+  Firecrawl `baseUrl` overrides are locked down: hosted traffic uses
+  `https://api.firecrawl.dev`; self-hosted overrides must target private or
+  internal endpoints, and `http://` is accepted only for those private targets.
 </Note>
 
 Current runtime behavior:

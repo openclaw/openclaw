@@ -96,11 +96,27 @@ while (Date.now() < deadline) {
 
     const message = connectRes.error?.message ?? "unknown";
     lastError = new Error(`connect failed: ${message}`);
-    if (!message.includes("gateway starting")) {
+    if (
+      !message.includes("gateway starting") &&
+      !message.includes("ws open timeout") &&
+      !message.includes("ECONNREFUSED") &&
+      !message.includes("ECONNRESET") &&
+      !message.includes("timeout")
+    ) {
       throw lastError;
     }
   } catch (error) {
     lastError = error instanceof Error ? error : new Error(String(error));
+    const message = lastError.message;
+    if (
+      !message.includes("gateway starting") &&
+      !message.includes("ws open timeout") &&
+      !message.includes("ECONNREFUSED") &&
+      !message.includes("ECONNRESET") &&
+      !message.includes("timeout")
+    ) {
+      throw lastError;
+    }
   } finally {
     ws?.close();
   }

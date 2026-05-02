@@ -467,7 +467,7 @@ export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
 }
 
-export function formatSha256Integrity(bytes: Uint8Array): string {
+function formatSha256Integrity(bytes: Uint8Array): string {
   const digest = createHash("sha256").update(bytes).digest("base64");
   return `sha256-${digest}`;
 }
