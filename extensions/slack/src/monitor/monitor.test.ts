@@ -282,6 +282,55 @@ describe("resolveSlackSystemEventSessionKey", () => {
       }),
     ).toBe("agent:ops-dm:main");
   });
+
+  it("appends a thread suffix for routed channel system events when threadTs is present", () => {
+    const ctx = createSlackMonitorContext(baseParams());
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C123",
+        channelType: "channel",
+        threadTs: "1777736834.126359",
+      }),
+    ).toBe("agent:main:slack:channel:c123:thread:1777736834.126359");
+  });
+
+  it("preserves the base session key when threadTs is empty", () => {
+    const ctx = createSlackMonitorContext(baseParams());
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "C123",
+        channelType: "channel",
+        threadTs: "   ",
+      }),
+    ).toBe("agent:main:slack:channel:c123");
+  });
+
+  it("appends a thread suffix for binding-resolved DM system events", () => {
+    const ctx = createSlackMonitorContext({
+      ...baseParams(),
+      accountId: "work",
+      cfg: {
+        bindings: [
+          {
+            agentId: "ops-dm",
+            match: {
+              channel: "slack",
+              accountId: "work",
+              peer: { kind: "direct", id: "U123" },
+            },
+          },
+        ],
+      },
+    });
+    expect(
+      ctx.resolveSlackSystemEventSessionKey({
+        channelId: "D123",
+        channelType: "im",
+        senderId: "U123",
+        threadTs: "1777736834.126359",
+      }),
+    ).toBe("agent:ops-dm:main:thread:1777736834.126359");
+  });
 });
 
 describe("isChannelAllowed with groupPolicy and channelsConfig", () => {
