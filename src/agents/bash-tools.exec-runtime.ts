@@ -36,7 +36,7 @@ import {
   appendOutput,
   createSessionSlug,
   markExited,
-  tail,
+  // tail,
 } from "./bash-process-registry.js";
 import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import {
@@ -47,7 +47,10 @@ import {
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
-
+import { normalizeEventRoutingKey } from "../security/dm-policy-shared.js";
+import { loadConfig } from "../config/config.js"; 
+import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 export { execSchema } from "./bash-tools.schemas.js";
 
 const SMKX = "\x1b[?1h";
@@ -123,7 +126,7 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 export const DEFAULT_NOTIFY_TAIL_CHARS = 400;
-const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
+// const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
@@ -166,7 +169,7 @@ export type ExecProcessHandle = {
   pid?: number;
   promise: Promise<ExecProcessOutcome>;
   kill: () => void;
-  /** Immediately suppress all future `onUpdate` calls for this handle. */
+  /** Immediately suppress all future `onUpdate` calls for this handle.. */
   disableUpdates: () => void;
 };
 
@@ -285,17 +288,17 @@ export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
-  const normalized = normalizeNotifyOutput(value);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  const safe = Math.max(1, maxChars - 1);
-  return `${normalized.slice(0, safe)}…`;
-}
+// function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
+//   const normalized = normalizeNotifyOutput(value);
+//   if (!normalized) {
+//     return "";
+//   }
+//   if (normalized.length <= maxChars) {
+//     return normalized;
+//   }
+//   const safe = Math.max(1, maxChars - 1);
+//   return `${normalized.slice(0, safe)}…`;
+// }
 
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
@@ -315,37 +318,86 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
-  if (!session.backgrounded || !session.notifyOnExit || session.exitNotified) {
+export function maybeNotifyOnExit(
+  session: ProcessSession, 
+  statusOverride?: string
+): void {
+  // P2 Guard: Avoid duplicate or invalid notifications
+  if (!session || session.exitNotified) {
     return;
   }
-  const sessionKey = session.sessionKey?.trim();
-  if (!sessionKey) {
+
+  // P2 Guard: Respect opt-out configuration
+  if (session.notifyOnExit === false) {
+    session.exitNotified = true;
     return;
   }
+
+  const sKey = session.sessionKey?.trim();
+  if (!sKey) {
+    session.exitNotified = true;
+    return;
+  }
+
+  const exitCode = session.exitCode;
+  const signal = session.exitSignal;
+  const sessionAny = session as unknown as Record<string, unknown>;
+  const isActuallyFailed = exitCode !== 0 && exitCode !== undefined;
+  const status = statusOverride || (isActuallyFailed || signal != null ? "failed" : "completed");
+
+  // Opt-in check for successful but empty output runs
+  if (
+    status === "completed" && 
+    !session.notifyOnExitEmptySuccess && 
+    !session.aggregated.trim()
+  ) {
+    session.exitNotified = true;
+    return;
+  }
+
   session.exitNotified = true;
-  const exitLabel = session.exitSignal
-    ? `signal ${session.exitSignal}`
-    : `code ${session.exitCode ?? 0}`;
-  const output = compactNotifyOutput(
-    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
-  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
-    return;
-  }
-  if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
-    return;
-  }
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  enqueueSystemEvent(summary, {
-    sessionKey,
-    deliveryContext: session.notifyDeliveryContext,
-    trusted: false,
+
+  const contextKey = sessionAny.contextKey as string | undefined;
+  const deliveryContext = sessionAny.deliveryContext as DeliveryContext | undefined;
+  const scopeKey = session.scopeKey;
+
+  const text = signal 
+    ? `Process exited with signal ${signal}` 
+    : `Exec ${status} (exit code ${exitCode ?? 0})`;
+
+  const cfg = loadConfig() || {};
+  const cfgAny = cfg as unknown as Record<string, unknown>;
+
+  // Resolve Routing logic to prevent Orphan Sessions
+  const agentId = normalizeAgentId(scopeKey || "");
+  const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+
+  const allowFrom: string[] = 
+    ((cfgAny.agents as Record<string, unknown>)?.defaults as Record<string, unknown>)?.allowFrom as string[] 
+    ?? ((cfgAny.channels as Record<string, unknown>)?.allowFrom as string[]) 
+    ?? [];
+
+  const finalSessionKey = normalizeEventRoutingKey({
+    sessionKey: sKey,
+    dmScope: (sessionAny.dmScope as string | undefined) || cfg.session?.scope,
+    allowFrom,
+    normalizeEntry: (entry: string) => entry.toLowerCase(),
+    resolveAgentMainSessionKey: () => mainSessionKey,
   });
+
+  // [P1] CRITICAL: Enqueue notification BEFORE waking the heartbeat
+  enqueueSystemEvent(text, {
+    sessionKey: finalSessionKey,
+    contextKey,
+    deliveryContext,
+  });
+
+  // [P1] CRITICAL: Wake heartbeat AFTER the event is queued
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+    scopedHeartbeatWakeOptions(finalSessionKey, { 
+      reason: "exec-exit", 
+      coalesMs: 0 
+    })
   );
 }
 
@@ -411,22 +463,48 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
-) {
-  const sessionKey = opts.sessionKey?.trim();
+  opts: { 
+    sessionKey?: string; 
+    contextKey?: string; 
+    deliveryContext?: DeliveryContext;
+    agentId?: string; 
+  },
+): void {
+  let sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
+
+  const cfg = loadConfig() || {};
+  const cfgAny = cfg as unknown as Record<string, unknown>;
+
+  sessionKey = normalizeEventRoutingKey({
+    sessionKey: sessionKey,
+    dmScope: cfg.session?.scope,
+    allowFrom: 
+      ((cfgAny.agents as Record<string, unknown>)?.defaults as Record<string, unknown>)?.allowFrom as string[] 
+      ?? ((cfgAny.channels as Record<string, unknown>)?.allowFrom as string[]) 
+      ?? [],
+    normalizeEntry: (entry: string) => entry.toLowerCase(),
+    resolveAgentMainSessionKey: (_key) => resolveAgentMainSessionKey({ 
+      cfg, 
+      agentId: opts.agentId || "" 
+    }),
+  });
+
   enqueueSystemEvent(text, {
-    sessionKey,
+    sessionKey, 
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
   });
+  
   requestHeartbeatNow(
-    scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event", coalesceMs: 0 }),
+    scopedHeartbeatWakeOptions(sessionKey, { 
+      reason: "exec-event", 
+      coalesceMs: 0 
+    })
   );
 }
-
 export { renderExecUpdateText } from "./bash-tools.exec-output.js";
 
 function joinExecFailureOutput(aggregated: string, reason: string) {
