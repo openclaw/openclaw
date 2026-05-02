@@ -12,6 +12,9 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_WEIGHTS,
   GroundednessCondition,
+  buildHybridScorer,
+  buildLlmJudgeScorer,
+  parseTaggedPartition,
   type ClaimPartition,
   type EvidenceWeights,
   computeGroundednessScore,
@@ -417,5 +420,105 @@ describe("joint improvement — GSAR × termination algebra", () => {
     for (const r of groundedProviders) {
       expect(r.joint.finalScore).toBeGreaterThanOrEqual(0.8);
     }
+  });
+});
+
+// ─── parseTaggedPartition ────────────────────────────────────────────────────
+
+describe("parseTaggedPartition", () => {
+  it("counts short-form tags", () => {
+    const r = parseTaggedPartition("Paris [G] is the capital. War ended in 1918 [G]. Maybe [U].");
+    expect(r).toEqual({ grounded: 2, ungrounded: 1, contradicted: 0, complementary: 0 });
+  });
+
+  it("counts long-form tags", () => {
+    const r = parseTaggedPartition(
+      "[grounded] fact. [ungrounded] guess. [contradicted] wrong. [complementary] infer.",
+    );
+    expect(r).toEqual({ grounded: 1, ungrounded: 1, contradicted: 1, complementary: 1 });
+  });
+
+  it("is case-insensitive", () => {
+    const r = parseTaggedPartition("[G] [g] [G]");
+    expect(r.grounded).toBe(3);
+  });
+
+  it("returns all-zero partition when no tags present", () => {
+    const r = parseTaggedPartition("Plain text with no annotations at all.");
+    expect(r).toEqual({ grounded: 0, ungrounded: 0, contradicted: 0, complementary: 0 });
+  });
+});
+
+// ─── buildLlmJudgeScorer ─────────────────────────────────────────────────────
+
+describe("buildLlmJudgeScorer", () => {
+  it("parses a clean JSON response from the judge", async () => {
+    const complete = async (_prompt: string) =>
+      'Here is the partition: {"grounded":3,"ungrounded":1,"contradicted":0,"complementary":1}';
+    const scorer = buildLlmJudgeScorer(complete);
+    const result = await scorer("some reply");
+    expect(result).toEqual({ grounded: 3, ungrounded: 1, contradicted: 0, complementary: 1 });
+  });
+
+  it("defaults to ungrounded:1 when judge returns no JSON", async () => {
+    const complete = async (_prompt: string) => "I cannot classify this.";
+    const scorer = buildLlmJudgeScorer(complete);
+    const result = await scorer("some reply");
+    expect(result).toEqual({ grounded: 0, ungrounded: 1, contradicted: 0, complementary: 0 });
+  });
+
+  it("clamps negative values to zero", async () => {
+    const complete = async (_prompt: string) =>
+      '{"grounded":-1,"ungrounded":2,"contradicted":0,"complementary":0}';
+    const scorer = buildLlmJudgeScorer(complete);
+    const result = await scorer("some reply");
+    expect(result.grounded).toBe(0);
+    expect(result.ungrounded).toBe(2);
+  });
+});
+
+// ─── buildHybridScorer ───────────────────────────────────────────────────────
+
+describe("buildHybridScorer", () => {
+  it("uses tag parser when tags are present — no fallback call", async () => {
+    let fallbackCalled = false;
+    const fallback = async (_: string): Promise<ClaimPartition> => {
+      fallbackCalled = true;
+      return { grounded: 99, ungrounded: 0, contradicted: 0, complementary: 0 };
+    };
+    const scorer = buildHybridScorer(fallback);
+    const result = await scorer("Paris [G] is the capital [G].");
+    expect(fallbackCalled).toBe(false);
+    expect(result).toEqual({ grounded: 2, ungrounded: 0, contradicted: 0, complementary: 0 });
+  });
+
+  it("calls fallback when no tags found", async () => {
+    let fallbackCalled = false;
+    const fallback = async (_: string): Promise<ClaimPartition> => {
+      fallbackCalled = true;
+      return { grounded: 2, ungrounded: 1, contradicted: 0, complementary: 0 };
+    };
+    const scorer = buildHybridScorer(fallback);
+    const result = await scorer("Plain text with no annotations.");
+    expect(fallbackCalled).toBe(true);
+    expect(result).toEqual({ grounded: 2, ungrounded: 1, contradicted: 0, complementary: 0 });
+  });
+
+  it("hybrid scorer wires into GroundednessCondition correctly", async () => {
+    const scorer = buildHybridScorer(
+      buildLlmJudgeScorer(
+        async () => '{"grounded":3,"ungrounded":0,"contradicted":0,"complementary":0}',
+      ),
+    );
+    const cond = new GroundednessCondition(scorer);
+    cond.reset();
+    // No tags — falls back to LLM judge which returns grounded:3 → score=1.0 → proceed
+    const [stop, reason] = await cond.check({
+      turn: 1,
+      replyText: "Untagged reply.",
+      startedAt: Date.now(),
+    });
+    expect(stop).toBe(true);
+    expect(reason).toMatch(/grounded:proceed/);
   });
 });

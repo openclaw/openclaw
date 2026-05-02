@@ -1,16 +1,25 @@
 /**
- * Composable termination conditions for agent loops.
+ * Composable termination conditions for A2A agent loops.
  *
- * Soft conditions (TextMention, TimeLimit) fire based on observable signals and
- * are non-deterministic — the LLM may or may not produce them on any given run.
- * Hard conditions (MaxIterations) always fire and guarantee bounded execution.
+ * The OR/AND combinators are well-known in reactive programming (RxJS, CSP).
+ * The novelty here is their application to *agent loop termination* specifically:
  *
- * The correct pattern is always:
- *   soft_signal.or(hard_bound)
+ *   1. Conditions are Awaitable — scorers can be async LLM calls.
+ *   2. Signals are semantic, not just events: grounded output, text mention,
+ *      elapsed time, pattern match — not raw stream events.
+ *   3. The GSAR integration (GroundednessCondition) composes grounding scores
+ *      directly into the termination decision, turning hallucination detection
+ *      into a first-class loop exit condition.
  *
- * Example:
- *   TextMention("DONE").or(MaxIterations(10))
- *   or(TextMention("DONE"), MaxIterations(10))   // functional form
+ * Soft conditions (TextMention, ReplyPattern, TimeLimit) fire based on
+ * observable signals and are non-deterministic — the LLM may or may not
+ * produce them. Hard conditions (MaxIterations) always fire and guarantee
+ * bounded execution. The correct pattern is:
+ *
+ *   soft_signal.or(MaxIterations(K_max))
+ *
+ * This encodes the K_max safety bound from GSAR (arxiv:2604.23366, §3.2):
+ * termination is guaranteed regardless of model behaviour.
  */
 
 export type TerminationState = {
