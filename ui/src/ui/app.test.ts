@@ -136,13 +136,10 @@ describe("OpenClawApp dictation recorder lifecycle", () => {
     await app.toggleChatDictation();
     const recorder = MockMediaRecorder.instances[0];
     recorder.emitData(new Blob(["audio"], { type: "audio/webm" }));
-    transcribeChatAudioMock.mockImplementationOnce(async () => {
-      expect(app.chatDictationChunks).toEqual([]);
-      return null;
-    });
+    const transcription = createDeferred<null>();
+    transcribeChatAudioMock.mockReturnValueOnce(transcription.promise);
 
     await app.toggleChatDictation();
-    await Promise.resolve();
 
     expect(app.chatDictationChunks).toEqual([]);
     expect(transcribeChatAudioMock).toHaveBeenCalledTimes(1);
@@ -150,6 +147,8 @@ describe("OpenClawApp dictation recorder lifecycle", () => {
       size: 5,
       type: "audio/webm",
     });
+    transcription.resolve(null);
+    await transcription.promise;
   });
 
   it("ignores duplicate starts while microphone permission is pending", async () => {
