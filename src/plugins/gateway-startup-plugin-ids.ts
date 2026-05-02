@@ -15,13 +15,23 @@ import { hasExplicitChannelConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import type { InstalledPluginIndexRecord } from "./installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import {
+  isPluginMetadataSnapshotCompatible,
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "./plugin-metadata-snapshot.js";
 import {
   createPluginRegistryIdNormalizer,
   normalizePluginsConfigWithRegistry,
 } from "./plugin-registry-contributions.js";
-import { loadPluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+import type { PluginRegistrySnapshot } from "./plugin-registry-snapshot.js";
+
+export type GatewayStartupPluginPlan = {
+  channelPluginIds: readonly string[];
+  configuredDeferredChannelPluginIds: readonly string[];
+  pluginIds: readonly string[];
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -235,19 +245,7 @@ export function resolveChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return resolveChannelPluginIdsFromRegistry({ manifestRegistry });
+  return [...loadGatewayStartupPluginPlan(params).channelPluginIds];
 }
 
 export function resolveChannelPluginIdsFromRegistry(params: {
@@ -262,7 +260,7 @@ export function resolveChannelPluginIdsFromRegistry(params: {
 export function resolveConfiguredDeferredChannelPluginIdsFromRegistry(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  index: ReturnType<typeof loadPluginRegistrySnapshot>;
+  index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
 }): string[] {
   const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
@@ -302,33 +300,25 @@ export function resolveConfiguredDeferredChannelPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return resolveConfiguredDeferredChannelPluginIdsFromRegistry({
-    config: params.config,
-    env: params.env,
-    index,
-    manifestRegistry,
-  });
+  return [...loadGatewayStartupPluginPlan(params).configuredDeferredChannelPluginIds];
 }
 
-export function resolveGatewayStartupPluginIdsFromRegistry(params: {
+export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   config: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  index: ReturnType<typeof loadPluginRegistrySnapshot>;
+  index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
-}): string[] {
+}): GatewayStartupPluginPlan {
+  const channelPluginIds = resolveChannelPluginIdsFromRegistry({
+    manifestRegistry: params.manifestRegistry,
+  });
+  const configuredDeferredChannelPluginIds = resolveConfiguredDeferredChannelPluginIdsFromRegistry({
+    config: params.config,
+    env: params.env,
+    index: params.index,
+    manifestRegistry: params.manifestRegistry,
+  });
   const configuredChannelIds = new Set(listPotentialEnabledChannelIds(params.config, params.env));
   const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {
     manifestRegistry: params.manifestRegistry,
@@ -358,7 +348,7 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
       manifestRegistry: params.manifestRegistry,
     }),
   });
-  return params.index.plugins
+  const pluginIds = params.index.plugins
     .filter((plugin) => {
       const manifest = findManifestPlugin(manifestLookup, plugin.pluginId);
       if (
@@ -427,6 +417,57 @@ export function resolveGatewayStartupPluginIdsFromRegistry(params: {
       return activationState.source === "explicit" || activationState.source === "default";
     })
     .map((plugin) => plugin.pluginId);
+  return {
+    channelPluginIds,
+    configuredDeferredChannelPluginIds,
+    pluginIds,
+  };
+}
+
+export function resolveGatewayStartupPluginIdsFromRegistry(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  index: PluginRegistrySnapshot;
+  manifestRegistry: PluginManifestRegistry;
+}): string[] {
+  return [...resolveGatewayStartupPluginPlanFromRegistry(params).pluginIds];
+}
+
+export function loadGatewayStartupPluginPlan(params: {
+  config: OpenClawConfig;
+  activationSourceConfig?: OpenClawConfig;
+  workspaceDir?: string;
+  env: NodeJS.ProcessEnv;
+  index?: PluginRegistrySnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): GatewayStartupPluginPlan {
+  const snapshotConfig = params.activationSourceConfig ?? params.config;
+  const metadataSnapshot =
+    params.metadataSnapshot &&
+    isPluginMetadataSnapshotCompatible({
+      snapshot: params.metadataSnapshot,
+      config: snapshotConfig,
+      env: params.env,
+      workspaceDir: params.workspaceDir,
+      index: params.index,
+    })
+      ? params.metadataSnapshot
+      : loadPluginMetadataSnapshot({
+          config: snapshotConfig,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+          ...(params.index ? { index: params.index } : {}),
+        });
+  return resolveGatewayStartupPluginPlanFromRegistry({
+    config: params.config,
+    ...(params.activationSourceConfig !== undefined
+      ? { activationSourceConfig: params.activationSourceConfig }
+      : {}),
+    env: params.env,
+    index: metadataSnapshot.index,
+    manifestRegistry: metadataSnapshot.manifestRegistry,
+  });
 }
 
 export function resolveGatewayStartupPluginIds(params: {
@@ -435,25 +476,5 @@ export function resolveGatewayStartupPluginIds(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): string[] {
-  const index = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
-  const manifestRegistry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    includeDisabled: true,
-  });
-  return resolveGatewayStartupPluginIdsFromRegistry({
-    config: params.config,
-    ...(params.activationSourceConfig !== undefined
-      ? { activationSourceConfig: params.activationSourceConfig }
-      : {}),
-    env: params.env,
-    index,
-    manifestRegistry,
-  });
+  return [...loadGatewayStartupPluginPlan(params).pluginIds];
 }

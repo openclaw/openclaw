@@ -23,7 +23,7 @@ export type {
   PluginMetadataSnapshotRegistryDiagnostic,
 } from "./plugin-metadata-snapshot.types.js";
 
-function resolvePluginMetadataSnapshotConfigFingerprint(
+function resolvePluginMetadataControlPlaneFingerprint(
   params: Pick<LoadPluginMetadataSnapshotParams, "config" | "env" | "workspaceDir"> & {
     index?: InstalledPluginIndex;
     policyHash?: string;
@@ -60,7 +60,7 @@ export function isPluginMetadataSnapshotCompatible(params: {
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
-        resolvePluginMetadataSnapshotConfigFingerprint({
+        resolvePluginMetadataControlPlaneFingerprint({
           config: params.config,
           env,
           index: params.index ?? params.snapshot.index,
@@ -195,7 +195,7 @@ function loadPluginMetadataSnapshotImpl(
 
   return {
     policyHash: index.policyHash,
-    configFingerprint: resolvePluginMetadataSnapshotConfigFingerprint({
+    configFingerprint: resolvePluginMetadataControlPlaneFingerprint({
       config: params.config,
       env: params.env,
       index,

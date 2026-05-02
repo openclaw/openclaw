@@ -7,8 +7,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
+  loadGatewayStartupPluginPlan,
   resolveConfiguredChannelPluginIds,
-  resolveGatewayStartupPluginIds,
 } from "./channel-plugin-ids.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
@@ -155,12 +155,12 @@ export function resolveEffectivePluginIds(params: {
   })) {
     ids.add(pluginId);
   }
-  for (const pluginId of resolveGatewayStartupPluginIds({
+  for (const pluginId of loadGatewayStartupPluginPlan({
     config: effectiveConfig,
     activationSourceConfig: params.config,
     workspaceDir: params.workspaceDir,
     env: params.env,
-  })) {
+  }).pluginIds) {
     ids.add(pluginId);
   }
   return [...ids].toSorted((left, right) => left.localeCompare(right));

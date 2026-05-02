@@ -11,7 +11,7 @@ import {
 } from "./plugin-control-plane-context.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
-export function resolvePluginMetadataSnapshotConfigFingerprint(
+export function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
   options: Omit<ResolvePluginControlPlaneContextParams, "config"> = {},
 ): string {
@@ -30,7 +30,7 @@ export function setCurrentPluginMetadataSnapshot(
   setCurrentPluginMetadataSnapshotState(
     snapshot,
     snapshot
-      ? resolvePluginMetadataSnapshotConfigFingerprint(options.config, {
+      ? resolvePluginMetadataControlPlaneFingerprint(options.config, {
           env: options.env,
           index: snapshot.index,
           policyHash: snapshot.policyHash,
@@ -63,15 +63,12 @@ export function getCurrentPluginMetadataSnapshot(
     return undefined;
   }
   if (params.config) {
-    const requestedConfigFingerprint = resolvePluginMetadataSnapshotConfigFingerprint(
-      params.config,
-      {
-        env: params.env,
-        index: snapshot.index,
-        policyHash: snapshot.policyHash,
-        workspaceDir: params.workspaceDir,
-      },
-    );
+    const requestedConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(params.config, {
+      env: params.env,
+      index: snapshot.index,
+      policyHash: snapshot.policyHash,
+      workspaceDir: params.workspaceDir,
+    });
     if (configFingerprint && configFingerprint !== requestedConfigFingerprint) {
       return undefined;
     }
