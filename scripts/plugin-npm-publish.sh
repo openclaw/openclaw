@@ -60,7 +60,10 @@ mirror_auth_source="$(printf '%s\n' "${publish_plan_output}" | sed -n '4p')"
 mirror_auth_requirement="$(printf '%s\n' "${publish_plan_output}" | sed -n '5p')"
 mirror_auth_source="${mirror_auth_source:-none}"
 mirror_auth_requirement="${mirror_auth_requirement:-optional}"
-publish_cmd=(npm publish --access public --tag "${publish_tag}" --provenance)
+publish_cmd=(npm publish --access public --tag "${publish_tag}")
+if [[ "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "0" && "${OPENCLAW_NPM_PUBLISH_PROVENANCE:-1}" != "false" ]]; then
+  publish_cmd+=(--provenance)
+fi
 
 log "Resolved package dir: ${package_dir}"
 log "Resolved package name: ${package_name}"
@@ -87,8 +90,12 @@ if [[ "${OPENCLAW_NPM_PUBLISH_AUTH_MODE:-}" == "trusted-publisher" ]]; then
   publish_auth_token=""
   publish_auth_source="trusted-publisher"
 fi
+publish_provenance="without provenance"
+if [[ " ${publish_cmd[*]} " == *" --provenance "* ]]; then
+  publish_provenance="with provenance"
+fi
 if [[ -n "${publish_auth_token}" ]]; then
-  log "Publish auth: ${publish_auth_source} with provenance"
+  log "Publish auth: ${publish_auth_source} ${publish_provenance}"
 else
   log "Publish auth: GitHub OIDC trusted publishing"
 fi
