@@ -1,16 +1,18 @@
-export function startAsyncSearchSync(params: {
+export async function awaitSearchSyncIfNeeded(params: {
   enabled: boolean;
   dirty: boolean;
   sessionsDirty: boolean;
   sync: (params: { reason: string }) => Promise<void>;
   onError: (err: unknown) => void;
-}): void {
+}): Promise<void> {
   if (!params.enabled || (!params.dirty && !params.sessionsDirty)) {
     return;
   }
-  void params.sync({ reason: "search" }).catch((err) => {
+  try {
+    await params.sync({ reason: "search" });
+  } catch (err) {
     params.onError(err);
-  });
+  }
 }
 
 export async function awaitPendingManagerWork(params: {
