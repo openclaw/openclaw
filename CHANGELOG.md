@@ -117,6 +117,7 @@ Docs: https://docs.openclaw.ai
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
 - Agents/OpenAI: normalize parameter-free MCP tool schemas whose `properties` value is null or undefined, so OpenAI no longer rejects MCP tools without parameters. Fixes #75362. (#75401) Thanks @SymbolStar.
+- Gateway/agents: avoid rebuilding core tools for plugin-only allowlists and keep the full plugin registry cache warm across scoped plugin loads, reducing per-turn latency spikes. Fixes #75882, #75907, #75906, #75887, and #75851. (#75922) Thanks @obviyus.
 
 ## 2026.4.30
 
