@@ -7,13 +7,18 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
-import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import {
+  addGatewayClientOptions,
+  callGatewayFromCli,
+  type GatewayRpcOpts,
+} from "../gateway-rpc.js";
 import {
   applyExistingCronSchedulePatch,
   resolveCronEditScheduleRequest,
 } from "./schedule-options.js";
 import {
   getCronChannelOptions,
+  looksLikeShellCommand,
   parseCronToolsAllow,
   parseDurationMs,
   warnIfCronSchedulerDisabled,
@@ -34,10 +39,7 @@ const assignIf = (
   }
 };
 
-async function loadCronJobForEditSchedulePatch(
-  opts: Record<string, unknown>,
-  id: string,
-): Promise<CronJob | undefined> {
+async function loadCronJobForEdit(opts: GatewayRpcOpts, id: string): Promise<CronJob | undefined> {
   let offset = 0;
   for (let page = 0; page < CRON_EDIT_LOOKUP_MAX_PAGES; page += 1) {
     const listed = (await callGatewayFromCli("cron.list", opts, {
@@ -204,6 +206,16 @@ export function registerCronEditCommand(cron: Command) {
             patch.sessionKey = null;
           }
 
+          let existingJobLoaded = false;
+          let existingJob: CronJob | undefined;
+          const getExistingJob = async () => {
+            if (!existingJobLoaded) {
+              existingJob = await loadCronJobForEdit(opts, id);
+              existingJobLoaded = true;
+            }
+            return existingJob;
+          };
+
           const scheduleRequest = resolveCronEditScheduleRequest({
             at: opts.at,
             cron: opts.cron,
@@ -215,7 +227,7 @@ export function registerCronEditCommand(cron: Command) {
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
           } else if (scheduleRequest.kind === "patch-existing-cron") {
-            const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
+            const existing = await getExistingJob();
             if (!existing) {
               throw new Error(`unknown cron job id: ${id}`);
             }
@@ -376,6 +388,36 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.accountId = accountId ? accountId : undefined;
             }
             patch.failureAlert = failureAlert;
+          }
+
+          // Warn when --system-event is being set on a job that is (or will be) a
+          // main-session job and the text looks like a shell command.  Such commands
+          // are never executed — the text is only dispatched as a context notification.
+          // When --session is not passed, fetch the existing job to check its target.
+          let effectiveSessionIsMain = opts.session === "main";
+          if (hasSystemEventPatch && !effectiveSessionIsMain && typeof opts.session !== "string") {
+            try {
+              const existing = await getExistingJob();
+              if (existing?.sessionTarget === "main") {
+                effectiveSessionIsMain = true;
+              }
+            } catch {
+              // Best-effort: if we cannot fetch the job, skip the warning.
+            }
+          }
+          if (
+            hasSystemEventPatch &&
+            effectiveSessionIsMain &&
+            looksLikeShellCommand(String(opts.systemEvent))
+          ) {
+            process.stderr.write(
+              [
+                "Warning: --system-event on --session main does not execute shell commands.",
+                "  The text is dispatched as a notification to the main agent session only.",
+                '  To run a script, use: --message "..." --session isolated --wake now',
+                "",
+              ].join("\n"),
+            );
           }
 
           const res = await callGatewayFromCli("cron.update", opts, {
