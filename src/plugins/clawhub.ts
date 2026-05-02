@@ -21,11 +21,9 @@ import {
   resolveLatestVersionFromPackage,
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
-  type ClawHubPackageChannel,
   type ClawHubPackageArtifactSummary,
   type ClawHubPackageCompatibility,
   type ClawHubPackageDetail,
-  type ClawHubPackageFamily,
   type ClawHubPackageClawPackSummary,
   type ClawHubPackageVersion,
 } from "../infra/clawhub.js";
