@@ -660,6 +660,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const now = Date.now();
     const cached = sessionsListCache.get(paramsKey);
     if (cached && now - cached.ts < SESSIONS_LIST_CACHE_TTL_MS) {
+      cached.ts = now; // sliding window: reset TTL on each hit
       respond(true, cached.result, undefined);
       return;
     }
