@@ -10,6 +10,10 @@ const MIN_HOST_REQUIREMENT = {
   raw: ">=2026.3.22",
   minimumLabel: "2026.3.22",
 };
+const BETA_MIN_HOST_REQUIREMENT = {
+  raw: ">=2026.5.1-beta.1",
+  minimumLabel: "2026.5.1-beta.1",
+};
 
 function expectValidHostCheck(currentVersion: string, minHostVersion?: string) {
   expectHostCheckResult({
@@ -57,6 +61,7 @@ describe("min-host-version", () => {
 
   it("parses semver floors", () => {
     expect(parseMinHostVersionRequirement(">=2026.3.22")).toEqual(MIN_HOST_REQUIREMENT);
+    expect(parseMinHostVersionRequirement(">=2026.5.1-beta.1")).toEqual(BETA_MIN_HOST_REQUIREMENT);
   });
 
   it("can parse legacy bare semver floors for runtime upgrade compatibility", () => {

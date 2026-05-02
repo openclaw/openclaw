@@ -617,37 +617,39 @@ export function loadPluginManifestRegistry(
       continue;
     }
     const manifest = manifestRes.manifest;
-    const allowLegacyBareMinHostVersion =
-      candidate.origin === "global" &&
-      matchesInstalledPluginRecord({
-        pluginId: manifest.id,
-        candidate,
-        config,
-        env,
-        installRecords: getInstallRecords(),
+    if (candidate.origin !== "bundled") {
+      const allowLegacyBareMinHostVersion =
+        candidate.origin === "global" &&
+        matchesInstalledPluginRecord({
+          pluginId: manifest.id,
+          candidate,
+          config,
+          env,
+          installRecords: getInstallRecords(),
+        });
+      const minHostVersionCheck = checkMinHostVersion({
+        currentVersion: currentHostVersion,
+        minHostVersion: candidate.packageManifest?.install?.minHostVersion,
+        allowLegacyBareSemver: allowLegacyBareMinHostVersion,
       });
-    const minHostVersionCheck = checkMinHostVersion({
-      currentVersion: currentHostVersion,
-      minHostVersion: candidate.packageManifest?.install?.minHostVersion,
-      allowLegacyBareSemver: allowLegacyBareMinHostVersion,
-    });
-    if (!minHostVersionCheck.ok) {
-      const packageManifestSource = path.join(
-        candidate.packageDir ?? candidate.rootDir,
-        "package.json",
-      );
-      diagnostics.push({
-        level: minHostVersionCheck.kind === "unknown_host_version" ? "warn" : "error",
-        pluginId: manifest.id,
-        source: packageManifestSource,
-        message:
-          minHostVersionCheck.kind === "invalid"
-            ? `plugin manifest invalid | ${minHostVersionCheck.error}`
-            : minHostVersionCheck.kind === "unknown_host_version"
-              ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
-              : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
-      });
-      continue;
+      if (!minHostVersionCheck.ok) {
+        const packageManifestSource = path.join(
+          candidate.packageDir ?? candidate.rootDir,
+          "package.json",
+        );
+        diagnostics.push({
+          level: minHostVersionCheck.kind === "invalid" ? "error" : "warn",
+          pluginId: manifest.id,
+          source: packageManifestSource,
+          message:
+            minHostVersionCheck.kind === "invalid"
+              ? `plugin manifest invalid | ${minHostVersionCheck.error}`
+              : minHostVersionCheck.kind === "unknown_host_version"
+                ? `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined; skipping load`
+                : `plugin requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}; skipping load`,
+        });
+        continue;
+      }
     }
 
     const configSchema = "configSchema" in manifest ? manifest.configSchema : undefined;
