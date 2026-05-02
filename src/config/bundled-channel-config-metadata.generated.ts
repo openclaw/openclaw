@@ -7902,6 +7902,624 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
     },
   },
   {
+    pluginId: "mattermost",
+    channelId: "mattermost",
+    label: "Mattermost",
+    description: "self-hosted Slack-style chat; install the plugin to enable.",
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        name: {
+          type: "string",
+        },
+        capabilities: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        dangerouslyAllowNameMatching: {
+          type: "boolean",
+        },
+        markdown: {
+          type: "object",
+          properties: {
+            tables: {
+              type: "string",
+              enum: ["off", "bullets", "code", "block"],
+            },
+          },
+          additionalProperties: false,
+        },
+        enabled: {
+          type: "boolean",
+        },
+        configWrites: {
+          type: "boolean",
+        },
+        botToken: {
+          anyOf: [
+            {
+              type: "string",
+            },
+            {
+              oneOf: [
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "env",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                      pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "file",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "object",
+                  properties: {
+                    source: {
+                      type: "string",
+                      const: "exec",
+                    },
+                    provider: {
+                      type: "string",
+                      pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                    },
+                    id: {
+                      type: "string",
+                    },
+                  },
+                  required: ["source", "provider", "id"],
+                  additionalProperties: false,
+                },
+              ],
+            },
+          ],
+        },
+        baseUrl: {
+          type: "string",
+        },
+        chatmode: {
+          type: "string",
+          enum: ["oncall", "onmessage", "onchar"],
+        },
+        oncharPrefixes: {
+          type: "array",
+          items: {
+            type: "string",
+          },
+        },
+        requireMention: {
+          type: "boolean",
+        },
+        dmPolicy: {
+          default: "pairing",
+          type: "string",
+          enum: ["pairing", "allowlist", "open", "disabled"],
+        },
+        allowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        groupAllowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        groupPolicy: {
+          default: "allowlist",
+          type: "string",
+          enum: ["open", "disabled", "allowlist"],
+        },
+        textChunkLimit: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+        },
+        chunkMode: {
+          type: "string",
+          enum: ["length", "newline"],
+        },
+        blockStreaming: {
+          type: "boolean",
+        },
+        blockStreamingCoalesce: {
+          type: "object",
+          properties: {
+            minChars: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            maxChars: {
+              type: "integer",
+              exclusiveMinimum: 0,
+              maximum: 9007199254740991,
+            },
+            idleMs: {
+              type: "integer",
+              minimum: 0,
+              maximum: 9007199254740991,
+            },
+          },
+          additionalProperties: false,
+        },
+        replyToMode: {
+          type: "string",
+          enum: ["off", "first", "all", "batched"],
+        },
+        responsePrefix: {
+          type: "string",
+        },
+        actions: {
+          type: "object",
+          properties: {
+            reactions: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
+        commands: {
+          type: "object",
+          properties: {
+            native: {
+              anyOf: [
+                {
+                  type: "boolean",
+                },
+                {
+                  type: "string",
+                  const: "auto",
+                },
+              ],
+            },
+            nativeSkills: {
+              anyOf: [
+                {
+                  type: "boolean",
+                },
+                {
+                  type: "string",
+                  const: "auto",
+                },
+              ],
+            },
+            callbackPath: {
+              type: "string",
+            },
+            callbackUrl: {
+              type: "string",
+            },
+          },
+          additionalProperties: false,
+        },
+        interactions: {
+          type: "object",
+          properties: {
+            callbackBaseUrl: {
+              type: "string",
+            },
+            allowedSourceIps: {
+              type: "array",
+              items: {
+                type: "string",
+              },
+            },
+          },
+          additionalProperties: false,
+        },
+        groups: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              requireMention: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        network: {
+          type: "object",
+          properties: {
+            dangerouslyAllowPrivateNetwork: {
+              type: "boolean",
+            },
+          },
+          additionalProperties: false,
+        },
+        dmChannelRetry: {
+          type: "object",
+          properties: {
+            maxRetries: {
+              type: "integer",
+              minimum: 0,
+              maximum: 10,
+            },
+            initialDelayMs: {
+              type: "integer",
+              minimum: 100,
+              maximum: 60000,
+            },
+            maxDelayMs: {
+              type: "integer",
+              minimum: 1000,
+              maximum: 60000,
+            },
+            timeoutMs: {
+              type: "integer",
+              minimum: 5000,
+              maximum: 120000,
+            },
+          },
+          additionalProperties: false,
+        },
+        accounts: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              name: {
+                type: "string",
+              },
+              capabilities: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              dangerouslyAllowNameMatching: {
+                type: "boolean",
+              },
+              markdown: {
+                type: "object",
+                properties: {
+                  tables: {
+                    type: "string",
+                    enum: ["off", "bullets", "code", "block"],
+                  },
+                },
+                additionalProperties: false,
+              },
+              enabled: {
+                type: "boolean",
+              },
+              configWrites: {
+                type: "boolean",
+              },
+              botToken: {
+                anyOf: [
+                  {
+                    type: "string",
+                  },
+                  {
+                    oneOf: [
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "env",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                            pattern: "^[A-Z][A-Z0-9_]{0,127}$",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "file",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                      {
+                        type: "object",
+                        properties: {
+                          source: {
+                            type: "string",
+                            const: "exec",
+                          },
+                          provider: {
+                            type: "string",
+                            pattern: "^[a-z][a-z0-9_-]{0,63}$",
+                          },
+                          id: {
+                            type: "string",
+                          },
+                        },
+                        required: ["source", "provider", "id"],
+                        additionalProperties: false,
+                      },
+                    ],
+                  },
+                ],
+              },
+              baseUrl: {
+                type: "string",
+              },
+              chatmode: {
+                type: "string",
+                enum: ["oncall", "onmessage", "onchar"],
+              },
+              oncharPrefixes: {
+                type: "array",
+                items: {
+                  type: "string",
+                },
+              },
+              requireMention: {
+                type: "boolean",
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "allowlist",
+                type: "string",
+                enum: ["open", "disabled", "allowlist"],
+              },
+              textChunkLimit: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              chunkMode: {
+                type: "string",
+                enum: ["length", "newline"],
+              },
+              blockStreaming: {
+                type: "boolean",
+              },
+              blockStreamingCoalesce: {
+                type: "object",
+                properties: {
+                  minChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  maxChars: {
+                    type: "integer",
+                    exclusiveMinimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                  idleMs: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 9007199254740991,
+                  },
+                },
+                additionalProperties: false,
+              },
+              replyToMode: {
+                type: "string",
+                enum: ["off", "first", "all", "batched"],
+              },
+              responsePrefix: {
+                type: "string",
+              },
+              actions: {
+                type: "object",
+                properties: {
+                  reactions: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              commands: {
+                type: "object",
+                properties: {
+                  native: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                  nativeSkills: {
+                    anyOf: [
+                      {
+                        type: "boolean",
+                      },
+                      {
+                        type: "string",
+                        const: "auto",
+                      },
+                    ],
+                  },
+                  callbackPath: {
+                    type: "string",
+                  },
+                  callbackUrl: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+              interactions: {
+                type: "object",
+                properties: {
+                  callbackBaseUrl: {
+                    type: "string",
+                  },
+                  allowedSourceIps: {
+                    type: "array",
+                    items: {
+                      type: "string",
+                    },
+                  },
+                },
+                additionalProperties: false,
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    requireMention: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+              network: {
+                type: "object",
+                properties: {
+                  dangerouslyAllowPrivateNetwork: {
+                    type: "boolean",
+                  },
+                },
+                additionalProperties: false,
+              },
+              dmChannelRetry: {
+                type: "object",
+                properties: {
+                  maxRetries: {
+                    type: "integer",
+                    minimum: 0,
+                    maximum: 10,
+                  },
+                  initialDelayMs: {
+                    type: "integer",
+                    minimum: 100,
+                    maximum: 60000,
+                  },
+                  maxDelayMs: {
+                    type: "integer",
+                    minimum: 1000,
+                    maximum: 60000,
+                  },
+                  timeoutMs: {
+                    type: "integer",
+                    minimum: 5000,
+                    maximum: 120000,
+                  },
+                },
+                additionalProperties: false,
+              },
+            },
+            required: ["dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+        },
+        defaultAccount: {
+          type: "string",
+        },
+      },
+      required: ["dmPolicy", "groupPolicy"],
+      additionalProperties: false,
+    },
+  },
+  {
     pluginId: "msteams",
     channelId: "msteams",
     label: "Microsoft Teams",
