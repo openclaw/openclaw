@@ -10,7 +10,6 @@
  * overwrite each other's tokens, registered commands, or handlers.
  */
 
-import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostRegisteredCommand } from "./slash-commands.js";
 import {
