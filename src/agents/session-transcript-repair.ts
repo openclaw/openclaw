@@ -245,20 +245,20 @@ function normalizeToolResultName(
 
 export { makeMissingToolResult };
 
-export type ToolCallInputRepairReport = {
+type ToolCallInputRepairReport = {
   messages: AgentMessage[];
   droppedToolCalls: number;
   droppedAssistantMessages: number;
 };
 
-export type ToolCallInputRepairOptions = {
+type ToolCallInputRepairOptions = {
   allowedToolNames?: Iterable<string>;
   allowProviderOwnedThinkingReplay?: boolean;
 };
 
-export type ErroredAssistantResultPolicy = "preserve" | "drop";
+type ErroredAssistantResultPolicy = "preserve" | "drop";
 
-export type ToolUseResultPairingOptions = {
+type ToolUseResultPairingOptions = {
   erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
   missingToolResultText?: string;
 };
@@ -430,7 +430,7 @@ export function sanitizeToolUseResultPairing(
   return repairToolUseResultPairing(messages, options).messages;
 }
 
-export type ToolUseRepairReport = {
+type ToolUseRepairReport = {
   messages: AgentMessage[];
   added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
   droppedDuplicateCount: number;
