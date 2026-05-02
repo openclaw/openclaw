@@ -15,7 +15,6 @@ import type {
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
-const providerPolicyPluginIdsByProviderId = new Map<string, string | null>();
 
 export type BundledProviderPolicySurface = {
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
@@ -70,13 +69,7 @@ function resolveBundledProviderPolicyPluginId(providerId: string): string | null
     return null;
   }
   const bundledPluginsDir = resolveBundledPluginsDir();
-  const cacheKey = `${bundledPluginsDir ?? "<none>"}::${normalizedProviderId}`;
-  if (providerPolicyPluginIdsByProviderId.has(cacheKey)) {
-    return providerPolicyPluginIdsByProviderId.get(cacheKey) ?? null;
-  }
-
   if (!bundledPluginsDir) {
-    providerPolicyPluginIdsByProviderId.set(cacheKey, null);
     return null;
   }
 
@@ -91,12 +84,10 @@ function resolveBundledProviderPolicyPluginId(providerId: string): string | null
       (provider) => normalizeProviderId(provider) === normalizedProviderId,
     );
     if (ownsProvider) {
-      providerPolicyPluginIdsByProviderId.set(cacheKey, plugin.id);
       return plugin.id;
     }
   }
 
-  providerPolicyPluginIdsByProviderId.set(cacheKey, null);
   return null;
 }
 
