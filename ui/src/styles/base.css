@@ -42,6 +42,8 @@
   --accent-subtle: rgba(255, 92, 92, 0.1);
   --accent-foreground: #fafafa;
   --accent-glow: rgba(255, 92, 92, 0.2);
+  --selection-bg: #005fcc;
+  --selection-fg: #ffffff;
   --primary: #ff5c5c;
   --primary-foreground: #ffffff;
 
@@ -589,8 +591,8 @@ select {
 }
 
 ::selection {
-  background: var(--accent-subtle);
-  color: var(--text-strong);
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }
 
 /* Scrollbar styling - Minimal, barely visible */
