@@ -602,13 +602,24 @@ function resolvePluginToolRegistry(params: {
   loadOptions: PluginLoadOptions;
   onlyPluginIds?: readonly string[];
 }) {
-  return getLoadedRuntimePluginRegistry({
+  const lookup = {
     env: params.loadOptions.env,
     loadOptions: params.loadOptions,
     workspaceDir: params.loadOptions.workspaceDir,
     requiredPluginIds: params.onlyPluginIds,
-    surface: "channel",
-  });
+  };
+  return (
+    getLoadedRuntimePluginRegistry({
+      ...lookup,
+      surface: "channel",
+    }) ??
+    getLoadedRuntimePluginRegistry({
+      env: lookup.env,
+      workspaceDir: lookup.workspaceDir,
+      requiredPluginIds: lookup.requiredPluginIds,
+      surface: "active",
+    })
+  );
 }
 
 function resolvePluginToolLoadState(params: {
