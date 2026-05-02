@@ -135,7 +135,7 @@ describe("thread-level session keys", () => {
     expect(routing.threadContext.messageThreadId).toBe(rootTs);
   });
 
-  it("keeps top-level channel messages on the per-channel session regardless of replyToMode", () => {
+  it("routes top-level channel messages based on replyToMode", () => {
     for (const mode of ["all", "first", "off", "batched"] as const) {
       const ctx = buildCtx({ replyToMode: mode });
       const account = buildAccount(mode);
@@ -161,8 +161,15 @@ describe("thread-level session keys", () => {
 
       const firstKey = first.sessionKey;
       const secondKey = second.sessionKey;
-      expect(firstKey).toBe(secondKey);
-      expect(firstKey).not.toContain(":thread:");
+
+      if (mode === "all") {
+        expect(firstKey).not.toBe(secondKey);
+        expect(firstKey).toContain(":thread:");
+        expect(secondKey).toContain(":thread:");
+      } else {
+        expect(firstKey).toBe(secondKey);
+        expect(firstKey).not.toContain(":thread:");
+      }
     }
   });
 
