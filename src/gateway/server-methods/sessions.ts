@@ -88,6 +88,7 @@ import {
   resolveSessionDisplayModelIdentityRef,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
+  type SessionsListResult,
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
@@ -645,12 +646,25 @@ async function handleSessionSend(params: {
     });
   }
 }
+let sessionsListCache: { result: SessionsListResult; ts: number; paramsKey: string } | null = null;
+const SESSIONS_LIST_CACHE_TTL_MS = 300_000;
+
 export const sessionsHandlers: GatewayRequestHandlers = {
   "sessions.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsListParams, "sessions.list", respond)) {
       return;
     }
     const p = params;
+    const paramsKey = JSON.stringify(p);
+    const now = Date.now();
+    if (
+      sessionsListCache &&
+      now - sessionsListCache.ts < SESSIONS_LIST_CACHE_TTL_MS &&
+      sessionsListCache.paramsKey === paramsKey
+    ) {
+      respond(true, sessionsListCache.result, undefined);
+      return;
+    }
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
@@ -661,6 +675,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       modelCatalog,
       opts: p,
     });
+    sessionsListCache = { result, ts: now, paramsKey };
     respond(true, result, undefined);
   },
   "sessions.subscribe": ({ client, context, respond }) => {
