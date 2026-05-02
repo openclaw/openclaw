@@ -420,7 +420,7 @@ export async function executePreparedCliRun(
               emitAgentEvent({
                 runId: params.runId,
                 stream: "tool",
-                data: evt as unknown as Record<string, unknown>,
+                data: evt as Record<string, unknown>,
               });
             },
             cleanup: async () => {
@@ -466,7 +466,7 @@ export async function executePreparedCliRun(
                 emitAgentEvent({
                   runId: params.runId,
                   stream: "tool",
-                  data: evt as unknown as Record<string, unknown>,
+                  data: evt as Record<string, unknown>,
                 });
               },
             })
