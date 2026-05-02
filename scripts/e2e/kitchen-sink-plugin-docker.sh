@@ -36,18 +36,20 @@ DOCKER_ENV_ARGS=(
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64"
   -e "KITCHEN_SINK_SCENARIOS=$KITCHEN_SINK_SCENARIOS"
 )
-for env_name in \
-  OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB \
-  OPENCLAW_CLAWHUB_URL \
-  CLAWHUB_URL \
-  OPENCLAW_CLAWHUB_TOKEN \
-  CLAWHUB_TOKEN \
-  CLAWHUB_AUTH_TOKEN; do
-  env_value="${!env_name:-}"
-  if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
-    DOCKER_ENV_ARGS+=(-e "$env_name")
-  fi
-done
+if [[ "${OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB:-0}" = "1" ]]; then
+  for env_name in \
+    OPENCLAW_KITCHEN_SINK_LIVE_CLAWHUB \
+    OPENCLAW_CLAWHUB_URL \
+    CLAWHUB_URL \
+    OPENCLAW_CLAWHUB_TOKEN \
+    CLAWHUB_TOKEN \
+    CLAWHUB_AUTH_TOKEN; do
+    env_value="${!env_name:-}"
+    if [[ -n "$env_value" && "$env_value" != "undefined" && "$env_value" != "null" ]]; then
+      DOCKER_ENV_ARGS+=(-e "$env_name")
+    fi
+  done
+fi
 
 echo "Running kitchen-sink plugin Docker E2E..."
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
