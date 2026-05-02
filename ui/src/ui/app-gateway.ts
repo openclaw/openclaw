@@ -102,7 +102,7 @@ type GatewayHost = {
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
   chatRunId: string | null;
-  pendingAbort?: { runId: string; sessionKey: string } | null;
+  pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -439,10 +439,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         const abort = host.pendingAbort;
         host.pendingAbort = null;
         void host.client
-          .request("chat.abort", {
-            sessionKey: abort.sessionKey,
-            runId: abort.runId,
-          })
+          .request(
+            "chat.abort",
+            abort.runId
+              ? { sessionKey: abort.sessionKey, runId: abort.runId }
+              : { sessionKey: abort.sessionKey },
+          )
           .catch((err) => {
             // Log to console for diagnostics; user sees no feedback for a stale abort
             // since the run likely completed during the disconnect window anyway.

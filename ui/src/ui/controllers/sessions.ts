@@ -65,6 +65,7 @@ const SESSION_EVENT_ROW_FIELDS = [
   "endedAt",
   "elevatedLevel",
   "fastMode",
+  "hasActiveRun",
   "inputTokens",
   "kind",
   "label",

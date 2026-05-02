@@ -224,7 +224,10 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
 }
 
 function emitSessionsChanged(
-  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "getSessionEventSubscriberConnIds">,
+  context: Pick<
+    GatewayRequestContext,
+    "broadcastToConnIds" | "chatAbortControllers" | "getSessionEventSubscriberConnIds"
+  >,
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
   const connIds = context.getSessionEventSubscriberConnIds();
@@ -282,6 +285,11 @@ function emitSessionsChanged(
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
             status: sessionRow.status,
+            hasActiveRun: hasTrackedActiveSessionRun({
+              context,
+              requestedKey: payload.sessionKey ?? sessionRow.key,
+              canonicalKey: sessionRow.key,
+            }),
             startedAt: sessionRow.startedAt,
             endedAt: sessionRow.endedAt,
             runtimeMs: sessionRow.runtimeMs,
@@ -427,10 +435,13 @@ function resolveAbortSessionKey(params: {
 }
 
 function hasTrackedActiveSessionRun(params: {
-  context: Pick<GatewayRequestContext, "chatAbortControllers">;
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;
   canonicalKey: string;
 }): boolean {
+  if (!(params.context.chatAbortControllers instanceof Map)) {
+    return false;
+  }
   for (const active of params.context.chatAbortControllers.values()) {
     if (active.sessionKey === params.canonicalKey || active.sessionKey === params.requestedKey) {
       return true;
@@ -666,7 +677,22 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       modelCatalog,
       opts: p,
     });
-    respond(true, result, undefined);
+    respond(
+      true,
+      {
+        ...result,
+        sessions: result.sessions.map((session) =>
+          Object.assign({}, session, {
+            hasActiveRun: hasTrackedActiveSessionRun({
+              context,
+              requestedKey: session.key,
+              canonicalKey: session.key,
+            }),
+          }),
+        ),
+      },
+      undefined,
+    );
   },
   "sessions.cleanup": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
