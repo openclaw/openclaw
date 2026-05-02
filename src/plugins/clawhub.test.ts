@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const parseClawHubPluginSpecMock = vi.fn();
 const fetchClawHubPackageDetailMock = vi.fn();
+const fetchClawHubPackageArtifactMock = vi.fn();
 const fetchClawHubPackageVersionMock = vi.fn();
 const downloadClawHubPackageArchiveMock = vi.fn();
 const archiveCleanupMock = vi.fn();
@@ -21,6 +22,7 @@ vi.mock("../infra/clawhub.js", async () => {
     ...actual,
     parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpecMock(...args),
     fetchClawHubPackageDetail: (...args: unknown[]) => fetchClawHubPackageDetailMock(...args),
+    fetchClawHubPackageArtifact: (...args: unknown[]) => fetchClawHubPackageArtifactMock(...args),
     fetchClawHubPackageVersion: (...args: unknown[]) => fetchClawHubPackageVersionMock(...args),
     downloadClawHubPackageArchive: (...args: unknown[]) =>
       downloadClawHubPackageArchiveMock(...args),
@@ -143,6 +145,12 @@ function expectClawHubInstallFlow(params: {
       version: params.version,
     }),
   );
+  expect(fetchClawHubPackageArtifactMock).toHaveBeenCalledWith(
+    expect.objectContaining({
+      name: "demo",
+      version: params.version,
+    }),
+  );
   expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
     expect.objectContaining({
       archivePath: params.archivePath,
@@ -175,6 +183,7 @@ describe("installPluginFromClawHub", () => {
   beforeEach(() => {
     parseClawHubPluginSpecMock.mockReset();
     fetchClawHubPackageDetailMock.mockReset();
+    fetchClawHubPackageArtifactMock.mockReset();
     fetchClawHubPackageVersionMock.mockReset();
     downloadClawHubPackageArchiveMock.mockReset();
     archiveCleanupMock.mockReset();
@@ -211,6 +220,9 @@ describe("installPluginFromClawHub", () => {
         },
       },
     });
+    fetchClawHubPackageArtifactMock.mockImplementation((params) =>
+      fetchClawHubPackageVersionMock(params),
+    );
     downloadClawHubPackageArchiveMock.mockResolvedValue({
       archivePath: "/tmp/clawhub-demo/archive.zip",
       integrity: DEMO_ARCHIVE_INTEGRITY,
@@ -375,6 +387,73 @@ describe("installPluginFromClawHub", () => {
         clawpackSize: 4096,
       },
     });
+    expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        artifact: "clawpack",
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+  });
+
+  it("uses the artifact resolver response as the install decision", async () => {
+    fetchClawHubPackageVersionMock.mockClear();
+    fetchClawHubPackageArtifactMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+      },
+      version: {
+        version: "2026.3.22",
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+      artifact: {
+        source: "clawhub",
+        artifactKind: "npm-pack",
+        packageName: "demo",
+        version: "2026.3.22",
+        artifactSha256: DEMO_CLAWPACK_SHA256,
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+      },
+    });
+    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
+      archivePath: "/tmp/clawhub-demo/demo-2026.3.22.tgz",
+      integrity: DEMO_CLAWPACK_INTEGRITY,
+      sha256Hex: DEMO_CLAWPACK_SHA256,
+      artifact: "clawpack",
+      clawpackHeaderSha256: DEMO_CLAWPACK_SHA256,
+      npmIntegrity: "sha512-clawpack",
+      npmShasum: "1".repeat(40),
+      cleanup: archiveCleanupMock,
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      clawhub: {
+        artifactKind: "npm-pack",
+        artifactFormat: "tgz",
+        npmIntegrity: "sha512-clawpack",
+        npmShasum: "1".repeat(40),
+        clawpackSha256: DEMO_CLAWPACK_SHA256,
+      },
+    });
+    expect(fetchClawHubPackageArtifactMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "demo",
+        version: "2026.3.22",
+      }),
+    );
+    expect(fetchClawHubPackageVersionMock).not.toHaveBeenCalled();
     expect(downloadClawHubPackageArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({
         artifact: "clawpack",

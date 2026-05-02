@@ -13,8 +13,8 @@ import {
 import {
   ClawHubRequestError,
   downloadClawHubPackageArchive,
+  fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
-  fetchClawHubPackageVersion,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
@@ -22,9 +22,11 @@ import {
   satisfiesGatewayMinimum,
   satisfiesPluginApiRange,
   type ClawHubPackageArtifactSummary,
+  type ClawHubPackageArtifactResolverResponse,
   type ClawHubPackageCompatibility,
   type ClawHubPackageDetail,
   type ClawHubPackageClawPackSummary,
+  type ClawHubResolvedArtifact,
   type ClawHubPackageVersion,
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -88,6 +90,17 @@ type ClawHubArchiveVerificationResolution =
       verification: ClawHubArchiveVerification | null;
     }
   | ClawHubInstallFailure;
+
+type ClawHubArtifactResolverVersion = NonNullable<
+  Exclude<ClawHubPackageArtifactResolverResponse["version"], string | null | undefined>
+>;
+
+type ClawHubInstallArtifactDecision = {
+  version: string;
+  compatibility?: ClawHubPackageCompatibility | null;
+  verification: ClawHubArchiveVerification | null;
+  clawpack?: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null;
+};
 
 type ClawHubArchiveFileVerificationResult =
   | {
@@ -217,6 +230,49 @@ function resolveClawHubNpmPackArtifact(
     return version.clawpack;
   }
   return null;
+}
+
+function readArtifactResolverVersion(
+  response: ClawHubPackageArtifactResolverResponse,
+  requestedVersion: string,
+): ClawHubArtifactResolverVersion {
+  if (
+    response.version &&
+    typeof response.version === "object" &&
+    !Array.isArray(response.version)
+  ) {
+    return response.version;
+  }
+  if (typeof response.version === "string" && response.version.trim().length > 0) {
+    return { version: response.version.trim() };
+  }
+  return { version: requestedVersion };
+}
+
+function resolveTopLevelNpmPackArtifact(
+  artifact: ClawHubResolvedArtifact | null | undefined,
+): ClawHubPackageArtifactSummary | null {
+  if (artifact?.artifactKind !== "npm-pack") {
+    return null;
+  }
+  return {
+    kind: "npm-pack",
+    format: "tgz",
+    sha256: artifact.artifactSha256 ?? null,
+    npmIntegrity: artifact.npmIntegrity,
+    npmShasum: artifact.npmShasum ?? null,
+    downloadUrl: artifact.downloadUrl ?? null,
+  };
+}
+
+function resolveTopLevelLegacyArchiveVerification(
+  artifact: ClawHubResolvedArtifact | null | undefined,
+): ClawHubArchiveVerification | null {
+  if (artifact?.artifactKind !== "legacy-zip" || typeof artifact.artifactSha256 !== "string") {
+    return null;
+  }
+  const integrity = normalizeClawHubSha256Integrity(artifact.artifactSha256);
+  return integrity ? { kind: "archive-integrity", integrity } : null;
 }
 
 export function formatClawHubSpecifier(params: { name: string; version?: string }): string {
@@ -692,16 +748,7 @@ async function resolveCompatiblePackageVersion(params: {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-}): Promise<
-  | {
-      ok: true;
-      version: string;
-      compatibility?: ClawHubPackageCompatibility | null;
-      verification: ClawHubArchiveVerification | null;
-      clawpack?: ClawHubPackageArtifactSummary | ClawHubPackageClawPackSummary | null;
-    }
-  | ClawHubInstallFailure
-> {
+}): Promise<({ ok: true } & ClawHubInstallArtifactDecision) | ClawHubInstallFailure> {
   const requestedVersion = resolveRequestedVersion(params);
   if (!requestedVersion) {
     return buildClawHubInstallFailure(
@@ -709,9 +756,9 @@ async function resolveCompatiblePackageVersion(params: {
       CLAWHUB_INSTALL_ERROR_CODE.NO_INSTALLABLE_VERSION,
     );
   }
-  let versionDetail;
+  let artifactResponse;
   try {
-    versionDetail = await fetchClawHubPackageVersion({
+    artifactResponse = await fetchClawHubPackageArtifact({
       name: params.detail.package?.name ?? "",
       version: requestedVersion,
       baseUrl: params.baseUrl,
@@ -725,20 +772,47 @@ async function resolveCompatiblePackageVersion(params: {
       version: requestedVersion,
     });
   }
-  const resolvedVersion = versionDetail.version?.version ?? requestedVersion;
+  const artifactVersion = readArtifactResolverVersion(artifactResponse, requestedVersion);
+  const resolvedVersion = normalizeOptionalString(artifactVersion.version) ?? requestedVersion;
   if (params.detail.package?.family === "skill") {
     return {
       ok: true,
       version: resolvedVersion,
-      compatibility:
-        versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
+      compatibility: artifactVersion.compatibility ?? params.detail.package?.compatibility ?? null,
       verification: null,
-      clawpack: versionDetail.version?.clawpack ?? null,
+      clawpack:
+        artifactVersion.clawpack ?? resolveTopLevelNpmPackArtifact(artifactResponse.artifact),
     };
   }
-  const clawpack = versionDetail.version
-    ? resolveClawHubNpmPackArtifact(versionDetail.version)
-    : null;
+  const versionDetail: ClawHubPackageVersion = {
+    package: artifactResponse.package
+      ? {
+          name: artifactResponse.package.name ?? params.detail.package?.name ?? "",
+          displayName:
+            artifactResponse.package.displayName ?? params.detail.package?.displayName ?? "",
+          family:
+            artifactResponse.package.family === "code-plugin" ||
+            artifactResponse.package.family === "bundle-plugin" ||
+            artifactResponse.package.family === "skill"
+              ? artifactResponse.package.family
+              : (params.detail.package?.family ?? "code-plugin"),
+        }
+      : null,
+    version: {
+      version: resolvedVersion,
+      createdAt: typeof artifactVersion.createdAt === "number" ? artifactVersion.createdAt : 0,
+      changelog: typeof artifactVersion.changelog === "string" ? artifactVersion.changelog : "",
+      distTags: artifactVersion.distTags,
+      files: artifactVersion.files,
+      sha256hash: artifactVersion.sha256hash,
+      compatibility: artifactVersion.compatibility,
+      artifact: artifactVersion.artifact,
+      clawpack: artifactVersion.clawpack ?? undefined,
+    },
+  };
+  const clawpack =
+    resolveClawHubNpmPackArtifact(versionDetail.version) ??
+    resolveTopLevelNpmPackArtifact(artifactResponse.artifact);
   const verificationState = resolveClawHubArchiveVerification(
     versionDetail,
     params.detail.package?.name ?? "unknown",
@@ -757,12 +831,15 @@ async function resolveCompatiblePackageVersion(params: {
       clawpack,
     };
   }
+  const topLevelLegacyVerification = resolveTopLevelLegacyArchiveVerification(
+    artifactResponse.artifact,
+  );
   return {
     ok: true,
     version: resolvedVersion,
     compatibility:
       versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
-    verification: verificationState.verification,
+    verification: verificationState.verification ?? topLevelLegacyVerification,
     clawpack,
   };
 }

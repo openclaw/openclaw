@@ -94,8 +94,30 @@ export type ClawHubResolvedArtifact =
       moderationState?: ClawHubArtifactModerationState | null;
     };
 export type ClawHubPackageArtifactResolverResponse = {
-  package?: { name?: string | null } | null;
-  version?: { version?: string | null } | string | null;
+  package?: {
+    name?: string | null;
+    displayName?: string | null;
+    family?: ClawHubPackageFamily | (string & {}) | null;
+  } | null;
+  version?:
+    | ({
+        version?: string | null;
+        createdAt?: number | null;
+        changelog?: string | null;
+        distTags?: string[];
+        files?: Array<{
+          path: string;
+          size?: number;
+          sha256: string;
+          contentType?: string;
+        }>;
+        sha256hash?: string | null;
+        compatibility?: ClawHubPackageCompatibility | null;
+        artifact?: ClawHubPackageArtifactSummary | null;
+        clawpack?: ClawHubPackageClawPackSummary | null;
+      } & Record<string, unknown>)
+    | string
+    | null;
   artifact?: ClawHubResolvedArtifact | null;
 };
 export type ClawHubPackageSecurityResponse = {
