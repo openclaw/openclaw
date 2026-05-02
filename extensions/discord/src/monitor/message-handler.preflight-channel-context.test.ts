@@ -9,7 +9,7 @@ describe("resolveDiscordPreflightChannelContext", () => {
       channelName: "\uC2E4\uD5D8",
       guildName: "Guild",
       guildInfo: null,
-      threadChannel: undefined,
+      threadChannel: null,
     });
 
     expect(context.configChannelSlug).toBe("");
