@@ -8,13 +8,13 @@ import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type ProviderAttributionVerification =
+type ProviderAttributionVerification =
   | "vendor-documented"
   | "vendor-hidden-api-spec"
   | "vendor-sdk-hook-only"
   | "internal-runtime";
 
-export type ProviderAttributionHook =
+type ProviderAttributionHook =
   | "request-headers"
   | "default-headers"
   | "user-agent-extra"
