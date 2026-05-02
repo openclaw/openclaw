@@ -496,15 +496,12 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/task-registry-control.runtime.js",
-        bundledDistPluginFile("acpx", "runtime-api.js"),
-        bundledDistPluginFile("acpx", "openclaw.plugin.json"),
-        bundledDistPluginFile("acpx", "package.json"),
-        bundledDistPluginFile("googlechat", "runtime-api.js"),
-        bundledDistPluginFile("googlechat", "openclaw.plugin.json"),
-        bundledDistPluginFile("googlechat", "package.json"),
-        bundledDistPluginFile("line", "runtime-api.js"),
-        bundledDistPluginFile("line", "openclaw.plugin.json"),
-        bundledDistPluginFile("line", "package.json"),
+        bundledDistPluginFile("slack", "runtime-api.js"),
+        bundledDistPluginFile("slack", "openclaw.plugin.json"),
+        bundledDistPluginFile("slack", "package.json"),
+        bundledDistPluginFile("telegram", "runtime-api.js"),
+        bundledDistPluginFile("telegram", "openclaw.plugin.json"),
+        bundledDistPluginFile("telegram", "package.json"),
       ]),
     );
   });
@@ -540,9 +537,8 @@ describe("collectMissingPackPaths", () => {
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
     expect(requiredBundledPluginPackPaths).toEqual(
       expect.arrayContaining([
-        bundledDistPluginFile("acpx", "runtime-api.js"),
-        bundledDistPluginFile("googlechat", "runtime-api.js"),
-        bundledDistPluginFile("line", "runtime-api.js"),
+        bundledDistPluginFile("slack", "runtime-api.js"),
+        bundledDistPluginFile("telegram", "runtime-api.js"),
       ]),
     );
   });
