@@ -331,4 +331,125 @@ describe("kimi tool-call markup wrapper", () => {
       thinking: { type: "enabled" },
     });
   });
+
+  it("adds blank reasoning_content to replayed assistant tool calls when thinking is enabled", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
+      messages: [
+        { role: "user", content: "Use the tool." },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Checking." },
+            {
+              type: "toolCall",
+              id: "tool_1",
+              name: "read",
+              arguments: { path: "/tmp/file.txt" },
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Already reasoned." }],
+          reasoning_content: "kept",
+          tool_calls: [
+            {
+              id: "tool_2",
+              type: "function",
+              function: { name: "read", arguments: "{}" },
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrapped = createKimiThinkingWrapper(baseStreamFn, "enabled");
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "enabled" },
+      messages: [
+        { role: "user", content: "Use the tool." },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Checking." },
+            {
+              type: "toolCall",
+              id: "tool_1",
+              name: "read",
+              arguments: { path: "/tmp/file.txt" },
+            },
+          ],
+          reasoning_content: "",
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Already reasoned." }],
+          reasoning_content: "kept",
+          tool_calls: [
+            {
+              id: "tool_2",
+              type: "function",
+              function: { name: "read", arguments: "{}" },
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("does not add reasoning_content to replayed assistant tool calls when thinking is disabled", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "tool_1",
+              name: "read",
+              arguments: { path: "/tmp/file.txt" },
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrapped = createKimiThinkingWrapper(baseStreamFn, "disabled");
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "disabled" },
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "tool_1",
+              name: "read",
+              arguments: { path: "/tmp/file.txt" },
+            },
+          ],
+        },
+      ],
+    });
+  });
 });
