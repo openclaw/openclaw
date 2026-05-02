@@ -420,4 +420,70 @@ describe("installed plugin index persistence", () => {
       plugins: [],
     });
   });
+
+  it("preserves ClawHub ClawPack source facts when refreshing the manifest cache", async () => {
+    const stateDir = makeTempDir();
+    const installPath = path.join(stateDir, "plugins", "clawpack-demo");
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          "clawpack-demo": {
+            source: "clawhub",
+            spec: "clawhub:clawpack-demo@2026.5.1-beta.2",
+            installPath,
+            version: "2026.5.1-beta.2",
+            integrity: "sha256-archive",
+            resolvedAt: "2026-05-01T00:00:00.000Z",
+            clawhubUrl: "https://clawhub.ai",
+            clawhubPackage: "clawpack-demo",
+            clawhubFamily: "code-plugin",
+            clawhubChannel: "official",
+            clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            clawpackSpecVersion: 1,
+            clawpackManifestSha256:
+              "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            clawpackSize: 4096,
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const index = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env: {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+        OPENCLAW_VERSION: "2026.4.25",
+        VITEST: "true",
+      },
+    });
+
+    const expected = {
+      installRecords: {
+        "clawpack-demo": {
+          source: "clawhub",
+          spec: "clawhub:clawpack-demo@2026.5.1-beta.2",
+          installPath,
+          version: "2026.5.1-beta.2",
+          integrity: "sha256-archive",
+          resolvedAt: "2026-05-01T00:00:00.000Z",
+          clawhubUrl: "https://clawhub.ai",
+          clawhubPackage: "clawpack-demo",
+          clawhubFamily: "code-plugin",
+          clawhubChannel: "official",
+          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256:
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          clawpackSize: 4096,
+        },
+      },
+      plugins: [],
+    };
+    expect(index).toMatchObject(expected);
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject(expected);
+  });
 });
