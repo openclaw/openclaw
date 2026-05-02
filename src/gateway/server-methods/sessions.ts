@@ -1444,7 +1444,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason: "patch",
     });
   },
-<<<<<<< HEAD
   "sessions.pluginPatch": async ({ params, respond, context, client, isWebchatConnect }) => {
     if (
       !assertValidParams(params, validateSessionsPluginPatchParams, "sessions.pluginPatch", respond)
