@@ -962,6 +962,19 @@
                 "pages": ["index", "start/showcase", "concepts/features"]
               },
               {
+                "group": "ZekeBot",
+                "pages": [
+                  "zekebot/index",
+                  "zekebot/getting-started",
+                  "zekebot/what-your-zekebot-can-do",
+                  "zekebot/available-tools",
+                  "zekebot/channels",
+                  "zekebot/memory-and-sessions",
+                  "zekebot/troubleshooting",
+                  "zekebot/changelog"
+                ]
+              },
+              {
                 "group": "First steps",
                 "pages": [
                   "start/getting-started",

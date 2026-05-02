@@ -40,6 +40,12 @@
       "file": "profiles",
       "summary": "Adds Sprout, Rambo internal, and external-client profile templates that preserve native Zeke tool visibility boundaries.",
       "docs": "profiles/sprout.json"
+    },
+    {
+      "story": "OCL-FORK-001/S11",
+      "file": "docs/zekebot",
+      "summary": "Adds user-facing ZekeBot platform docs for profiles, native tools, channels, memory/session boundaries, troubleshooting, and changelog.",
+      "docs": "docs/zekebot/index.md"
     }
   ]
 }

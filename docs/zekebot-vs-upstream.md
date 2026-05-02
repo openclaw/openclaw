@@ -40,3 +40,40 @@ S4 keeps those upstream pins rather than introducing a second pinning mechanism.
 ## Merge Guidance
 
 When cherry-picking upstream Dockerfile changes, compare the final `Dockerfile` against this page. If upstream changes conflict with a recorded ZekeBot difference, either preserve the ZekeBot behavior or update this page with the new decision and rollback path.
+
+## Native Zeke Plugin Differences
+
+ZekeBot bundles the `zeke` plugin under `extensions/zeke/`. The plugin registers native OpenClaw tools that forward to ZekeFlow authority APIs.
+
+The plugin must not write Zeke state directly. It does not own events, pending proposals, Cognee memory, signal rows, or context policy. Those remain ZekeFlow responsibilities.
+
+Initial native tools:
+
+- `ask_zeke_context`
+- `search_zeke_context`
+- `explain_zeke_context_route`
+- `read_zeke_source`
+- `read_repo_file`
+- `grep_repo`
+- `glob_repo`
+- `propose_signal`
+
+`create_signal` is backend-only and must not be exposed in a model-facing catalog.
+
+## Profile Differences
+
+ZekeBot carries profile templates under `profiles/`.
+
+| Profile           | Purpose                         | Internal Zeke tools      |
+| ----------------- | ------------------------------- | ------------------------ |
+| `sprout`          | Internal Chief of Staff runtime | Initial native Zeke set. |
+| `rambo-internal`  | Internal operational runtime    | Context subset only.     |
+| `external-client` | Future tenant/client baseline   | None.                    |
+
+Upstream merge reviews must check whether changes affect plugin loading, tool catalog projection, gateway tool invocation, profile parsing, hooks, or config reload behavior. If they do, the change is not a trivial cherry-pick.
+
+## Authority API Difference
+
+Native Zeke tools call ZekeFlow instead of executing Zeke work in the fork. Per-profile tokens bind runtime identity, and ZekeFlow derives caller/entity/profile server-side.
+
+Same-chat signal proposal approval also requires a signed operator reply path. Model-visible text alone is not authority.
