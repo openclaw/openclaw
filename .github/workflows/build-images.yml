@@ -105,7 +105,7 @@ jobs:
             image: ghcr.io/openzeke/zekebot
             cache_scope: zekebot-gateway
             build_args: |
-              OPENCLAW_EXTENSIONS=diagnostics-otel
+              OPENCLAW_EXTENSIONS=diagnostics-otel zeke
           - name: sandbox
             dockerfile: Dockerfile.sandbox
             image: ghcr.io/openzeke/zekebot-sandbox
