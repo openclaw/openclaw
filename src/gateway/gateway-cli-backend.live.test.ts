@@ -282,6 +282,19 @@ describeLive("gateway live (cli backend)", () => {
           port,
           auth: { mode: "token", token },
         },
+        models:
+          providerId === "codex-cli"
+            ? {
+                ...cfg.models,
+                providers: {
+                  ...cfg.models?.providers,
+                  openai: {
+                    ...cfg.models?.providers?.openai,
+                    timeoutSeconds: Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000),
+                  },
+                },
+              }
+            : cfg.models,
         agents: {
           ...cfg.agents,
           defaults: {
