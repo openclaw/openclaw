@@ -5,14 +5,34 @@ import type { GatewayConnectionHealthState, GatewayWsClient } from "./ws-types.j
 export const CONNECTION_PING_INTERVAL_MS = 5_000;
 // 4x stale tolerance: misses up to 3 pongs before reporting disconnected.
 export const CONNECTION_STALE_MS = CONNECTION_PING_INTERVAL_MS * 4;
+const MAX_PENDING_PING_TIMESTAMPS =
+  Math.ceil(CONNECTION_STALE_MS / CONNECTION_PING_INTERVAL_MS) + 1;
+
+function isFreshPingTimestamp(sentAt: number, now: number): boolean {
+  return sentAt <= now && now - sentAt <= CONNECTION_STALE_MS;
+}
+
+function prunePendingPingTimestamps(state: GatewayConnectionHealthState, now: number): number[] {
+  const pending =
+    state.pendingPingSentAtMs?.filter((sentAt) => isFreshPingTimestamp(sentAt, now)) ?? [];
+  if (pending.length > 0) {
+    state.pendingPingSentAtMs = pending.slice(-MAX_PENDING_PING_TIMESTAMPS);
+    return state.pendingPingSentAtMs;
+  }
+  delete state.pendingPingSentAtMs;
+  return [];
+}
 
 export function pingGatewayClient(client: GatewayWsClient, now = Date.now()): boolean {
   if (client.socket.readyState !== WebSocket.OPEN) {
     return false;
   }
-  client.connectionHealth.lastPingSentAtMs = now;
   try {
     client.socket.ping(String(now));
+    const pending = prunePendingPingTimestamps(client.connectionHealth, now);
+    pending.push(now);
+    client.connectionHealth.pendingPingSentAtMs = pending.slice(-MAX_PENDING_PING_TIMESTAMPS);
+    client.connectionHealth.lastPingSentAtMs = now;
     return true;
   } catch {
     return false;
@@ -29,7 +49,12 @@ export function recordConnectionPong(
   }
   // We only use pongs that echo our own numeric ping payload.
   const sentAt = Number(data.toString());
-  if (!Number.isFinite(sentAt) || sentAt !== client.connectionHealth.lastPingSentAtMs) {
+  if (!Number.isFinite(sentAt) || !isFreshPingTimestamp(sentAt, now)) {
+    return false;
+  }
+  const pending = prunePendingPingTimestamps(client.connectionHealth, now);
+  const tracked = sentAt === client.connectionHealth.lastPingSentAtMs || pending.includes(sentAt);
+  if (!tracked) {
     return false;
   }
 
@@ -38,6 +63,10 @@ export function recordConnectionPong(
   client.connectionHealth.rttMs =
     prev === undefined ? sample : Math.round(prev * 0.8 + sample * 0.2);
   client.connectionHealth.lastHeartbeatAtMs = now;
+  client.connectionHealth.pendingPingSentAtMs = pending.filter((value) => value !== sentAt);
+  if (client.connectionHealth.pendingPingSentAtMs.length === 0) {
+    delete client.connectionHealth.pendingPingSentAtMs;
+  }
   return true;
 }
 

@@ -31,6 +31,7 @@ function createClient(params: {
   readyState?: number;
   connectedAtMs?: number;
   lastPingSentAtMs?: number;
+  pendingPingSentAtMs?: number[];
   lastHeartbeatAtMs?: number;
   rttMs?: number;
 }): GatewayWsClient {
@@ -42,6 +43,9 @@ function createClient(params: {
       connectedAtMs: params.connectedAtMs ?? 1,
       ...(params.lastPingSentAtMs !== undefined
         ? { lastPingSentAtMs: params.lastPingSentAtMs }
+        : {}),
+      ...(params.pendingPingSentAtMs !== undefined
+        ? { pendingPingSentAtMs: params.pendingPingSentAtMs }
         : {}),
       ...(params.lastHeartbeatAtMs !== undefined
         ? { lastHeartbeatAtMs: params.lastHeartbeatAtMs }
@@ -126,6 +130,34 @@ describe("connection health", () => {
       rttMs: 60,
       lastHeartbeatAtMs: 1_100,
     });
+  });
+
+  it("accepts delayed pong samples within the stale window", () => {
+    const client = createClient({
+      lastPingSentAtMs: 5_000,
+      pendingPingSentAtMs: [0, 5_000],
+    });
+
+    expect(recordConnectionPong(client, Buffer.from("0"), 6_000)).toBe(true);
+
+    expect(client.connectionHealth).toMatchObject({
+      lastHeartbeatAtMs: 6_000,
+      rttMs: 6_000,
+      pendingPingSentAtMs: [5_000],
+    });
+  });
+
+  it("rejects delayed pong samples outside the stale window", () => {
+    const client = createClient({
+      lastPingSentAtMs: 10_000,
+      pendingPingSentAtMs: [0, 10_000],
+    });
+
+    expect(recordConnectionPong(client, Buffer.from("0"), CONNECTION_STALE_MS + 1)).toBe(false);
+
+    expect(client.connectionHealth.lastHeartbeatAtMs).toBeUndefined();
+    expect(client.connectionHealth.rttMs).toBeUndefined();
+    expect(client.connectionHealth.pendingPingSentAtMs).toEqual([0, 10_000]);
   });
 
   it("ignores pongs that do not echo the latest numeric ping payload", () => {

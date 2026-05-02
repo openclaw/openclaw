@@ -4,6 +4,7 @@ import type { ConnectParams } from "../protocol/index.js";
 export type GatewayConnectionHealthState = {
   connectedAtMs: number;
   lastPingSentAtMs?: number;
+  pendingPingSentAtMs?: number[];
   lastHeartbeatAtMs?: number;
   rttMs?: number;
 };
