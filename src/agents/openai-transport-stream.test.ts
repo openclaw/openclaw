@@ -4068,12 +4068,96 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+      zaiThinkingDisabled: true,
+    });
 
     expect(output.content.length).toBe(1);
     const block = output.content[0] as { type: string; text: string };
     expect(block.type).toBe("text");
     expect(block.text).toBe("This is the actual user-facing response from GLM-5.");
+  });
+
+  it("keeps Z.AI reasoning_content as hidden thinking when thinking is enabled", async () => {
+    const model = {
+      id: "glm-5-turbo",
+      name: "GLM-5-Turbo",
+      api: "openai-completions",
+      provider: "zai",
+      baseUrl: "",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-zai-think",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "",
+              reasoning_content: "This is preserved Z.AI thinking content.",
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-zai-think",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: { content: "Visible reply." },
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    // thinking is enabled (zaiThinkingDisabled not set) — reasoning_content stays hidden
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content.length).toBe(2);
+    const thinkingBlock = output.content[0] as { type: string; thinking: string };
+    const textBlock = output.content[1] as { type: string; text: string };
+    expect(thinkingBlock.type).toBe("thinking");
+    expect(thinkingBlock.thinking).toBe("This is preserved Z.AI thinking content.");
+    expect(textBlock.type).toBe("text");
+    expect(textBlock.text).toBe("Visible reply.");
   });
 
   it("fails fast when post-tool-call buffering grows beyond the safety cap", async () => {

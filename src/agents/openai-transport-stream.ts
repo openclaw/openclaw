@@ -1289,7 +1289,13 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           buildOpenAISdkRequestOptions(model, options?.signal),
         )) as unknown as AsyncIterable<ChatCompletionChunk>;
         stream.push({ type: "start", partial: output as never });
-        await processOpenAICompletionsStream(responseStream, output, model, stream);
+        const thinkingParam = params.thinking;
+        const zaiThinkingDisabled =
+          thinkingParam instanceof Object &&
+          (thinkingParam as Record<string, unknown>).type === "disabled";
+        await processOpenAICompletionsStream(responseStream, output, model, stream, {
+          zaiThinkingDisabled,
+        });
         if (options?.signal?.aborted) {
           throw new Error("Request was aborted");
         }
@@ -1311,6 +1317,7 @@ async function processOpenAICompletionsStream(
   output: MutableAssistantOutput,
   model: Model<Api>,
   stream: { push(event: unknown): void },
+  opts?: { zaiThinkingDisabled?: boolean },
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
@@ -1468,7 +1475,9 @@ async function processOpenAICompletionsStream(
     const reasoningDeltas = getCompletionsReasoningDeltas(
       choice.delta as Record<string, unknown>,
       compat.visibleReasoningDetailTypes,
-      compat.thinkingFormat,
+      compat.thinkingFormat === "zai" && opts?.zaiThinkingDisabled === true
+        ? "zai-text"
+        : compat.thinkingFormat,
     );
     for (const reasoningDelta of reasoningDeltas) {
       if (currentBlock?.type === "toolCall") {
@@ -1610,9 +1619,8 @@ function getCompletionsReasoningDeltas(
     for (const field of reasoningFields) {
       const value = delta[field];
       if (typeof value === "string" && value.length > 0) {
-        // Z.AI GLM-5 reasoning models always put their visible response in reasoning_content
-        // even when thinking is disabled. Route to text so the reply reaches the user.
-        const kind = thinkingFormat === "zai" ? "text" : "thinking";
+        // "zai-text" signals Z.AI with thinking disabled: reasoning_content is the visible reply.
+        const kind = thinkingFormat === "zai-text" ? "text" : "thinking";
         pushDelta(
           kind === "text" ? { kind, text: value } : { kind, signature: field, text: value },
         );
