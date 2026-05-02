@@ -100,6 +100,7 @@ export type PluginHookName =
   | "gateway_stop"
   | "heartbeat_prompt_contribution"
   | "cron_changed"
+  | "substitute_template"
   | "before_dispatch"
   | "reply_dispatch"
   | "before_install";
@@ -137,6 +138,7 @@ export const PLUGIN_HOOK_NAMES = [
   "gateway_stop",
   "heartbeat_prompt_contribution",
   "cron_changed",
+  "substitute_template",
   "before_dispatch",
   "reply_dispatch",
   "before_install",
@@ -667,6 +669,17 @@ export type PluginHookCronChangedEvent = {
   provider?: string;
 };
 
+export type PluginHookSubstituteTemplateEvent = {
+  sourcePath: string;
+  content: string;
+};
+
+export type PluginHookSubstituteTemplateContext = Record<string, never>;
+
+export type PluginHookSubstituteTemplateResult = {
+  content?: string;
+};
+
 export type PluginHookGatewayCronCreateInput = {
   name: string;
   description: string;
@@ -929,6 +942,13 @@ export type PluginHookHandlerMap = {
     event: PluginHookCronChangedEvent,
     ctx: PluginHookGatewayContext,
   ) => Promise<void> | void;
+  substitute_template: (
+    event: PluginHookSubstituteTemplateEvent,
+    ctx: PluginHookSubstituteTemplateContext,
+  ) =>
+    | Promise<PluginHookSubstituteTemplateResult | void>
+    | PluginHookSubstituteTemplateResult
+    | void;
   before_install: (
     event: PluginHookBeforeInstallEvent,
     ctx: PluginHookBeforeInstallContext,

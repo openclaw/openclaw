@@ -119,6 +119,7 @@ observation-only.
 
 - `gateway_start` / `gateway_stop` — start or stop plugin-owned services with the Gateway
 - `cron_changed` — observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
+- **`substitute_template`** — replace workspace template content before OpenClaw writes it
 - **`before_install`** — inspect skill or plugin install scans and optionally block
 
 ## Tool call policy
@@ -338,6 +339,13 @@ events still carry the deleted job snapshot so external schedulers can
 reconcile state. Use `ctx.getCron?.()` and `ctx.config` from the runtime
 context when syncing external wake schedulers, and keep OpenClaw as the
 source of truth for due checks and execution.
+
+`substitute_template` fires when OpenClaw loads a workspace `.md` template from
+`docs/reference/templates`, such as `AGENTS.md`, `SOUL.md`, `TOOLS.md`,
+`IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`. The event includes
+`sourcePath` and `content`; `content` is the loaded template body after front
+matter stripping. Return `{ content }` to replace the template content OpenClaw
+writes to disk. The transformed content is cached by template name.
 
 ## Upcoming deprecations
 

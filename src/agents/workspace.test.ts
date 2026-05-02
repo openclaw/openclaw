@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import type { PluginHookSubstituteTemplateEvent } from "../plugins/hook-types.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -184,6 +185,56 @@ describe("ensureAgentWorkspace", () => {
         code: "ENOENT",
       });
     }
+  });
+
+  it("runs substitute_template before newly seeded template files are written", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    const events: PluginHookSubstituteTemplateEvent[] = [];
+    const hookRunner = {
+      hasHooks: (hookName: string) => hookName === "substitute_template",
+      runSubstituteTemplate: async (event: PluginHookSubstituteTemplateEvent) => {
+        events.push(event);
+        if (path.basename(event.sourcePath) === DEFAULT_USER_FILENAME) {
+          return { content: "# USER.md\n\nHook-customized user profile\n" };
+        }
+        return undefined;
+      },
+    };
+
+    await ensureAgentWorkspace({
+      dir: tempDir,
+      ensureBootstrapFiles: true,
+      hookRunner,
+    });
+
+    expect(events.map((event) => path.basename(event.sourcePath))).toEqual([
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_SOUL_FILENAME,
+      DEFAULT_TOOLS_FILENAME,
+      DEFAULT_IDENTITY_FILENAME,
+      DEFAULT_USER_FILENAME,
+      DEFAULT_HEARTBEAT_FILENAME,
+      DEFAULT_BOOTSTRAP_FILENAME,
+    ]);
+    const userEvent = events.find(
+      (event) => path.basename(event.sourcePath) === DEFAULT_USER_FILENAME,
+    );
+    expect(userEvent).toMatchObject({
+      sourcePath: path.resolve("docs", "reference", "templates", DEFAULT_USER_FILENAME),
+    });
+    expect(userEvent?.content).toContain("# USER.md");
+    await expect(fs.readFile(path.join(tempDir, DEFAULT_USER_FILENAME), "utf-8")).resolves.toBe(
+      "# USER.md\n\nHook-customized user profile\n",
+    );
+
+    events.length = 0;
+    await ensureAgentWorkspace({
+      dir: tempDir,
+      ensureBootstrapFiles: true,
+      hookRunner,
+    });
+
+    expect(events).toEqual([]);
   });
 
   it("preserves legacy setup detection when skipped profile files already exist", async () => {

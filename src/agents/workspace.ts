@@ -6,6 +6,8 @@ import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
 } from "../memory/root-memory-files.js";
+import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { HookRunner } from "../plugins/hooks.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { readStringValue } from "../shared/string-coerce.js";
@@ -32,6 +34,8 @@ const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_USER_FILENAME,
 ] as const;
+
+type TemplateSubstitutionHookRunner = Pick<HookRunner, "hasHooks" | "runSubstituteTemplate">;
 
 const workspaceTemplateCache = new Map<string, Promise<string>>();
 let gitAvailabilityPromise: Promise<boolean> | null = null;
@@ -99,8 +103,13 @@ function stripFrontMatter(content: string): string {
   return trimmed;
 }
 
-async function loadTemplate(name: string): Promise<string> {
-  const cached = workspaceTemplateCache.get(name);
+async function loadTemplate(
+  name: string,
+  hookRunner?: TemplateSubstitutionHookRunner,
+): Promise<string> {
+  const hasSubstitutionHook = hookRunner?.hasHooks("substitute_template") === true;
+  const cacheKey = hasSubstitutionHook ? `${name}\0substitute_template` : name;
+  const cached = workspaceTemplateCache.get(cacheKey);
   if (cached) {
     return cached;
   }
@@ -109,8 +118,20 @@ async function loadTemplate(name: string): Promise<string> {
     const templateDir = await resolveWorkspaceTemplateDir();
     const templatePath = path.join(templateDir, name);
     try {
-      const content = await fs.readFile(templatePath, "utf-8");
-      return stripFrontMatter(content);
+      const content = stripFrontMatter(await fs.readFile(templatePath, "utf-8"));
+
+      if (!hasSubstitutionHook) {
+        return content;
+      }
+
+      const hookResult = await hookRunner.runSubstituteTemplate(
+        {
+          sourcePath: templatePath,
+          content: content,
+        },
+        {},
+      );
+      return hookResult?.content ?? content;
     } catch {
       throw new Error(
         `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,
@@ -118,11 +139,11 @@ async function loadTemplate(name: string): Promise<string> {
     }
   })();
 
-  workspaceTemplateCache.set(name, pending);
+  workspaceTemplateCache.set(cacheKey, pending);
   try {
     return await pending;
   } catch (error) {
-    workspaceTemplateCache.delete(name);
+    workspaceTemplateCache.delete(cacheKey);
     throw error;
   }
 }
@@ -480,6 +501,7 @@ export async function ensureAgentWorkspace(params?: {
    * Required workspace setup such as AGENTS.md and TOOLS.md still runs.
    */
   skipOptionalBootstrapFiles?: string[];
+  hookRunner?: TemplateSubstitutionHookRunner | null;
 }): Promise<{
   dir: string;
   agentsPath?: string;
@@ -507,6 +529,7 @@ export async function ensureAgentWorkspace(params?: {
   const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   const statePath = resolveWorkspaceStatePath(dir);
+  const hookRunner = params?.hookRunner ?? getGlobalHookRunner();
 
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
@@ -526,12 +549,17 @@ export async function ensureAgentWorkspace(params?: {
     return existing.every((v) => !v) && !hasCanonicalRootMemory;
   })();
 
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
-  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  const profileConfiguredBeforeSeeding = await workspaceProfileLooksConfigured({
+    dir,
+    includeGitEvidence: true,
+  });
+
+  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME, hookRunner ?? undefined);
+  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME, hookRunner ?? undefined);
+  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME, hookRunner ?? undefined);
+  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME, hookRunner ?? undefined);
+  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME, hookRunner ?? undefined);
+  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME, hookRunner ?? undefined);
   const skipOptionalBootstrapFiles = new Set(params?.skipOptionalBootstrapFiles ?? []);
   const shouldWriteBootstrapFile = (fileName: string): boolean =>
     !OPTIONAL_BOOTSTRAP_FILENAMES.has(fileName) || !skipOptionalBootstrapFiles.has(fileName);
@@ -585,15 +613,13 @@ export async function ensureAgentWorkspace(params?: {
     // Legacy migration path: if USER/IDENTITY diverged from templates, or if user-content
     // indicators exist, treat setup as complete and avoid recreating BOOTSTRAP for
     // already-configured workspaces.
-    if (
-      await workspaceProfileLooksConfigured({
-        dir,
-        includeGitEvidence: true,
-      })
-    ) {
+    if (profileConfiguredBeforeSeeding) {
       markState({ setupCompletedAt: nowIso() });
     } else {
-      const bootstrapTemplate = await loadTemplate(DEFAULT_BOOTSTRAP_FILENAME);
+      const bootstrapTemplate = await loadTemplate(
+        DEFAULT_BOOTSTRAP_FILENAME,
+        hookRunner ?? undefined,
+      );
       const wroteBootstrap = await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
       if (!wroteBootstrap) {
         bootstrapExists = await fileExists(bootstrapPath);

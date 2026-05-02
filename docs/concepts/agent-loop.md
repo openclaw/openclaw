@@ -102,6 +102,7 @@ These run inside the agent loop or gateway pipeline:
 - **`message_received` / `message_sending` / `message_sent`**: inbound + outbound message hooks.
 - **`session_start` / `session_end`**: session lifecycle boundaries.
 - **`gateway_start` / `gateway_stop`**: gateway lifecycle events.
+- **`substitute_template`**: replaces bundled workspace template content before it is written.
 
 Hook decision rules for outbound/tool guards:
 

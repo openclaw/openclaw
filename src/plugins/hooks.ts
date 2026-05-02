@@ -52,6 +52,9 @@ import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookSubstituteTemplateContext,
+  PluginHookSubstituteTemplateEvent,
+  PluginHookSubstituteTemplateResult,
   PluginHookMessageContext,
   PluginHookMessageReceivedEvent,
   PluginHookMessageSendingEvent,
@@ -141,6 +144,9 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookSubstituteTemplateContext,
+  PluginHookSubstituteTemplateEvent,
+  PluginHookSubstituteTemplateResult,
   PluginHookBeforeInstallContext,
   PluginHookBeforeInstallEvent,
   PluginHookBeforeInstallResult,
@@ -1299,6 +1305,22 @@ export function createHookRunner(
     return runVoidHook("cron_changed", event, ctx);
   }
 
+  async function runSubstituteTemplate(
+    event: PluginHookSubstituteTemplateEvent,
+    ctx: PluginHookSubstituteTemplateContext,
+  ): Promise<PluginHookSubstituteTemplateResult | undefined> {
+    return runModifyingHook<"substitute_template", PluginHookSubstituteTemplateResult>(
+      "substitute_template",
+      event,
+      ctx,
+      {
+        mergeResults: (acc, next) => ({
+          content: firstDefined(acc?.content, next.content),
+        }),
+      },
+    );
+  }
+
   // =========================================================================
   // Skill Install Hooks
   // =========================================================================
@@ -1395,6 +1417,7 @@ export function createHookRunner(
     runGatewayStop,
     runHeartbeatPromptContribution,
     runCronChanged,
+    runSubstituteTemplate,
     // Install hooks
     runBeforeInstall,
     // Utility
