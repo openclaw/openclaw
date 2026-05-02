@@ -481,7 +481,7 @@ console.log(JSON.stringify(result));
 
     expect(script).toContain('guestPowerShellBackground(\n      "agent-turn"');
     expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S");
-    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 1500");
+    expect(script).toContain("OPENCLAW_PARALLELS_WINDOWS_AGENT_TIMEOUT_S || 2100");
     expect(script).toContain("windowsAgentTurnConfigPatchScript(this.auth.modelId)");
     expect(script).toContain("--model");
     expect(script).toContain('resolveParallelsModelTimeoutSeconds("windows")');
@@ -491,6 +491,28 @@ console.log(JSON.stringify(result));
     expect(script).not.toContain("$config.models.providers");
     expect(script).not.toContain("timeoutSeconds = 300");
     expect(script).toContain('"$sessionId.jsonl"');
+  });
+
+  it("gives GPT-5.5 enough Parallels model time on slower desktop guests", () => {
+    const source = `
+import { resolveParallelsModelTimeoutSeconds } from "./${TS_PATHS.common}";
+console.log(JSON.stringify({
+  macos: resolveParallelsModelTimeoutSeconds("macos"),
+  windows: resolveParallelsModelTimeoutSeconds("windows"),
+  linux: resolveParallelsModelTimeoutSeconds("linux"),
+}));
+`;
+    expect(JSON.parse(runTsEval(source))).toEqual({
+      linux: 600,
+      macos: 900,
+      windows: 900,
+    });
+    expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
+      '--timeout ${resolveParallelsModelTimeoutSeconds("macos")}',
+    );
+    expect(readFileSync(TS_PATHS.linux, "utf8")).toContain(
+      '--timeout ${resolveParallelsModelTimeoutSeconds("linux")}',
+    );
   });
 
   it("waits through transient Windows restoring state before VM operations", () => {

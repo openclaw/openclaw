@@ -132,6 +132,8 @@ Telegraph style. Root rules only. Read scoped `AGENTS.md` before subtree work.
 - Hot tests: avoid per-test `vi.resetModules()` + heavy imports. Measure with `pnpm test:perf:imports <file>` / `pnpm test:perf:hotspots --limit N`.
 - Seam depth: pure helper/contract unit tests; one integration smoke per boundary.
 - Mock expensive seams directly: scanners, manifests, registries, fs crawls, provider SDKs, network/process launch.
+- Plugin tests mocking `plugin-registry` need both manifest-registry and metadata-snapshot exports; missing `loadPluginRegistrySnapshotWithMetadata` masks install/slot behavior.
+- Thread-bound subagent tests that do not create a requester transcript should set `context: "isolated"` so fork-context validation does not hide lifecycle cleanup paths.
 - Prefer injection; if module mocking, mock narrow local `*.runtime.ts`, not broad barrels or `openclaw/plugin-sdk/*`.
 - Share fixtures/builders; delete duplicate assertions; assert behavior that can regress here.
 - Do not edit baseline/inventory/ignore/snapshot/expected-failure files to silence checks without explicit approval.

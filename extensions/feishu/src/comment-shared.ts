@@ -64,7 +64,7 @@ export function formatFeishuApiError(
   });
 }
 
-export function formatFeishuApiFailure(
+function formatFeishuApiFailure(
   error: unknown,
   errorPrefix: string,
   options: {

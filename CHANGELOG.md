@@ -9,6 +9,8 @@ Docs: https://docs.openclaw.ai
 - Tools: add a platform-level tool descriptor planner for descriptor-first visibility, generic availability checks, and executor references. Thanks @shakkernerd.
 - Docs/Codex: clarify that ChatGPT/Codex subscription setups should use `openai/gpt-*` with `agentRuntime.id: "codex"` for native Codex runtime, while `openai-codex/*` remains the PI OAuth route. Thanks @pashpashpash.
 - Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.
+- Plugins/beta: externalize ACPX behind the official `@openclaw/acpx` package so packaged installs keep ACP harness adapter binaries out of core until the ACP backend is installed. Thanks @vincentkoc.
+- Plugins/beta: externalize diagnostics OpenTelemetry behind the official `@openclaw/diagnostics-otel` package so packaged installs keep the OTEL dependency stack out of core until the plugin is installed. Thanks @vincentkoc.
 - Plugins/beta: prepare Google Chat, LINE, Matrix, and Mattermost for `2026.5.1-beta.2` npm and ClawHub publishing, and keep publishable plugin dist trees out of the core npm package. Thanks @vincentkoc.
 - Plugins/beta: prepare BlueBubbles, diagnostics Prometheus, Google Meet, Nextcloud Talk, Nostr, Zalo, and Zalo Personal for `2026.5.1-beta.2` npm and ClawHub publishing. Thanks @vincentkoc.
 - Plugins/beta: prepare diagnostics OpenTelemetry, Discord, Diffs, Lobster, Memory LanceDB, Microsoft Teams, QQ Bot, Voice Call, and WhatsApp for `2026.5.1-beta.1` npm and ClawHub publishing. Thanks @vincentkoc.
@@ -28,8 +30,19 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/diagnostics: include a bounded redacted startup error message in stability bundles, so crash-loop reports identify the failing plugin or contract without exposing secrets. Refs #75797. Thanks @ymebosma.
+- Gateway/pricing: abort in-flight model pricing catalog fetches when Gateway shutdown stops the refresh loop, and avoid post-stop cache writes or refresh timers. Fixes #72208. Thanks @rzcq.
+- Control UI/Talk: allow the OpenAI Realtime WebRTC offer endpoint through the Control UI CSP, configure browser sessions with explicit VAD/transcription input settings, and surface OpenAI realtime error/lifecycle events instead of leaving Talk stuck as live with no diagnostic. Fixes #73427.
+- Plugins: clarify config-selected duplicate plugin override diagnostics and document manifest schema updates for bundled-plugin forks. Fixes #8582. Thanks @sachah.
+- Providers/OpenAI: resolve `keychain:<service>:<account>` `OPENAI_API_KEY` refs before creating OpenAI Realtime browser sessions or voice bridges, with a bounded cached Keychain lookup. Fixes #72120. Thanks @ctbritt.
 - Discord/gateway: reconnect when the gateway socket closes while waiting for the shared IDENTIFY concurrency window, instead of silently skipping IDENTIFY and leaving the bot online but unresponsive. Fixes #74617. Thanks @zeeskdr-ai.
+- Voice Call: add `sessionScope: "per-call"` for fresh per-call agent memory while preserving the default per-phone caller history. Fixes #45280. Thanks @pondcountry.
+- Music generation: raise too-small tool timeouts to the provider-safe 10-second floor and collapse cascading abort fallback errors into a clearer root-cause summary. Thanks @shakkernerd.
 - Telegram/startup: use the existing `getMe` request guard for the gateway bot probe instead of a fixed 2.5-second budget, and honor higher `timeoutSeconds` configs for slow Telegram API paths. Fixes #75783. Thanks @tankotan.
+- Telegram/models: make model picker confirmations say selections are session-scoped and do not change the agent's persistent default. Fixes #75965. Thanks @sd1114820.
+- Control UI/slash commands: keep fallback command metadata on a browser-safe registry path, so provider thinking runtime imports cannot blank the Web UI with `process is not defined`. Fixes #75987. Thanks @novkien.
+- Heartbeat/Discord: keep async exec completion events out of the generic `System (untrusted)` prompt block and let the dedicated exec heartbeat prompt handle them, so Discord no longer receives raw exec failure tails as separate system-style messages. Fixes #66366. Thanks @Promee-ThaBossHoss.
+- Channels: strip plain-text MiniMax and XML tool-call scaffolding from shared user-facing reply sanitization, so messaging channels do not deliver raw model tool syntax when a provider emits it as text instead of structured tool calls. Fixes #62820. Thanks @canh0chua.
 - Infer/media: report missing image-understanding and audio-transcription provider configuration for `image describe`, `image describe-many`, and `audio transcribe` instead of blaming the input path when no provider is available. Fixes #73569 and supersedes #73593, #74288, and #74495. Thanks @bittoby, @tmimmanuel, @Linux2010, and @vyctorbrzezowski.
 - Docs/health: clarify that session listing surfaces stored conversation rows rather than Discord/channel socket liveness, and point connectivity checks at channel status and health probes. Fixes #70420. Thanks @ashersoutherncities-art and @martingarramon.
 - WhatsApp/Cron: keep DM pairing-store approvals out of implicit cron and heartbeat recipient fallback, so scheduled automation only uses explicit targets, active configured recipients, or configured `allowFrom` entries. Fixes #62339. Thanks @kelvinisly-collab.
@@ -44,6 +57,8 @@ Docs: https://docs.openclaw.ai
 - Web search/Brave: add `plugins.entries.brave.config.webSearch.baseUrl` for Brave-compatible proxies, including endpoint-aware cache keys for both web and LLM Context modes. Fixes #19075. Thanks @jkoprax and @vishnukool.
 - Web search/config: validate explicit `tools.web.search.provider` values against bundled and installed plugin manifests, while warning for stale third-party plugin config. Fixes #53092. Thanks @TinyTb.
 - Web search/SearXNG: retry empty non-general category searches once with the general category, so unsupported category engines do not return empty results when general search has matches. Fixes #73552. Thanks @Loukky.
+- CLI/message: skip gateway-stop hooks for read-only `message read` and bound stop-hook shutdown for other message actions, so one-shot Discord reads cannot hang behind plugin lifecycle cleanup.
+- Plugins/web-provider: cache repeated bundled web search and web fetch provider registry loads by default while preserving explicit cache opt-outs. Supersedes #75992. Thanks @DmitryPogodaev.
 - Agents/sandbox: preserve existing workspace file modes when sandbox edits atomically replace files, so 0644 files do not collapse to 0600 after Write/Edit/apply_patch. Fixes #44077. Thanks @patosullivan.
 - Agents/models: keep legacy CLI runtime model refs such as `claude-cli/*` in the configured allowlist after canonical runtime migration, so cron `payload.model` overrides keep working. Fixes #75753. Thanks @RyanSandoval.
 - Codex/app-server: restart the shared Codex app-server client once when it closes during startup thread resume, preserving the existing thread binding instead of retrying `thread/start` on a closed client. Thanks @vincentkoc.
@@ -460,6 +475,7 @@ Docs: https://docs.openclaw.ai
 - Agents/output: strip internal `[tool calls omitted]` replay placeholders from user-facing replies while preserving visible reply whitespace. Fixes #74573. Thanks @blaspat.
 - Providers/Google Vertex: route authorized_user ADC credentials through OpenClaw's REST transport so Docker installs using gcloud application-default credentials no longer crash in the Google SDK before requests are sent. Fixes #74628. Thanks @frankhal2001-design.
 - ACP/resolver: fall through to thread-bound session resolution when an explicit `--session` token cannot be resolved while preserving the bad-token diagnostic when no thread binding exists, so Discord slash commands that auto-fill the current thread ID as the positional ACP target no longer return "Unable to resolve session target" errors. Fixes #66299. Thanks @hclsys, @kindomLee, and @martingarramon.
+- macOS/Talk: route remote and custom Talk providers through Gateway `talk.speak` before falling back to the system voice, so configured providers such as OpenAI are no longer treated as local-voice-only. (#74645) Thanks @Fuma2013.
 - Agents/sessions: emit a terminal lifecycle backstop when embedded timeout/error turns return without `agent_end`, so Gateway sessions no longer stay stuck in `running` after failover surfaces a timeout. Fixes #74607. Thanks @millerc79.
 - Gateway/diagnostics: include stuck-session reason hints and recovery skip causes in warnings, so operators can tell whether a lane is waiting on active work, queued work, or stale bookkeeping. Thanks @vincentkoc.
 - Providers/DeepSeek: expose native DeepSeek V4 `xhigh` and `max` thinking levels through the provider `resolveThinkingProfile` hook so `/think xhigh|max` applies the intended effort instead of falling back to base levels. (#73008) Thanks @ai-hpc.

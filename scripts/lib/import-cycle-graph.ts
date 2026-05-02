@@ -7,7 +7,7 @@ type SourceFileCollectionOptions = {
   shouldSkipRepoPath?: (repoPath: string) => boolean;
 };
 
-export function normalizeRepoPath(filePath: string, repoRoot: string): string {
+function normalizeRepoPath(filePath: string, repoRoot: string): string {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
 

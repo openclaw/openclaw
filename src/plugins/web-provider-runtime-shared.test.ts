@@ -231,4 +231,132 @@ describe("web-provider-runtime-shared", () => {
     });
     expect(mocks.loadOpenClawPlugins).not.toHaveBeenCalled();
   });
+
+  it("caches runtime web provider plugin loads by default", () => {
+    const loadedRegistry = { source: "loaded" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: {},
+        onlyPluginIds: ["brave"],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(mocks.resolveCompatibleRuntimePluginRegistry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: true,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: true,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+  });
+
+  it("keeps explicit runtime web provider cache opt-outs", () => {
+    const loadedRegistry = { source: "loaded" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+
+    resolvePluginWebProviders(
+      {
+        cache: false,
+        config: {},
+        onlyPluginIds: ["brave"],
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders,
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: false,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+  });
+
+  it("caches setup web provider plugin loads by default", () => {
+    const loadedRegistry = { source: "setup" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+
+    const providers = resolvePluginWebProviders(
+      {
+        config: {},
+        mode: "setup",
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders,
+        resolveBundledPublicArtifactProviders: () => null,
+      },
+    );
+
+    expect(providers).toEqual(["provider"]);
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: true,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+  });
+
+  it("keeps explicit setup web provider cache opt-outs", () => {
+    const loadedRegistry = { source: "setup" };
+    const mapRegistryProviders = vi.fn(() => ["provider"]);
+    mocks.loadOpenClawPlugins.mockReturnValue(loadedRegistry as never);
+
+    resolvePluginWebProviders(
+      {
+        cache: false,
+        config: {},
+        mode: "setup",
+      },
+      {
+        resolveBundledResolutionConfig: () => ({
+          config: {},
+          activationSourceConfig: {},
+          autoEnabledReasons: {},
+        }),
+        resolveCandidatePluginIds: () => ["brave"],
+        mapRegistryProviders,
+        resolveBundledPublicArtifactProviders: () => null,
+      },
+    );
+
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cache: false,
+        onlyPluginIds: ["brave"],
+      }),
+    );
+  });
 });

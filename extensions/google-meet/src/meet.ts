@@ -454,7 +454,7 @@ export async function endGoogleMeetActiveConference(params: {
   }
 }
 
-export async function fetchGoogleMeetConferenceRecord(params: {
+async function fetchGoogleMeetConferenceRecord(params: {
   accessToken: string;
   conferenceRecord: string;
 }): Promise<GoogleMeetConferenceRecord> {

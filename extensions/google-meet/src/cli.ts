@@ -1053,7 +1053,7 @@ function renderTranscriptMarkdown(result: GoogleMeetArtifactsResult): string {
   return `${lines.join("\n")}\n`;
 }
 
-export function collectGoogleMeetArtifactWarnings(
+function collectGoogleMeetArtifactWarnings(
   result: GoogleMeetArtifactsResult,
 ): GoogleMeetExportWarning[] {
   const warnings: GoogleMeetExportWarning[] = [];
