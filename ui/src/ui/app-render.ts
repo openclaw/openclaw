@@ -2443,6 +2443,7 @@ export function renderApp(state: AppViewState) {
                 onCallParamsChange: (next) => (state.debugCallParams = next),
                 onRefresh: () => loadDebug(state),
                 onCall: () => callDebugMethod(state),
+                onEventLogScroll: (event) => state.handleDebugEventLogScroll(event),
               }),
             )
           : nothing}

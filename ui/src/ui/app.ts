@@ -39,6 +39,7 @@ import { renderApp } from "./app-render.ts";
 import {
   exportLogs as exportLogsInternal,
   handleChatScroll as handleChatScrollInternal,
+  handleDebugEventLogScroll as handleDebugEventLogScrollInternal,
   handleLogsScroll as handleLogsScrollInternal,
   resetChatScroll as resetChatScrollInternal,
   scheduleChatScroll as scheduleChatScrollInternal,
@@ -553,6 +554,7 @@ export class OpenClawApp extends LitElement {
   @state() logsLimit = 500;
   @state() logsMaxBytes = 250_000;
   @state() logsAtBottom = true;
+  @state() debugEventLogAtBottom = true;
 
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
@@ -564,6 +566,7 @@ export class OpenClawApp extends LitElement {
   private logsPollInterval: number | null = null;
   private debugPollInterval: number | null = null;
   private logsScrollFrame: number | null = null;
+  private debugEventLogScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
   refreshSessionsAfterChat = new Set<string>();
@@ -684,6 +687,13 @@ export class OpenClawApp extends LitElement {
   handleLogsScroll(event: Event) {
     handleLogsScrollInternal(
       this as unknown as Parameters<typeof handleLogsScrollInternal>[0],
+      event,
+    );
+  }
+
+  handleDebugEventLogScroll(event: Event) {
+    handleDebugEventLogScrollInternal(
+      this as unknown as Parameters<typeof handleDebugEventLogScrollInternal>[0],
       event,
     );
   }

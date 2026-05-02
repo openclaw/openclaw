@@ -13,7 +13,9 @@ export function renderOverviewEventLog(props: OverviewEventLogProps) {
     return nothing;
   }
 
-  const visible = props.events.slice(0, 20);
+  // Keep overview focused on recent activity while preserving stable append order
+  // in the shared event log buffer.
+  const visible = props.events.slice(-20).toReversed();
 
   return html`
     <details class="card ov-event-log" open>
