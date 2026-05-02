@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -239,6 +240,114 @@ describe("sessionsCleanupCommand", () => {
     expect(payload.beforeCount).toBe(1);
     expect(payload.afterCount).toBe(0);
     expect(payload.missing).toBe(1);
+  });
+
+  it("keeps sessions when a stale stored transcript path falls back to a live canonical transcript", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      live: {
+        sessionId: "live-transcript",
+        updatedAt: 1,
+        sessionFile: "/missing/live-transcript.jsonl",
+      },
+    });
+    mocks.resolveSessionFilePath.mockImplementation(
+      (sessionId: string, entry?: { sessionFile?: string }) =>
+        entry?.sessionFile?.trim()
+          ? `/missing/${sessionId}.jsonl`
+          : `/canonical/${sessionId}.jsonl`,
+    );
+    const existsSyncSpy = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((filePath) => String(filePath) === "/canonical/live-transcript.jsonl");
+
+    try {
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          json: true,
+          dryRun: true,
+          fixMissing: true,
+        },
+        runtime,
+      );
+
+      expect(logs).toHaveLength(1);
+      const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+      expect(payload.beforeCount).toBe(1);
+      expect(payload.afterCount).toBe(1);
+      expect(payload.missing).toBe(0);
+    } finally {
+      existsSyncSpy.mockRestore();
+    }
+  });
+
+  it("repairs stale stored transcript paths instead of pruning the session", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    const currentStore: Record<string, SessionEntry> = {
+      live: {
+        sessionId: "live-transcript",
+        updatedAt: 1,
+        sessionFile: "/missing/live-transcript.jsonl",
+      },
+    };
+    mocks.loadSessionStore.mockImplementation(() => structuredClone(currentStore));
+    mocks.resolveSessionFilePath.mockImplementation(
+      (sessionId: string, entry?: { sessionFile?: string }) =>
+        entry?.sessionFile?.trim()
+          ? `/missing/${sessionId}.jsonl`
+          : `/canonical/${sessionId}.jsonl`,
+    );
+    mocks.updateSessionStore.mockImplementation(
+      async (
+        _storePath: string,
+        mutator: (store: Record<string, SessionEntry>) => Promise<void> | void,
+        opts?: {
+          onMaintenanceApplied?: (report: {
+            mode: "warn" | "enforce";
+            beforeCount: number;
+            afterCount: number;
+            pruned: number;
+            capped: number;
+            diskBudget: Record<string, unknown> | null;
+          }) => Promise<void> | void;
+        },
+      ) => {
+        await mutator(currentStore);
+        await opts?.onMaintenanceApplied?.({
+          mode: "warn",
+          beforeCount: 1,
+          afterCount: 1,
+          pruned: 0,
+          capped: 0,
+          diskBudget: null,
+        });
+        return 0;
+      },
+    );
+    const existsSyncSpy = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((filePath) => String(filePath) === "/canonical/live-transcript.jsonl");
+
+    try {
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          json: true,
+          fixMissing: true,
+        },
+        runtime,
+      );
+
+      expect(logs).toHaveLength(1);
+      const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+      expect(payload.beforeCount).toBe(1);
+      expect(payload.afterCount).toBe(1);
+      expect(payload.missing).toBe(0);
+      expect(currentStore.live?.sessionFile).toBe("/canonical/live-transcript.jsonl");
+    } finally {
+      existsSyncSpy.mockRestore();
+    }
   });
 
   it("renders a dry-run action table with keep/prune actions", async () => {

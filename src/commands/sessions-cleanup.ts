@@ -150,11 +150,24 @@ function pruneMissingTranscriptEntries(params: {
       continue;
     }
     const transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
-    if (!fs.existsSync(transcriptPath)) {
-      delete params.store[key];
-      removed += 1;
-      params.onPruned?.(key);
+    if (fs.existsSync(transcriptPath)) {
+      continue;
     }
+    const persistedSessionFile = entry.sessionFile?.trim();
+    if (persistedSessionFile) {
+      const fallbackTranscriptPath = resolveSessionFilePath(
+        entry.sessionId,
+        undefined,
+        sessionPathOpts,
+      );
+      if (fallbackTranscriptPath !== transcriptPath && fs.existsSync(fallbackTranscriptPath)) {
+        entry.sessionFile = fallbackTranscriptPath;
+        continue;
+      }
+    }
+    delete params.store[key];
+    removed += 1;
+    params.onPruned?.(key);
   }
   return removed;
 }
