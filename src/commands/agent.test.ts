@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, type MockInstance, vi } from "vitest"
 import "./agent-command.test-mocks.js";
 import { __testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
+import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
@@ -607,11 +607,13 @@ describe("agentCommand", () => {
         },
       });
 
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      const catalog = [
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "GPT-5.2", provider: "openai" },
-      ]);
+      ];
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce(catalog);
+      vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(catalog);
       vi.mocked(runEmbeddedPiAgent)
         .mockRejectedValueOnce(Object.assign(new Error("rate limited"), { status: 429 }))
         .mockResolvedValueOnce({
@@ -665,11 +667,13 @@ describe("agentCommand", () => {
         },
       });
 
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      const catalog = [
         { id: "qwen3.5:27b", name: "Qwen 3.5", provider: "ollama" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
-      ]);
+      ];
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce(catalog);
+      vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(catalog);
       vi.mocked(runEmbeddedPiAgent).mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
 
       await expect(
@@ -714,10 +718,12 @@ describe("agentCommand", () => {
         },
       });
 
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      const catalog = [
         { id: "claude-opus-4-6", name: "Opus", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
-      ]);
+      ];
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce(catalog);
+      vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(catalog);
 
       await runAgentWithSessionKey("agent:main:subagent:clear-overrides");
 
@@ -871,14 +877,16 @@ describe("agentCommand", () => {
           "openai/gpt-4.1-mini": {},
         },
       });
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      const catalog = [
         {
           id: "gpt-4.1-mini",
           name: "GPT-4.1 Mini",
           provider: "openai",
           reasoning: true,
         },
-      ]);
+      ];
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce(catalog);
+      vi.mocked(loadManifestModelCatalog).mockReturnValueOnce(catalog);
 
       await agentCommand({ message: "hi", to: "+1555" }, runtime);
 
