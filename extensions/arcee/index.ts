@@ -6,10 +6,6 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  ARCEE_TRINITY_LARGE_THINKING_COMPAT,
-  shouldContributeArceeTrinityLargeThinkingCompat,
-} from "./models.js";
-import {
   applyArceeConfig,
   applyArceeOpenRouterConfig,
   ARCEE_DEFAULT_MODEL_REF,
@@ -21,7 +17,11 @@ import {
   normalizeArceeOpenRouterBaseUrl,
   toArceeOpenRouterModelId,
 } from "./provider-catalog.js";
-import { normalizeArceeProviderConfig } from "./provider-policy-api.js";
+import {
+  ARCEE_TRINITY_LARGE_THINKING_COMPAT,
+  normalizeArceeProviderConfig,
+  shouldContributeArceeTrinityLargeThinkingCompat,
+} from "./provider-policy.js";
 
 const PROVIDER_ID = "arcee";
 const ARCEE_WIZARD_GROUP = {
