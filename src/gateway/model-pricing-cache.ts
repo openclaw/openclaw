@@ -1283,14 +1283,6 @@ export function startGatewayModelPricingRefresh(params: {
   };
 }
 
-export function getGatewayModelPricingCacheMeta(): {
-  cachedAt: number;
-  ttlMs: number;
-  size: number;
-} {
-  return { ...getGatewayModelPricingCacheMetaState(), ttlMs: CACHE_TTL_MS };
-}
-
 export function __resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
   clearRefreshTimer();
