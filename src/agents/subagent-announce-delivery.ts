@@ -743,7 +743,7 @@ async function sendSubagentAnnounceDirectly(params: {
               path: resolveCompletionFallbackPath(deliveryTarget.threadId),
             };
           }
-        } catch (err) {
+        } catch {
           // Fallback failed — fall through to gateway call below
         }
       }
