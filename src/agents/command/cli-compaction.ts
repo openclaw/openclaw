@@ -192,12 +192,47 @@ export async function runCliTurnCompactionLifecycle(params: {
 }): Promise<SessionEntry | undefined> {
   const sessionFile = params.sessionEntry?.sessionFile;
   const contextTokenBudget = resolvePositiveInteger(params.sessionEntry?.contextTokens);
-  if (!sessionFile || !contextTokenBudget) {
+  if (!sessionFile) {
     return params.sessionEntry;
   }
 
   const contextEngine = await cliCompactionDeps.resolveContextEngine(params.cfg);
   const sessionManager = cliCompactionDeps.openSessionManager(sessionFile);
+
+  // Ingest the just-completed CLI turn into the context engine. Without this,
+  // CLI-backed agents never feed the context-engine plugin (e.g. Lossless-Claw),
+  // so retrieval tools like lcm_grep / lcm_describe can never recall anything
+  // across turns. The embedded runner already ingests via
+  // tool-result-context-guard; this closes the gap for CLI runs.
+  // Runs even when contextTokenBudget is unset, since ingest is independent of
+  // compaction. Wrapped in try/catch so engine failures never break the CLI
+  // return path.
+  try {
+    const messages = getSessionBranchMessages(sessionManager);
+    if (messages.length > 0 && typeof contextEngine.afterTurn === "function") {
+      await contextEngine.afterTurn({
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile,
+        messages,
+        // persistCliTurnTranscript ran immediately before; the just-appended
+        // user prompt + assistant reply are the last two messages on disk.
+        prePromptMessageCount: Math.max(0, messages.length - 2),
+        tokenBudget: contextTokenBudget,
+      });
+    }
+  } catch (error) {
+    log.warn(
+      `CLI turn ingest failed for ${params.provider}/${params.model}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+
+  if (!contextTokenBudget) {
+    return params.sessionEntry;
+  }
+
   const settingsManager = await cliCompactionDeps.createPreparedEmbeddedPiSettingsManager({
     cwd: params.workspaceDir,
     agentDir: params.agentDir,
