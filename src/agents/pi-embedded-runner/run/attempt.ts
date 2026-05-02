@@ -195,6 +195,7 @@ import { observeReplayMetadata, replayMetadataFromState } from "../replay-state.
 import {
   clearActiveEmbeddedRun,
   type EmbeddedPiQueueHandle,
+  type EmbeddedPiQueueMessageOptions,
   setActiveEmbeddedRun,
   updateActiveEmbeddedRunSnapshot,
 } from "../runs.js";
@@ -1594,6 +1595,13 @@ export async function runEmbeddedAttempt(
       }
       session.setActiveToolsByName(sessionToolAllowlist);
       const activeSession = session;
+      // OpenClaw wants active-run steering to classify normal corrections as
+      // inject and stop-like messages as interrupt. Enable Pi's tool-boundary
+      // checkpoints up front; queueMessage below snapshots the per-message
+      // inject/interrupt behavior before each steer() call.
+      (activeSession.agent as typeof activeSession.agent & {
+        toolCallSteeringBehavior: NonNullable<EmbeddedPiQueueMessageOptions["toolCallSteeringBehavior"]>;
+      }).toolCallSteeringBehavior = "interrupt";
       prepStages.mark("agent-session");
       if (isRawModelRun) {
         // Raw model probes should measure exactly the requested prompt against
@@ -2334,6 +2342,13 @@ export async function runEmbeddedAttempt(
         queueMessage: async (text: string, options) => {
           if (options?.steeringMode) {
             activeSession.agent.steeringMode = options.steeringMode;
+          }
+          if (options?.toolCallSteeringBehavior) {
+            // Paired pi-agent-core steering support adds this setter; keep the
+            // local shape explicit until OpenClaw can bump to that published SDK.
+            (activeSession.agent as typeof activeSession.agent & {
+              toolCallSteeringBehavior: NonNullable<EmbeddedPiQueueMessageOptions["toolCallSteeringBehavior"]>;
+            }).toolCallSteeringBehavior = options.toolCallSteeringBehavior;
           }
           await activeSession.steer(text);
         },

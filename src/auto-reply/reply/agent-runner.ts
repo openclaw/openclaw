@@ -61,6 +61,7 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-l
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
+import { isAbortRequestText } from "./abort-primitives.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
@@ -995,12 +996,15 @@ export async function runReplyAgent(params: {
     }
   };
 
-  if (shouldSteer && isStreaming) {
+  if (shouldSteer && (isStreaming || isActive)) {
     const steerSessionId =
       (sessionKey ? replyRunRegistry.resolveSessionId(sessionKey) : undefined) ??
       followupRun.run.sessionId;
     const steered = queueEmbeddedPiMessage(steerSessionId, followupRun.prompt, {
       steeringMode: resolvePiSteeringModeForQueueMode(resolvedQueue.mode),
+      toolCallSteeringBehavior: isAbortRequestText(followupRun.summaryLine ?? followupRun.prompt)
+        ? "interrupt"
+        : "inject",
       ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
     });
     if (steered && !shouldFollowup) {

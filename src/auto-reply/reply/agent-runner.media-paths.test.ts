@@ -88,6 +88,7 @@ function makeRunReplyAgentParams(
     commandBody: prompt,
     followupRun: createMockFollowupRun({
       prompt,
+      summaryLine: prompt,
       run: {
         agentId: "main",
         agentDir: "/tmp/agent",
@@ -216,6 +217,7 @@ describe("runReplyAgent media path normalization", () => {
 
     expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
       steeringMode: "all",
+      toolCallSteeringBehavior: "inject",
     });
 
     await runReplyAgent(
@@ -228,7 +230,70 @@ describe("runReplyAgent media path normalization", () => {
 
     expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
       steeringMode: "one-at-a-time",
+      toolCallSteeringBehavior: "inject",
     });
+  });
+
+  it("steers active embedded runs even when the busy snapshot is not streaming", async () => {
+    queueEmbeddedPiMessageMock.mockReturnValue(true);
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        isActive: true,
+        isStreaming: false,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith("session", "generate chart", {
+      steeringMode: "all",
+      toolCallSteeringBehavior: "inject",
+    });
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to follow-up queue when active-run steering cannot be delivered", async () => {
+    queueEmbeddedPiMessageMock.mockReturnValue(false);
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        isActive: true,
+        isStreaming: false,
+        isRunActive: () => true,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith("session", "generate chart", {
+      steeringMode: "all",
+      toolCallSteeringBehavior: "inject",
+    });
+    expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("interrupts remaining tool calls for stop-like active-run steering", async () => {
+    queueEmbeddedPiMessageMock.mockReturnValue(true);
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        prompt: "stop",
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        isActive: true,
+        isStreaming: false,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith("session", "stop", {
+      steeringMode: "all",
+      toolCallSteeringBehavior: "interrupt",
+    });
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
   });
 
   it("shares one media cache between block accumulation and final payload delivery", async () => {

@@ -19,12 +19,12 @@ import {
 type RunHandle = Parameters<typeof setActiveEmbeddedRun>[1];
 
 function createRunHandle(
-  overrides: { isCompacting?: boolean; abort?: () => void } = {},
+  overrides: { isCompacting?: boolean; isStreaming?: boolean; abort?: () => void } = {},
 ): RunHandle {
   const abort = overrides.abort ?? (() => {});
   return {
     queueMessage: async () => {},
-    isStreaming: () => true,
+    isStreaming: () => overrides.isStreaming ?? true,
     isCompacting: () => overrides.isCompacting ?? false,
     abort,
   };
@@ -75,10 +75,16 @@ describe("pi-embedded runner run registry", () => {
     });
 
     expect(
-      queueEmbeddedPiMessage("session-steer", "continue", { steeringMode: "one-at-a-time" }),
+      queueEmbeddedPiMessage("session-steer", "continue", {
+        steeringMode: "one-at-a-time",
+        toolCallSteeringBehavior: "interrupt",
+      }),
     ).toBe(true);
 
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "one-at-a-time" });
+    expect(queueMessage).toHaveBeenCalledWith("continue", {
+      steeringMode: "one-at-a-time",
+      toolCallSteeringBehavior: "interrupt",
+    });
   });
 
   it("defaults active embedded steering to all pending messages", () => {
@@ -91,6 +97,18 @@ describe("pi-embedded runner run registry", () => {
     expect(queueEmbeddedPiMessage("session-default-steer", "continue")).toBe(true);
 
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+  });
+
+  it("queues steering to active embedded runs even while they are between stream chunks", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-tooling", {
+      ...createRunHandle({ isStreaming: false }),
+      queueMessage,
+    });
+
+    expect(queueEmbeddedPiMessage("session-tooling", "stop after current tool")).toBe(true);
+
+    expect(queueMessage).toHaveBeenCalledWith("stop after current tool", { steeringMode: "all" });
   });
 
   it("force-clears an aborted run that does not drain", async () => {
