@@ -242,6 +242,16 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.restartChannels).toEqual(new Set(["telegram"]));
   });
 
+  it("keeps installed channel plugin source changes restart-backed", () => {
+    const plan = buildGatewayReloadPlan(["plugins.installs.telegram.installPath"]);
+
+    expect(plan.restartGateway).toBe(true);
+    expect(plan.reloadPlugins).toBe(false);
+    expect(plan.disposeMcpRuntimes).toBe(false);
+    expect(plan.restartChannels).toEqual(new Set());
+    expect(plan.restartReasons).toEqual(["plugins.installs.telegram.installPath"]);
+  });
+
   it("restarts heartbeat when model-related config changes", () => {
     const plan = buildGatewayReloadPlan([
       "models.providers.openai.models",

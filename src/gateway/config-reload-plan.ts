@@ -177,15 +177,6 @@ function listReloadRules(): ReloadRule[] {
         `restart-channel:${plugin.id}` as ReloadAction,
       ],
     },
-    {
-      prefix: `plugins.installs.${plugin.id}`,
-      kind: "hot",
-      actions: [
-        "reload-plugins",
-        "dispose-mcp-runtimes",
-        `restart-channel:${plugin.id}` as ReloadAction,
-      ],
-    },
   ]);
   const pluginReloadRules: ReloadRule[] = (registry?.reloads ?? []).flatMap((entry) =>
     (entry.registration.restartPrefixes ?? [])
