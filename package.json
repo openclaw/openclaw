@@ -1674,6 +1674,7 @@
     "vitest": "^4.1.5"
   },
   "overrides": {
+    "@aws-sdk/client-bedrock-runtime": "3.1024.0",
     "axios": "1.15.0",
     "follow-redirects": "1.16.0",
     "node-domexception": "npm:@nolyfill/domexception@1.0.28",
@@ -1688,6 +1689,7 @@
       "@anthropic-ai/sdk": "0.92.0",
       "hono": "4.12.14",
       "@hono/node-server": "1.19.14",
+      "@aws-sdk/client-bedrock-runtime": "3.1024.0",
       "axios": "1.15.0",
       "follow-redirects": "1.16.0",
       "defu": "6.1.5",
