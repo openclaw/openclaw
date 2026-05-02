@@ -841,6 +841,18 @@ describe("resolveTelegramFetch", () => {
     await resolved("https://api.telegram.org/botx/sendMessage");
     await resolved("https://api.telegram.org/botx/sendChatAction");
 
+    expect(loggerDebug).toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    );
+    expect(loggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP",
+      ),
+    );
+    expect(loggerWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    );
+
     expect(undiciFetch).toHaveBeenCalledTimes(4);
 
     const secondDispatcher = getDispatcherFromUndiciCall(2);

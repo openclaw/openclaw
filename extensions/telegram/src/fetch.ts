@@ -76,6 +76,8 @@ type TelegramTransportAttempt = {
   createDispatcher: () => TelegramDispatcher;
   exportAttempt: TelegramDispatcherAttempt;
   logMessage?: string;
+  /** Defaults to warn when logMessage is set. */
+  promotionLogLevel?: "debug" | "warn";
 };
 
 type TelegramDnsResultOrder = "ipv4first" | "verbatim";
@@ -519,6 +521,7 @@ function createTelegramTransportAttempts(params: {
     },
     exportAttempt: { dispatcherPolicy: fallbackPolicy },
     logMessage: "fetch fallback: enabling sticky IPv4-only dispatcher",
+    promotionLogLevel: "debug",
   });
 
   if (TELEGRAM_FALLBACK_IPS.length === 0) {
@@ -643,7 +646,12 @@ export function resolveTelegramTransport(
     const nextAttempt = transportAttempts[nextIndex];
     if (nextAttempt.logMessage) {
       const reasonText = reason ? `, reason=${reason}` : "";
-      log.debug(`${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`);
+      const line = `${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`;
+      if (nextAttempt.promotionLogLevel === "debug") {
+        log.debug(line);
+      } else {
+        log.warn(line);
+      }
     }
     stickyAttemptIndex = nextIndex;
     return true;
