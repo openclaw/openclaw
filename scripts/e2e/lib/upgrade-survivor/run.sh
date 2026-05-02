@@ -287,12 +287,7 @@ legacy_plugin_dependency_probe_paths() {
 
 install_baseline_plugin_dependencies() {
   plugin_deps_cleanup_enabled || return 0
-  echo "Running baseline doctor to install configured plugin dependencies before update."
-  if ! openclaw doctor --fix --non-interactive >"$BASELINE_DOCTOR_LOG" 2>&1; then
-    echo "baseline openclaw doctor failed while preparing plugin dependency cleanup scenario" >&2
-    cat "$BASELINE_DOCTOR_LOG" >&2 || true
-    return 1
-  fi
+  echo "Skipping baseline doctor for plugin dependency cleanup scenario; candidate doctor owns stale dependency cleanup."
 }
 
 seed_legacy_plugin_dependency_debris() {
