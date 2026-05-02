@@ -52,11 +52,6 @@ function resolveCronJobScheduleKind(
   return kind === "at" || kind === "every" || kind === "cron" ? kind : null;
 }
 
-function resolveCronJobPayloadKind(job: CronJob): "systemEvent" | "agentTurn" | null {
-  const kind = (job as { payload?: { kind?: unknown } }).payload?.kind;
-  return kind === "systemEvent" || kind === "agentTurn" ? kind : null;
-}
-
 export type CronState = {
   client: GatewayBrowserClient | null;
   connected: boolean;

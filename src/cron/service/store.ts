@@ -41,8 +41,14 @@ function isSupportedPayload(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  const kind = (value as { kind?: unknown }).kind;
-  return kind === "systemEvent" || kind === "agentTurn";
+  const payload = value as { kind?: unknown; text?: unknown; message?: unknown };
+  if (payload.kind === "systemEvent") {
+    return typeof payload.text === "string";
+  }
+  if (payload.kind === "agentTurn") {
+    return typeof payload.message === "string";
+  }
+  return false;
 }
 
 function isHydratableCronJob(value: unknown): value is CronJob {

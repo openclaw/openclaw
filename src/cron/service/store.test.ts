@@ -364,6 +364,22 @@ describe("cron service store seam coverage", () => {
               schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
               state: {},
             },
+            {
+              id: "missing-agent-message-job",
+              name: "missing agent message job",
+              enabled: true,
+              schedule: { kind: "cron", expr: "30 6 * * *", tz: "UTC" },
+              payload: { kind: "agentTurn" },
+              state: {},
+            },
+            {
+              id: "missing-system-text-job",
+              name: "missing system text job",
+              enabled: true,
+              schedule: { kind: "cron", expr: "45 6 * * *", tz: "UTC" },
+              payload: { kind: "systemEvent" },
+              state: {},
+            },
           ],
         },
         null,
@@ -384,6 +400,14 @@ describe("cron service store seam coverage", () => {
       expect.objectContaining({ jobId: "missing-payload-job", index: 2 }),
       expect.stringContaining("ignoring malformed persisted job"),
     );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "missing-agent-message-job", index: 3 }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "missing-system-text-job", index: 4 }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
 
     await persist(state);
 
@@ -394,6 +418,8 @@ describe("cron service store seam coverage", () => {
       "valid-job",
       "missing-schedule-job",
       "missing-payload-job",
+      "missing-agent-message-job",
+      "missing-system-text-job",
     ]);
   });
 
