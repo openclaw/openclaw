@@ -205,6 +205,7 @@ type ApplyShortTermPromotionsOptions = {
   nowMs?: number;
   timezone?: string;
   currentAgentId?: string;
+  sessionKey?: string;
   /**
    * Maximum size of MEMORY.md on disk after a promotion write, in
    * characters. When the post-write size would exceed this budget, the
@@ -1807,6 +1808,7 @@ export async function applyShortTermPromotions(
     const provenanceEntries: ProvenanceEntry[] = rehydratedSelected.map((candidate) => ({
       id: candidate.key,
       agentId: options.currentAgentId,
+      sessionKey: options.sessionKey,
       promotedAt: nowIso,
       score: candidate.score,
       contentHash: hashContent(candidate.snippet || ""),
