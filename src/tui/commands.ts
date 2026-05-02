@@ -4,7 +4,7 @@ import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thi
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-const VERBOSE_LEVELS = ["on", "off"];
+const VERBOSE_LEVELS = ["on", "full", "off"];
 const TRACE_LEVELS = ["on", "off"];
 const FAST_LEVELS = ["status", "on", "off"];
 const REASONING_LEVELS = ["on", "off"];
@@ -96,7 +96,7 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
     },
     {
       name: "verbose",
-      description: "Set verbose on/off",
+      description: "Set verbose on/full/off",
       getArgumentCompletions: verboseCompletions,
     },
     {
@@ -170,7 +170,7 @@ export function helpText(options: SlashCommandOptions = {}): string {
     "/model <provider/model> (or /models)",
     `/think <${thinkLevels}>`,
     "/fast <status|on|off>",
-    "/verbose <on|off>",
+    "/verbose <on|full|off>",
     "/trace <on|off>",
     "/reasoning <on|off>",
     "/usage <off|tokens|full>",
