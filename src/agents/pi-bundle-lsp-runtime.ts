@@ -6,6 +6,7 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
+import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
@@ -69,7 +70,7 @@ function delay(ms: number): Promise<void> {
 }
 
 function spawnLspServerProcess(config: StdioMcpServerLaunchConfig): ChildProcess {
-  const mergedEnv = { ...process.env, ...config.env };
+  const mergedEnv = sanitizeHostExecEnv({ ...process.env, ...config.env });
   const program = resolveWindowsSpawnProgram({
     command: config.command,
     env: mergedEnv,
