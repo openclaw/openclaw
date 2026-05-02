@@ -176,9 +176,17 @@ jobs:
           }
           NODE
 
-      - name: Kova self-check
+      - name: Kova version and plan sanity
         if: steps.lane.outputs.run == 'true'
-        run: kova self-check --json
+        shell: bash
+        run: |
+          set -euo pipefail
+          kova version --json
+          kova matrix plan \
+            --profile "$PROFILE" \
+            --target "local-build:${GITHUB_WORKSPACE}" \
+            --include scenario:fresh-install \
+            --json >/tmp/kova-plan.json
 
       - name: Configure live OpenAI auth
         if: ${{ steps.lane.outputs.run == 'true' && matrix.live == 'true' }}
