@@ -416,6 +416,13 @@ export async function executePreparedCliRun(
                 },
               });
             },
+            onToolEvent: (evt) => {
+              emitAgentEvent({
+                runId: params.runId,
+                stream: "tool",
+                data: evt as unknown as Record<string, unknown>,
+              });
+            },
             cleanup: async () => {
               try {
                 await claudeSkillsPlugin.cleanup();
@@ -453,6 +460,13 @@ export async function executePreparedCliRun(
                       context.backendResolved.textTransforms?.output,
                     ),
                   },
+                });
+              },
+              onToolEvent: (evt) => {
+                emitAgentEvent({
+                  runId: params.runId,
+                  stream: "tool",
+                  data: evt as unknown as Record<string, unknown>,
                 });
               },
             })
