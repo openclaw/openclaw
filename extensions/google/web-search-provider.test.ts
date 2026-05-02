@@ -25,6 +25,7 @@ function installGeminiFetch() {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
 });
 
@@ -99,6 +100,106 @@ describe("google web search provider", () => {
     expect(String(mockFetch.mock.calls[0]?.[0])).toBe(
       "https://generativelanguage.googleapis.com/proxy/v1beta/models/gemini-2.5-flash:generateContent",
     );
+  });
+
+  it("passes freshness to Gemini Google Search grounding as a time range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-15T12:00:00Z"));
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({ query: "latest ai news", freshness: "week" });
+
+    const body = JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body)) as {
+      tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
+    };
+    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
+      startTime: "2026-04-08T12:00:00.000Z",
+      endTime: "2026-04-15T12:00:00.000Z",
+    });
+  });
+
+  it("passes date ranges to Gemini Google Search grounding", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({
+      query: "OpenClaw release notes",
+      date_after: "2026-04-01",
+      date_before: "2026-04-30",
+    });
+
+    const body = JSON.parse(String(mockFetch.mock.calls[0]?.[1]?.body)) as {
+      tools?: Array<{ google_search?: { timeRangeFilter?: unknown } }>;
+    };
+    expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
+      startTime: "2026-04-01T00:00:00Z",
+      endTime: "2026-05-01T00:00:00.000Z",
+    });
+  });
+
+  it("returns validation errors for invalid Gemini time filters before fetch", async () => {
+    const mockFetch = installGeminiFetch();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await expect(
+      tool?.execute({
+        query: "OpenClaw release notes",
+        freshness: "week",
+        date_after: "2026-04-01",
+      }),
+    ).resolves.toMatchObject({
+      error: "conflicting_time_filters",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("normalizes Gemini shorthand base URLs", () => {

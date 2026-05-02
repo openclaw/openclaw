@@ -75,14 +75,16 @@ URLs.
 
 ## Supported parameters
 
-Gemini search supports `query`.
+Gemini search supports `query`, `freshness`, `date_after`, and `date_before`.
 
 `count` is accepted for shared `web_search` compatibility, but Gemini grounding
 still returns one synthesized answer with citations rather than an N-result
 list.
 
-Provider-specific filters like `country`, `language`, `freshness`, and
-`domain_filter` are not supported.
+`freshness` accepts `day`, `week`, `month`, `year`, and the shared shortcuts
+`pd`, `pw`, `pm`, and `py`. OpenClaw converts these values, or an explicit
+`date_after`/`date_before` range, into Gemini Google Search grounding's
+`timeRangeFilter`. `country`, `language`, and `domain_filter` are not supported.
 
 ## Model selection
 

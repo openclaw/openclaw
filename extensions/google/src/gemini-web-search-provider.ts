@@ -34,9 +34,18 @@ const GEMINI_TOOL_PARAMETERS = {
     },
     country: { type: "string", description: "Not supported by Gemini." },
     language: { type: "string", description: "Not supported by Gemini." },
-    freshness: { type: "string", description: "Not supported by Gemini." },
-    date_after: { type: "string", description: "Not supported by Gemini." },
-    date_before: { type: "string", description: "Not supported by Gemini." },
+    freshness: {
+      type: "string",
+      description: "Limit Google Search grounding to recent results: day, week, month, or year.",
+    },
+    date_after: {
+      type: "string",
+      description: "Only ground with results published after this date (YYYY-MM-DD).",
+    },
+    date_before: {
+      type: "string",
+      description: "Only ground with results published before this date (YYYY-MM-DD).",
+    },
   },
   required: ["query"],
 } satisfies Record<string, unknown>;
