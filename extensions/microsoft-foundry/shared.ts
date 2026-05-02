@@ -111,6 +111,21 @@ function normalizeFoundryModelName(value?: string | null): string | undefined {
   return trimmed || undefined;
 }
 
+/**
+ * Returns true when the deployment model name belongs to an Anthropic family
+ * (Claude).  The built-in microsoft-foundry provider only supports
+ * OpenAI-compatible Foundry APIs today; Anthropic deployments use a different
+ * endpoint path (`/anthropic/v1/messages`) and API shape that is not yet
+ * wired.  See #60546.
+ */
+export function isAnthropicFoundryDeployment(modelName?: string | null): boolean {
+  const normalized = normalizeFoundryModelName(modelName);
+  if (!normalized) {
+    return false;
+  }
+  return normalized.startsWith("claude");
+}
+
 export function usesFoundryResponsesByDefault(value?: string | null): boolean {
   const normalized = normalizeFoundryModelName(value);
   if (!normalized) {

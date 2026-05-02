@@ -7,6 +7,7 @@ import { buildFoundryConnectionTest, isValidTenantIdentifier } from "./onboard.j
 import { resetFoundryRuntimeAuthCaches } from "./runtime.js";
 import {
   buildFoundryAuthResult,
+  isAnthropicFoundryDeployment,
   normalizeFoundryEndpoint,
   requiresFoundryMaxCompletionTokens,
   supportsFoundryImageInput,
@@ -782,4 +783,20 @@ describe("microsoft-foundry plugin", () => {
     ]);
     expect(result.defaultModel).toBe("microsoft-foundry/deployment-gpt5");
   });
+});
+
+describe("isAnthropicFoundryDeployment", () => {
+  it.each(["claude-opus-4-6", "Claude-Sonnet-4", "claude-3.5-haiku", "CLAUDE-instant"])(
+    "detects Anthropic model: %s",
+    (name) => {
+      expect(isAnthropicFoundryDeployment(name)).toBe(true);
+    },
+  );
+
+  it.each(["gpt-5.4", "o4-mini", "phi-4", "llama-3", undefined, null, ""])(
+    "rejects non-Anthropic model: %s",
+    (name) => {
+      expect(isAnthropicFoundryDeployment(name)).toBe(false);
+    },
+  );
 });
