@@ -208,6 +208,23 @@ describe("telegram topic agentId schema", () => {
     expect(res.data.direct?.["123456789"]?.topics?.["99"]?.agentId).toBe("support");
   });
 
+  it("accepts DM threadReplies overrides", () => {
+    const res = TelegramConfigSchema.safeParse({
+      direct: {
+        "123456789": {
+          threadReplies: "inbound",
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (!res.success) {
+      console.error(res.error.format());
+      return;
+    }
+    expect(res.data.direct?.["123456789"]?.threadReplies).toBe("inbound");
+  });
+
   it("accepts empty config without agentId", () => {
     const res = TelegramConfigSchema.safeParse({
       groups: {
