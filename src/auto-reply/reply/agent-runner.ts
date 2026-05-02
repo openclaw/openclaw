@@ -9,6 +9,7 @@ import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../.
 import { enqueueCommitmentExtraction } from "../../commitments/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  clearSessionPluginDebugEntries,
   loadSessionStore,
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
@@ -26,6 +27,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   estimateUsageCost,
@@ -865,8 +867,10 @@ function refreshSessionEntryFromStore(params: {
   sessionKey?: string;
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
+  suppressPluginDebugEntries?: boolean;
 }): SessionEntry | undefined {
-  const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
+  const { storePath, sessionKey, fallbackEntry, activeSessionStore, suppressPluginDebugEntries } =
+    params;
   if (!storePath || !sessionKey) {
     return fallbackEntry;
   }
@@ -876,10 +880,14 @@ function refreshSessionEntryFromStore(params: {
     if (!latestEntry) {
       return fallbackEntry;
     }
+    const nextEntry =
+      suppressPluginDebugEntries && latestEntry.pluginDebugEntries
+        ? { ...latestEntry, pluginDebugEntries: undefined }
+        : latestEntry;
     if (activeSessionStore) {
-      activeSessionStore[sessionKey] = latestEntry;
+      activeSessionStore[sessionKey] = nextEntry;
     }
-    return latestEntry;
+    return nextEntry;
   } catch {
     return fallbackEntry;
   }
@@ -1133,9 +1141,35 @@ export async function runReplyAgent(params: {
   let runFollowupTurn = queuedRunFollowupTurn;
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied = false;
+  let suppressPluginDebugEntriesForTurn = false;
 
   try {
     await typingSignals.signalRunStart();
+
+    // Clear any stale pluginDebugEntries before plugins run this turn. Without this,
+    // a prior turn's status line (e.g. active-memory timeout) would stick in the
+    // store and be re-emitted on every subsequent reply.
+    try {
+      activeSessionEntry =
+        (await clearSessionPluginDebugEntries({
+          storePath,
+          sessionKey,
+          inMemoryEntry: activeSessionEntry,
+          inMemoryStore: activeSessionStore,
+        })) ?? activeSessionEntry;
+    } catch (error) {
+      // If the persisted clear fails, prefer hiding plugin debug output for
+      // this turn over risking replay of stale lines from disk.
+      suppressPluginDebugEntriesForTurn = true;
+      if (activeSessionEntry?.pluginDebugEntries) {
+        activeSessionEntry = { ...activeSessionEntry };
+        delete activeSessionEntry.pluginDebugEntries;
+        if (activeSessionStore && sessionKey) {
+          activeSessionStore[sessionKey] = activeSessionEntry;
+        }
+      }
+      defaultRuntime.error("Failed to clear stale session plugin debug entries", error);
+    }
 
     activeSessionEntry = await runPreflightCompactionIfNeeded({
       cfg,
@@ -1554,6 +1588,7 @@ export async function runReplyAgent(params: {
         sessionKey,
         fallbackEntry: activeSessionEntry,
         activeSessionStore,
+        suppressPluginDebugEntries: suppressPluginDebugEntriesForTurn,
       });
     }
 
