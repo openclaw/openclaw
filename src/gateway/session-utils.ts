@@ -381,9 +381,9 @@ function resolveRuntimeChildSessionKeys(
 ): string[] | undefined {
   const childSessionKeys = new Set<string>();
   const controllerKey = controllerSessionKey.trim();
-  const runs =
-    subagentRuns?.runsByControllerSessionKey.get(controllerKey) ??
-    listSubagentRunsForController(controllerSessionKey);
+  const runs = subagentRuns
+    ? (subagentRuns.runsByControllerSessionKey.get(controllerKey) ?? [])
+    : listSubagentRunsForController(controllerSessionKey);
   for (const entry of runs) {
     const childSessionKey = normalizeOptionalString(entry.childSessionKey);
     if (!childSessionKey) {
@@ -1811,8 +1811,10 @@ export function filterAndSortSessionEntries(params: {
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
+  rowContext?: SessionListRowContext;
 }): [string, SessionEntry][] {
   const { store, opts, now } = params;
+  const rowContext = params.rowContext;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
@@ -1854,7 +1856,9 @@ export function filterAndSortSessionEntries(params: {
       if (key === "unknown" || key === "global") {
         return false;
       }
-      const latest = getSessionDisplaySubagentRunByChildSessionKey(key);
+      const latest = rowContext
+        ? rowContext.subagentRuns.getDisplaySubagentRun(key)
+        : getSessionDisplaySubagentRunByChildSessionKey(key);
       if (latest) {
         const latestControllerSessionKey =
           normalizeOptionalString(latest.controllerSessionKey) ||
@@ -1862,7 +1866,9 @@ export function filterAndSortSessionEntries(params: {
         return (
           latestControllerSessionKey === spawnedBy &&
           shouldKeepSubagentRunChildLink(latest, {
-            activeDescendants: countActiveDescendantRuns(key),
+            activeDescendants: rowContext
+              ? rowContext.subagentRuns.countActiveDescendantRuns(key)
+              : countActiveDescendantRuns(key),
             now,
           })
         );
@@ -1913,11 +1919,21 @@ export function listSessionsFromStore(params: {
   const now = Date.now();
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const sessionListTranscriptFieldRows = 100;
-  const rowContext = buildSessionListRowContext({ store, now });
+  let rowContext: SessionListRowContext | undefined;
+  const getRowContext = () => {
+    rowContext ??= buildSessionListRowContext({ store, now });
+    return rowContext;
+  };
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
+  const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const entries = filterAndSortSessionEntries({ store, opts, now });
+  const entries = filterAndSortSessionEntries({
+    store,
+    opts,
+    now,
+    rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+  });
 
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
@@ -1932,8 +1948,8 @@ export function listSessionsFromStore(params: {
       includeDerivedTitles: includeTranscriptFields && includeDerivedTitles,
       includeLastMessage: includeTranscriptFields && includeLastMessage,
       transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
-      storeChildSessionsByKey: rowContext.storeChildSessionsByKey,
-      rowContext,
+      storeChildSessionsByKey: getRowContext().storeChildSessionsByKey,
+      rowContext: getRowContext(),
     });
   });
 
@@ -1967,11 +1983,21 @@ export async function listSessionsFromStoreAsync(params: {
   const now = Date.now();
   const sessionListTranscriptUsageMaxBytes = 64 * 1024;
   const sessionListTranscriptFieldRows = 100;
-  const rowContext = buildSessionListRowContext({ store, now });
+  let rowContext: SessionListRowContext | undefined;
+  const getRowContext = () => {
+    rowContext ??= buildSessionListRowContext({ store, now });
+    return rowContext;
+  };
   const includeDerivedTitles = opts.includeDerivedTitles === true;
   const includeLastMessage = opts.includeLastMessage === true;
+  const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
-  const entries = filterAndSortSessionEntries({ store, opts, now });
+  const entries = filterAndSortSessionEntries({
+    store,
+    opts,
+    now,
+    rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+  });
 
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
@@ -1988,8 +2014,8 @@ export async function listSessionsFromStoreAsync(params: {
       includeDerivedTitles: false,
       includeLastMessage: false,
       transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
-      storeChildSessionsByKey: rowContext.storeChildSessionsByKey,
-      rowContext,
+      storeChildSessionsByKey: getRowContext().storeChildSessionsByKey,
+      rowContext: getRowContext(),
     });
     if (
       entry?.sessionId &&
