@@ -95,6 +95,7 @@ import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
+const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
@@ -543,24 +544,51 @@ export async function runCodexAppServerAttempt(
           });
           return { client: startupClient, thread: startupThread };
         };
-        try {
-          return await startupAttempt();
-        } catch (error) {
-          if (runAbortController.signal.aborted || !isCodexAppServerConnectionClosedError(error)) {
-            throw error;
+        for (
+          let attempt = 1;
+          attempt <= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS;
+          attempt += 1
+        ) {
+          try {
+            return await startupAttempt();
+          } catch (error) {
+            if (
+              runAbortController.signal.aborted ||
+              !isCodexAppServerConnectionClosedError(error)
+            ) {
+              throw error;
+            }
+            const failedClient = attemptedClient;
+            const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
+            if (startupClientForCleanup === failedClient) {
+              startupClientForCleanup = undefined;
+            }
+            attemptedClient = undefined;
+            if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
+              embeddedAgentLog.warn(
+                "codex app-server connection closed during startup; retries exhausted",
+                {
+                  attempt,
+                  maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                  clearedSharedClient,
+                  error: formatErrorMessage(error),
+                },
+              );
+              throw error;
+            }
+            embeddedAgentLog.warn(
+              "codex app-server connection closed during startup; restarting app-server and retrying",
+              {
+                attempt,
+                nextAttempt: attempt + 1,
+                maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
+                clearedSharedClient,
+                error: formatErrorMessage(error),
+              },
+            );
           }
-          embeddedAgentLog.warn(
-            "codex app-server connection closed during startup; restarting app-server and retrying",
-            { error },
-          );
-          const failedClient = attemptedClient;
-          clearSharedCodexAppServerClientIfCurrent(failedClient);
-          if (startupClientForCleanup === failedClient) {
-            startupClientForCleanup = undefined;
-          }
-          attemptedClient = undefined;
-          return await startupAttempt();
         }
+        throw new Error("codex app-server startup retry loop exited unexpectedly");
       },
     }));
     startupClientForCleanup = undefined;

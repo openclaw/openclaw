@@ -2017,6 +2017,58 @@ describe("runCodexAppServerAttempt", () => {
     expect(requests).toEqual([["thread/resume"], ["thread/resume", "turn/start"]]);
   });
 
+  it("tolerates a second app-server close while retrying startup", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const requests: string[][] = [];
+    let starts = 0;
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    __testing.setCodexAppServerClientFactoryForTests(async () => {
+      const startIndex = starts++;
+      const methods: string[] = [];
+      requests.push(methods);
+      return {
+        request: vi.fn(async (method: string) => {
+          methods.push(method);
+          if (method === "thread/resume" && startIndex < 2) {
+            throw new Error("codex app-server client is closed");
+          }
+          if (method === "thread/resume") {
+            return threadStartResult("thread-existing");
+          }
+          if (method === "turn/start") {
+            return turnStartResult();
+          }
+          return {};
+        }),
+        addNotificationHandler: (handler: typeof notify) => {
+          notify = handler;
+          return () => undefined;
+        },
+        addRequestHandler: () => () => undefined,
+      } as never;
+    });
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await vi.waitFor(() => expect(requests[2]).toContain("turn/start"), { interval: 1 });
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-existing",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "completed" },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({ aborted: false });
+    expect(requests).toEqual([
+      ["thread/resume"],
+      ["thread/resume"],
+      ["thread/resume", "turn/start"],
+    ]);
+  });
+
   it("passes native hook relay config on thread start and resume", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
