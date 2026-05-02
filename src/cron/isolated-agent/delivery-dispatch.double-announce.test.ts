@@ -1256,6 +1256,31 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
+  it("skips deleteAfterRun cleanup for non-cron sessions", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
+
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
+    params.agentSessionKey = "agent:main:meeting";
+    (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        delivered: false,
+      }),
+    );
+    expect(callGateway).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+      }),
+    );
+    expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
+  });
+
+
   it("suppresses trailing NO_REPLY after summary text in direct delivery (#64976)", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
