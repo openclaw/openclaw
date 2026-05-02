@@ -1,6 +1,4 @@
 import { execFile } from "node:child_process";
-import { isDeepStrictEqual } from "node:util";
-import { applyRuntimeLegacyConfigMigrations } from "../../commands/doctor/shared/runtime-compat-api.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -211,8 +209,7 @@ function parseValidateConfigFromRawOrRespond(
     );
     return null;
   }
-  const migrated = applyRuntimeLegacyConfigMigrations(restored.result);
-  const restoredConfig = (migrated.next ?? restored.result) as OpenClawConfig;
+  const restoredConfig = restored.result as OpenClawConfig;
   const validated = validateConfigObjectWithPlugins(restoredConfig);
   if (!validated.ok) {
     respond(
@@ -417,8 +414,7 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const migratedRuntime = applyRuntimeLegacyConfigMigrations(restoredRuntime.result);
-    const resolvedRuntime = (migratedRuntime.next ?? restoredRuntime.result) as OpenClawConfig;
+    const resolvedRuntime = restoredRuntime.result as OpenClawConfig;
     const sourcePatch = createMergePatch(snapshot.config, resolvedRuntime);
     const mergedSource = applyMergePatch(snapshot.sourceConfig, sourcePatch, {
       mergeObjectArraysById: true,

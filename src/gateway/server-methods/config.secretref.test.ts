@@ -39,10 +39,6 @@ vi.mock("../../config/merge-patch.js", () => ({
   createMergePatch: (_prev: unknown, next: unknown) => structuredClone((next ?? {}) as object),
 }));
 
-vi.mock("../../commands/doctor/shared/runtime-compat-api.js", () => ({
-  applyRuntimeLegacyConfigMigrations: (raw: OpenClawConfig) => ({ next: raw }),
-}));
-
 vi.mock("../../secrets/runtime.js", () => ({
   prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
 }));
