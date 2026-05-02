@@ -1,7 +1,4 @@
-import {
-  REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES,
-  type RealtimeVoiceAgentConsultToolPolicy,
-} from "openclaw/plugin-sdk/realtime-voice";
+import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
 import {
   buildSecretInputSchema,
   coerceSecretRef,
