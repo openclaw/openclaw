@@ -416,6 +416,7 @@ function loadCapabilityProviderEntries<K extends CapabilityProviderRegistryKey>(
 }): PluginRegistry[K] {
   const registry = getLoadedRuntimePluginRegistry({
     env: params.loadOptions.env,
+    loadOptions: params.loadOptions,
     workspaceDir: params.loadOptions.workspaceDir,
     requiredPluginIds: params.loadOptions.onlyPluginIds,
   });

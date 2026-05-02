@@ -81,6 +81,7 @@ function resolveOrLoadRuntimePluginRegistry(
   if (
     !getLoadedRuntimePluginRegistry({
       env: loadOptions.env,
+      loadOptions,
       workspaceDir: loadOptions.workspaceDir,
       requiredPluginIds: loadOptions.onlyPluginIds,
     })

@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getLoadedRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
+import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
 
 type StartupScopedPluginSnapshot = NonNullable<
@@ -39,8 +40,18 @@ export function ensureRuntimePluginsLoaded(params: {
     config: params.config,
     workspaceDir,
   });
-  getLoadedRuntimePluginRegistry({
-    workspaceDir,
+  const allowGatewaySubagentBinding =
+    params.allowGatewaySubagentBinding === true ||
+    getActivePluginRuntimeSubagentMode() === "gateway-bindable";
+  ensureStandaloneRuntimePluginRegistryLoaded({
     requiredPluginIds: startupPluginIds,
+    loadOptions: {
+      config: params.config,
+      workspaceDir,
+      ...(startupPluginIds === undefined ? {} : { onlyPluginIds: startupPluginIds }),
+      runtimeOptions: allowGatewaySubagentBinding
+        ? { allowGatewaySubagentBinding: true }
+        : undefined,
+    },
   });
 }

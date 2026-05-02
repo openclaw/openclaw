@@ -3,6 +3,8 @@ import { createEmptyPluginRegistry } from "../registry.js";
 
 const mocks = vi.hoisted(() => ({
   loadOpenClawPlugins: vi.fn<typeof import("../loader.js").loadOpenClawPlugins>(),
+  resolveCompatibleRuntimePluginRegistry:
+    vi.fn<typeof import("../loader.js").resolveCompatibleRuntimePluginRegistry>(),
   resolveRuntimePluginRegistry: vi.fn<typeof import("../loader.js").resolveRuntimePluginRegistry>(),
   getActivePluginRegistry: vi.fn<typeof import("../runtime.js").getActivePluginRegistry>(),
   resolveConfiguredChannelPluginIds:
@@ -27,6 +29,9 @@ let resetPluginRegistryLoadedForTests: typeof import("./runtime-registry-loader.
 vi.mock("../loader.js", () => ({
   loadOpenClawPlugins: (...args: Parameters<typeof mocks.loadOpenClawPlugins>) =>
     mocks.loadOpenClawPlugins(...args),
+  resolveCompatibleRuntimePluginRegistry: (
+    ...args: Parameters<typeof mocks.resolveCompatibleRuntimePluginRegistry>
+  ) => mocks.resolveCompatibleRuntimePluginRegistry(...args),
   resolveRuntimePluginRegistry: (...args: Parameters<typeof mocks.resolveRuntimePluginRegistry>) =>
     mocks.resolveRuntimePluginRegistry(...args),
 }));
@@ -71,6 +76,7 @@ describe("ensurePluginRegistryLoaded", () => {
 
   beforeEach(() => {
     mocks.loadOpenClawPlugins.mockReset();
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReset();
     mocks.resolveRuntimePluginRegistry.mockReset();
     mocks.getActivePluginRegistry.mockReset();
     mocks.resolveConfiguredChannelPluginIds.mockReset();
@@ -82,6 +88,7 @@ describe("ensurePluginRegistryLoaded", () => {
     resetPluginRegistryLoadedForTests();
 
     mocks.getActivePluginRegistry.mockReturnValue(null);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(undefined);
     mocks.loadOpenClawPlugins.mockReturnValue(createEmptyPluginRegistry());
     mocks.resolveRuntimePluginRegistry.mockImplementation(
       (...args: Parameters<typeof mocks.loadOpenClawPlugins>) => mocks.loadOpenClawPlugins(...args),
@@ -324,6 +331,7 @@ describe("ensurePluginRegistryLoaded", () => {
   it("reuses a compatible active registry instead of forcing a broad reload", () => {
     const activeRegistry = createEmptyPluginRegistry();
     mocks.getActivePluginRegistry.mockReturnValue(activeRegistry);
+    mocks.resolveCompatibleRuntimePluginRegistry.mockReturnValue(activeRegistry);
 
     ensurePluginRegistryLoaded({
       scope: "all",

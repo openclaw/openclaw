@@ -314,6 +314,7 @@ function resolvePluginToolRegistry(params: {
 }) {
   return getLoadedRuntimePluginRegistry({
     env: params.loadOptions.env,
+    loadOptions: params.loadOptions,
     workspaceDir: params.loadOptions.workspaceDir,
     requiredPluginIds: params.onlyPluginIds,
     surface: "channel",

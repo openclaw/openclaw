@@ -18,6 +18,9 @@ const applyPluginAutoEnableMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
   loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
+  resolveCompatibleRuntimePluginRegistry: (params: unknown) =>
+    resolveRuntimePluginRegistryMock(params),
+  resolvePluginRegistryLoadCacheKey: (params: unknown) => JSON.stringify(params),
   resolveRuntimePluginRegistry: (params: unknown) => resolveRuntimePluginRegistryMock(params),
 }));
 
@@ -1106,7 +1109,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it("reuses the gateway-bindable registry when it covers the tool runtime scope", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
-    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
     resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
 
     const tools = resolvePluginTools(
@@ -1153,7 +1156,7 @@ describe("resolvePluginTools optional tools", () => {
       ],
       diagnostics: [],
     };
-    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
     const tools = resolvePluginTools(
@@ -1171,7 +1174,7 @@ describe("resolvePluginTools optional tools", () => {
 
   it("adds enabled non-startup tool plugins to the active tool runtime scope", () => {
     const activeRegistry = createOptionalDemoActiveRegistry();
-    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable");
+    setActivePluginRegistry(activeRegistry as never, "gateway-startup", "gateway-bindable", "/tmp");
     resolveRuntimePluginRegistryMock.mockReturnValue(activeRegistry);
 
     resolvePluginTools({
@@ -1196,6 +1199,12 @@ describe("resolvePluginTools optional tools", () => {
 
   it("reuses the pinned gateway channel registry after provider runtime loads replace active registry", () => {
     const gatewayRegistry = createOptionalDemoActiveRegistry();
+    setActivePluginRegistry(
+      gatewayRegistry as never,
+      "gateway-startup",
+      "gateway-bindable",
+      "/tmp",
+    );
     pinActivePluginChannelRegistry(gatewayRegistry as never);
     setActivePluginRegistry(
       {
@@ -1205,6 +1214,7 @@ describe("resolvePluginTools optional tools", () => {
       } as never,
       "provider-runtime",
       "default",
+      "/tmp",
     );
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 
@@ -1222,6 +1232,12 @@ describe("resolvePluginTools optional tools", () => {
 
   it("reuses the pinned gateway channel registry even when the caller omits gateway binding", () => {
     const gatewayRegistry = createOptionalDemoActiveRegistry();
+    setActivePluginRegistry(
+      gatewayRegistry as never,
+      "gateway-startup",
+      "gateway-bindable",
+      "/tmp",
+    );
     pinActivePluginChannelRegistry(gatewayRegistry as never);
     setActivePluginRegistry(
       {
@@ -1231,6 +1247,7 @@ describe("resolvePluginTools optional tools", () => {
       } as never,
       "provider-runtime",
       "default",
+      "/tmp",
     );
     resolveRuntimePluginRegistryMock.mockReturnValue(undefined);
 

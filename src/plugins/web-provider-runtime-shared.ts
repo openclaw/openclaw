@@ -174,6 +174,7 @@ export function resolvePluginWebProviders<TEntry>(
   const loadOptions = resolveWebProviderLoadOptions(context, params);
   const compatible = getLoadedRuntimePluginRegistry({
     env: context.env,
+    loadOptions,
     workspaceDir: context.workspaceDir,
     requiredPluginIds: context.onlyPluginIds,
   });

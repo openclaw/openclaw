@@ -311,6 +311,7 @@ export function resolvePluginProviders(params: {
   const loadState = resolveRuntimeProviderPluginLoadState(params, base);
   const registry = getLoadedRuntimePluginRegistry({
     env: base.env,
+    loadOptions: loadState.loadOptions,
     workspaceDir: base.workspaceDir,
     requiredPluginIds: loadState.loadOptions.onlyPluginIds,
   });

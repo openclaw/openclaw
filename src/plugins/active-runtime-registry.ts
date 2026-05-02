@@ -1,3 +1,4 @@
+import { resolveCompatibleRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import type { PluginRegistry } from "./registry-types.js";
 import {
   getActivePluginChannelRegistry,
@@ -28,9 +29,6 @@ function registryContainsPluginIds(
   if (pluginIds === undefined) {
     return true;
   }
-  if (pluginIds.length === 0) {
-    return true;
-  }
   const loaded = new Set<string>();
   for (const plugin of registry.plugins ?? []) {
     if (plugin.status === undefined || plugin.status === "loaded") {
@@ -49,6 +47,9 @@ function registryContainsPluginIds(
         }
       }
     }
+  }
+  if (pluginIds.length === 0) {
+    return loaded.size === 0;
   }
   return pluginIds.every((pluginId) => loaded.has(pluginId));
 }
@@ -70,21 +71,33 @@ function resolveSurfaceRegistry(
 export function getLoadedRuntimePluginRegistry(
   params: {
     env?: NodeJS.ProcessEnv;
+    loadOptions?: PluginLoadOptions;
     workspaceDir?: string;
     requiredPluginIds?: readonly string[];
     surface?: ActiveRuntimePluginRegistrySurface;
   } = {},
 ): PluginRegistry | undefined {
-  void params.env;
+  const surface = params.surface ?? "active";
+  const requiredPluginIds = normalizeRequiredPluginIds(
+    params.requiredPluginIds ?? params.loadOptions?.onlyPluginIds,
+  );
+  if (surface === "active" && params.loadOptions && requiredPluginIds?.length !== 0) {
+    const compatible = resolveCompatibleRuntimePluginRegistry(params.loadOptions);
+    if (!compatible || !registryContainsPluginIds(compatible, requiredPluginIds)) {
+      return undefined;
+    }
+    return compatible;
+  }
+
   const activeWorkspaceDir = getActivePluginRegistryWorkspaceDir();
-  if (params.workspaceDir && activeWorkspaceDir && params.workspaceDir !== activeWorkspaceDir) {
+  const requestedWorkspaceDir = params.workspaceDir ?? params.loadOptions?.workspaceDir;
+  if (requestedWorkspaceDir !== undefined && activeWorkspaceDir !== requestedWorkspaceDir) {
     return undefined;
   }
-  const registry = resolveSurfaceRegistry(params.surface ?? "active");
+  const registry = resolveSurfaceRegistry(surface);
   if (!registry) {
     return undefined;
   }
-  const requiredPluginIds = normalizeRequiredPluginIds(params.requiredPluginIds);
   if (!registryContainsPluginIds(registry, requiredPluginIds)) {
     return undefined;
   }
