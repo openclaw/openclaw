@@ -1133,6 +1133,7 @@ export async function runEmbeddedPiAgent(
             timedOut,
             idleTimedOut,
             timedOutDuringCompaction,
+            timedOutDuringToolExecution,
             sessionIdUsed,
             sessionFileUsed,
             lastAssistant: sessionLastAssistant,
@@ -1932,6 +1933,7 @@ export async function runEmbeddedPiAgent(
             failoverReason: assistantFailoverReason,
             timedOut,
             timedOutDuringCompaction,
+            timedOutDuringToolExecution,
             profileRotated: false,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({
@@ -1944,6 +1946,7 @@ export async function runEmbeddedPiAgent(
             timedOut,
             idleTimedOut,
             timedOutDuringCompaction,
+            timedOutDuringToolExecution,
             allowSameModelIdleTimeoutRetry:
               timedOut &&
               idleTimedOut &&
