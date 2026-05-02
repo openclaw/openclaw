@@ -27,6 +27,7 @@ type DispatchReplyWithBufferedBlockDispatcherResult = Awaited<
 >;
 type DeliverRepliesFn = typeof import("./bot/delivery.js").deliverReplies;
 type DeliverRepliesParams = Parameters<DeliverRepliesFn>[0];
+type MatchPluginCommandFn = typeof import("./bot-native-commands.runtime.js").matchPluginCommand;
 
 const dispatchReplyResult: DispatchReplyWithBufferedBlockDispatcherResult = {
   queuedFinal: false,
@@ -45,10 +46,15 @@ const persistentBindingMocks = vi.hoisted(() => ({
 const sessionMocks = vi.hoisted(() => ({
   loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
+  resolveAndPersistSessionFile: vi.fn(),
   resolveStorePath: vi.fn(),
 }));
 const commandAuthMocks = vi.hoisted(() => ({
   resolveCommandArgMenu: vi.fn(),
+}));
+const pluginRuntimeMocks = vi.hoisted(() => ({
+  executePluginCommand: vi.fn(async () => ({ text: "ok" })),
+  matchPluginCommand: vi.fn<MatchPluginCommandFn>(() => null),
 }));
 const replyMocks = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
@@ -148,6 +154,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   return {
     ...actual,
     loadSessionStore: sessionMocks.loadSessionStore,
+    resolveAndPersistSessionFile: sessionMocks.resolveAndPersistSessionFile,
     resolveStorePath: sessionMocks.resolveStorePath,
   };
 });
@@ -178,8 +185,8 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async () => {
   return {
     ...actual,
     getPluginCommandSpecs: vi.fn(() => []),
-    matchPluginCommand: vi.fn(() => null),
-    executePluginCommand: vi.fn(async () => ({ text: "ok" })),
+    matchPluginCommand: pluginRuntimeMocks.matchPluginCommand,
+    executePluginCommand: pluginRuntimeMocks.executePluginCommand,
   };
 });
 vi.mock("./bot/delivery.js", () => ({
@@ -192,6 +199,9 @@ vi.mock("./bot/delivery.replies.js", () => ({
 let registerTelegramNativeCommands: typeof import("./bot-native-commands.js").registerTelegramNativeCommands;
 
 type TelegramCommandHandler = (ctx: unknown) => Promise<void>;
+type TelegramPluginCommandSpecs = ReturnType<
+  NonNullable<TelegramNativeCommandDeps["getPluginCommandSpecs"]>
+>;
 
 function registerAndResolveStatusHandler(params: {
   cfg: OpenClawConfig;
@@ -233,6 +243,7 @@ function registerAndResolveCommandHandlerBase(params: {
   useAccessGroups: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
+  pluginCommandSpecs?: TelegramPluginCommandSpecs;
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -246,6 +257,7 @@ function registerAndResolveCommandHandlerBase(params: {
     useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
+    pluginCommandSpecs,
   } = params;
   const commandHandlers = new Map<string, TelegramCommandHandler>();
   const sendMessage = vi.fn().mockResolvedValue(undefined);
@@ -253,7 +265,7 @@ function registerAndResolveCommandHandlerBase(params: {
     getRuntimeConfig: vi.fn(() => cfg),
     readChannelAllowFromStore: vi.fn(async () => storeAllowFrom ?? []),
     dispatchReplyWithBufferedBlockDispatcher: replyMocks.dispatchReplyWithBufferedBlockDispatcher,
-    getPluginCommandSpecs: vi.fn(() => []),
+    getPluginCommandSpecs: vi.fn(() => pluginCommandSpecs ?? []),
     listSkillCommandsForAgents: vi.fn(() => []),
     syncTelegramMenuCommands: vi.fn(),
   };
@@ -292,6 +304,7 @@ function registerAndResolveCommandHandler(params: {
   useAccessGroups?: boolean;
   telegramCfg?: NativeCommandTestParams["telegramCfg"];
   resolveTelegramGroupConfig?: RegisterTelegramHandlerParams["resolveTelegramGroupConfig"];
+  pluginCommandSpecs?: TelegramPluginCommandSpecs;
 }): {
   handler: TelegramCommandHandler;
   sendMessage: ReturnType<typeof vi.fn>;
@@ -305,6 +318,7 @@ function registerAndResolveCommandHandler(params: {
     useAccessGroups,
     telegramCfg,
     resolveTelegramGroupConfig,
+    pluginCommandSpecs,
   } = params;
   return registerAndResolveCommandHandlerBase({
     commandName,
@@ -315,6 +329,7 @@ function registerAndResolveCommandHandler(params: {
     useAccessGroups: useAccessGroups ?? true,
     telegramCfg,
     resolveTelegramGroupConfig,
+    pluginCommandSpecs,
   });
 }
 
@@ -450,7 +465,22 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     commandAuthMocks.resolveCommandArgMenu.mockClear();
     sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
+    sessionMocks.resolveAndPersistSessionFile.mockClear().mockImplementation(async (params) => {
+      const sessionFile =
+        params.fallbackSessionFile ?? `/tmp/openclaw-sessions/${params.sessionId}.jsonl`;
+      return {
+        sessionFile,
+        sessionEntry: {
+          ...params.sessionEntry,
+          sessionId: params.sessionId,
+          sessionFile,
+          updatedAt: Date.now(),
+        },
+      };
+    });
     sessionMocks.resolveStorePath.mockClear().mockReturnValue("/tmp/openclaw-sessions.json");
+    pluginRuntimeMocks.executePluginCommand.mockClear().mockResolvedValue({ text: "ok" });
+    pluginRuntimeMocks.matchPluginCommand.mockClear().mockReturnValue(null);
     replyMocks.dispatchReplyWithBufferedBlockDispatcher
       .mockClear()
       .mockResolvedValue(dispatchReplyResult);
@@ -1018,5 +1048,62 @@ describe("registerTelegramNativeCommands — session metadata", () => {
     await handler(createTelegramTopicCommandContext());
 
     expectUnauthorizedNewCommandBlocked(sendMessage);
+  });
+
+  it("passes a persisted topic session file to plugin commands", async () => {
+    sessionMocks.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions/sessions.json");
+    sessionMocks.loadSessionStore.mockReturnValue({
+      "agent:main:telegram:group:-1001234567890:topic:42": {
+        sessionId: "sess-topic",
+        updatedAt: 1,
+      },
+    });
+
+    const { handler } = registerAndResolveCommandHandler({
+      commandName: "codex",
+      cfg: { commands: { allowFrom: { telegram: ["200"] } } } as OpenClawConfig,
+      groupAllowFrom: ["-1001234567890"],
+      useAccessGroups: false,
+      pluginCommandSpecs: [
+        {
+          name: "codex",
+          description: "Codex",
+          acceptsArgs: true,
+        },
+      ] as TelegramPluginCommandSpecs,
+    });
+    pluginRuntimeMocks.matchPluginCommand.mockReturnValue({
+      command: {
+        name: "codex",
+        description: "Codex",
+        handler: vi.fn(),
+        pluginId: "openclaw-codex-app-server",
+        pluginName: "Codex",
+        requireAuth: true,
+      },
+      args: "bind --cwd /tmp/work",
+    });
+
+    await handler(
+      createTelegramTopicCommandContext({ match: "bind --cwd /tmp/work", threadId: 42 }),
+    );
+
+    expect(sessionMocks.resolveAndPersistSessionFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "sess-topic",
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+        storePath: "/tmp/openclaw-sessions/sessions.json",
+        sessionsDir: "/tmp/openclaw-sessions",
+        fallbackSessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+      }),
+    );
+    expect(pluginRuntimeMocks.executePluginCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
+        sessionId: "sess-topic",
+        sessionFile: "/tmp/openclaw-sessions/sess-topic-topic-42.jsonl",
+        messageThreadId: 42,
+      }),
+    );
   });
 });
