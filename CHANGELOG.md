@@ -40,6 +40,7 @@ Docs: https://docs.openclaw.ai
 - Subagents: avoid duplicate parent-visible replies when a parent uses `sessions_send` on its own persistent native subagent session, while preserving announce delivery for async sends. Fixes #73550. Thanks @sylviazhang2006-design.
 - Web search/Brave: add opt-in `brave.http` diagnostics for Brave request URLs/query params, response status/timing, and cache hit/miss/write events without logging API keys or response bodies. Fixes #55196. Thanks @mecampbellsoup.
 - Web search/config: validate explicit `tools.web.search.provider` values against bundled and installed plugin manifests, while warning for stale third-party plugin config. Fixes #53092. Thanks @TinyTb.
+- Web search/SearXNG: retry empty non-general category searches once with the general category, so unsupported category engines do not return empty results when general search has matches. Fixes #73552. Thanks @Loukky.
 - Agents/sandbox: preserve existing workspace file modes when sandbox edits atomically replace files, so 0644 files do not collapse to 0600 after Write/Edit/apply_patch. Fixes #44077. Thanks @patosullivan.
 - Agents/models: keep legacy CLI runtime model refs such as `claude-cli/*` in the configured allowlist after canonical runtime migration, so cron `payload.model` overrides keep working. Fixes #75753. Thanks @RyanSandoval.
 - Codex/app-server: restart the shared Codex app-server client once when it closes during startup thread resume, preserving the existing thread binding instead of retrying `thread/start` on a closed client. Thanks @vincentkoc.

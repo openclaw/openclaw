@@ -91,6 +91,17 @@ function buildSearxngSearchUrl(params: {
   return url.toString();
 }
 
+function shouldRetryEmptyCategorySearchWithGeneral(categories: string | undefined): boolean {
+  if (!categories) {
+    return false;
+  }
+  const normalized = categories
+    .split(",")
+    .map((category) => category.trim().toLowerCase())
+    .filter((category) => category.length > 0);
+  return normalized.length > 0 && !normalized.includes("general");
+}
+
 async function searxngEndpointTargetsPrivateNetwork(
   url: URL,
   lookupFn?: LookupFn,
@@ -169,6 +180,54 @@ function parseSearxngResponseText(text: string, count: number): SearxngResult[] 
   return results;
 }
 
+async function fetchSearxngResults(params: {
+  baseUrl: string;
+  query: string;
+  categories?: string;
+  language?: string;
+  timeoutSeconds: number;
+  count: number;
+  endpointMode: SearxngEndpointMode;
+}): Promise<SearxngResult[]> {
+  const url = buildSearxngSearchUrl({
+    baseUrl: params.baseUrl,
+    query: params.query,
+    categories: params.categories,
+    language: params.language,
+  });
+
+  const withEndpoint =
+    params.endpointMode === "selfHosted"
+      ? withSelfHostedWebSearchEndpoint
+      : withTrustedWebSearchEndpoint;
+  return await withEndpoint(
+    {
+      url,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+        },
+      },
+    },
+    async (response) => {
+      if (!response.ok) {
+        const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
+        throw new Error(
+          `SearXNG search error (${response.status}): ${detail || response.statusText}`,
+        );
+      }
+
+      const body = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
+      if (body.truncated) {
+        throw new Error("SearXNG response too large.");
+      }
+      return parseSearxngResponseText(body.text, params.count);
+    },
+  );
+}
+
 export async function runSearxngSearch(params: {
   config?: OpenClawConfig;
   query: string;
@@ -208,42 +267,27 @@ export async function runSearxngSearch(params: {
     return { ...cached.value, cached: true };
   }
 
-  const url = buildSearxngSearchUrl({
+  const startedAt = Date.now();
+  let results = await fetchSearxngResults({
     baseUrl,
     query: params.query,
     categories,
     language,
+    timeoutSeconds,
+    count,
+    endpointMode,
   });
-
-  const startedAt = Date.now();
-  const withEndpoint =
-    endpointMode === "selfHosted" ? withSelfHostedWebSearchEndpoint : withTrustedWebSearchEndpoint;
-  const results = await withEndpoint(
-    {
-      url,
+  if (results.length === 0 && shouldRetryEmptyCategorySearchWithGeneral(categories)) {
+    results = await fetchSearxngResults({
+      baseUrl,
+      query: params.query,
+      categories: "general",
+      language,
       timeoutSeconds,
-      init: {
-        method: "GET",
-        headers: {
-          Accept: "application/json",
-        },
-      },
-    },
-    async (response) => {
-      if (!response.ok) {
-        const detail = (await readResponseText(response, { maxBytes: 64_000 })).text;
-        throw new Error(
-          `SearXNG search error (${response.status}): ${detail || response.statusText}`,
-        );
-      }
-
-      const body = await readResponseText(response, { maxBytes: MAX_RESPONSE_BYTES });
-      if (body.truncated) {
-        throw new Error("SearXNG response too large.");
-      }
-      return parseSearxngResponseText(body.text, count);
-    },
-  );
+      count,
+      endpointMode,
+    });
+  }
 
   const payload = {
     query: params.query,
@@ -273,6 +317,7 @@ export const __testing = {
   buildSearxngSearchUrl,
   normalizeSearxngResult,
   parseSearxngResponseText,
+  shouldRetryEmptyCategorySearchWithGeneral,
   validateSearxngBaseUrl,
   SEARXNG_SEARCH_CACHE,
 };
