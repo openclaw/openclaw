@@ -9,7 +9,6 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/auto-reply/inbound.group-require-mention-test-plugins.ts",
   "src/auto-reply/reply/get-reply.test-loader.ts",
   "src/cli/daemon-cli-compat.ts",
-  "src/cli/debug-timing.ts",
   "src/commands/doctor/shared/deprecation-compat.ts",
   "src/config/doc-baseline.runtime.ts",
   "src/config/doc-baseline.ts",
