@@ -373,6 +373,15 @@ Fix options:
   reports the conflict. Pick one owner for the channel or rename plugin-owned
   tools so the runtime surface is unambiguous.
 
+### Plugin tool factory caching
+
+OpenClaw caches successful plugin tool factory results for repeated
+resolutions with the same effective request context. The cache key includes the
+effective runtime config, workspace, agent/session ids, sandbox policy, browser
+settings, delivery context, requester identity, and ownership state, so
+factories that depend on those trusted fields are re-run when the context
+changes.
+
 ## Plugin slots (exclusive categories)
 
 Some categories are exclusive (only one active at a time):

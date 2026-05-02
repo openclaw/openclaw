@@ -1,5 +1,6 @@
 import { normalizeToolName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
 import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
 import {
@@ -11,7 +12,7 @@ import {
   buildPluginRuntimeLoadOptions,
   resolvePluginRuntimeLoadContext,
 } from "./runtime/load-context.js";
-import type { OpenClawPluginToolContext } from "./types.js";
+import type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "./types.js";
 
 export type PluginToolMeta = {
   pluginId: string;
@@ -19,6 +20,103 @@ export type PluginToolMeta = {
 };
 
 const pluginToolMeta = new WeakMap<AnyAgentTool, PluginToolMeta>();
+const PLUGIN_TOOL_FACTORY_CACHE_LIMIT_PER_FACTORY = 64;
+
+type PluginToolFactoryResult = AnyAgentTool | AnyAgentTool[] | null | undefined;
+
+let pluginToolFactoryCache = new WeakMap<
+  OpenClawPluginToolFactory,
+  Map<string, PluginToolFactoryResult>
+>();
+let pluginToolFactoryCacheObjectIds = new WeakMap<object, number>();
+let nextPluginToolFactoryCacheObjectId = 1;
+
+export function resetPluginToolFactoryCache(): void {
+  pluginToolFactoryCache = new WeakMap();
+  pluginToolFactoryCacheObjectIds = new WeakMap();
+  nextPluginToolFactoryCacheObjectId = 1;
+}
+
+function getPluginToolFactoryCacheObjectId(value: object | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+  const existing = pluginToolFactoryCacheObjectIds.get(value);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const next = nextPluginToolFactoryCacheObjectId++;
+  pluginToolFactoryCacheObjectIds.set(value, next);
+  return next;
+}
+
+function getPluginToolFactoryConfigCacheKey(
+  value: PluginLoadOptions["config"] | null | undefined,
+): string | number | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    return resolveRuntimeConfigCacheKey(value);
+  } catch {
+    return getPluginToolFactoryCacheObjectId(value);
+  }
+}
+
+function buildPluginToolFactoryCacheKey(params: {
+  ctx: OpenClawPluginToolContext;
+  currentRuntimeConfig?: PluginLoadOptions["config"] | null;
+}): string {
+  const { ctx } = params;
+  return JSON.stringify({
+    config: getPluginToolFactoryConfigCacheKey(ctx.config),
+    runtimeConfig: getPluginToolFactoryConfigCacheKey(ctx.runtimeConfig),
+    currentRuntimeConfig: getPluginToolFactoryConfigCacheKey(params.currentRuntimeConfig),
+    fsPolicy: ctx.fsPolicy ?? null,
+    workspaceDir: ctx.workspaceDir ?? null,
+    agentDir: ctx.agentDir ?? null,
+    agentId: ctx.agentId ?? null,
+    sessionKey: ctx.sessionKey ?? null,
+    sessionId: ctx.sessionId ?? null,
+    browser: ctx.browser ?? null,
+    messageChannel: ctx.messageChannel ?? null,
+    agentAccountId: ctx.agentAccountId ?? null,
+    deliveryContext: ctx.deliveryContext ?? null,
+    requesterSenderId: ctx.requesterSenderId ?? null,
+    senderIsOwner: ctx.senderIsOwner ?? null,
+    sandboxed: ctx.sandboxed ?? null,
+  });
+}
+
+function readCachedPluginToolFactoryResult(params: {
+  factory: OpenClawPluginToolFactory;
+  cacheKey: string;
+}): { hit: boolean; result: PluginToolFactoryResult } {
+  const cache = pluginToolFactoryCache.get(params.factory);
+  if (!cache || !cache.has(params.cacheKey)) {
+    return { hit: false, result: undefined };
+  }
+  return { hit: true, result: cache.get(params.cacheKey) };
+}
+
+function writeCachedPluginToolFactoryResult(params: {
+  factory: OpenClawPluginToolFactory;
+  cacheKey: string;
+  result: PluginToolFactoryResult;
+}): void {
+  let cache = pluginToolFactoryCache.get(params.factory);
+  if (!cache) {
+    cache = new Map();
+    pluginToolFactoryCache.set(params.factory, cache);
+  }
+  if (!cache.has(params.cacheKey) && cache.size >= PLUGIN_TOOL_FACTORY_CACHE_LIMIT_PER_FACTORY) {
+    const oldestKey = cache.keys().next().value;
+    if (oldestKey !== undefined) {
+      cache.delete(oldestKey);
+    }
+  }
+  cache.set(params.cacheKey, params.result);
+}
 
 export function setPluginToolMeta(tool: AnyAgentTool, meta: PluginToolMeta): void {
   pluginToolMeta.set(tool, meta);
@@ -152,6 +250,15 @@ export function resolvePluginTools(params: {
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
   const blockedPlugins = new Set<string>();
+  let currentRuntimeConfigForFactoryCache: PluginLoadOptions["config"] | null | undefined =
+    params.context.runtimeConfig;
+  if (currentRuntimeConfigForFactoryCache === undefined && params.context.getRuntimeConfig) {
+    try {
+      currentRuntimeConfigForFactoryCache = params.context.getRuntimeConfig();
+    } catch {
+      currentRuntimeConfigForFactoryCache = null;
+    }
+  }
 
   for (const entry of registry.tools) {
     if (blockedPlugins.has(entry.pluginId)) {
@@ -172,15 +279,32 @@ export function resolvePluginTools(params: {
       blockedPlugins.add(entry.pluginId);
       continue;
     }
-    let resolved: AnyAgentTool | AnyAgentTool[] | null | undefined = null;
-    try {
-      resolved = entry.factory(params.context);
-    } catch (err) {
-      context.logger.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
-      continue;
+    let resolved: PluginToolFactoryResult = null;
+    const factoryCacheKey = buildPluginToolFactoryCacheKey({
+      ctx: params.context,
+      currentRuntimeConfig: currentRuntimeConfigForFactoryCache,
+    });
+    const cached = readCachedPluginToolFactoryResult({
+      factory: entry.factory,
+      cacheKey: factoryCacheKey,
+    });
+    if (cached.hit) {
+      resolved = cached.result;
+    } else {
+      try {
+        resolved = entry.factory(params.context);
+      } catch (err) {
+        context.logger.error(`plugin tool failed (${entry.pluginId}): ${String(err)}`);
+        continue;
+      }
+      writeCachedPluginToolFactoryResult({
+        factory: entry.factory,
+        cacheKey: factoryCacheKey,
+        result: resolved,
+      });
     }
     if (!resolved) {
-      if (entry.names.length > 0) {
+      if ((entry.names?.length ?? 0) > 0) {
         context.logger.debug?.(
           `plugin tool factory returned null (${entry.pluginId}): [${entry.names.join(", ")}]`,
         );
