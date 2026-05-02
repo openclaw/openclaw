@@ -1,5 +1,6 @@
 import type { ChatType } from "../channels/chat-type.js";
 import type {
+  AgentContextInjection,
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
   EmbeddedPiExecutionContract,
@@ -106,6 +107,7 @@ export type AgentConfig = {
   /** Optional per-agent overrides for selected context/token-heavy limits. */
   contextLimits?: AgentContextLimitsConfig;
   contextTokens?: number;
+  contextInjection?: AgentContextInjection;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   identity?: IdentityConfig;

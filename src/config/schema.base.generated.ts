@@ -7256,6 +7256,13 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                   exclusiveMinimum: 0,
                   maximum: 9007199254740991,
                 },
+                contextInjection: {
+                  type: "string",
+                  enum: ["always", "continuation-skip", "never"],
+                  title: "Agent Context Injection",
+                  description:
+                    "Per-agent context injection mode. Overrides agents.defaults.contextInjection for this agent. 'always' re-injects bootstrap on every turn, 'continuation-skip' skips after a completed bootstrap turn, 'never' disables injection entirely.",
+                },
                 heartbeat: {
                   type: "object",
                   properties: {
@@ -24863,6 +24870,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Agent Skills Prompt Max Chars",
       help: "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
       tags: ["performance"],
+    },
+    "agents.list[].contextInjection": {
+      label: "Agent Context Injection",
+      help: "Per-agent context injection mode. Overrides agents.defaults.contextInjection for this agent. 'always' re-injects bootstrap on every turn, 'continuation-skip' skips after a completed bootstrap turn, 'never' disables injection entirely.",
+      tags: ["advanced"],
     },
     "agents.list[].contextLimits": {
       label: "Agent Context Limits",
