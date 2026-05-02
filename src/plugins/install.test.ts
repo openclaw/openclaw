@@ -213,11 +213,13 @@ async function installFromDirWithWarnings(params: {
   pluginDir: string;
   extensionsDir: string;
   dangerouslyForceUnsafeInstall?: boolean;
+  trustedSourceLinkedOfficialInstall?: boolean;
   mode?: "install" | "update";
 }) {
   const warnings: string[] = [];
   const result = await installPluginFromDir({
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     dirPath: params.pluginDir,
     extensionsDir: params.extensionsDir,
     mode: params.mode,
@@ -1867,6 +1869,36 @@ describe("installPluginFromArchive", () => {
         warning.includes(
           "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
         ),
+      ),
+    ).toBe(true);
+  });
+
+  it("allows package installs with dangerous code patterns for trusted source-linked official installs", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "official-dangerous-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["index.js"] },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      `const { spawn } = require("child_process");\nspawn("google-chrome", []);`,
+    );
+
+    const { result, warnings } = await installFromDirWithWarnings({
+      pluginDir,
+      extensionsDir,
+      trustedSourceLinkedOfficialInstall: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(
+      warnings.some((warning) =>
+        warning.includes("allowed because it is an official source-linked ClawHub package"),
       ),
     ).toBe(true);
   });

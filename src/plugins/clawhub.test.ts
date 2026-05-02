@@ -255,6 +255,35 @@ describe("installPluginFromClawHub", () => {
     expect(archiveCleanupMock).toHaveBeenCalledTimes(1);
   });
 
+  it("marks official source-linked OpenClaw packages as trusted for install scanning", async () => {
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        verification: {
+          tier: "source-linked",
+          sourceRepo: "openclaw/openclaw",
+        },
+      },
+    });
+
+    await installPluginFromClawHub({
+      spec: "clawhub:demo",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(installPluginFromArchiveMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trustedSourceLinkedOfficialInstall: true,
+      }),
+    );
+  });
+
   it("resolves explicit ClawHub dist tags before fetching version metadata", async () => {
     parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "latest" });
     fetchClawHubPackageDetailMock.mockResolvedValueOnce({
