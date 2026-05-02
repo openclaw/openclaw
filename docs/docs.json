@@ -1182,6 +1182,7 @@
                 "pages": [
                   "tools/plugin",
                   "plugins/community",
+                  "plugins/plugin-inventory",
                   "plugins/bundles",
                   "plugins/dependency-resolution",
                   "plugins/codex-harness",
