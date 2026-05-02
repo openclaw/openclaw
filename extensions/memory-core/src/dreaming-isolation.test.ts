@@ -105,8 +105,8 @@ describe("Bug #65374: Layer 2b — fail-closed on shared workspace", () => {
     if (!match) {
       return [];
     }
-    // Fail closed: shared workspace + no identity = no dreaming
-    if (match.shared && !currentAgentId) {
+    // Fail closed: shared workspace + no identity (or whitespace-only) = no dreaming
+    if (match.shared && !currentAgentId?.trim()) {
       return [];
     }
     // Filter to current agent when shared and identity known
@@ -204,19 +204,17 @@ describe("Bug #65374: Adversarial paths", () => {
     expect(decideAgentIds({ match, currentAgentId: "" })).toEqual([]);
   });
 
-  it("fail-closed survives shared workspace with whitespace-only currentAgentId", () => {
+  it("fail-closed rejects shared workspace with whitespace-only currentAgentId", () => {
     const match: MemoryDreamingWorkspace = {
       workspaceDir: "/shared",
       agentIds: ["alpha", "gamma"],
       shared: true,
     };
-    // Whitespace-only string is truthy but meaningless — our logic treats it as truthy,
-    // but this documents the behavior. If we want stricter validation, we need a trim check.
+    // Whitespace-only string is meaningless — fail closed by returning no agents.
+    // Ghost red-team finding: whitespace bypasses the !currentAgentId check.
+    // Fix: use currentAgentId?.trim() to catch whitespace-only values.
     const result = decideAgentIds({ match, currentAgentId: "  " });
-    // Current implementation: whitespace is truthy, so it passes the `!currentAgentId` check
-    // and filters to ["  "]. This is a known edge case — whitespace-only agentId
-    // would not match any real agent, resulting in no session ingestion anyway.
-    expect(result).toEqual(["  "]);
+    expect(result).toEqual([]);
   });
 
   it("currentAgentId not in workspace agent list still returns single entry (no cross-contamination)", () => {
@@ -276,7 +274,7 @@ function decideAgentIds(params: {
   if (!match) {
     return [];
   }
-  if (match.shared && !currentAgentId) {
+  if (match.shared && !currentAgentId?.trim()) {
     return [];
   }
   if (currentAgentId && match.agentIds.length > 1) {
