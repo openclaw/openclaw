@@ -14,6 +14,11 @@ const ALIASES = ["/messaging_window", "/messaging-window"];
 const USAGE =
   "Usage: /messaging_window status | <duration|off> | global <duration|off> | <channel|current> <duration|off> | channel <name|current> <duration|off> | reset global | reset <channel|current>";
 
+function splitArgs(raw: string): string[] {
+  const trimmed = raw.trim();
+  return trimmed ? trimmed.split(/\s+/) : [];
+}
+
 function parseWindowMs(raw: string): number | null {
   const normalized = normalizeOptionalLowercaseString(raw) ?? "";
   if (normalized === "off" || normalized === "disable" || normalized === "disabled") {
@@ -55,7 +60,7 @@ function parseSetScope(action: string, args: string): MessagingWindowCommand {
   }
 
   if (action === "channel") {
-    const [channel, value, ...extra] = args.split(/\s+/).filter(Boolean);
+    const [channel, value, ...extra] = splitArgs(args);
     if (!channel || !value || extra.length > 0) {
       return { action: "error", message: USAGE };
     }
@@ -66,7 +71,7 @@ function parseSetScope(action: string, args: string): MessagingWindowCommand {
     return { action: "set", scope: "channel", channel, debounceMs };
   }
 
-  const [value, ...extra] = args.split(/\s+/).filter(Boolean);
+  const [value, ...extra] = splitArgs(args);
   if (value && extra.length === 0) {
     const debounceMs = parseWindowMs(value);
     if (debounceMs != null) {
@@ -78,7 +83,7 @@ function parseSetScope(action: string, args: string): MessagingWindowCommand {
 }
 
 function parseResetScope(args: string): MessagingWindowCommand {
-  const [scope, channel, ...extra] = args.split(/\s+/).filter(Boolean);
+  const [scope, channel, ...extra] = splitArgs(args);
   if (scope === "global" && !channel && extra.length === 0) {
     return { action: "reset", scope: "global" };
   }
@@ -92,7 +97,7 @@ function parseResetScope(args: string): MessagingWindowCommand {
 }
 
 function parseOffScope(args: string): MessagingWindowCommand {
-  const [scope, channel, ...extra] = args.split(/\s+/).filter(Boolean);
+  const [scope, channel, ...extra] = splitArgs(args);
   if (!scope && !channel && extra.length === 0) {
     return { action: "set", scope: "global", debounceMs: 0 };
   }
