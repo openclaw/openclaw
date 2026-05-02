@@ -143,7 +143,7 @@ type GenerationCapabilityProviderKey =
   | "videoGenerationProviders"
   | "musicGenerationProviders";
 
-export function findCapabilityProviderById<T extends CapabilityProvider>(params: {
+function findCapabilityProviderById<T extends CapabilityProvider>(params: {
   providers: T[];
   providerId?: string;
 }): T | undefined {
@@ -208,7 +208,7 @@ export function resolveSelectedCapabilityProvider<T extends CapabilityProvider>(
   });
 }
 
-export function resolveCapabilityModelCandidatesForTool(params: {
+function resolveCapabilityModelCandidatesForTool(params: {
   cfg?: OpenClawConfig;
   agentDir?: string;
   authStore?: AuthProfileStore;
