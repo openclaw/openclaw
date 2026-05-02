@@ -29,6 +29,7 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  sessionId?: string;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
