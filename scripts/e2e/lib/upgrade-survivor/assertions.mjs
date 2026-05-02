@@ -388,7 +388,17 @@ function assertConfiguredPluginInstalls() {
   const index = readInstalledPluginIndex();
   const records = index.installRecords ?? {};
   const matrix = records.matrix;
-  assert(matrix, "configured external matrix plugin install record missing");
+  const bundledMatrix = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "matrix");
+  if (!matrix) {
+    assert(
+      bundledMatrix,
+      "configured matrix plugin is neither present in the plugin index nor installed externally",
+    );
+    assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
+    assert(!records.discord, "internal discord plugin should not be installed externally");
+    assert(!records.telegram, "internal telegram plugin should not be installed externally");
+    return;
+  }
   assert(
     matrix.source === "clawhub" || matrix.source === "npm",
     `configured external matrix plugin installed from unexpected source: ${matrix.source}`,
