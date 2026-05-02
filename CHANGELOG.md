@@ -18,6 +18,7 @@ Docs: https://docs.openclaw.ai
 - Agents/runtime: memoize transcript replay-policy resolution for stable config and process-env runs while preserving custom-env provider hook behavior. Thanks @DmitryPogodaev.
 - Infra/path-guards: add a fast path for canonical absolute POSIX containment checks, avoiding repeated `path.resolve` and `path.relative` work in hot filesystem walkers. Refs #75895, #75575, and #68782. Thanks @Enderfga.
 - Tools: add a platform-level tool descriptor planner for descriptor-first visibility, generic availability checks, and executor references. Thanks @shakkernerd.
+- Plugins/tools: cache plugin tool descriptors captured from `api.registerTool(...)` so repeated prompt-time planning can skip plugin runtime loading while execution still loads the live plugin tool. (#76079) Thanks @shakkernerd.
 - Docs/Codex: clarify that ChatGPT/Codex subscription setups should use `openai/gpt-*` with `agentRuntime.id: "codex"` for native Codex runtime, while `openai-codex/*` remains the PI OAuth route. Thanks @pashpashpash.
 - Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.
 - Plugins/beta: externalize ACPX behind the official `@openclaw/acpx` package so packaged installs keep ACP harness adapter binaries out of core until the ACP backend is installed. Thanks @vincentkoc.
@@ -274,7 +275,6 @@ Docs: https://docs.openclaw.ai
 - Providers/Google: fix Gemini 2.5 Flash-Lite `reasoning: "minimal"` rejections by raising its thinking-budget floor to 512 while preserving the existing Gemini 2.5 Pro and Flash minimal presets. (#70629) Thanks @ericberic.
 - Agents/status: resolve `session_status(sessionKey="current")` for sparse channel-plugin sessions after literal current lookups miss, so Scope, Slack, Discord, and other plugin-driven agents avoid retrying through `Unknown sessionKey: current`. Fixes #74141. (#72306) Thanks @bittoby.
 - Cron: retry recurring wake-now main-session jobs through temporary heartbeat busy skips before recording success, so queued cron events no longer appear as ok ghost runs while the main lane is still busy. Fixes #75964. (#76083) Thanks @kshetrajna12 and @xuruiray.
-
 
 ## 2026.4.30
 
