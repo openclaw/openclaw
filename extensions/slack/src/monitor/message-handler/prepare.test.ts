@@ -409,6 +409,33 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
   });
 
+  it("recovers full Slack DM text from top-level rich text blocks when text is only a preview", async () => {
+    const preview = "Yo Molty what is uppppp ".repeat(7).slice(0, 160);
+    const fullText = `${preview}and this tail should still reach the agent`;
+
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: preview,
+        blocks: [
+          {
+            type: "rich_text",
+            block_id: "b1",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [{ type: "text", text: fullText }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toBe(fullText);
+    expect(prepared!.ctxPayload.BodyForAgent).toContain(fullText);
+  });
+
   it("ignores non-forward attachments when no direct text/files are present", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({

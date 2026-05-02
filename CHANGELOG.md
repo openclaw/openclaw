@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack: recover full inbound DM text from top-level rich-text blocks when Slack sends a shortened message preview, so long direct messages still reach the agent intact. Fixes #55358. Thanks @tonyjwinter.
 - Replies: strip legacy `[TOOL_CALL]{tool => ..., args => ...}[/TOOL_CALL]` pseudo-call text from user-facing replies and flag it in tool-call diagnostics instead of showing raw tool syntax in channels. Fixes #63610. Thanks @canh0chua.
 - WhatsApp: close long-lived web sockets through Baileys `end(error)` before falling back to raw websocket close, so listener teardown runs Baileys cleanup instead of leaving zombie sockets. Fixes #52442. Thanks @essendigitalgroup-cyber.
 - Twitch/plugins: emit a flat JSON Schema for Twitch channel config so single-account and multi-account configs validate before runtime load, and add source-checkout diagnostics for missing pnpm workspace dependencies. Thanks @vincentkoc.
