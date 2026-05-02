@@ -155,6 +155,7 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  "chat.transcribeAudio",
 ];
 
 export function listGatewayMethods(): string[] {

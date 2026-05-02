@@ -22,8 +22,10 @@ import {
   removeQueuedMessage as removeQueuedMessageInternal,
   resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
+  transcribeChatAudio as transcribeChatAudioInternal,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
+  type ChatDictationStatus,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -222,6 +224,12 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkDetail: string | null = null;
   @state() realtimeTalkTranscript: string | null = null;
   private realtimeTalkSession: RealtimeTalkSession | null = null;
+  @state() chatDictationStatus: ChatDictationStatus = "idle";
+  @state() chatDictationDetail: string | null = null;
+  private chatDictationRecorder: MediaRecorder | null = null;
+  private chatDictationStream: MediaStream | null = null;
+  private chatDictationChunks: Blob[] = [];
+  private chatDictationCancelNextStop = false;
   @state() chatManualRefreshInFlight = false;
   @state() chatMobileControlsOpen = false;
   private chatMobileControlsTrigger: HTMLElement | null = null;
@@ -643,6 +651,7 @@ export class OpenClawApp extends LitElement {
     document.removeEventListener("keydown", this.chatMobileControlsKeydownHandler);
     document.removeEventListener("pointerdown", this.chatMobileControlsPointerdownHandler);
     this.chatMobileControlsTrigger = null;
+    this.cancelChatDictation();
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
     super.disconnectedCallback();
   }
@@ -942,6 +951,96 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;
     }
+  }
+
+  async toggleChatDictation() {
+    if (this.chatDictationRecorder && this.chatDictationStatus === "recording") {
+      this.chatDictationRecorder.stop();
+      return;
+    }
+    if (this.chatDictationStatus === "transcribing") {
+      return;
+    }
+    if (!this.client || !this.connected) {
+      this.chatDictationStatus = "error";
+      this.chatDictationDetail = "Gateway not connected";
+      this.lastError = this.chatDictationDetail;
+      return;
+    }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      this.chatDictationStatus = "error";
+      this.chatDictationDetail = "Browser microphone recording is unavailable";
+      this.lastError = this.chatDictationDetail;
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((candidate) =>
+        MediaRecorder.isTypeSupported(candidate),
+      );
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      this.chatDictationStream = stream;
+      this.chatDictationRecorder = recorder;
+      this.chatDictationChunks = [];
+      recorder.addEventListener("dataavailable", (event) => {
+        if (event.data.size > 0) {
+          this.chatDictationChunks.push(event.data);
+        }
+      });
+      recorder.addEventListener("error", (event) => {
+        this.chatDictationStatus = "error";
+        this.chatDictationDetail =
+          event.message || event.error?.message || "Dictation recording failed";
+        this.lastError = this.chatDictationDetail;
+        this.stopChatDictationStream();
+      });
+      recorder.addEventListener("stop", () => {
+        const chunks = this.chatDictationChunks;
+        const canceled = this.chatDictationCancelNextStop;
+        this.chatDictationCancelNextStop = false;
+        this.chatDictationRecorder = null;
+        this.stopChatDictationStream();
+        if (canceled) {
+          this.chatDictationStatus = "idle";
+          this.chatDictationDetail = null;
+          return;
+        }
+        const blob = new Blob(chunks, {
+          type: recorder.mimeType || chunks[0]?.type || "audio/webm",
+        });
+        void transcribeChatAudioInternal(
+          this as unknown as Parameters<typeof transcribeChatAudioInternal>[0],
+          blob,
+        );
+      });
+      this.chatDictationStatus = "recording";
+      this.chatDictationDetail = "Recording dictation...";
+      recorder.start();
+    } catch (error) {
+      this.chatDictationRecorder = null;
+      this.stopChatDictationStream();
+      this.chatDictationStatus = "error";
+      this.chatDictationDetail = error instanceof Error ? error.message : String(error);
+      this.lastError = this.chatDictationDetail;
+    }
+  }
+
+  private stopChatDictationStream() {
+    this.chatDictationStream?.getTracks().forEach((track) => track.stop());
+    this.chatDictationStream = null;
+  }
+
+  cancelChatDictation() {
+    if (this.chatDictationRecorder?.state === "recording") {
+      this.chatDictationCancelNextStop = true;
+      this.chatDictationRecorder.stop();
+    }
+    this.chatDictationRecorder = null;
+    this.chatDictationChunks = [];
+    this.stopChatDictationStream();
+    this.chatDictationStatus = "idle";
+    this.chatDictationDetail = null;
   }
 
   async steerQueuedChatMessage(id: string) {
