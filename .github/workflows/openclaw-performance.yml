@@ -89,6 +89,7 @@ jobs:
       REPORT_DIR: ${{ github.workspace }}/.artifacts/kova/reports/${{ matrix.lane }}
       BUNDLE_DIR: ${{ github.workspace }}/.artifacts/kova/bundles/${{ matrix.lane }}
       SUMMARY_DIR: ${{ github.workspace }}/.artifacts/kova/summaries
+      SOURCE_PERF_DIR: ${{ github.workspace }}/.artifacts/openclaw-performance/source/${{ matrix.lane }}
       LANE_ID: ${{ matrix.lane }}
       PROFILE: ${{ inputs.profile || 'diagnostic' }}
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
@@ -297,6 +298,105 @@ jobs:
             exit "$status"
           fi
 
+      - name: Run OpenClaw source performance probes
+        if: ${{ steps.lane.outputs.run == 'true' && matrix.lane == 'mock-provider' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_runs="$REQUESTED_REPEAT"
+          if ! [[ "$source_runs" =~ ^[0-9]+$ ]] || [[ "$source_runs" -lt 1 ]]; then
+            source_runs=3
+          fi
+
+          mkdir -p "$SOURCE_PERF_DIR/mock-hello"
+          pnpm build
+
+          pnpm test:gateway:cpu-scenarios \
+            --output-dir "$SOURCE_PERF_DIR/gateway-cpu" \
+            --runs "$source_runs" \
+            --warmup 1 \
+            --skip-qa \
+            --startup-case default \
+            --startup-case skipChannels \
+            --startup-case oneInternalHook \
+            --startup-case allInternalHooks \
+            --startup-case fiftyPlugins \
+            --startup-case fiftyStartupLazyPlugins
+
+          for run_index in $(seq 1 "$source_runs"); do
+            run_dir="$SOURCE_PERF_DIR/mock-hello/run-$(printf '%03d' "$run_index")"
+            pnpm openclaw qa suite \
+              --provider-mode mock-openai \
+              --concurrency 1 \
+              --output-dir "$(realpath --relative-to="$GITHUB_WORKSPACE" "$run_dir")" \
+              --scenario channel-chat-baseline
+          done
+
+          gateway_home="$(mktemp -d)"
+          gateway_port="$(node -e "const net=require('node:net'); const s=net.createServer(); s.listen(0,'127.0.0.1',()=>{ console.log(s.address().port); s.close(); });")"
+          gateway_state="$gateway_home/.openclaw"
+          gateway_config="$gateway_state/openclaw.json"
+          gateway_log="$SOURCE_PERF_DIR/cli-gateway.log"
+          gateway_pid=""
+          mkdir -p "$gateway_state"
+          cat > "$gateway_config" <<EOF
+          {
+            "browser": { "enabled": false },
+            "gateway": {
+              "mode": "local",
+              "port": ${gateway_port},
+              "bind": "loopback",
+              "auth": { "mode": "none" },
+              "controlUi": { "enabled": false },
+              "tailscale": { "mode": "off" }
+            },
+            "plugins": {
+              "enabled": true,
+              "entries": { "browser": { "enabled": false } }
+            }
+          }
+          EOF
+          cleanup_gateway() {
+            if [[ -n "${gateway_pid:-}" ]] && kill -0 "$gateway_pid" 2>/dev/null; then
+              kill "$gateway_pid" 2>/dev/null || true
+              wait "$gateway_pid" 2>/dev/null || true
+            fi
+            rm -rf "$gateway_home"
+          }
+          trap cleanup_gateway EXIT
+          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" OPENCLAW_SKIP_CHANNELS=1 \
+            node dist/entry.js gateway run --bind loopback --port "$gateway_port" --auth none --allow-unconfigured --force \
+            >"$gateway_log" 2>&1 &
+          gateway_pid="$!"
+
+          for _ in $(seq 1 120); do
+            if curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null; then
+              break
+            fi
+            if ! kill -0 "$gateway_pid" 2>/dev/null; then
+              cat "$gateway_log" >&2
+              exit 1
+            fi
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:${gateway_port}/healthz" >/dev/null
+
+          OPENCLAW_HOME="$gateway_home" OPENCLAW_STATE_DIR="$gateway_state" OPENCLAW_CONFIG_PATH="$gateway_config" OPENCLAW_GATEWAY_PORT="$gateway_port" \
+            node --import tsx scripts/bench-cli-startup.ts \
+            --case gatewayHealthJson \
+            --case configGetGatewayPort \
+            --runs "$source_runs" \
+            --warmup 1 \
+            --output "$SOURCE_PERF_DIR/cli-startup.json"
+          cleanup_gateway
+          trap - EXIT
+
+          pnpm perf:source:summary \
+            --source-dir "$SOURCE_PERF_DIR" \
+            --output "$SOURCE_PERF_DIR/index.md"
+
+          cat "$SOURCE_PERF_DIR/index.md" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Upload Kova artifacts
         if: ${{ always() && steps.lane.outputs.run == 'true' }}
         uses: actions/upload-artifact@v5
@@ -306,6 +406,7 @@ jobs:
             .artifacts/kova/reports/${{ matrix.lane }}
             .artifacts/kova/bundles/${{ matrix.lane }}
             .artifacts/kova/summaries/${{ matrix.lane }}.md
+            .artifacts/openclaw-performance/source/${{ matrix.lane }}
           if-no-files-found: ignore
           retention-days: ${{ matrix.deep_profile == 'true' && 14 || 30 }}
 
@@ -347,6 +448,18 @@ jobs:
           if [[ -d "$BUNDLE_DIR" ]]; then
             mkdir -p "$dest/bundles"
             cp -R "$BUNDLE_DIR"/. "$dest/bundles/"
+          fi
+          if [[ -d "$SOURCE_PERF_DIR" ]]; then
+            mkdir -p "$dest/source"
+            cp -R "$SOURCE_PERF_DIR"/. "$dest/source/"
+            if [[ -f "$SOURCE_PERF_DIR/index.md" ]]; then
+              cat >> "$dest/index.md" <<'EOF'
+
+          ## Source probes
+
+          Additional gateway boot, memory, plugin pressure, mock hello-loop, and CLI startup numbers are in [source/index.md](source/index.md).
+          EOF
+            fi
           fi
           cat > "${reports_root}/openclaw-performance/${ref_slug}/latest-${LANE_ID}.json" <<EOF
           {
