@@ -895,6 +895,9 @@ export async function runMemoryFlushIfNeeded(params: {
       runId: flushRunId,
       sessionId: activeSessionEntry?.sessionId ?? params.followupRun.run.sessionId,
       lane: CommandLane.Main,
+      // Propagate abort signal so terminal aborts (run-budget timeout, HTTP
+      // client disconnect) skip pointless fallback retries. Closes #60388.
+      abortSignal: params.replyOperation.abortSignal,
       run: async (provider, model, runOptions) => {
         const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams({
           run: params.followupRun.run,

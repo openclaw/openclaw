@@ -747,6 +747,7 @@ function buildArtifactsCapture(params: {
       runtimeArtifacts?.timedOutDuringCompaction ?? runtimeEnd?.timedOutDuringCompaction,
     timedOutDuringToolExecution:
       runtimeArtifacts?.timedOutDuringToolExecution ?? runtimeEnd?.timedOutDuringToolExecution,
+    timedOutByRunBudget: runtimeArtifacts?.timedOutByRunBudget ?? runtimeEnd?.timedOutByRunBudget,
     promptError:
       runtimeArtifacts?.promptError ?? runtimeEnd?.promptError ?? runtimeCompletion?.promptError,
     promptErrorSource: runtimeArtifacts?.promptErrorSource ?? runtimeCompletion?.promptErrorSource,

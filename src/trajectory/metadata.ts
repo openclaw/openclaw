@@ -47,6 +47,7 @@ type BuildTrajectoryArtifactsParams = {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  timedOutByRunBudget: boolean;
   promptError?: string;
   promptErrorSource?: string | null;
   usage?: unknown;
@@ -305,6 +306,7 @@ export function buildTrajectoryArtifacts(
     idleTimedOut: params.idleTimedOut,
     timedOutDuringCompaction: params.timedOutDuringCompaction,
     timedOutDuringToolExecution: params.timedOutDuringToolExecution,
+    timedOutByRunBudget: params.timedOutByRunBudget,
     promptError: params.promptError,
     promptErrorSource: params.promptErrorSource,
     usage: params.usage,

@@ -57,6 +57,12 @@ type AssistantDecisionParams = {
   timedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
+  /**
+   * True when the embedded run-budget timer fired (whole-run deadline
+   * exhausted). When set, no fallback model can help — the run is over
+   * regardless of which provider handles it. Closes #60388.
+   */
+  timedOutByRunBudget: boolean;
   profileRotated: boolean;
 };
 
@@ -82,7 +88,10 @@ function shouldRotatePrompt(params: PromptDecisionParams): boolean {
 function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   return (
     (!params.aborted && (params.failoverFailure || params.failoverReason !== null)) ||
-    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
+    (params.timedOut &&
+      !params.timedOutDuringCompaction &&
+      !params.timedOutDuringToolExecution &&
+      !params.timedOutByRunBudget)
   );
 }
 

@@ -2128,6 +2128,355 @@ describe("runWithModelFallback", () => {
       });
     });
   });
+
+  describe("terminal abort propagation (closes #60388)", () => {
+    // The fallback layer should treat aborts with certain signal.reason markers
+    // as "terminal" — the run is over regardless of which model handles it,
+    // so retrying with a fallback model wastes API calls. Two terminal sources:
+    //   - run-budget timeout: scheduleAbortTimer in pi-embedded-runner fires
+    //     abortRun(true), which calls runAbortController.abort() with an Error
+    //     whose name is "TimeoutError"
+    //   - HTTP client disconnect: watchClientDisconnect in src/gateway/http-common.ts
+    //     calls abort(new ClientDisconnectError())
+    //
+    // These tests verify the contract via shape (name === "TimeoutError" /
+    // "ClientDisconnectError") rather than importing concrete classes — that
+    // way the contract is independent of class location.
+
+    function makeAbortError(message = "aborted"): Error {
+      const err = new Error(message);
+      err.name = "AbortError";
+      return err;
+    }
+
+    function makeTaggedAbortController(reason: Error): AbortController {
+      const controller = new AbortController();
+      controller.abort(reason);
+      return controller;
+    }
+
+    it("rethrows immediately when signal.reason has name=TimeoutError (run-budget timeout)", async () => {
+      const cfg = makeCfg();
+      const runError = makeAbortError("aborted");
+      const run = vi.fn().mockRejectedValue(runError);
+
+      const timeoutReason = new Error("request timed out");
+      timeoutReason.name = "TimeoutError";
+      const controller = makeTaggedAbortController(timeoutReason);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(runError);
+
+      // Critical assertion: only the FIRST candidate runs — no fallback retry.
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows immediately when signal.reason has name=ClientDisconnectError", async () => {
+      const cfg = makeCfg();
+      const runError = makeAbortError("aborted");
+      const run = vi.fn().mockRejectedValue(runError);
+
+      const disconnectReason = new Error("HTTP client disconnected");
+      disconnectReason.name = "ClientDisconnectError";
+      const controller = makeTaggedAbortController(disconnectReason);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(runError);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("detects TimeoutError nested as cause of an outer Error", async () => {
+      // pi-embedded-runner's makeAbortError() wraps the original reason as
+      // an outer AbortError with .cause set. The terminal-abort check must
+      // walk up one level to find the TimeoutError.
+      const cfg = makeCfg();
+      const runError = makeAbortError("aborted");
+      const run = vi.fn().mockRejectedValue(runError);
+
+      const innerTimeout = new Error("request timed out");
+      innerTimeout.name = "TimeoutError";
+      const outerWrap = new Error("aborted", { cause: innerTimeout });
+      outerWrap.name = "AbortError";
+      const controller = makeTaggedAbortController(outerWrap);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(runError);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when thrown error has TimeoutError in cause chain (embedded run-budget timer)", async () => {
+      // The embedded runner aborts a *private* runAbortController on
+      // run-budget timeout — `params.abortSignal` (the caller signal) is
+      // never aborted. abortable() then wraps the rejection in an outer
+      // AbortError whose .cause is the TimeoutError. The fallback layer
+      // must inspect the thrown error's cause chain (not just the signal).
+      // Closes #60388.
+      const cfg = makeCfg();
+      const innerTimeout = new Error("request timed out");
+      innerTimeout.name = "TimeoutError";
+      const outerAbort = new Error("aborted", { cause: innerTimeout });
+      outerAbort.name = "AbortError";
+      const run = vi.fn().mockRejectedValue(outerAbort);
+
+      // Note: NO abortSignal passed — caller signal is irrelevant for this
+      // path. The terminal classification must come from the thrown error.
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when thrown error has ClientDisconnectError in cause chain", async () => {
+      // Parallel to the run-budget case: HTTP client disconnect can also
+      // surface as a wrapped AbortError whose .cause is a
+      // ClientDisconnectError. The fallback layer must recognize it via
+      // the thrown error even when params.abortSignal is unused.
+      const cfg = makeCfg();
+      const innerDisconnect = new Error("client disconnected");
+      innerDisconnect.name = "ClientDisconnectError";
+      const outerAbort = new Error("aborted", { cause: innerDisconnect });
+      outerAbort.name = "AbortError";
+      const run = vi.fn().mockRejectedValue(outerAbort);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+        }),
+      ).rejects.toBe(outerAbort);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back normally when thrown error is generic AbortError without terminal cause", async () => {
+      // Sanity: a generic AbortError (e.g. user pressed Esc but signal not
+      // tagged) should NOT trigger terminal-from-error detection — it falls
+      // through to the existing fallback path.
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("provider transient failure"))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back normally when signal is aborted with a non-terminal reason", async () => {
+      // A signal aborted with a generic error (e.g. provider-specific failure)
+      // should NOT skip fallback — that's a regular failover situation.
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("provider had a sad day"))
+        .mockResolvedValueOnce("ok");
+
+      const genericReason = new Error("some unrelated abort");
+      const controller = makeTaggedAbortController(genericReason);
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+        abortSignal: controller.signal,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back normally when no abortSignal is passed (back-compat)", async () => {
+      // Existing callers that don't pass abortSignal must continue to behave
+      // as before — fallback chain runs on errors.
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("first attempt failed"))
+        .mockResolvedValueOnce("ok");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("falls back normally when signal is provided but not aborted", async () => {
+      // A live signal that hasn't fired yet must not block fallback.
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("first attempt failed"))
+        .mockResolvedValueOnce("ok");
+
+      const controller = new AbortController();
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+        abortSignal: controller.signal,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+
+    it("rethrows terminal abort even when error resembles a failover-normalizable error", async () => {
+      // Edge case flagged by greptile review on openclaw/openclaw#62682:
+      // If the signal is aborted with a terminal reason (run-budget timeout)
+      // BUT the thrown error also looks like a rate-limit error that
+      // coerceToFailoverError would normalize (e.g. Google Vertex RESOURCE_EXHAUSTED
+      // abort racing with the run-budget timer), the old `shouldRethrowAbort && !normalizedFailover`
+      // guard would fall through and try the next candidate. Fix: check isTerminalAbort
+      // BEFORE coerceToFailoverError.
+      const cfg = makeCfg();
+
+      // Construct an error that coerceToFailoverError may recognize as a
+      // retryable FailoverError (rate-limit shape). We use a generic error
+      // with a 429 status property, which matches multiple provider coercions.
+      const rateLimitLikeError = Object.assign(new Error("RESOURCE_EXHAUSTED: quota exceeded"), {
+        status: 429,
+        name: "AbortError",
+      });
+
+      const run = vi.fn().mockRejectedValue(rateLimitLikeError);
+
+      const timeoutReason = new Error("request timed out");
+      timeoutReason.name = "TimeoutError";
+      const controller = new AbortController();
+      controller.abort(timeoutReason);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBe(rateLimitLikeError);
+
+      // Critical: only the first candidate should run. The terminal signal
+      // must override the failover normalization.
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats cron timeout string reason as terminal (covers plain-string abort)", async () => {
+      // Flagged by codex review on openclaw/openclaw#62682: `src/cron/service/timer.ts:90`
+      // calls `runAbortController.abort(timeoutErrorMessage())` with a plain
+      // string, not an Error. `isTerminalAbort` must handle this shape or
+      // cron timeouts will silently waste fallback attempts.
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const controller = new AbortController();
+      controller.abort("cron: job execution timed out");
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats an Error whose .message matches a known terminal string as terminal", async () => {
+      // Defensive: if a caller wraps `timeoutErrorMessage()` in `new Error(...)`
+      // before passing it to `abort()`, the outer `name` will be generic
+      // ("Error") but the `.message` will carry the known terminal marker.
+      const cfg = makeCfg();
+      const run = vi.fn().mockRejectedValue(makeAbortError("aborted"));
+
+      const wrapped = new Error("cron: job execution timed out");
+      const controller = new AbortController();
+      controller.abort(wrapped);
+
+      await expect(
+        runWithModelFallback({
+          cfg,
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+          run,
+          abortSignal: controller.signal,
+        }),
+      ).rejects.toBeInstanceOf(Error);
+
+      expect(run).toHaveBeenCalledTimes(1);
+    });
+
+    it("does NOT treat unrelated string reasons as terminal", async () => {
+      // Back-compat guard: arbitrary strings passed to abort() must still
+      // flow through normal fallback (not get mistakenly short-circuited).
+      const cfg = makeCfg();
+      const run = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("first attempt failed"))
+        .mockResolvedValueOnce("ok");
+
+      const controller = new AbortController();
+      controller.abort("some unrelated cancel reason");
+
+      const result = await runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        run,
+        abortSignal: controller.signal,
+      });
+
+      expect(result.result).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(2);
+    });
+  });
 });
 
 describe("runWithImageModelFallback", () => {

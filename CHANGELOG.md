@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/failover: stop the model fallback chain when a run-level abort is terminal — the embedded run-budget timer (`scheduleAbortTimer`), an HTTP client disconnect, or a cron job timeout. Previously the fallback layer would continue trying additional models even though the whole run's deadline had elapsed (or the caller had gone away), wasting tokens and time on retries that could not produce a useful result. Detection covers both `signal.reason` (caller-driven) and the thrown error's `.cause` chain (embedded private controller). New `timedOutByRunBudget` attempt result flag; failover policy now skips assistant rotation when set. Closes #60388. Thanks @simonusa.
 - Agents/sessions: preserve terminal lifecycle state when final run metadata persists from a stale in-memory snapshot, preventing `main` sessions from staying stuck as running after completed or timed-out turns.
 - Status: show the `openai-codex` OAuth profile for `openai/gpt-*` sessions running through the native Codex runtime instead of reporting auth as unknown. (#76197) Thanks @mbelinky.
 - Plugins/externalization: keep diagnostics ClawHub packages and persisted bundled-plugin relocation on npm-first install metadata for launch, and omit Discord from the core package now that its external package is published. Thanks @vincentkoc.
