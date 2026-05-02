@@ -84,7 +84,7 @@ describe("createDiscordRestClient proxy support", () => {
     expect(requestClient.options?.fetch).toBeUndefined();
   });
 
-  it("falls back to direct fetch when the Discord proxy URL is remote", () => {
+  it("accepts remote Discord proxy URLs", () => {
     const cfg = {
       channels: {
         discord: {
@@ -99,8 +99,8 @@ describe("createDiscordRestClient proxy support", () => {
       options?: { fetch?: typeof fetch };
     };
 
-    expect(makeProxyFetchMock).not.toHaveBeenCalledWith("http://proxy.test:8080");
-    expect(requestClient.options?.fetch).toBeUndefined();
+    expect(makeProxyFetchMock).toHaveBeenCalledWith("http://proxy.test:8080");
+    expect(requestClient.options?.fetch).toEqual(expect.any(Function));
   });
 
   it("accepts IPv6 loopback Discord proxy URLs", () => {

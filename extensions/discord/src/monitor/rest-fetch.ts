@@ -6,8 +6,9 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { ProxyAgent, fetch as undiciFetch } from "undici";
+import { resolveDiscordFetch } from "../fetch.js";
 import { withValidatedDiscordProxy } from "../proxy-fetch.js";
+import { makeProxyFetch } from "../proxy.js";
 
 export function resolveDiscordRestFetch(
   proxyUrl: string | undefined,
@@ -15,14 +16,9 @@ export function resolveDiscordRestFetch(
 ): typeof fetch {
   const effectiveProxyUrl = resolveEffectiveDebugProxyUrl(proxyUrl);
   const fetcher = withValidatedDiscordProxy(effectiveProxyUrl, runtime, (proxy) => {
-    const agent = new ProxyAgent(proxy);
+    const discordFetch = resolveDiscordFetch(makeProxyFetch(proxy));
     return wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
-      (
-        undiciFetch(input as string | URL, {
-          ...(init as Record<string, unknown>),
-          dispatcher: agent,
-        }) as unknown as Promise<Response>
-      ).then((response) => {
+      discordFetch(input, init).then((response) => {
         captureHttpExchange({
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
