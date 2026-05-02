@@ -1806,11 +1806,42 @@ public struct SessionsCompactionRestoreResult: Codable, Sendable {
     }
 }
 
+public struct SessionRuntimeEnvelope: Codable, Sendable {
+    public let allowedtools: [String]?
+    public let disallowedtools: [String]?
+    public let allowedpaths: [String]?
+    public let deniedpaths: [String]?
+    public let bashcommandallowlist: [String]?
+
+    public init(
+        allowedtools: [String]?,
+        disallowedtools: [String]?,
+        allowedpaths: [String]?,
+        deniedpaths: [String]?,
+        bashcommandallowlist: [String]?)
+    {
+        self.allowedtools = allowedtools
+        self.disallowedtools = disallowedtools
+        self.allowedpaths = allowedpaths
+        self.deniedpaths = deniedpaths
+        self.bashcommandallowlist = bashcommandallowlist
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case allowedtools = "allowedTools"
+        case disallowedtools = "disallowedTools"
+        case allowedpaths = "allowedPaths"
+        case deniedpaths = "deniedPaths"
+        case bashcommandallowlist = "bashCommandAllowlist"
+    }
+}
+
 public struct SessionsCreateParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
     public let label: String?
     public let model: String?
+    public let envelope: [String: AnyCodable]?
     public let parentsessionkey: String?
     public let task: String?
     public let message: String?
@@ -1820,6 +1851,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         agentid: String?,
         label: String?,
         model: String?,
+        envelope: [String: AnyCodable]?,
         parentsessionkey: String?,
         task: String?,
         message: String?)
@@ -1828,6 +1860,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         self.agentid = agentid
         self.label = label
         self.model = model
+        self.envelope = envelope
         self.parentsessionkey = parentsessionkey
         self.task = task
         self.message = message
@@ -1838,6 +1871,7 @@ public struct SessionsCreateParams: Codable, Sendable {
         case agentid = "agentId"
         case label
         case model
+        case envelope
         case parentsessionkey = "parentSessionKey"
         case task
         case message
@@ -1944,6 +1978,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let spawndepth: AnyCodable?
     public let subagentrole: AnyCodable?
     public let subagentcontrolscope: AnyCodable?
+    public let envelope: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -1967,6 +2002,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         spawndepth: AnyCodable?,
         subagentrole: AnyCodable?,
         subagentcontrolscope: AnyCodable?,
+        envelope: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?)
     {
@@ -1989,6 +2025,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.spawndepth = spawndepth
         self.subagentrole = subagentrole
         self.subagentcontrolscope = subagentcontrolscope
+        self.envelope = envelope
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -2013,6 +2050,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case spawndepth = "spawnDepth"
         case subagentrole = "subagentRole"
         case subagentcontrolscope = "subagentControlScope"
+        case envelope
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
