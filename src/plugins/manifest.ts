@@ -381,6 +381,8 @@ export type PluginManifest = {
   videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   /** Cheap music-generation provider auth metadata without importing plugin runtime. */
   musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  /** Cheap plugin-tool availability metadata without importing plugin runtime. */
+  toolMetadata?: Record<string, PluginManifestToolMetadata>;
   /** Manifest-owned config behavior consumed by generic core helpers. */
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
@@ -452,6 +454,8 @@ export type PluginManifestCapabilityProviderMetadata = {
   authSignals?: PluginManifestCapabilityProviderAuthSignal[];
   configSignals?: PluginManifestCapabilityProviderConfigSignal[];
 };
+
+export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata;
 
 export type PluginManifestProviderAuthChoice = {
   /** Provider id owned by this manifest entry. */
@@ -1565,6 +1569,7 @@ export function loadPluginManifest(
   const musicGenerationProviderMetadata = normalizeCapabilityProviderMetadata(
     raw.musicGenerationProviderMetadata,
   );
+  const toolMetadata = normalizeCapabilityProviderMetadata(raw.toolMetadata);
   const configContracts = normalizeManifestConfigContracts(raw.configContracts);
   const channelConfigs = normalizeChannelConfigs(raw.channelConfigs);
 
@@ -1614,6 +1619,7 @@ export function loadPluginManifest(
       imageGenerationProviderMetadata,
       videoGenerationProviderMetadata,
       musicGenerationProviderMetadata,
+      toolMetadata,
       configContracts,
       channelConfigs,
     },

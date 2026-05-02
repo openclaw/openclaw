@@ -178,6 +178,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `imageGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap image-generation auth metadata for provider ids declared in `contracts.imageGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                  |
 | `videoGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap video-generation auth metadata for provider ids declared in `contracts.videoGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                  |
 | `musicGenerationProviderMetadata`    | No       | `Record<string, object>`         | Cheap music-generation auth metadata for provider ids declared in `contracts.musicGenerationProviders`, including provider-owned auth aliases and base-url guards.                                                                  |
+| `toolMetadata`                       | No       | `Record<string, object>`         | Cheap availability metadata for plugin-owned tools declared in `contracts.tools`. Use it when a tool should not load runtime unless config, env, or auth evidence exists.                                                           |
 | `channelConfigs`                     | No       | `Record<string, object>`         | Manifest-owned channel config metadata merged into discovery and validation surfaces before runtime loads.                                                                                                                          |
 | `skills`                             | No       | `string[]`                       | Skill directories to load, relative to the plugin root.                                                                                                                                                                             |
 | `name`                               | No       | `string`                         | Human-readable plugin name.                                                                                                                                                                                                         |
@@ -279,6 +280,45 @@ Each `providerBaseUrl` guard supports:
 | `provider`        | Yes      | `string`   | Provider config id whose `baseUrl` should be checked.                                                                                                |
 | `defaultBaseUrl`  | No       | `string`   | Base URL to assume when the provider config omits `baseUrl`.                                                                                         |
 | `allowedBaseUrls` | Yes      | `string[]` | Allowed base URLs for this auth signal. The signal is ignored when the configured or default base URL does not match one of these normalized values. |
+
+## Tool metadata reference
+
+`toolMetadata` uses the same `configSignals` and `authSignals` shapes as
+generation provider metadata, keyed by tool name. `contracts.tools` declares
+ownership. `toolMetadata` declares cheap availability evidence so OpenClaw can
+avoid importing a plugin runtime just to have its tool factory return `null`.
+
+```json
+{
+  "providerAuthEnvVars": {
+    "example": ["EXAMPLE_API_KEY"]
+  },
+  "contracts": {
+    "tools": ["example_search"]
+  },
+  "toolMetadata": {
+    "example_search": {
+      "authSignals": [
+        {
+          "provider": "example"
+        }
+      ],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.example.config",
+          "overlayPath": "search",
+          "required": ["apiKey"]
+        }
+      ]
+    }
+  }
+}
+```
+
+If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and
+loads the owning plugin when the tool contract matches policy. For hot-path
+tools whose factory depends on auth/config, plugin authors should declare
+`toolMetadata` instead of making core import runtime to ask.
 
 ## providerAuthChoices reference
 

@@ -565,6 +565,93 @@ describe("optional media tool factory planning", () => {
     ).not.toEqual(expect.arrayContaining(["image_generate", "video_generate", "music_generate"]));
   });
 
+  it("counts configured non-env SecretRef config signals without resolving secrets", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          comfy: {
+            config: {
+              mode: "cloud",
+              apiKey: { source: "file", provider: "vault", id: "/comfy/api-key" },
+              workflow: { "1": { inputs: {} } },
+              promptNodeId: "1",
+            },
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          vault: {
+            source: "file",
+            path: "/tmp/openclaw-secrets.json",
+            mode: "json",
+          },
+        },
+      },
+    };
+    const configSignals = [
+      {
+        rootPath: "plugins.entries.comfy.config",
+        mode: {
+          path: "mode",
+          allowed: ["cloud"],
+        },
+        requiredAny: ["workflow", "workflowPath"],
+        required: ["promptNodeId", "apiKey"],
+      },
+    ];
+    installSnapshot(config, [
+      createPlugin({
+        id: "comfy",
+        contracts: {
+          imageGenerationProviders: ["comfy"],
+          videoGenerationProviders: ["comfy"],
+          musicGenerationProviders: ["comfy"],
+        },
+        imageGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+        videoGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+        musicGenerationProviderMetadata: {
+          comfy: { configSignals },
+        },
+      }),
+    ]);
+
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }),
+    ).toMatchObject({
+      imageGenerate: true,
+      videoGenerate: true,
+      musicGenerate: true,
+    });
+  });
+
+  it("does not register the image tool without cheap vision availability evidence", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "media-owner",
+        contracts: { mediaUnderstandingProviders: ["media-owner"] },
+        setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
+      }),
+    ]);
+
+    expect(
+      createOpenClawTools({
+        config,
+        agentDir: "/tmp/openclaw-agent",
+        authProfileStore: createAuthStore(),
+        disablePluginTools: true,
+      }).map((tool) => tool.name),
+    ).not.toContain("image");
+  });
+
   it.each([
     {
       name: "legacy local provider config",
@@ -687,22 +774,20 @@ describe("optional media tool factory planning", () => {
     });
   });
 
-  it("falls back to existing factory checks when snapshot or auth store proof is missing", () => {
-    expect(__testing.resolveOptionalMediaToolFactoryPlan({ config: {} })).toEqual({
-      imageGenerate: true,
-      videoGenerate: true,
-      musicGenerate: true,
-      pdf: true,
-    });
-
+  it("does not use a generic factory plan when metadata has no availability proof", () => {
     const config: OpenClawConfig = {};
     installSnapshot(config, []);
 
-    expect(__testing.resolveOptionalMediaToolFactoryPlan({ config })).toEqual({
-      imageGenerate: true,
-      videoGenerate: true,
-      musicGenerate: true,
-      pdf: true,
+    expect(
+      __testing.resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }),
+    ).toEqual({
+      imageGenerate: false,
+      videoGenerate: false,
+      musicGenerate: false,
+      pdf: false,
     });
   });
 });

@@ -38,6 +38,7 @@ import {
   type PluginManifestProviderRequest,
   type PluginManifestQaRunner,
   type PluginManifestSetup,
+  type PluginManifestToolMetadata,
   type PluginPackageChannel,
   type PluginPackageInstall,
 } from "./manifest.js";
@@ -153,6 +154,7 @@ export type PluginManifestRecord = {
   imageGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   videoGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
   musicGenerationProviderMetadata?: Record<string, PluginManifestCapabilityProviderMetadata>;
+  toolMetadata?: Record<string, PluginManifestToolMetadata>;
   configContracts?: PluginManifestConfigContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
   channelCatalogMeta?: {
@@ -337,6 +339,7 @@ function buildRecord(params: {
     imageGenerationProviderMetadata: params.manifest.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.manifest.videoGenerationProviderMetadata,
     musicGenerationProviderMetadata: params.manifest.musicGenerationProviderMetadata,
+    toolMetadata: params.manifest.toolMetadata,
     configContracts: params.manifest.configContracts,
     channelConfigs,
     ...(params.candidate.packageManifest?.channel?.id

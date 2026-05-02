@@ -7,6 +7,7 @@ import {
   isManifestPluginAvailableForControlPlane,
   loadManifestContractSnapshot,
 } from "./manifest-contract-eligibility.js";
+import { hasManifestToolAvailability } from "./manifest-tool-availability.js";
 import {
   getActivePluginChannelRegistry,
   getActivePluginRegistry,
@@ -235,35 +236,34 @@ function manifestToolContractMatchesAllowlist(params: {
   return params.toolNames.some((name) => params.allowlist.has(normalizeToolName(name)));
 }
 
-function addToolPluginIdsFromRegistry(
-  registry: ReturnType<typeof getActivePluginRegistry>,
-  pluginIds: Set<string>,
-  allowlist: Set<string>,
-): void {
-  for (const entry of registry?.tools ?? []) {
-    if (
-      pluginToolNamesMatchAllowlist({
-        names: entry.names,
-        pluginId: entry.pluginId,
-        optional: entry.optional,
-        allowlist,
-      })
-    ) {
-      pluginIds.add(entry.pluginId);
-    }
+function listManifestToolNamesForAvailability(params: {
+  toolNames: readonly string[];
+  pluginId: string;
+  allowlist: Set<string>;
+}): string[] {
+  if (
+    params.allowlist.size === 0 ||
+    params.allowlist.has("*") ||
+    params.allowlist.has("group:plugins")
+  ) {
+    return [...params.toolNames];
   }
+  if (params.allowlist.has(normalizeToolName(params.pluginId))) {
+    return [...params.toolNames];
+  }
+  return params.toolNames.filter((name) => params.allowlist.has(normalizeToolName(name)));
 }
 
 function resolvePluginToolRuntimePluginIds(params: {
   config: PluginLoadOptions["config"];
+  availabilityConfig?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
   toolAllowlist?: string[];
+  hasAuthForProvider?: (providerId: string) => boolean;
 }): string[] {
   const pluginIds = new Set<string>();
   const allowlist = normalizeAllowlist(params.toolAllowlist);
-  addToolPluginIdsFromRegistry(getActivePluginChannelRegistry(), pluginIds, allowlist);
-  addToolPluginIdsFromRegistry(getActivePluginRegistry(), pluginIds, allowlist);
   const snapshot = loadManifestContractSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -279,11 +279,23 @@ function resolvePluginToolRuntimePluginIds(params: {
     ) {
       continue;
     }
+    const toolNames = plugin.contracts?.tools ?? [];
     if (
       manifestToolContractMatchesAllowlist({
-        toolNames: plugin.contracts?.tools ?? [],
+        toolNames,
         pluginId: plugin.id,
         allowlist,
+      }) &&
+      hasManifestToolAvailability({
+        plugin,
+        toolNames: listManifestToolNamesForAvailability({
+          toolNames,
+          pluginId: plugin.id,
+          allowlist,
+        }),
+        config: params.availabilityConfig ?? params.config,
+        env: params.env,
+        hasAuthForProvider: params.hasAuthForProvider,
       })
     ) {
       pluginIds.add(plugin.id);
@@ -296,7 +308,7 @@ function registryContainsPluginIds(
   registry: ReturnType<typeof getActivePluginRegistry>,
   pluginIds?: readonly string[],
 ): boolean {
-  if (!registry || pluginIds === undefined) {
+  if (!registry || pluginIds === undefined || pluginIds.length === 0) {
     return false;
   }
   const loadedPluginIds = new Set(
@@ -332,6 +344,7 @@ export function resolvePluginTools(params: {
   toolAllowlist?: string[];
   suppressNameConflicts?: boolean;
   allowGatewaySubagentBinding?: boolean;
+  hasAuthForProvider?: (providerId: string) => boolean;
   env?: NodeJS.ProcessEnv;
 }): AnyAgentTool[] {
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
@@ -353,9 +366,11 @@ export function resolvePluginTools(params: {
     : undefined;
   const onlyPluginIds = resolvePluginToolRuntimePluginIds({
     config: context.config,
+    availabilityConfig: params.context.runtimeConfig ?? context.config,
     workspaceDir: context.workspaceDir,
     env,
     toolAllowlist: params.toolAllowlist,
+    hasAuthForProvider: params.hasAuthForProvider,
   });
   const loadOptions = buildPluginRuntimeLoadOptions(context, {
     activate: false,
@@ -375,11 +390,15 @@ export function resolvePluginTools(params: {
   const existing = params.existingToolNames ?? new Set<string>();
   const existingNormalized = new Set(Array.from(existing, (tool) => normalizeToolName(tool)));
   const allowlist = normalizeAllowlist(params.toolAllowlist);
+  const scopedPluginIds = new Set(onlyPluginIds);
   const blockedPlugins = new Set<string>();
   const factoryTimingStartedAt = Date.now();
   const factoryTimings: PluginToolFactoryTiming[] = [];
 
   for (const entry of registry.tools) {
+    if (!scopedPluginIds.has(entry.pluginId)) {
+      continue;
+    }
     if (blockedPlugins.has(entry.pluginId)) {
       continue;
     }

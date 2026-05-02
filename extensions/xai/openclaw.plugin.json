@@ -135,6 +135,44 @@
       }
     }
   },
+  "toolMetadata": {
+    "code_execution": {
+      "authSignals": [
+        {
+          "provider": "xai"
+        }
+      ],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.xai.config",
+          "overlayPath": "webSearch",
+          "required": ["apiKey"]
+        },
+        {
+          "rootPath": "tools.web.search.grok",
+          "required": ["apiKey"]
+        }
+      ]
+    },
+    "x_search": {
+      "authSignals": [
+        {
+          "provider": "xai"
+        }
+      ],
+      "configSignals": [
+        {
+          "rootPath": "plugins.entries.xai.config",
+          "overlayPath": "webSearch",
+          "required": ["apiKey"]
+        },
+        {
+          "rootPath": "tools.web.search.grok",
+          "required": ["apiKey"]
+        }
+      ]
+    }
+  },
   "configContracts": {
     "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },

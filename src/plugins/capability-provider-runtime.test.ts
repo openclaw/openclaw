@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   loadPluginManifestRegistry: vi.fn<(params?: Record<string, unknown>) => MockManifestRegistry>(
     () => createEmptyMockManifestRegistry(),
   ),
+  resolveInstalledManifestRegistryIndexFingerprint: vi.fn(() => "test-installed-index"),
   loadBundledCapabilityRuntimeRegistry: vi.fn(),
   loadPluginRegistrySnapshot: vi.fn<() => { plugins: Array<Record<string, unknown>> }>(() => ({
     plugins: [],
@@ -60,6 +61,8 @@ vi.mock("./bundled-capability-runtime.js", () => ({
 
 vi.mock("./manifest-registry-installed.js", () => ({
   loadPluginManifestRegistryForInstalledIndex: mocks.loadPluginManifestRegistry,
+  resolveInstalledManifestRegistryIndexFingerprint:
+    mocks.resolveInstalledManifestRegistryIndexFingerprint,
 }));
 
 vi.mock("./plugin-registry.js", async (importOriginal) => {

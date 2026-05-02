@@ -1,8 +1,13 @@
+import { selectApplicableRuntimeConfig } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  getActiveRuntimeWebToolsMetadata,
+  getActiveSecretsRuntimeSnapshot,
+} from "../secrets/runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
@@ -29,9 +34,9 @@ import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { coerceImageModelConfig } from "./tools/image-tool.helpers.js";
 import { createImageTool } from "./tools/image-tool.js";
 import {
-  getCurrentCapabilityMetadataSnapshot,
   hasSnapshotCapabilityAvailability,
   hasSnapshotProviderEnvAvailability,
+  loadCapabilityMetadataSnapshot,
 } from "./tools/manifest-capability-availability.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { coerceToolModelConfig, hasToolModelConfig } from "./tools/model-config.helpers.js";
@@ -74,6 +79,10 @@ function hasExplicitToolModelConfig(modelConfig: AgentModelConfig | undefined): 
   return hasToolModelConfig(coerceToolModelConfig(modelConfig));
 }
 
+function hasExplicitImageModelConfig(config: OpenClawConfig | undefined): boolean {
+  return hasToolModelConfig(coerceImageModelConfig(config));
+}
+
 function isToolAllowedByFactoryAllowlist(toolName: string, allowlist?: string[]): boolean {
   if (!allowlist || allowlist.length === 0) {
     return true;
@@ -82,10 +91,40 @@ function isToolAllowedByFactoryAllowlist(toolName: string, allowlist?: string[])
   return expanded.has("*") || expanded.has(normalizeToolName(toolName));
 }
 
+function resolveImageToolFactoryAvailable(params: {
+  config?: OpenClawConfig;
+  agentDir?: string;
+  modelHasVision?: boolean;
+  authStore?: AuthProfileStore;
+}): boolean {
+  if (!params.agentDir?.trim()) {
+    return false;
+  }
+  if (params.modelHasVision || hasExplicitImageModelConfig(params.config)) {
+    return true;
+  }
+  const snapshot = loadCapabilityMetadataSnapshot({
+    config: params.config,
+  });
+  return (
+    hasSnapshotCapabilityAvailability({
+      snapshot,
+      authStore: params.authStore,
+      key: "mediaUnderstandingProviders",
+      config: params.config,
+    }) ||
+    hasConfiguredVisionModelAuthSignal({
+      config: params.config,
+      snapshot,
+      authStore: params.authStore,
+    })
+  );
+}
+
 function hasConfiguredVisionModelAuthSignal(params: {
   config?: OpenClawConfig;
-  snapshot: NonNullable<ReturnType<typeof getCurrentCapabilityMetadataSnapshot>>;
-  authStore: AuthProfileStore;
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
+  authStore?: AuthProfileStore;
 }): boolean {
   const providers = params.config?.models?.providers;
   if (!providers || typeof providers !== "object") {
@@ -99,7 +138,7 @@ function hasConfiguredVisionModelAuthSignal(params: {
     ) {
       continue;
     }
-    if (listProfilesForProvider(params.authStore, providerId).length > 0) {
+    if (params.authStore && listProfilesForProvider(params.authStore, providerId).length > 0) {
       return true;
     }
     if (
@@ -141,12 +180,6 @@ function resolveOptionalMediaToolFactoryPlan(params: {
   const explicitPdf =
     hasToolModelConfig(coercePdfModelConfig(params.config)) ||
     hasToolModelConfig(coerceImageModelConfig(params.config));
-  const fallbackPlan: OptionalMediaToolFactoryPlan = {
-    imageGenerate: allowImageGenerate,
-    videoGenerate: allowVideoGenerate,
-    musicGenerate: allowMusicGenerate,
-    pdf: allowPdf,
-  };
   if (params.config?.plugins?.enabled === false) {
     return {
       imageGenerate: false,
@@ -155,16 +188,10 @@ function resolveOptionalMediaToolFactoryPlan(params: {
       pdf: false,
     };
   }
-  if (!params.authStore) {
-    return fallbackPlan;
-  }
-  const snapshot = getCurrentCapabilityMetadataSnapshot({
+  const snapshot = loadCapabilityMetadataSnapshot({
     config: params.config,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
-  if (!snapshot) {
-    return fallbackPlan;
-  }
   return {
     imageGenerate:
       allowImageGenerate &&
@@ -283,6 +310,12 @@ export function createOpenClawTools(
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
+  const runtimeSnapshot = getActiveSecretsRuntimeSnapshot();
+  const availabilityConfig = selectApplicableRuntimeConfig({
+    inputConfig: resolvedConfig,
+    runtimeConfig: runtimeSnapshot?.config,
+    runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
+  });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: options?.agentSessionKey,
     config: resolvedConfig,
@@ -311,15 +344,21 @@ export function createOpenClawTools(
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
   const optionalMediaTools = resolveOptionalMediaToolFactoryPlan({
-    config: resolvedConfig,
+    config: availabilityConfig ?? resolvedConfig,
     workspaceDir,
     authStore: options?.authProfileStore,
     toolAllowlist: options?.pluginToolAllowlist,
   });
-  const imageTool = options?.agentDir?.trim()
+  const imageToolAgentDir = options?.agentDir;
+  const imageTool = resolveImageToolFactoryAvailable({
+    config: availabilityConfig ?? resolvedConfig,
+    agentDir: imageToolAgentDir,
+    modelHasVision: options?.modelHasVision,
+    authStore: options?.authProfileStore,
+  })
     ? createImageTool({
-        config: options?.config,
-        agentDir: options.agentDir,
+        config: availabilityConfig ?? options?.config,
+        agentDir: imageToolAgentDir!,
         authProfileStore: options?.authProfileStore,
         workspaceDir,
         sandbox,

@@ -1195,6 +1195,7 @@ describe("loadPluginManifestRegistry", () => {
       contracts: {
         mediaUnderstandingProviders: ["openai"],
         imageGenerationProviders: ["openai"],
+        tools: ["image_generate"],
       },
       imageGenerationProviderMetadata: {
         openai: {
@@ -1239,6 +1240,22 @@ describe("loadPluginManifestRegistry", () => {
             video: "ignored",
           },
           nativeDocumentInputs: ["pdf", "docx"],
+        },
+      },
+      toolMetadata: {
+        image_generate: {
+          authSignals: [
+            {
+              provider: "openai-codex",
+            },
+          ],
+          configSignals: [
+            {
+              rootPath: "plugins.entries.openai.config",
+              overlayPath: "image",
+              required: ["apiKey"],
+            },
+          ],
         },
       },
       configSchema: { type: "object" },
@@ -1291,6 +1308,22 @@ describe("loadPluginManifestRegistry", () => {
           audio: 20,
         },
         nativeDocumentInputs: ["pdf"],
+      },
+    });
+    expect(registry.plugins[0]?.toolMetadata).toEqual({
+      image_generate: {
+        authSignals: [
+          {
+            provider: "openai-codex",
+          },
+        ],
+        configSignals: [
+          {
+            rootPath: "plugins.entries.openai.config",
+            overlayPath: "image",
+            required: ["apiKey"],
+          },
+        ],
       },
     });
   });
