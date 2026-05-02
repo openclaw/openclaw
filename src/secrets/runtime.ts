@@ -21,6 +21,7 @@ import {
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
+import { SecretProviderResolutionError, SecretRefResolutionError } from "./resolve.js";
 import { type SecretResolverWarning } from "./runtime-shared.js";
 import {
   clearActiveRuntimeWebToolsMetadata,
@@ -379,6 +380,8 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     loadablePluginOrigins,
   });
 
+  const configAssignmentCount = context.assignments.length;
+
   if (includeAuthStoreRefs) {
     const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
     if (!params.loadAuthStore) {
@@ -396,17 +399,41 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     }
   }
 
-  if (context.assignments.length > 0) {
-    const refs = context.assignments.map((assignment) => assignment.ref);
+  const configAssignments = context.assignments.slice(0, configAssignmentCount);
+  const authStoreAssignments = context.assignments.slice(configAssignmentCount);
+
+  if (configAssignments.length > 0) {
+    const refs = configAssignments.map((assignment) => assignment.ref);
     const resolved = await resolveSecretRefValues(refs, {
       config: sourceConfig,
       env: context.env,
       cache: context.cache,
     });
     applyResolvedAssignments({
-      assignments: context.assignments,
+      assignments: configAssignments,
       resolved,
     });
+  }
+
+  for (const assignment of authStoreAssignments) {
+    try {
+      const resolved = await resolveSecretRefValues([assignment.ref], {
+        config: sourceConfig,
+        env: context.env,
+        cache: context.cache,
+      });
+      applyResolvedAssignments({ assignments: [assignment], resolved });
+    } catch (err) {
+      if (err instanceof SecretProviderResolutionError || err instanceof SecretRefResolutionError) {
+        context.warnings.push({
+          code: "SECRETS_AUTH_PROFILE_REF_UNRESOLVED",
+          path: assignment.path,
+          message: `${assignment.path}: auth-profile credential could not be resolved; profile will remain unavailable. ${String(err)}`,
+        });
+      } else {
+        throw err;
+      }
+    }
   }
 
   const snapshot = {
