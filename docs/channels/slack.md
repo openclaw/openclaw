@@ -714,7 +714,7 @@ Notes:
     - `user:<id>` for DMs
     - `channel:<id>` for channels
 
-    Slack DMs are opened via Slack conversation APIs when sending to user targets.
+    Text/block-only Slack DMs can post directly to user IDs; file uploads and threaded sends open the DM via Slack conversation APIs first because those paths require a concrete conversation ID.
 
   </Accordion>
 </AccordionGroup>

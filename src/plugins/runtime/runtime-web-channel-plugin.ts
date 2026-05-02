@@ -104,10 +104,16 @@ type WebChannelHeavyRuntimeModule = {
   resolveHeartbeatRecipients: (...args: unknown[]) => unknown;
 };
 
-let cachedHeavyModulePath: string | null = null;
-let cachedHeavyModule: WebChannelHeavyRuntimeModule | null = null;
-let cachedLightModulePath: string | null = null;
-let cachedLightModule: WebChannelLightRuntimeModule | null = null;
+type WebChannelRuntimeModuleKind = "heavy" | "light";
+type CachedWebChannelRuntimeModule = {
+  modulePath: string;
+  module: WebChannelHeavyRuntimeModule | WebChannelLightRuntimeModule;
+};
+
+const webChannelRuntimeModuleCache = new Map<
+  WebChannelRuntimeModuleKind,
+  CachedWebChannelRuntimeModule
+>();
 
 const moduleLoaders: PluginModuleLoaderCache = new Map();
 
@@ -140,32 +146,38 @@ function loadCurrentHeavyModuleSync(): WebChannelHeavyRuntimeModule {
   });
 }
 
+function getCachedWebChannelRuntimeModule<T extends CachedWebChannelRuntimeModule["module"]>(
+  kind: WebChannelRuntimeModuleKind,
+  modulePath: string,
+  load: () => T,
+): T {
+  const cached = webChannelRuntimeModuleCache.get(kind);
+  if (cached?.modulePath === modulePath) {
+    return cached.module as T;
+  }
+  const loaded = load();
+  webChannelRuntimeModuleCache.set(kind, { modulePath, module: loaded });
+  return loaded;
+}
+
 function loadWebChannelLightModule(): WebChannelLightRuntimeModule {
   const record = resolveWebChannelPluginRecord();
   const modulePath = resolveWebChannelRuntimeModulePath(record, "light-runtime-api");
-  if (cachedLightModule && cachedLightModulePath === modulePath) {
-    return cachedLightModule;
-  }
-  const loaded = loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
-    origin: record.origin,
-  });
-  cachedLightModulePath = modulePath;
-  cachedLightModule = loaded;
-  return loaded;
+  return getCachedWebChannelRuntimeModule("light", modulePath, () =>
+    loadPluginBoundaryModule<WebChannelLightRuntimeModule>(modulePath, moduleLoaders, {
+      origin: record.origin,
+    }),
+  );
 }
 
 async function loadWebChannelHeavyModule(): Promise<WebChannelHeavyRuntimeModule> {
   const record = resolveWebChannelPluginRecord();
   const modulePath = resolveWebChannelRuntimeModulePath(record, "runtime-api");
-  if (cachedHeavyModule && cachedHeavyModulePath === modulePath) {
-    return cachedHeavyModule;
-  }
-  const loaded = loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
-    origin: record.origin,
-  });
-  cachedHeavyModulePath = modulePath;
-  cachedHeavyModule = loaded;
-  return loaded;
+  return getCachedWebChannelRuntimeModule("heavy", modulePath, () =>
+    loadPluginBoundaryModule<WebChannelHeavyRuntimeModule>(modulePath, moduleLoaders, {
+      origin: record.origin,
+    }),
+  );
 }
 
 function getLightExport<K extends keyof WebChannelLightRuntimeModule>(

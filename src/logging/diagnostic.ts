@@ -112,6 +112,7 @@ let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
 let lastDiagnosticLivenessWallAt = 0;
 let lastDiagnosticLivenessCpuUsage: CpuUsage | null = null;
 let lastDiagnosticLivenessEventLoopUtilization: EventLoopUtilization | null = null;
+let lastDiagnosticLivenessEventAt = 0;
 let lastDiagnosticLivenessWarnAt = 0;
 
 function loadCommandPollBackoffRuntime() {
@@ -179,6 +180,7 @@ function startDiagnosticLivenessSampler(): void {
   lastDiagnosticLivenessWallAt = Date.now();
   lastDiagnosticLivenessCpuUsage = process.cpuUsage();
   lastDiagnosticLivenessEventLoopUtilization = performance.eventLoopUtilization();
+  lastDiagnosticLivenessEventAt = 0;
   lastDiagnosticLivenessWarnAt = 0;
 
   if (diagnosticLivenessMonitor) {
@@ -202,6 +204,7 @@ function stopDiagnosticLivenessSampler(): void {
   lastDiagnosticLivenessWallAt = 0;
   lastDiagnosticLivenessCpuUsage = null;
   lastDiagnosticLivenessEventLoopUtilization = null;
+  lastDiagnosticLivenessEventAt = 0;
   lastDiagnosticLivenessWarnAt = 0;
 }
 
@@ -266,7 +269,21 @@ function sampleDiagnosticLiveness(now: number): DiagnosticLivenessSample | null 
   };
 }
 
-function shouldEmitDiagnosticLivenessWarning(now: number): boolean {
+function shouldEmitDiagnosticLivenessEvent(now: number): boolean {
+  if (
+    lastDiagnosticLivenessEventAt > 0 &&
+    now - lastDiagnosticLivenessEventAt < DEFAULT_LIVENESS_WARN_COOLDOWN_MS
+  ) {
+    return false;
+  }
+  lastDiagnosticLivenessEventAt = now;
+  return true;
+}
+
+function shouldEmitDiagnosticLivenessWarning(now: number, work: DiagnosticWorkSnapshot): boolean {
+  if (!hasOpenDiagnosticWork(work)) {
+    return false;
+  }
   if (
     lastDiagnosticLivenessWarnAt > 0 &&
     now - lastDiagnosticLivenessWarnAt < DEFAULT_LIVENESS_WARN_COOLDOWN_MS
@@ -281,19 +298,22 @@ function emitDiagnosticLivenessWarning(
   sample: DiagnosticLivenessSample,
   work: DiagnosticWorkSnapshot,
 ): void {
-  diag.warn(
-    `liveness warning: reasons=${sample.reasons.join(",")} interval=${Math.round(
-      sample.intervalMs / 1000,
-    )}s eventLoopDelayP99Ms=${formatOptionalDiagnosticMetric(
-      sample.eventLoopDelayP99Ms,
-    )} eventLoopDelayMaxMs=${formatOptionalDiagnosticMetric(
-      sample.eventLoopDelayMaxMs,
-    )} eventLoopUtilization=${formatOptionalDiagnosticMetric(
-      sample.eventLoopUtilization,
-    )} cpuCoreRatio=${formatOptionalDiagnosticMetric(sample.cpuCoreRatio)} active=${
-      work.activeCount
-    } waiting=${work.waitingCount} queued=${work.queuedCount}`,
-  );
+  const message = `liveness warning: reasons=${sample.reasons.join(",")} interval=${Math.round(
+    sample.intervalMs / 1000,
+  )}s eventLoopDelayP99Ms=${formatOptionalDiagnosticMetric(
+    sample.eventLoopDelayP99Ms,
+  )} eventLoopDelayMaxMs=${formatOptionalDiagnosticMetric(
+    sample.eventLoopDelayMaxMs,
+  )} eventLoopUtilization=${formatOptionalDiagnosticMetric(
+    sample.eventLoopUtilization,
+  )} cpuCoreRatio=${formatOptionalDiagnosticMetric(sample.cpuCoreRatio)} active=${
+    work.activeCount
+  } waiting=${work.waitingCount} queued=${work.queuedCount}`;
+  if (hasOpenDiagnosticWork(work)) {
+    diag.warn(message);
+  } else {
+    diag.debug(message);
+  }
   emitDiagnosticEvent({
     type: "diagnostic.liveness.warning",
     reasons: sample.reasons,
@@ -735,10 +755,13 @@ export function startDiagnosticHeartbeat(
     pruneDiagnosticSessionStates(now, true);
     const work = getDiagnosticWorkSnapshot();
     const livenessSample = (opts?.sampleLiveness ?? sampleDiagnosticLiveness)(now, work);
+    const shouldEmitLivenessEvent =
+      livenessSample !== null && shouldEmitDiagnosticLivenessEvent(now);
     const shouldEmitLivenessWarning =
-      livenessSample !== null && shouldEmitDiagnosticLivenessWarning(now);
+      livenessSample !== null && shouldEmitDiagnosticLivenessWarning(now, work);
+    const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
-      shouldEmitLivenessWarning || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
+      shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
     (opts?.emitMemorySample ?? emitDiagnosticMemorySample)({
       emitSample: shouldRecordMemorySample,
     });
@@ -747,7 +770,7 @@ export function startDiagnosticHeartbeat(
       return;
     }
 
-    if (shouldEmitLivenessWarning && livenessSample) {
+    if (shouldEmitLivenessReport && livenessSample) {
       emitDiagnosticLivenessWarning(livenessSample, work);
     }
 

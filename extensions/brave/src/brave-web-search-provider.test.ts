@@ -2,6 +2,7 @@ import fs from "node:fs";
 import { validateJsonSchemaValue } from "openclaw/plugin-sdk/config-schema";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing } from "../test-api.js";
+import { createBraveWebSearchProvider as createBraveWebSearchContractProvider } from "../web-search-contract-api.js";
 import { createBraveWebSearchProvider } from "./brave-web-search-provider.js";
 
 const braveManifest = JSON.parse(
@@ -10,12 +11,43 @@ const braveManifest = JSON.parse(
   configSchema?: Record<string, unknown>;
 };
 
+function installBraveLlmContextFetch() {
+  const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+    return {
+      ok: true,
+      json: async () => ({
+        grounding: {
+          generic: [
+            {
+              url: "https://example.com/context",
+              title: "Context",
+              snippets: ["snippet"],
+            },
+          ],
+        },
+        sources: [],
+      }),
+    } as Response;
+  });
+  global.fetch = mockFetch as typeof global.fetch;
+  return mockFetch;
+}
+
 describe("brave web search provider", () => {
   const priorFetch = global.fetch;
 
   afterEach(() => {
     vi.unstubAllEnvs();
     global.fetch = priorFetch;
+  });
+
+  it("points provider metadata at the canonical Brave docs page", () => {
+    expect(createBraveWebSearchProvider().docsUrl).toBe(
+      "https://docs.openclaw.ai/tools/brave-search",
+    );
+    expect(createBraveWebSearchContractProvider().docsUrl).toBe(
+      "https://docs.openclaw.ai/tools/brave-search",
+    );
   });
 
   it("points missing-key users to fetch/browser alternatives", async () => {
@@ -174,6 +206,129 @@ describe("brave web search provider", () => {
     expect(result).toMatchObject({
       error: "invalid_date_range",
     });
+  });
+
+  it("passes freshness to Brave llm-context endpoint", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch();
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "BSA...",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "latest ai news", freshness: "week" });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.pathname).toBe("/res/v1/llm/context");
+    expect(requestUrl.searchParams.get("freshness")).toBe("pw");
+  });
+
+  it("passes bounded date ranges to Brave llm-context endpoint", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch();
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "BSA...",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({
+      query: "latest ai news",
+      date_after: "2025-01-01",
+      date_before: "2025-01-31",
+    });
+
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.pathname).toBe("/res/v1/llm/context");
+    expect(requestUrl.searchParams.get("freshness")).toBe("2025-01-01to2025-01-31");
+  });
+
+  it("uses today as the end date for Brave llm-context date_after-only ranges", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch();
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "BSA...",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await tool.execute({ query: "latest ai news", date_after: "2025-01-01" });
+
+    const today = new Date().toISOString().slice(0, 10);
+    const requestUrl = new URL(String(mockFetch.mock.calls[0]?.[0]));
+    expect(requestUrl.pathname).toBe("/res/v1/llm/context");
+    expect(requestUrl.searchParams.get("freshness")).toBe(`2025-01-01to${today}`);
+  });
+
+  it("rejects future Brave llm-context date_after-only ranges before fetch", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch();
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "BSA...",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "latest ai news",
+      date_after: "2999-01-01",
+    });
+
+    expect(result).toMatchObject({
+      error: "invalid_date_range",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("rejects Brave llm-context date_before-only ranges before fetch", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "test-key");
+    const mockFetch = installBraveLlmContextFetch();
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "BSA...",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    const result = await tool.execute({
+      query: "latest ai news",
+      date_before: "2025-01-31",
+    });
+
+    expect(result).toMatchObject({
+      error: "unsupported_date_filter",
+    });
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("falls back unsupported country values before calling Brave", async () => {

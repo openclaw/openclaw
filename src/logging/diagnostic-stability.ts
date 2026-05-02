@@ -281,7 +281,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.queued = event.queued;
       break;
     case "diagnostic.liveness.warning":
-      record.level = "warning";
+      record.level = event.active > 0 || event.waiting > 0 || event.queued > 0 ? "warning" : "info";
       record.durationMs = event.intervalMs;
       record.count = event.reasons.length;
       assignReasonCode(record, event.reasons[0]);

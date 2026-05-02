@@ -1,8 +1,4 @@
 import {
-  listChannelCatalogEntries,
-  type PluginChannelCatalogEntry,
-} from "../../../../plugins/channel-catalog-registry.js";
-import {
   loadBundledPluginPublicSurface,
   loadBundledPluginPublicSurfaceSync,
 } from "../../../../test-utils/bundled-plugin-public-surface.js";
@@ -14,7 +10,6 @@ type ChannelPluginApiModule = Record<string, unknown>;
 
 const channelPluginCache = new Map<ChannelId, ChannelPlugin | null>();
 const channelPluginPromiseCache = new Map<ChannelId, Promise<ChannelPlugin | null>>();
-let channelCatalogEntries: PluginChannelCatalogEntry[] | undefined;
 
 function isChannelPlugin(value: unknown): value is ChannelPlugin {
   return (
@@ -28,13 +23,6 @@ function isChannelPlugin(value: unknown): value is ChannelPlugin {
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listCatalogBundledChannelPluginIds() as ChannelId[];
-}
-
-export function getBundledChannelCatalogEntry(
-  id: ChannelId,
-): PluginChannelCatalogEntry | undefined {
-  channelCatalogEntries ??= listChannelCatalogEntries({ origin: "bundled" });
-  return channelCatalogEntries.find((entry) => entry.pluginId === id || entry.channel.id === id);
 }
 
 export function getBundledChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
@@ -84,11 +72,4 @@ export function listBundledChannelPlugins(): readonly ChannelPlugin[] {
     const plugin = getBundledChannelPlugin(id);
     return plugin ? [plugin] : [];
   });
-}
-
-export async function listBundledChannelPluginsAsync(): Promise<readonly ChannelPlugin[]> {
-  const plugins = await Promise.all(
-    listBundledChannelPluginIds().map((id) => getBundledChannelPluginAsync(id)),
-  );
-  return plugins.filter((plugin): plugin is ChannelPlugin => Boolean(plugin));
 }

@@ -299,6 +299,8 @@ describe("sessions tools", () => {
       params: {
         activeMinutes: undefined,
         agentId: "main",
+        includeDerivedTitles: false,
+        includeLastMessage: false,
         includeGlobal: true,
         includeUnknown: true,
         label: "mailbox",
@@ -382,8 +384,8 @@ describe("sessions tools", () => {
       callGatewayMock.mockImplementation(async (opts: unknown) => {
         const request = opts as { method?: string; params?: Record<string, unknown> };
         if (request.method === "sessions.list") {
-          expect(request.params?.includeDerivedTitles).toBeUndefined();
-          expect(request.params?.includeLastMessage).toBeUndefined();
+          expect(request.params?.includeDerivedTitles).toBe(false);
+          expect(request.params?.includeLastMessage).toBe(false);
           return {
             path: storePath,
             sessions: [

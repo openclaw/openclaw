@@ -21,8 +21,17 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord/reactions: skip reaction listener registration when DMs and group DMs are disabled and every configured guild has `reactionNotifications: "off"`, avoiding needless reaction-event queue work. Fixes #47516. Thanks @x4v13r1120.
+- CLI sessions: preserve explicit manual-attach reuse bindings so trusted CLI sessions are not invalidated on the first turn when auth, prompt, or MCP fingerprints drift. Fixes #75849. Thanks @alfredjbclaw.
+- Telegram/streaming: keep partial preview streaming enabled for plain reply-to replies, disabling drafts only for real native quote excerpts that require Telegram quote parameters. Fixes #73505. Thanks @choury.
+- Config: log the "newer OpenClaw" version warning once per process instead of once per config snapshot read. (#75927) Thanks @romneyda.
+- Telegram/message actions: treat benign delete-message 400s as no-op warnings instead of runtime errors, so stale or already-removed messages do not create noisy delete failures. Fixes #73726. Thanks @Avicennasis.
+- Telegram: split long default markdown sends and media follow-up text into safe HTML chunks, so outbound messages over Telegram's limit no longer fail as one oversized Bot API request. Fixes #75868. Thanks @zhengsx.
+- Gateway/chat history: merge Claude CLI transcript imports for Anthropic-routed sessions that still have a Claude CLI binding, so local chat history does not hide CLI JSONL turns. Fixes #75850. Thanks @alfredjbclaw.
+- Media: trim serialized JSON suffixes after local `MEDIA:` directive file extensions, so generated-image metadata cannot pollute the parsed media path and cause false `ENOENT` delivery failures. Fixes #75182. Thanks @TnzGit and @hclsys.
 - Cron: make scheduler reload schedule comparison tolerate malformed persisted jobs, so one bad cron entry no longer aborts the whole tick. Fixes #75886. Thanks @samfox-ai.
 - Doctor/channels: warn after migrations when default Telegram or Discord accounts have no configured token and their env fallback (`TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN`) is unavailable, with secret-safe migration docs for checking state-dir `.env`. Fixes #74298. Thanks @lolaopenclaw.
+- Gateway/diagnostics: keep idle liveness samples in telemetry instead of visible warning logs unless diagnostic work is active, waiting, or queued. Thanks @vincentkoc.
 - Control UI/chat: keep live replies visible when a raw session alias such as `main` sends the chat turn but Gateway emits events under the canonical session key for the same run. Fixes #73716. Thanks @teebes.
 - CLI/models: reject `--agent` on `openclaw models set` and `set-image` instead of silently writing agent-scoped requests to global model defaults. Fixes #68391. Thanks @derrickabellard.
 - CLI: stop treating the legacy singular `openclaw tool ...` token as a plugin id under restrictive `plugins.allow`, so it falls through as a normal unknown/reserved command instead of suggesting a stale allowlist entry. Fixes #64732. Thanks @efe-arv, @SweetSophia, and @hashtag1974.
@@ -37,11 +46,16 @@ Docs: https://docs.openclaw.ai
 - Slack/message actions: send media before the follow-up Block Kit message when Slack `send` includes a file plus presentation or interactive controls, so file attachments are no longer rejected. Fixes #51458. Thanks @HirokiKobayashi-R.
 - Slack/DMs: honor `dmHistoryLimit` for fresh 1:1 Slack DM sessions by backfilling recent conversation history before the current reply. Fixes #64427. Thanks @brantley-creator.
 - Slack/DMs: keep top-level direct messages on the stable DM session even when `replyToMode` targets Slack thread replies, preserving context across DM turns. Fixes #58832. Thanks @daye-jjeong.
+- Slack/delivery: preserve Slack Web API missing-scope details in outbound delivery errors, so queued retry state identifies the OAuth scope to add. Fixes #62391. Thanks @alexey-pelykh.
+- Slack/DMs: send text/block-only proactive DMs directly with `chat.postMessage(channel=<user id>)` while keeping conversation resolution for uploads and threaded sends. Fixes #62042. Thanks @MarkMolina.
 - Slack/mentions: resolve `<!subteam^...>` user-group mentions through Slack `usergroups.users.list` and treat them as explicit mentions only when the bot user is a member, so mention-gated agent channels wake for real user-group mentions without config-only allowlists. Fixes #73827. Thanks @CG-Intelligence-Agent-Jack.
 - Slack/message tool: let `read` fetch an exact Slack message timestamp, including a specific thread reply when paired with `threadId`, instead of returning only the parent thread or recent channel history. Fixes #53943. Thanks @zomars.
 - Web search: point missing-key errors to `web_fetch` for known URLs and the browser tool for interactive pages. Thanks @zhaoyang97.
 - Web search: late-bind managed agent `web_search` calls to the current runtime config snapshot, so existing sessions do not keep stale unresolved SecretRefs after secrets reload. Fixes #75420. Thanks @richardmqq.
+- Web search/DuckDuckGo: include the keyless DuckDuckGo provider in the web search setup wizard. Fixes #65862 and supersedes #65940. Thanks @Jah-yee.
 - Web search: honor `baseUrl` overrides for Gemini, Grok, and x_search provider-owned config, so proxy-backed search tools no longer dial hardcoded public endpoints. Supersedes #61972. Thanks @Lanfei.
+- Web search/Brave: point Brave provider metadata at the canonical `/tools/brave-search` docs page and make the legacy `/brave-search` docs page a redirect stub. Fixes #65870 and supersedes #65892. Thanks @Magicray1217 and @Jah-yee.
+- Web search/Brave: allow `freshness` and bounded date ranges in `llm-context` mode, matching Brave's documented LLM Context API support. Supersedes #51005. Thanks @remusao.
 - Web fetch: resolve external plugin `webFetchProviders` for non-sandboxed `web_fetch`, while keeping sandboxed fetches limited to bundled providers. Fixes #74915. Thanks @ultrahighsuper and @mingmingtsao.
 - Heartbeat: strip legacy `[TOOL_CALL]...[/TOOL_CALL]` and `[TOOL_RESULT]...[/TOOL_RESULT]` pseudo-call blocks from heartbeat replies before channel delivery. Fixes #54138. Thanks @Deniable9570.
 - macOS/Voice Wake: send wake-word and Push-to-Talk transcripts through the selected macOS session target instead of always falling back to main WebChat. Fixes #51040. Thanks @carl-jeffrolc.
@@ -83,6 +97,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/hooks: derive hook `ctx.channelId` from the conversation target instead of the provider name, so Discord and other channel plugins can keep per-channel state isolated. Fixes #59881. Thanks @bradfreels.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
+- Agents/OpenAI: normalize parameter-free MCP tool schemas whose `properties` value is null or undefined, so OpenAI no longer rejects MCP tools without parameters. Fixes #75362. (#75401) Thanks @SymbolStar.
 
 ## 2026.4.30
 
