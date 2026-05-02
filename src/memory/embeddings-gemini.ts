@@ -3,6 +3,7 @@ import {
   executeWithApiKeyRotation,
 } from "../agents/api-key-rotation.js";
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
+import { retry } from "../agents/tools/retry.js";
 import { parseGeminiAuth } from "../infra/gemini-auth.js";
 import {
   DEFAULT_GOOGLE_API_BASE_URL,
@@ -15,7 +16,6 @@ import { debugEmbeddingsLog } from "./embeddings-debug.js";
 import type { EmbeddingProvider, EmbeddingProviderOptions } from "./embeddings.js";
 import { buildRemoteBaseUrlPolicy, withRemoteHttpResponse } from "./remote-http.js";
 import { resolveMemorySecretInputString } from "./secret-input.js";
-import { retry } from "../agents/tools/retry.js";
 
 export type GeminiEmbeddingClient = {
   baseUrl: string;

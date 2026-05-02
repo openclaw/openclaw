@@ -1,5 +1,5 @@
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { retry } from "../agents/tools/retry.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { withRemoteHttpResponse } from "./remote-http.js";
 
 export async function postJson<T>(params: {

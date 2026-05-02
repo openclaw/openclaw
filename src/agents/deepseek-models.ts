@@ -2,12 +2,12 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 
 export const DEEPSEEK_BASE_URL = "https://api.deepseek.com";
 
-// TODO: fill in actual DeepSeek API pricing
-// https://api-docs.deepseek.com/quick_start/pricing
+// Pricing: https://api-docs.deepseek.com/quick_start/pricing
+// Rates are per 1M tokens (same unit as other providers in this file).
 const DEEPSEEK_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
+  input: 0.14,
+  output: 0.28,
+  cacheRead: 0.0028,
   cacheWrite: 0,
 };
 
