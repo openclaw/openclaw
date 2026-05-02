@@ -85,9 +85,12 @@ function openAiProviderConfigForCodexCli(
     models: [
       {
         contextWindow: 1_047_576,
+        cost: { cacheRead: 0, cacheWrite: 0, input: 0, output: 0 },
         id: modelId,
+        input: ["text"],
         maxTokens: 32_768,
         name: modelId,
+        reasoning: true,
       },
     ],
     timeoutSeconds: Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000),
