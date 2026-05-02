@@ -676,7 +676,7 @@ async function resolveCompatiblePackageVersion(params: {
       compatibility:
         versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
       verification: null,
-      storepack: versionDetail.version?.storepack ?? params.detail.package?.storepack ?? null,
+      storepack: versionDetail.version?.storepack ?? null,
     };
   }
   const verificationState = resolveClawHubArchiveVerification(
@@ -693,7 +693,7 @@ async function resolveCompatiblePackageVersion(params: {
     compatibility:
       versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
     verification: verificationState.verification,
-    storepack: versionDetail.version?.storepack ?? params.detail.package?.storepack ?? null,
+    storepack: versionDetail.version?.storepack ?? null,
   };
 }
 

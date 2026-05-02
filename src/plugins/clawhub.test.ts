@@ -337,6 +337,70 @@ describe("installPluginFromClawHub", () => {
     });
   });
 
+  it("does not persist package-level StorePack metadata for version records without StorePack facts", async () => {
+    parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.3.21" });
+    fetchClawHubPackageDetailMock.mockResolvedValueOnce({
+      package: {
+        name: "demo",
+        displayName: "Demo",
+        family: "code-plugin",
+        channel: "official",
+        isOfficial: true,
+        createdAt: 0,
+        updatedAt: 0,
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+        storepack: {
+          available: true,
+          specVersion: 1,
+          format: "storepack.zip",
+          sha256: DEMO_STOREPACK_SHA256,
+          size: 4096,
+          fileCount: 7,
+          manifestSha256: DEMO_STOREPACK_MANIFEST_SHA256,
+          builtAt: 1774200000000,
+          buildVersion: "2026.3.22",
+          hostTargets: [],
+          environment: null,
+          runtimeBundles: [],
+        },
+      },
+    });
+    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
+      version: {
+        version: "2026.3.21",
+        createdAt: 0,
+        changelog: "",
+        sha256hash: "a9eac48c6129bc44b6f93c9a9f48f6c700d191b7279a1e1915f28df6f59bb1af",
+        compatibility: {
+          pluginApiRange: ">=2026.3.22",
+          minGatewayVersion: "2026.3.0",
+        },
+      },
+    });
+
+    const result = await installPluginFromClawHub({
+      spec: "clawhub:demo@2026.3.21",
+      baseUrl: "https://clawhub.ai",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      clawhub: {
+        source: "clawhub",
+      },
+    });
+    if (!result.ok) {
+      throw new Error(result.error);
+    }
+    expect(result.clawhub.storepackSha256).toBeUndefined();
+    expect(result.clawhub.storepackSpecVersion).toBeUndefined();
+    expect(result.clawhub.storepackManifestSha256).toBeUndefined();
+    expect(result.clawhub.storepackSize).toBeUndefined();
+  });
+
   it("installs when ClawHub advertises a wildcard plugin API range", async () => {
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {
