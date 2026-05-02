@@ -1,6 +1,10 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  resolveConfigScopedRuntimeCacheValue,
+  type ConfigScopedRuntimeCache,
+} from "./config-scoped-runtime-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-context.js";
 import { resolveProviderConfigApiOwnerHint } from "./provider-config-owner.js";
 import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
@@ -15,10 +19,7 @@ import type {
   ProviderWrapStreamFnContext,
 } from "./types.js";
 
-const providerRuntimePluginCache = new WeakMap<
-  OpenClawConfig,
-  Map<string, ProviderPlugin | null>
->();
+const providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
 
 type ProviderRuntimePluginLookupParams = {
   provider: string;
@@ -58,20 +59,6 @@ function resolveProviderRuntimePluginCacheKey(params: ProviderRuntimePluginLooku
     bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat ?? null,
     bundledProviderVitestCompat: params.bundledProviderVitestCompat ?? null,
   });
-}
-
-function resolveProviderRuntimePluginCache(
-  params: ProviderRuntimePluginLookupParams,
-): Map<string, ProviderPlugin | null> | undefined {
-  if (!params.config || (params.env && params.env !== process.env)) {
-    return undefined;
-  }
-  let cache = providerRuntimePluginCache.get(params.config);
-  if (!cache) {
-    cache = new Map();
-    providerRuntimePluginCache.set(params.config, cache);
-  }
-  return cache;
 }
 
 function matchesProviderLiteralId(provider: ProviderPlugin, providerId: string): boolean {
@@ -119,33 +106,38 @@ export function resolveProviderPluginsForHooks(params: {
 export function resolveProviderRuntimePlugin(
   params: ProviderRuntimePluginLookupParams,
 ): ProviderPlugin | undefined {
-  const cache = resolveProviderRuntimePluginCache(params);
-  const cacheKey = cache ? resolveProviderRuntimePluginCacheKey(params) : "";
-  if (cache?.has(cacheKey)) {
-    return cache.get(cacheKey) ?? undefined;
-  }
-  const apiOwnerHint = resolveProviderConfigApiOwnerHint({
-    provider: params.provider,
-    config: params.config,
-  });
-  const plugin = resolveProviderPluginsForHooks({
-    config: params.config,
-    workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
-    env: params.env,
-    providerRefs: apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider],
-    applyAutoEnable: params.applyAutoEnable,
-    bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
-    bundledProviderVitestCompat: params.bundledProviderVitestCompat,
-  }).find((plugin) => {
-    if (apiOwnerHint) {
+  const cacheConfig = params.env && params.env !== process.env ? undefined : params.config;
+  const plugin = resolveConfigScopedRuntimeCacheValue({
+    cache: providerRuntimePluginCache,
+    config: cacheConfig,
+    key: resolveProviderRuntimePluginCacheKey(params),
+    load: () => {
+      const apiOwnerHint = resolveProviderConfigApiOwnerHint({
+        provider: params.provider,
+        config: params.config,
+      });
       return (
-        matchesProviderLiteralId(plugin, params.provider) || matchesProviderId(plugin, apiOwnerHint)
+        resolveProviderPluginsForHooks({
+          config: params.config,
+          workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState(),
+          env: params.env,
+          providerRefs: apiOwnerHint ? [params.provider, apiOwnerHint] : [params.provider],
+          applyAutoEnable: params.applyAutoEnable,
+          bundledProviderAllowlistCompat: params.bundledProviderAllowlistCompat,
+          bundledProviderVitestCompat: params.bundledProviderVitestCompat,
+        }).find((plugin) => {
+          if (apiOwnerHint) {
+            return (
+              matchesProviderLiteralId(plugin, params.provider) ||
+              matchesProviderId(plugin, apiOwnerHint)
+            );
+          }
+          return matchesProviderId(plugin, params.provider);
+        }) ?? null
       );
-    }
-    return matchesProviderId(plugin, params.provider);
+    },
   });
-  cache?.set(cacheKey, plugin ?? null);
-  return plugin;
+  return plugin ?? undefined;
 }
 
 export function resolveProviderHookPlugin(params: {

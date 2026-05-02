@@ -13,6 +13,7 @@ import type { PluginLoadOptions } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
 import {
+  createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
@@ -196,7 +197,7 @@ export function loadBundledCapabilityRuntimeRegistry(params: {
   const env = params.env ?? process.env;
   const pluginIds = new Set(params.pluginIds);
   const registry = createEmptyPluginRegistry();
-  const moduleLoaders: PluginModuleLoaderCache = new Map();
+  const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
   const getModuleLoader = (modulePath: string) => {
     const tryNative =

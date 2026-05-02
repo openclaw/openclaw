@@ -28,4 +28,18 @@ describe("resolveConfigScopedRuntimeCacheValue", () => {
     expect(resolveConfigScopedRuntimeCacheValue({ cache, key: "demo", load })).toBe("loaded");
     expect(load).toHaveBeenCalledTimes(2);
   });
+
+  it("caches undefined values by key", () => {
+    const cache: ConfigScopedRuntimeCache<string | undefined> = new WeakMap();
+    const config = {} as OpenClawConfig;
+    const load = vi.fn(() => undefined);
+
+    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "missing", load })).toBe(
+      undefined,
+    );
+    expect(resolveConfigScopedRuntimeCacheValue({ cache, config, key: "missing", load })).toBe(
+      undefined,
+    );
+    expect(load).toHaveBeenCalledOnce();
+  });
 });

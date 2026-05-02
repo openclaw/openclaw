@@ -1,6 +1,7 @@
 import { createJiti } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { tryNativeRequireJavaScriptModule } from "./native-module-require.js";
+import { PluginLruCache } from "./plugin-cache-primitives.js";
 import {
   buildPluginLoaderJitiOptions,
   createPluginLoaderModuleCacheKey,
@@ -10,7 +11,18 @@ import {
 
 export type PluginModuleLoader = ReturnType<typeof createJiti>;
 export type PluginModuleLoaderFactory = typeof createJiti;
-export type PluginModuleLoaderCache = Map<string, PluginModuleLoader>;
+export type PluginModuleLoaderCache = Pick<
+  PluginLruCache<PluginModuleLoader>,
+  "clear" | "get" | "set" | "size"
+>;
+
+const DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES = 128;
+
+export function createPluginModuleLoaderCache(
+  maxEntries = DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES,
+): PluginModuleLoaderCache {
+  return new PluginLruCache<PluginModuleLoader>(maxEntries);
+}
 
 export function getCachedPluginModuleLoader(params: {
   cache: PluginModuleLoaderCache;

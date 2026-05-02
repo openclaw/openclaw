@@ -8,7 +8,10 @@ import {
   optimizeImageToJpeg as optimizeImageToJpegImpl,
 } from "../../media/web-media.js";
 import type { PollInput } from "../../polls.js";
-import type { PluginModuleLoaderCache } from "../plugin-module-loader-cache.js";
+import {
+  createPluginModuleLoaderCache,
+  type PluginModuleLoaderCache,
+} from "../plugin-module-loader-cache.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
 import {
   loadPluginBoundaryModule,
@@ -115,7 +118,7 @@ const webChannelRuntimeModuleCache = new Map<
   CachedWebChannelRuntimeModule
 >();
 
-const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function resolveWebChannelPluginRecord(): WebChannelPluginRecord {
   return resolvePluginRuntimeRecordByEntryBaseNames(["light-runtime-api", "runtime-api"], () => {

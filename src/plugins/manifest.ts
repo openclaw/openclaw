@@ -28,6 +28,7 @@ import {
   type PluginManifestCommandAlias,
 } from "./manifest-command-aliases.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
+import { createPluginCacheKey, PluginLruCache } from "./plugin-cache-primitives.js";
 import type { PluginKind } from "./plugin-kind.types.js";
 
 export const PLUGIN_MANIFEST_FILENAME = "openclaw.plugin.json";
@@ -42,7 +43,9 @@ type PluginManifestLoadCacheEntry = {
   ctimeMs: number;
 };
 
-const pluginManifestLoadCache = new Map<string, PluginManifestLoadCacheEntry>();
+const pluginManifestLoadCache = new PluginLruCache<PluginManifestLoadCacheEntry>(
+  MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES,
+);
 
 export function clearPluginManifestLoadCache(): void {
   pluginManifestLoadCache.clear();
@@ -1227,12 +1230,14 @@ function buildPluginManifestLoadCacheKey(params: {
   rootRealPath?: string;
   stats: fs.Stats;
 }): string {
-  return JSON.stringify([
-    path.resolve(params.manifestPath),
-    params.rejectHardlinks,
-    params.rootRealPath ?? "",
-    params.stats.dev,
-    params.stats.ino,
+  return createPluginCacheKey([
+    [
+      path.resolve(params.manifestPath),
+      params.rejectHardlinks,
+      params.rootRealPath ?? "",
+      params.stats.dev,
+      params.stats.ino,
+    ],
     params.stats.size,
     params.stats.mtimeMs,
     params.stats.ctimeMs,
@@ -1252,8 +1257,6 @@ function getCachedPluginManifestLoadResult(
   ) {
     return undefined;
   }
-  pluginManifestLoadCache.delete(key);
-  pluginManifestLoadCache.set(key, entry);
   return entry.result;
 }
 
@@ -1268,13 +1271,6 @@ function setCachedPluginManifestLoadResult(
     mtimeMs: stats.mtimeMs,
     ctimeMs: stats.ctimeMs,
   });
-  if (pluginManifestLoadCache.size <= MAX_PLUGIN_MANIFEST_LOAD_CACHE_ENTRIES) {
-    return;
-  }
-  const oldestKey = pluginManifestLoadCache.keys().next().value;
-  if (typeof oldestKey === "string") {
-    pluginManifestLoadCache.delete(oldestKey);
-  }
 }
 
 function parsePluginKind(raw: unknown): PluginKind | PluginKind[] | undefined {

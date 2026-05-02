@@ -48,6 +48,39 @@ describe("getCachedPluginModuleLoader", () => {
     expect(cache.size).toBe(1);
   });
 
+  it("creates bounded loader caches", async () => {
+    const { createJiti, getCachedPluginModuleLoader } =
+      await loadCachedPluginModuleLoader("bounded-loader-cache");
+    const { createPluginModuleLoaderCache } = await importFreshModule<
+      typeof import("./plugin-module-loader-cache.js")
+    >(import.meta.url, "./plugin-module-loader-cache.js?scope=bounded-loader-cache-factory");
+
+    const cache = createPluginModuleLoaderCache(1);
+    const first = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/extensions/demo-a/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "/repo/extensions/demo-a/index.ts",
+    });
+    getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/extensions/demo-b/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "/repo/extensions/demo-b/index.ts",
+    });
+    const reloadedFirst = getCachedPluginModuleLoader({
+      cache,
+      modulePath: "/repo/extensions/demo-a/index.ts",
+      importerUrl: "file:///repo/src/plugins/loader.ts",
+      loaderFilename: "/repo/extensions/demo-a/index.ts",
+    });
+
+    expect(cache.size).toBe(1);
+    expect(reloadedFirst).not.toBe(first);
+    reloadedFirst("/repo/extensions/demo-a/index.ts");
+    expect(createJiti).toHaveBeenCalledOnce();
+  });
+
   it("keeps loader caches scoped by loader filename and dist preference", async () => {
     const { createJiti, getCachedPluginModuleLoader } =
       await loadCachedPluginModuleLoader("filename-scope");

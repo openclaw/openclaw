@@ -108,6 +108,7 @@ import {
 } from "./plugin-control-plane-context.js";
 import { withProfile } from "./plugin-load-profile.js";
 import {
+  createPluginModuleLoaderCache,
   getCachedPluginSourceModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
@@ -463,7 +464,7 @@ function runPluginRegisterSync(
 }
 
 function createPluginModuleLoader(options: Pick<PluginLoadOptions, "pluginSdkResolution">) {
-  const moduleLoaders: PluginModuleLoaderCache = new Map();
+  const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
   const loadSourceModule = (modulePath: string) => {
     return getCachedPluginSourceModuleLoader({
       cache: moduleLoaders,

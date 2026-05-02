@@ -6,6 +6,7 @@ import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/file-identity.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
+  createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
@@ -26,7 +27,7 @@ const publicSurfaceLocationCache = new Map<
     boundaryRoot: string;
   } | null
 >();
-const moduleLoaders: PluginModuleLoaderCache = new Map();
+const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
