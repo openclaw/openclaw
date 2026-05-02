@@ -95,7 +95,8 @@
         "install": {
           "npmSpec": "@openclaw/discord",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
+          "minHostVersion": ">=2026.4.10",
+          "allowInvalidConfigRecovery": true
         }
       }
     },

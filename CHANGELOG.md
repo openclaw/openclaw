@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/update: detect tracked plugin install records whose package directories disappeared during `openclaw update`, reinstall them before normal plugin updates, and fail the update if any install record still points at missing disk payloads.
 - Plugins/registry: hash manifest and package metadata when validating persisted plugin registries so fast same-size rewrites cannot leave stale plugin metadata trusted.
 - Plugins/registry: canonicalize install-record provenance paths before trust diagnostics, so npm plugins installed under symlinked temp/state roots no longer warn as untracked local code.
+- Plugins/install: let official external Discord reinstall requests pass the invalid-config guard and run stale-channel repair, so upgrades can recover missing external plugin state directly.
 - CLI/infer: reject local `codex/*` one-shot model probes before simple-completion dispatch and point operators at the Codex app-server runtime path instead of ending with an empty-output error.
 - Agents/sessions: preserve terminal lifecycle state when final run metadata persists from a stale in-memory snapshot, preventing `main` sessions from staying stuck as running after completed or timed-out turns.
 - Gateway/CLI: make `openclaw gateway start` repair stale managed service definitions that point at old OpenClaw versions, missing binaries, or temporary installer paths before starting.
