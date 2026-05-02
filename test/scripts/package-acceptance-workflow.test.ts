@@ -140,6 +140,7 @@ describe("package acceptance workflow", () => {
 
   it("requires full release child workflows to run at the resolved target SHA", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
+    const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
 
     expect(workflow).toContain("TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}");
     expect(workflow).toContain("--json status,conclusion,url,attempt,headSha,jobs");
@@ -148,6 +149,7 @@ describe("package acceptance workflow", () => {
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
     );
     expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
+    expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
   });
 
   it("keeps exhaustive update migration as a separate manual package gate", () => {
