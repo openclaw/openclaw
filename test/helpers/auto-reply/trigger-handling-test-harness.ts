@@ -305,13 +305,6 @@ export function requireSessionStorePath(cfg: { session?: { store?: string } }): 
   return storePath;
 }
 
-export async function readSessionStore(cfg: {
-  session?: { store?: string };
-}): Promise<Record<string, { elevatedLevel?: string }>> {
-  const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
-  return JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
-}
-
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
   getReplyFromConfig: typeof import("../../../src/auto-reply/reply.js").getReplyFromConfig;
