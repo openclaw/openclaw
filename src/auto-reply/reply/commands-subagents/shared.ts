@@ -5,7 +5,6 @@ import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-reg
 import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../../agents/subagent-registry.types.js";
 import {
-  extractAssistantText,
   resolveInternalSessionKey,
   resolveMainSessionAlias,
   stripToolMessages,
@@ -27,7 +26,7 @@ import {
   type SubagentTargetResolution,
 } from "../subagents-utils.js";
 
-export { extractAssistantText, stripToolMessages };
+export { stripToolMessages };
 export { resolveCommandSurfaceChannel, resolveChannelAccountId };
 export type { ChatMessage } from "../commands-subagents-text.js";
 
@@ -67,7 +66,7 @@ type SubagentsAction =
   | "agents"
   | "help";
 
-export type SubagentsCommandParams = Parameters<CommandHandler>[0];
+type SubagentsCommandParams = Parameters<CommandHandler>[0];
 
 export type SubagentsCommandContext = {
   params: SubagentsCommandParams;
@@ -213,7 +212,7 @@ export function resolveSubagentsAction(params: {
   return "steer";
 }
 
-export type FocusTargetResolution = {
+type FocusTargetResolution = {
   targetKind: "subagent" | "acp";
   targetSessionKey: string;
   agentId: string;
