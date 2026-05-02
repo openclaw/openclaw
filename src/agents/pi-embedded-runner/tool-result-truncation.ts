@@ -659,7 +659,10 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     replacements: plan.replacements,
   });
   if (rewriteResult.changed && params.sessionFile) {
-    emitSessionTranscriptUpdate(params.sessionFile);
+    emitSessionTranscriptUpdate({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+    });
   }
 
   log.info(
@@ -723,7 +726,10 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
       state,
       appendedEntries: rewriteResult.appendedEntries,
     });
-    emitSessionTranscriptUpdate(params.sessionFile);
+    emitSessionTranscriptUpdate({
+      sessionFile: params.sessionFile,
+      sessionKey: params.sessionKey,
+    });
   }
 
   log.info(

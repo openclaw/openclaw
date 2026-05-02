@@ -135,17 +135,17 @@ function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
 /**
  * Hint shown next to an installable channel option in the selection menu when
  * we don't yet have a runtime-collected status. Mirrors the "configured" /
- * "installed" affordance other channels get so users can see "remote install
- * from npm: <npm-spec>" before committing to install.
+ * "installed" affordance other channels get so users can see "download from
+ * <npm-spec>" before committing to install.
  *
  * Bundled channels (the plugin lives under `extensions/<id>` in the host
  * repo, e.g. Signal / Tlon / Twitch / Slack) are NOT downloaded from npm —
  * they ship with the host. Even when their `package.json` declares an
  * `npmSpec` (or the catalog falls back to the package name), surfacing
- * "remote install from npm: <npm-spec>" misleads users into believing the
- * plugin is missing. For bundled channels we suppress the npm hint entirely
- * so the menu shows the same neutral "plugin · install" affordance used when
- * no npm source is known.
+ * "download from <npm-spec>" misleads users into believing the plugin is
+ * missing. For bundled channels we suppress the npm hint entirely so the
+ * menu shows the same neutral "plugin · install" affordance used when no
+ * npm source is known.
  */
 export function resolveCatalogChannelSelectionHint(
   entry: { install?: { npmSpec?: string } },
@@ -153,7 +153,7 @@ export function resolveCatalogChannelSelectionHint(
 ): string {
   const npmSpec = entry.install?.npmSpec?.trim();
   if (npmSpec && !options?.bundledLocalPath) {
-    return `remote install from npm: ${formatSetupSelectionLabel(npmSpec, npmSpec)}`;
+    return `download from ${formatSetupSelectionLabel(npmSpec, npmSpec)}`;
   }
   return "";
 }
@@ -162,8 +162,8 @@ export function resolveCatalogChannelSelectionHint(
  * Look up the bundled-source entry for a catalog channel, regardless of
  * whether the catalog refers to it by `pluginId` or `npmSpec`. We use this
  * to detect bundled channels in the selection menu so we can suppress the
- * misleading "remote install from npm: <npm-spec>" hint for plugins that
- * already ship with the host (Signal / Tlon / Twitch / Slack ...).
+ * misleading "download from <npm-spec>" hint for plugins that already ship
+ * with the host (Signal / Tlon / Twitch / Slack ...).
  */
 export function findBundledSourceForCatalogChannel(params: {
   bundled: ReadonlyMap<string, BundledPluginSource>;

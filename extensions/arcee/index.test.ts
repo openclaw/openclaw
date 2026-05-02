@@ -69,14 +69,6 @@ describe("arcee provider plugin", () => {
       "arcee/trinity-large-preview",
       "arcee/trinity-large-thinking",
     ]);
-    expect(
-      config?.models?.providers?.arcee?.models?.find(
-        (model) => model.id === "arcee/trinity-large-thinking",
-      )?.compat,
-    ).toMatchObject({
-      supportsReasoningEffort: false,
-      supportsTools: false,
-    });
   });
 
   it("keeps direct Arcee auth env candidates separate from OpenRouter", () => {
@@ -100,12 +92,6 @@ describe("arcee provider plugin", () => {
       "trinity-large-preview",
       "trinity-large-thinking",
     ]);
-    expect(
-      catalogProvider.models?.find((model) => model.id === "trinity-large-thinking")?.compat,
-    ).toMatchObject({
-      supportsReasoningEffort: false,
-      supportsTools: false,
-    });
   });
 
   it("builds the OpenRouter-backed Arcee AI model catalog", async () => {
@@ -126,12 +112,6 @@ describe("arcee provider plugin", () => {
       "arcee/trinity-large-preview",
       "arcee/trinity-large-thinking",
     ]);
-    expect(
-      catalogProvider.models?.find((model) => model.id === "arcee/trinity-large-thinking")?.compat,
-    ).toMatchObject({
-      supportsReasoningEffort: false,
-      supportsTools: false,
-    });
   });
 
   it("normalizes Arcee OpenRouter models to vendor-prefixed runtime ids", async () => {
@@ -150,10 +130,6 @@ describe("arcee provider plugin", () => {
       } as never),
     ).toMatchObject({
       id: "arcee/trinity-large-thinking",
-      compat: {
-        supportsReasoningEffort: false,
-        supportsTools: false,
-      },
     });
 
     expect(
@@ -200,10 +176,6 @@ describe("arcee provider plugin", () => {
     ).toMatchObject({
       id: "arcee/trinity-large-thinking",
       baseUrl: "https://openrouter.ai/api/v1",
-      compat: {
-        supportsReasoningEffort: false,
-        supportsTools: false,
-      },
     });
 
     expect(
@@ -216,153 +188,5 @@ describe("arcee provider plugin", () => {
       api: "openai-completions",
       baseUrl: "https://openrouter.ai/api/v1",
     });
-  });
-
-  it("repairs stale Trinity tool compat on existing Arcee configs and runtime models", async () => {
-    const provider = await registerSingleProviderPlugin(arceePlugin);
-
-    expect(
-      provider.normalizeConfig?.({
-        provider: "arcee",
-        providerConfig: {
-          api: "openai-completions",
-          baseUrl: "https://openrouter.ai/v1/",
-          models: [
-            {
-              id: "arcee/trinity-large-thinking",
-              name: "Trinity Large Thinking",
-              reasoning: true,
-              input: ["text"],
-              contextWindow: 262144,
-              maxTokens: 80000,
-              cost: {
-                input: 0.25,
-                output: 0.9,
-                cacheRead: 0.25,
-                cacheWrite: 0.25,
-              },
-              compat: {
-                supportsReasoningEffort: false,
-                supportsStrictMode: true,
-              },
-            },
-          ],
-        },
-      } as never),
-    ).toMatchObject({
-      baseUrl: "https://openrouter.ai/api/v1",
-      models: [
-        {
-          id: "arcee/trinity-large-thinking",
-          compat: {
-            supportsReasoningEffort: false,
-            supportsStrictMode: true,
-            supportsTools: false,
-          },
-        },
-      ],
-    });
-
-    expect(
-      provider.normalizeConfig?.({
-        provider: "arcee",
-        providerConfig: {
-          api: "openai-completions",
-          baseUrl: "https://api.arcee.ai/api/v1",
-          models: [
-            {
-              id: "trinity-large-thinking",
-              name: "Trinity Large Thinking",
-              reasoning: true,
-              input: ["text"],
-              contextWindow: 262144,
-              maxTokens: 80000,
-              cost: {
-                input: 0.25,
-                output: 0.9,
-                cacheRead: 0.25,
-                cacheWrite: 0.25,
-              },
-              compat: {
-                supportsReasoningEffort: false,
-              },
-            },
-          ],
-        },
-      } as never),
-    ).toMatchObject({
-      baseUrl: "https://api.arcee.ai/api/v1",
-      models: [
-        {
-          id: "trinity-large-thinking",
-          compat: {
-            supportsReasoningEffort: false,
-            supportsTools: false,
-          },
-        },
-      ],
-    });
-
-    const trinityRuntimeModel = {
-      name: "Trinity Large Thinking",
-      api: "openai-completions",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 262144,
-      maxTokens: 80000,
-      cost: {
-        input: 0.25,
-        output: 0.9,
-        cacheRead: 0.25,
-        cacheWrite: 0.25,
-      },
-      compat: {
-        supportsReasoningEffort: false,
-      },
-    };
-
-    const trinityCompat = {
-      supportsReasoningEffort: false,
-      supportsTools: false,
-    };
-
-    expect(
-      provider.contributeResolvedModelCompat?.({
-        provider: "arcee",
-        modelId: "arcee/trinity-large-thinking",
-        model: {
-          ...trinityRuntimeModel,
-          provider: "arcee",
-          id: "arcee/trinity-large-thinking",
-          baseUrl: "https://openrouter.ai/api/v1",
-        },
-      } as never),
-    ).toEqual(trinityCompat);
-
-    expect(
-      provider.contributeResolvedModelCompat?.({
-        provider: "arcee",
-        modelId: "trinity-large-thinking",
-        model: {
-          ...trinityRuntimeModel,
-          provider: "arcee",
-          id: "trinity-large-thinking",
-          baseUrl: "https://api.arcee.ai/api/v1",
-        },
-      } as never),
-    ).toEqual(trinityCompat);
-
-    expect(
-      provider.contributeResolvedModelCompat?.({
-        provider: "openrouter",
-        modelId: "trinity-large-thinking",
-        model: {
-          ...trinityRuntimeModel,
-          provider: "openrouter",
-          id: "trinity-large-thinking",
-          baseUrl: "https://openrouter.ai/api/v1",
-        },
-      } as never),
-    ).toBeUndefined();
   });
 });

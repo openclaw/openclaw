@@ -41,7 +41,6 @@ type LifecycleHost = {
   realtimeTalkStatus?: string;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
-  cancelChatDictation?: () => void;
   chatLoading: boolean;
   chatMessages: unknown[];
   chatToolMessages: unknown[];
@@ -92,7 +91,6 @@ export function handleDisconnected(host: LifecycleHost) {
   host.realtimeTalkStatus = "idle";
   host.realtimeTalkDetail = null;
   host.realtimeTalkTranscript = null;
-  host.cancelChatDictation?.();
   host.client?.stop();
   host.client = null;
   host.connected = false;

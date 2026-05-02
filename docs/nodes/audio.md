@@ -17,7 +17,6 @@ title: "Audio and voice notes"
   5. On success, it replaces `Body` with an `[Audio]` block and sets `{{Transcript}}`.
 - **Command parsing**: When transcription succeeds, `CommandBody`/`RawBody` are set to the transcript so slash commands still work.
 - **Verbose logging**: In `--verbose`, we log when transcription runs and when it replaces the body.
-- **Control UI dictation**: The Chat composer can send a browser-recorded microphone clip to `chat.transcribeAudio`. That Gateway RPC writes the clip to a temporary local file, runs this same audio transcription pipeline, returns draft text to the browser, and deletes the temporary file. It does not create an agent run by itself.
 
 ## Auto-detection (default)
 

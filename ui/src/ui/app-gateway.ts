@@ -103,7 +103,6 @@ type GatewayHost = {
   sessionKey: string;
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
-  cancelChatDictation?: () => void;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -155,6 +154,15 @@ function isTerminalChatState(
   state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
 ): state is "final" | "aborted" | "error" {
   return state === "final" || state === "aborted" || state === "error";
+}
+
+function isSessionMessagePhasePayload(payload: unknown): boolean {
+  return (
+    Boolean(payload) &&
+    typeof payload === "object" &&
+    !Array.isArray(payload) &&
+    (payload as { phase?: unknown }).phase === "message"
+  );
 }
 
 type ConnectGatewayOptions = {
@@ -484,7 +492,6 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
-      host.cancelChatDictation?.();
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??
@@ -742,7 +749,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    const applyResult = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (
+      applyResult.applied &&
+      applyResult.change === "updated" &&
+      isSessionMessagePhasePayload(evt.payload)
+    ) {
+      return;
+    }
     void loadSessions(host as unknown as SessionsState);
     return;
   }

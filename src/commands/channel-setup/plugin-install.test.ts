@@ -518,7 +518,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         options: [
           expect.objectContaining({
             value: "npm",
-            label: `Remote install from npm (${bundledChatForkNpmSpec})`,
+            label: `Download from npm (${bundledChatForkNpmSpec})`,
           }),
           expect.objectContaining({
             value: "skip",
@@ -562,7 +562,7 @@ describe("ensureChannelSetupPluginInstalled", () => {
         options: [
           expect.objectContaining({
             value: "clawhub",
-            label: "Remote install from ClawHub (clawhub:openclaw/clawhub-chat@2026.5.2)",
+            label: "Download from ClawHub (clawhub:openclaw/clawhub-chat@2026.5.2)",
           }),
           expect.objectContaining({
             value: "skip",

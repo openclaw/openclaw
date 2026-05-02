@@ -663,16 +663,7 @@
   background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
 }
 
-.agent-chat__input-btn--dictating {
-  color: var(--danger, #ef4444);
-  background: color-mix(in srgb, var(--danger, #ef4444) 14%, transparent);
-}
-
 .agent-chat__talk-status {
-  color: var(--text);
-}
-
-.agent-chat__dictation-status {
   color: var(--text);
 }
 

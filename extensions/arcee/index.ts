@@ -17,12 +17,6 @@ import {
   normalizeArceeOpenRouterBaseUrl,
   toArceeOpenRouterModelId,
 } from "./provider-catalog.js";
-import {
-  ARCEE_TRINITY_LARGE_THINKING_COMPAT,
-  applyArceeTrinityLargeThinkingCompat,
-  normalizeArceeProviderConfig,
-  shouldContributeArceeTrinityLargeThinkingCompat,
-} from "./provider-policy.js";
 
 const PROVIDER_ID = "arcee";
 const ARCEE_WIZARD_GROUP = {
@@ -101,7 +95,7 @@ function normalizeArceeResolvedModel<T extends { baseUrl?: string; id: string }>
     return undefined;
   }
   return {
-    ...applyArceeTrinityLargeThinkingCompat(model),
+    ...model,
     id: normalizedId,
     baseUrl: normalizedBaseUrl,
   };
@@ -126,12 +120,13 @@ export default definePluginEntry({
           config,
           providerId: PROVIDER_ID,
         }),
-      normalizeConfig: ({ providerConfig }) => normalizeArceeProviderConfig(providerConfig),
+      normalizeConfig: ({ providerConfig }) => {
+        const normalizedBaseUrl = normalizeArceeOpenRouterBaseUrl(providerConfig.baseUrl);
+        return normalizedBaseUrl && normalizedBaseUrl !== providerConfig.baseUrl
+          ? { ...providerConfig, baseUrl: normalizedBaseUrl }
+          : undefined;
+      },
       normalizeResolvedModel: ({ model }) => normalizeArceeResolvedModel(model),
-      contributeResolvedModelCompat: (ctx) =>
-        shouldContributeArceeTrinityLargeThinkingCompat(ctx)
-          ? ARCEE_TRINITY_LARGE_THINKING_COMPAT
-          : undefined,
       normalizeTransport: ({ api, baseUrl }) => {
         const normalizedBaseUrl = normalizeArceeOpenRouterBaseUrl(baseUrl);
         return normalizedBaseUrl && normalizedBaseUrl !== baseUrl

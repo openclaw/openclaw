@@ -320,14 +320,13 @@ export async function setupChannels(
   // installable catalog channels (e.g. WeCom shipped via npm). In QuickStart we
   // run with `deferStatusUntilSelection`, which leaves `statusByChannel` empty
   // until the user picks a channel — without this overlay the selection menu
-  // would render those options without any "remote install from npm:
-  // <npm-spec>" hint.
+  // would render those options without any "download from <npm-spec>" hint.
   //
   // Bundled channels (Signal / Tlon / Twitch / Slack ...) reach this code path
   // too whenever their plugin is not yet enabled, because they share the same
-  // "installable catalog" bucket. For those we must NOT show "remote install
-  // from npm: <npm-spec>" — the plugin already lives under `extensions/<id>`
-  // and the hint would mislead users into thinking the plugin is missing.
+  // "installable catalog" bucket. For those we must NOT show "download from
+  // <npm-spec>" — the plugin already lives under `extensions/<id>` and the
+  // hint would mislead users into thinking the plugin is missing.
   const buildStatusByChannelForSelection = (
     catalogById: ReturnType<typeof getChannelEntries>["catalogById"],
   ): Map<ChannelChoice, ChannelSetupStatus> => {

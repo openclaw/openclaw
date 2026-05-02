@@ -98,24 +98,24 @@ Arcee AI models can be accessed directly via the Arcee platform or through [Open
 
 OpenClaw currently ships this bundled Arcee catalog:
 
-| Model ref                      | Name                   | Input | Context | Cost (in/out per 1M) | Notes                                      |
-| ------------------------------ | ---------------------- | ----- | ------- | -------------------- | ------------------------------------------ |
-| `arcee/trinity-large-thinking` | Trinity Large Thinking | text  | 256K    | $0.25 / $0.90        | Default model; reasoning enabled; no tools |
-| `arcee/trinity-large-preview`  | Trinity Large Preview  | text  | 128K    | $0.25 / $1.00        | General-purpose; 400B params, 13B active   |
-| `arcee/trinity-mini`           | Trinity Mini 26B       | text  | 128K    | $0.045 / $0.15       | Fast and cost-efficient; function calling  |
+| Model ref                      | Name                   | Input | Context | Cost (in/out per 1M) | Notes                                     |
+| ------------------------------ | ---------------------- | ----- | ------- | -------------------- | ----------------------------------------- |
+| `arcee/trinity-large-thinking` | Trinity Large Thinking | text  | 256K    | $0.25 / $0.90        | Default model; reasoning enabled          |
+| `arcee/trinity-large-preview`  | Trinity Large Preview  | text  | 128K    | $0.25 / $1.00        | General-purpose; 400B params, 13B active  |
+| `arcee/trinity-mini`           | Trinity Mini 26B       | text  | 128K    | $0.045 / $0.15       | Fast and cost-efficient; function calling |
 
 <Tip>
-The onboarding preset sets `arcee/trinity-large-thinking` as the default model. It is reasoning/text-only and does not support tool use or function calling.
+The onboarding preset sets `arcee/trinity-large-thinking` as the default model.
 </Tip>
 
 ## Supported features
 
-| Feature                                       | Supported                                   |
-| --------------------------------------------- | ------------------------------------------- |
-| Streaming                                     | Yes                                         |
-| Tool use / function calling                   | Model-dependent; not Trinity Large Thinking |
-| Structured output (JSON mode and JSON schema) | Yes                                         |
-| Extended thinking                             | Yes (Trinity Large Thinking)                |
+| Feature                                       | Supported                    |
+| --------------------------------------------- | ---------------------------- |
+| Streaming                                     | Yes                          |
+| Tool use / function calling                   | Yes                          |
+| Structured output (JSON mode and JSON schema) | Yes                          |
+| Extended thinking                             | Yes (Trinity Large Thinking) |
 
 <AccordionGroup>
   <Accordion title="Environment note">

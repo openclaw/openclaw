@@ -928,6 +928,55 @@ describe("resolvePluginTools optional tools", () => {
     expect(factory).toHaveBeenCalledTimes(2);
   });
 
+  it("reuses cached plugin tool descriptors across session identity changes", async () => {
+    const factory = vi.fn((rawCtx: unknown) => {
+      const ctx = rawCtx as { sessionId?: string };
+      return {
+        ...makeTool("cached_session_tool"),
+        async execute() {
+          return { content: [{ type: "text", text: ctx.sessionId ?? "missing" }] };
+        },
+      };
+    });
+    setRegistry([
+      {
+        pluginId: "cache-session-test",
+        optional: false,
+        source: "/tmp/cache-session-test.js",
+        names: ["cached_session_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          sessionId: "first-session",
+          sessionKey: "agent:main:first-session",
+        },
+      }),
+    );
+    const second = resolvePluginTools(
+      createResolveToolsParams({
+        context: {
+          ...createContext(),
+          sessionId: "second-session",
+          sessionKey: "agent:main:second-session",
+        },
+      }),
+    );
+
+    expectResolvedToolNames(first, ["cached_session_tool"]);
+    expectResolvedToolNames(second, ["cached_session_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+
+    await expect(second[0]?.execute("call", {}, undefined)).resolves.toEqual({
+      content: [{ type: "text", text: "second-session" }],
+    });
+    expect(factory).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reuse cached plugin tool descriptors across sandbox context changes", () => {
     const factory = vi.fn((rawCtx: unknown) => {
       const ctx = rawCtx as { sandboxed?: boolean };

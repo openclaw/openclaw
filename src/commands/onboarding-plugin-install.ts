@@ -320,7 +320,7 @@ async function promptInstallChoice(params: {
   // `extensions/<id>` and is discovered via `resolveBundledPluginSources`),
   // the bundled copy is the source of truth: it is version-locked to the
   // current host build and is what `defaultChoice` will pick anyway (see
-  // `resolveInstallDefaultChoice`). Surfacing remote install options in that
+  // `resolveInstallDefaultChoice`). Surfacing remote download options in that
   // case is misleading; those catalog specs only exist as fallback metadata for
   // non-bundled builds. Hide them so bundled channels like Tlon look identical
   // to Twitch / Slack in the menu.
@@ -334,13 +334,13 @@ async function promptInstallChoice(params: {
   if (safeClawHubSpec) {
     options.push({
       value: "clawhub",
-      label: formatRemoteInstallChoiceLabel("clawhub", safeClawHubSpec),
+      label: `Download from ClawHub (${safeClawHubSpec})`,
     });
   }
   if (safeNpmSpec) {
     options.push({
       value: "npm",
-      label: formatRemoteInstallChoiceLabel("npm", safeNpmSpec),
+      label: `Download from npm (${safeNpmSpec})`,
     });
   }
   if (params.localPath) {
@@ -418,11 +418,6 @@ function summarizeInstallError(message: string): string {
 
 function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && error.message === "timeout";
-}
-
-function formatRemoteInstallChoiceLabel(source: "clawhub" | "npm", spec: string): string {
-  const sourceLabel = source === "clawhub" ? "ClawHub" : "npm";
-  return `Remote install from ${sourceLabel} (${spec})`;
 }
 
 async function applyPluginEnablement(params: {

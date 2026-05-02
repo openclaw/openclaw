@@ -1,4 +1,4 @@
-import type { ChatDictationStatus, ChatSendOptions } from "./app-chat.ts";
+import type { ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
@@ -119,8 +119,6 @@ export type AppViewState = {
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
-  chatDictationStatus: ChatDictationStatus;
-  chatDictationDetail: string | null;
   chatManualRefreshInFlight: boolean;
   chatMobileControlsOpen: boolean;
   nodesLoading: boolean;
@@ -472,7 +470,6 @@ export type AppViewState = {
     resetChatInputHistoryNavigation: () => void;
     handleSendChat: (messageOverride?: string, opts?: ChatSendOptions) => Promise<void>;
     toggleRealtimeTalk: () => Promise<void>;
-    toggleChatDictation: () => Promise<void>;
     steerQueuedChatMessage: (id: string) => Promise<void>;
     handleAbortChat: () => Promise<void>;
     removeQueuedMessage: (id: string) => void;

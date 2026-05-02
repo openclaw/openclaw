@@ -44,7 +44,6 @@ let handleAbortChat: typeof import("./app-chat.ts").handleAbortChat;
 let refreshChatAvatar: typeof import("./app-chat.ts").refreshChatAvatar;
 let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQueueItemsForRun;
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
-let transcribeChatAudio: typeof import("./app-chat.ts").transcribeChatAudio;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -55,7 +54,6 @@ async function loadChatHelpers(): Promise<void> {
     refreshChatAvatar,
     clearPendingQueueItemsForRun,
     removeQueuedMessage,
-    transcribeChatAudio,
   } = await import("./app-chat.ts"));
 }
 
@@ -105,72 +103,11 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     toolStreamById: new Map(),
     toolStreamOrder: [],
     toolStreamSyncTimer: null,
-    chatDictationStatus: "idle",
-    chatDictationDetail: null,
     updateComplete: Promise.resolve(),
     ...overrides,
   };
   return host as ChatHost;
 }
-
-describe("transcribeChatAudio", () => {
-  beforeAll(async () => {
-    await loadChatHelpers();
-  });
-
-  it("sends recorded audio to the gateway and appends the transcript to the draft", async () => {
-    const request = vi.fn(async () => ({ text: "new words" }));
-    const host = makeHost({
-      client: { request } as never,
-      chatMessage: "existing",
-    });
-
-    await transcribeChatAudio(host, new Blob([new Uint8Array([1, 2, 3])], { type: "audio/webm" }));
-
-    expect(request).toHaveBeenCalledWith("chat.transcribeAudio", {
-      audioBase64: "AQID",
-      mimeType: "audio/webm",
-    });
-    expect(host.chatMessage).toBe("existing new words");
-    expect(host.chatDictationStatus).toBe("idle");
-    expect(host.chatDictationDetail).toBeNull();
-  });
-
-  it("surfaces gateway transcription errors without changing the draft", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("no provider");
-    });
-    const host = makeHost({
-      client: { request } as never,
-      chatMessage: "existing",
-    });
-
-    await transcribeChatAudio(host, new Blob([new Uint8Array([1])], { type: "audio/ogg" }));
-
-    expect(host.chatMessage).toBe("existing");
-    expect(host.chatDictationStatus).toBe("error");
-    expect(host.chatDictationDetail).toBe("no provider");
-    expect(host.lastError).toBe("no provider");
-  });
-
-  it("rejects oversized dictation before sending it over the gateway socket", async () => {
-    const request = vi.fn();
-    const host = makeHost({
-      client: { request } as never,
-      chatMessage: "existing",
-    });
-
-    await transcribeChatAudio(
-      host,
-      new Blob([new Uint8Array(18 * 1024 * 1024 + 1)], { type: "audio/webm" }),
-    );
-
-    expect(request).not.toHaveBeenCalled();
-    expect(host.chatMessage).toBe("existing");
-    expect(host.chatDictationStatus).toBe("error");
-    expect(host.chatDictationDetail).toContain("too large");
-  });
-});
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
   return {

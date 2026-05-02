@@ -22,7 +22,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 ## How it works (behavior)
 
-- The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, `chat.inject`, and `chat.transcribeAudio`.
+- The UI connects to the Gateway WebSocket and uses `chat.history`, `chat.send`, and `chat.inject`.
 - `chat.history` is bounded for stability: Gateway may truncate long text fields, omit heavy metadata, and replace oversized entries with `[chat.history omitted: message too large]`.
 - `chat.history` follows the active transcript branch for modern append-only session files, so abandoned rewrite branches and superseded prompt copies are not rendered in WebChat.
 - Control UI remembers the backing Gateway `sessionId` returned by `chat.history` and includes it on follow-up `chat.send` calls, so reconnects and page refreshes continue the same stored conversation unless the user starts or resets a session.
@@ -37,7 +37,6 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
   and assistant entries whose whole visible text is only the exact silent
   token `NO_REPLY` / `no_reply` are omitted.
 - Reasoning-flagged reply payloads (`isReasoning: true`) are excluded from WebChat assistant content, transcript replay text, and audio content blocks, so thinking-only payloads do not surface as visible assistant messages or playable audio.
-- `chat.transcribeAudio` powers server-side dictation in the Control UI chat composer. The browser records microphone audio, sends it as base64 to the Gateway, and the Gateway runs the configured `tools.media.audio` pipeline. The returned transcript is inserted into the draft; no agent run is started until the user sends it.
 - `chat.inject` appends an assistant note directly to the transcript and broadcasts it to the UI (no agent run).
 - Aborted runs can keep partial assistant output visible in the UI.
 - Gateway persists aborted partial assistant text into transcript history when buffered output exists, and marks those entries with abort metadata.

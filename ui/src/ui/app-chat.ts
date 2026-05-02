@@ -17,7 +17,6 @@ import {
   type ChatInputHistoryKeyResult,
   type ChatInputHistoryState,
 } from "./chat/input-history.ts";
-import { bytesToBase64 } from "./chat/realtime-talk-audio.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
 import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
@@ -69,21 +68,9 @@ export type ChatHost = ChatInputHistoryState & {
   refreshSessionsAfterChat: Set<string>;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
-  chatDictationStatus?: ChatDictationStatus;
-  chatDictationDetail?: string | null;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
 };
-
-export type ChatDictationStatus = "idle" | "starting" | "recording" | "transcribing" | "error";
-
-type ChatTranscribeAudioResult = {
-  text?: unknown;
-  provider?: unknown;
-  model?: unknown;
-};
-
-export const CHAT_TRANSCRIBE_AUDIO_MAX_BYTES = 18 * 1024 * 1024;
 
 export type ChatSendOptions = {
   confirmReset?: boolean;
@@ -134,60 +121,6 @@ export function isChatStopCommand(text: string) {
     normalized === "wait" ||
     normalized === "exit"
   );
-}
-
-function appendDictationText(draft: string, transcript: string): string {
-  const text = transcript.trim();
-  if (!text) {
-    return draft;
-  }
-  const current = draft.trimEnd();
-  return current ? `${current} ${text}` : text;
-}
-
-export async function transcribeChatAudio(host: ChatHost, audio: Blob): Promise<string | null> {
-  if (!host.client || !host.connected) {
-    host.chatDictationStatus = "error";
-    host.chatDictationDetail = "Gateway not connected";
-    host.lastError = host.chatDictationDetail;
-    return null;
-  }
-  if (audio.size <= 0) {
-    host.chatDictationStatus = "error";
-    host.chatDictationDetail = "No audio captured";
-    host.lastError = host.chatDictationDetail;
-    return null;
-  }
-  if (audio.size > CHAT_TRANSCRIBE_AUDIO_MAX_BYTES) {
-    host.chatDictationStatus = "error";
-    host.chatDictationDetail = `Audio clip is too large for WebChat dictation. Keep recordings under ${CHAT_TRANSCRIBE_AUDIO_MAX_BYTES} bytes.`;
-    host.lastError = host.chatDictationDetail;
-    return null;
-  }
-
-  host.chatDictationStatus = "transcribing";
-  host.chatDictationDetail = "Transcribing dictation...";
-  try {
-    const bytes = new Uint8Array(await audio.arrayBuffer());
-    const mimeType = audio.type || "audio/webm";
-    const result = await host.client.request<ChatTranscribeAudioResult>("chat.transcribeAudio", {
-      audioBase64: bytesToBase64(bytes),
-      mimeType,
-    });
-    const transcript = typeof result.text === "string" ? result.text.trim() : "";
-    if (!transcript) {
-      throw new Error("No transcript returned");
-    }
-    host.chatMessage = appendDictationText(host.chatMessage, transcript);
-    host.chatDictationStatus = "idle";
-    host.chatDictationDetail = null;
-    return transcript;
-  } catch (err) {
-    host.chatDictationStatus = "error";
-    host.chatDictationDetail = err instanceof Error ? err.message : String(err);
-    host.lastError = host.chatDictationDetail;
-    return null;
-  }
 }
 
 function isChatResetCommand(text: string) {

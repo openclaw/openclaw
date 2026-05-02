@@ -427,14 +427,16 @@ function isNpmExecPath(value: string): boolean {
   return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(basename(value).toLowerCase());
 }
 
-export function resolveNpmCommandInvocation(params?: {
-  npmExecPath?: string;
-  nodeExecPath?: string;
-  platform?: NodeJS.Platform;
-}): { command: string; args: string[] } {
-  const npmExecPath = params === undefined ? process.env.npm_execpath : params.npmExecPath;
-  const nodeExecPath = params?.nodeExecPath ?? process.execPath;
-  const npmCommand = (params?.platform ?? process.platform) === "win32" ? "npm.cmd" : "npm";
+export function resolveNpmCommandInvocation(
+  params: {
+    npmExecPath?: string;
+    nodeExecPath?: string;
+    platform?: NodeJS.Platform;
+  } = {},
+): { command: string; args: string[] } {
+  const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
+  const nodeExecPath = params.nodeExecPath ?? process.execPath;
+  const npmCommand = (params.platform ?? process.platform) === "win32" ? "npm.cmd" : "npm";
 
   if (typeof npmExecPath === "string" && npmExecPath.length > 0 && isNpmExecPath(npmExecPath)) {
     return { command: nodeExecPath, args: [npmExecPath] };

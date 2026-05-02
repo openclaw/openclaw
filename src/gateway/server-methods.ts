@@ -12,7 +12,6 @@ import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { artifactsHandlers } from "./server-methods/artifacts.js";
 import { channelsHandlers } from "./server-methods/channels.js";
-import { chatTranscribeAudioHandlers } from "./server-methods/chat-transcribe-audio.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import { commandsHandlers } from "./server-methods/commands.js";
 import { configHandlers } from "./server-methods/config.js";
@@ -86,7 +85,6 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...healthHandlers,
   ...channelsHandlers,
   ...chatHandlers,
-  ...chatTranscribeAudioHandlers,
   ...commandsHandlers,
   ...cronHandlers,
   ...deviceHandlers,
