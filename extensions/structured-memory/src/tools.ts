@@ -222,36 +222,71 @@ async function runClassification(params: {
   rawText: string;
   resolvedModel: { provider?: string; model?: string };
 }): Promise<{ result: ClassificationResult } | { error: ClassificationError }> {
-  const subagentSessionId = `structured-mem-classify-${Date.now().toString(36)}-${crypto.randomUUID().slice(0, 8)}`;
-  const subagentSessionKey = `${params.sessionKey}:structured-memory:classify:${crypto.randomUUID().slice(0, 8)}`;
+  const subagentSessionKey = `structured-memory:classify:${crypto.randomUUID().slice(0, 8)}`;
   const prompt = buildClassificationPrompt(params.rawText);
 
   try {
-    const result = await params.api.runtime.agent.runEmbeddedPiAgent({
-      sessionId: subagentSessionId,
+    // Use subagent.run with lightContext=true to avoid workspace bootstrap —
+    // classification only needs the prompt + user message, not full agent context.
+    const { runId } = await params.api.runtime.subagent.run({
       sessionKey: subagentSessionKey,
-      agentId: params.agentId,
-      prompt,
+      message: prompt,
       provider: params.resolvedModel.provider,
       model: params.resolvedModel.model,
-      timeoutMs: params.config.classification.timeoutMs,
-      runId: subagentSessionId,
-      trigger: "manual",
-      toolsAllow: [],
-      disableMessageTool: true,
-      bootstrapContextMode: "lightweight",
-      silentExpected: true,
-      verboseLevel: "off",
-      thinkLevel: "off",
-      reasoningLevel: "off",
-      cleanupBundleMcpOnRunEnd: true,
+      lightContext: true,
     });
 
-    const rawReply = (result.payloads ?? [])
-      .map((payload) => payload.text?.trim() ?? "")
-      .filter(Boolean)
-      .join("\n")
-      .trim();
+    const waitResult = await params.api.runtime.subagent.waitForRun({
+      runId,
+      timeoutMs: params.config.classification.timeoutMs,
+    });
+
+    if (waitResult.status === "timeout") {
+      return {
+        error: {
+          code: "TIMEOUT",
+          message: `Classification timed out after ${params.config.classification.timeoutMs}ms`,
+        },
+      };
+    }
+    if (waitResult.status === "error") {
+      const msg = waitResult.error ?? "Subagent run failed";
+      if (msg.includes("429") || msg.includes("rate") || msg.includes("quota")) {
+        return { error: { code: "RATE_LIMITED", message: msg } };
+      }
+      return { error: { code: "MODEL_UNAVAILABLE", message: msg } };
+    }
+
+    // Fetch the subagent session messages to extract the model reply.
+    const sessionMessages = await params.api.runtime.subagent.getSessionMessages({
+      sessionKey: subagentSessionKey,
+      limit: 2,
+    });
+
+    // Clean up the transient subagent session.
+    params.api.runtime.subagent
+      .deleteSession({
+        sessionKey: subagentSessionKey,
+        deleteTranscript: true,
+      })
+      .catch(() => {});
+
+    const assistantMsgs = (sessionMessages.messages as Array<{ role?: string; content?: string }>)
+      .filter((m) => m.role === "assistant")
+      .map((m) => m.content ?? "")
+      .filter(Boolean);
+
+    const rawReply = assistantMsgs.join("\n").trim();
+
+    if (!rawReply) {
+      return {
+        error: {
+          code: "MODEL_UNAVAILABLE",
+          message:
+            "Empty response from classification model — the model may be too small for the subagent scaffold. Use a 7B+ model or configure the plugin to use pure-rule classification only.",
+        },
+      };
+    }
 
     const classification = parseClassificationResponse(rawReply);
     if (!classification) {

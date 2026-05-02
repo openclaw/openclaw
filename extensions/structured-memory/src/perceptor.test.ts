@@ -60,6 +60,33 @@ describe("perceptor analyzeMessage", () => {
     });
   });
 
+  describe("memory request detection", () => {
+    it("detects explicit memorization directives", () => {
+      const cases = [
+        "你帮我记一下，密码改成了abc123",
+        "记住这个：下周五交报告",
+        "别忘了周六下午三点开会",
+        "帮我记一下客户电话是13900001111",
+        "记下来，王经理的邮箱是wang@example.com",
+        "存一下这个地址",
+      ];
+      for (const c of cases) {
+        expect(analyzeMessage(c).signal?.source).toBe("memory_request");
+      }
+    });
+
+    it("extracts content after directive for keywords", () => {
+      const r = analyzeMessage("帮我记一下密码是abc123");
+      expect(r.signal?.source).toBe("memory_request");
+      expect(r.signal!.keywords).toContain("abc123");
+    });
+
+    it("has higher priority than time commitment", () => {
+      const r = analyzeMessage("帮我记一下，下周五之前要交报告");
+      expect(r.signal?.source).toBe("memory_request");
+    });
+  });
+
   describe("time commitment detection", () => {
     it("detects deadline patterns", () => {
       const r = analyzeMessage("周五之前要提交报告");

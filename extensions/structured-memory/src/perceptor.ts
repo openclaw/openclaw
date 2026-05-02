@@ -6,6 +6,7 @@ export type PerceptorSource =
   | "correction"
   | "rule_constraint"
   | "explicit_preference"
+  | "memory_request"
   | "time_commitment"
   | "identity";
 
@@ -28,6 +29,7 @@ const SOURCE_PRIORITY: readonly PerceptorSource[] = [
   "correction",
   "rule_constraint",
   "explicit_preference",
+  "memory_request",
   "time_commitment",
   "identity",
 ];
@@ -36,8 +38,9 @@ const PRIORITY_RANK: Record<PerceptorSource, number> = {
   correction: 0,
   rule_constraint: 1,
   explicit_preference: 2,
-  time_commitment: 3,
-  identity: 4,
+  memory_request: 3,
+  time_commitment: 4,
+  identity: 5,
 };
 
 // ── Keyword extraction ───────────────────────────────────────
@@ -245,7 +248,27 @@ function detectExplicitPreference(text: string): PerceptorSignal | null {
   };
 }
 
-// Detector 4: Time Commitment
+// Detector 4: Explicit Memory Request ("帮我记一下" etc.)
+const MEMORY_REQUEST_RE =
+  /帮我记|记住|别忘了|记下来|记一下|帮我存|存一下|你帮我记|别忘了|帮我备注|备注一下/;
+
+function detectMemoryRequest(text: string): PerceptorSignal | null {
+  if (!MEMORY_REQUEST_RE.test(text)) return null;
+  // The text following the directive is what should be memorized.
+  // Strip the directive prefix for a cleaner summary.
+  const cleaned = text
+    .replace(/你?帮我?(记一下|记住|记下来|存一下|备注一下|别忘了)[，,]?\s*/g, "")
+    .trim();
+  return {
+    type: cleaned.length > 0 ? "fact" : "fact",
+    importance: 5,
+    confidence: 0.85,
+    keywords: extractKeywords(cleaned || text),
+    source: "memory_request",
+  };
+}
+
+// Detector 5: Time Commitment
 const TIME_EXPR_RE =
   /周五|周六|周日|周一|周二|周三|周四|星期[一二三四五六日]|下周[一二三四五六日]?|下个月|明年|月底|月初|年末|年底|这周|这个月|明天|后天|改天|回头|这周末|下周末|春节|元旦|五一|国庆|暑假|寒假|放假|周末/;
 const TIME_ACTION_RE = /要|会|准备|打算|计划|想|去|做|参加|完成|交|提交|写完|搞完|之前|以前|的时候/;
@@ -267,7 +290,7 @@ function detectTimeCommitment(text: string): PerceptorSignal | null {
   };
 }
 
-// Detector 5: Identity
+// Detector 6: Identity
 const IDENTITY_RE =
   /我(?:叫|是|住在|在|姓|的|今年|属|喜欢|讨厌|有(?:一[个只台辆])?)|我的.{1,6}(?:是|叫|在|喜欢|住)/;
 
@@ -296,6 +319,7 @@ const DETECTORS: [PerceptorSource, DetectorFn][] = [
   ["correction", detectCorrection],
   ["rule_constraint", detectRuleConstraint],
   ["explicit_preference", detectExplicitPreference],
+  ["memory_request", detectMemoryRequest],
   ["time_commitment", detectTimeCommitment],
   ["identity", detectIdentity],
 ];
