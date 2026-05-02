@@ -3066,6 +3066,7 @@ describe("google-meet plugin", () => {
           resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
           loadSessionStore: vi.fn(() => sessionStore),
           saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
           resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
         },
         runEmbeddedPiAgent: vi.fn(async () => ({
@@ -3322,6 +3323,7 @@ describe("google-meet plugin", () => {
       },
     };
     let pullCount = 0;
+    const sessionStore: Record<string, unknown> = {};
     const runtime = {
       nodes: {
         invoke: vi.fn(async ({ params }: { params?: { action?: string; base64?: string } }) => {
@@ -3342,8 +3344,9 @@ describe("google-meet plugin", () => {
         ensureAgentWorkspace: vi.fn(async () => {}),
         session: {
           resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => ({})),
+          loadSessionStore: vi.fn(() => sessionStore),
           saveSessionStore: vi.fn(async () => {}),
+          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
           resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
         },
         runEmbeddedPiAgent: vi.fn(async () => ({
