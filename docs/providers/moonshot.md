@@ -385,7 +385,7 @@ Config lives under `plugins.entries.moonshot.config.webSearch`:
     | ---------- | ---------------- | ----------------------------- | ------------------- |
     | Moonshot   | `moonshot/`      | `https://api.moonshot.ai/v1`  | `MOONSHOT_API_KEY`  |
     | Moonshot CN| `moonshot/`      | `https://api.moonshot.cn/v1`  | `MOONSHOT_API_KEY`  |
-    | Kimi Coding| `kimi/`          | Kimi Coding endpoint          | `KIMI_API_KEY`      |
+    | Kimi Coding| `kimi/`          | `https://api.kimi.com/coding/v1` | `KIMI_API_KEY`   |
     | Web search | N/A              | Same as Moonshot API region   | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
 
     - Kimi web search uses `KIMI_API_KEY` or `MOONSHOT_API_KEY`, and defaults to `https://api.moonshot.ai/v1` with model `kimi-k2.6`.
