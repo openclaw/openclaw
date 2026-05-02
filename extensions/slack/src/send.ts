@@ -70,32 +70,96 @@ type SlackSendOpts = {
   blocks?: (Block | KnownBlock)[];
 };
 
+type SlackWebApiErrorData = {
+  error?: unknown;
+  needed?: unknown;
+  response_metadata?: {
+    scopes?: unknown;
+    acceptedScopes?: unknown;
+  };
+};
+
+type SlackWebApiError = Error & {
+  data?: SlackWebApiErrorData;
+};
+
 function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
   return Boolean(identity?.username || identity?.iconUrl || identity?.iconEmoji);
 }
 
-function isSlackCustomizeScopeError(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
+function normalizeSlackApiString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeSlackScopeList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
   }
-  const maybeData = err as Error & {
-    data?: {
-      error?: string;
-      needed?: string;
-      response_metadata?: { scopes?: string[]; acceptedScopes?: string[] };
-    };
-  };
-  const code = normalizeLowercaseStringOrEmpty(maybeData.data?.error);
+  return value.flatMap((scope) => {
+    const normalized = normalizeSlackApiString(scope);
+    return normalized ? [normalized] : [];
+  });
+}
+
+function getSlackWebApiErrorData(err: unknown): SlackWebApiErrorData | undefined {
+  if (!(err instanceof Error)) {
+    return undefined;
+  }
+  const data = (err as SlackWebApiError).data;
+  if (!data || typeof data !== "object") {
+    return undefined;
+  }
+  return data;
+}
+
+function formatSlackWebApiErrorMessage(err: unknown): string | undefined {
+  if (!(err instanceof Error)) {
+    return undefined;
+  }
+  const data = getSlackWebApiErrorData(err);
+  const code = normalizeSlackApiString(data?.error);
+  if (!code) {
+    return undefined;
+  }
+  const details: string[] = [];
+  const needed = normalizeSlackApiString(data?.needed);
+  if (needed) {
+    details.push(`needed: ${needed}`);
+  }
+  const scopes = normalizeSlackScopeList(data?.response_metadata?.scopes);
+  if (scopes.length) {
+    details.push(`granted: ${scopes.join(", ")}`);
+  }
+  const acceptedScopes = normalizeSlackScopeList(data?.response_metadata?.acceptedScopes);
+  if (acceptedScopes.length) {
+    details.push(`accepted: ${acceptedScopes.join(", ")}`);
+  }
+  return `${err.message || `An API error occurred: ${code}`}${
+    details.length ? ` (${details.join("; ")})` : ""
+  }`;
+}
+
+function enrichSlackWebApiError(err: unknown): unknown {
+  const message = formatSlackWebApiErrorMessage(err);
+  if (!message || !(err instanceof Error) || message === err.message) {
+    return err;
+  }
+  return new Error(message);
+}
+
+function isSlackCustomizeScopeError(err: unknown): boolean {
+  const data = getSlackWebApiErrorData(err);
+  const code = normalizeLowercaseStringOrEmpty(normalizeSlackApiString(data?.error));
   if (code !== "missing_scope") {
     return false;
   }
-  const needed = normalizeLowercaseStringOrEmpty(maybeData.data?.needed);
+  const needed = normalizeLowercaseStringOrEmpty(normalizeSlackApiString(data?.needed));
   if (needed?.includes("chat:write.customize")) {
     return true;
   }
   const scopes = [
-    ...(maybeData.data?.response_metadata?.scopes ?? []),
-    ...(maybeData.data?.response_metadata?.acceptedScopes ?? []),
+    ...normalizeSlackScopeList(data?.response_metadata?.scopes),
+    ...normalizeSlackScopeList(data?.response_metadata?.acceptedScopes),
   ].map((scope) => normalizeLowercaseStringOrEmpty(scope));
   return scopes.includes("chat:write.customize");
 }
@@ -394,6 +458,22 @@ export async function sendMessageSlack(
 }
 
 async function sendMessageSlackQueued(params: {
+  trimmedMessage: string;
+  opts: SlackSendOpts;
+  cfg: OpenClawConfig;
+  account: ReturnType<typeof resolveSlackAccount>;
+  token: string;
+  recipient: SlackRecipient;
+  blocks?: (Block | KnownBlock)[];
+}): Promise<SlackSendResult> {
+  try {
+    return await sendMessageSlackQueuedInner(params);
+  } catch (err) {
+    throw enrichSlackWebApiError(err);
+  }
+}
+
+async function sendMessageSlackQueuedInner(params: {
   trimmedMessage: string;
   opts: SlackSendOpts;
   cfg: OpenClawConfig;
