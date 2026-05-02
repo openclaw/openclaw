@@ -330,6 +330,12 @@ function readStabilityEventRecord(
   assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
   assignOptionalCodeString(
     sanitized,
+    "activeWorkKind",
+    record.activeWorkKind,
+    `${label}.activeWorkKind`,
+  );
+  assignOptionalCodeString(
+    sanitized,
     "pairedToolName",
     record.pairedToolName,
     `${label}.pairedToolName`,

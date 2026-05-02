@@ -101,7 +101,7 @@ function ensureSlackTestRuntime(): {
 
 export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-export async function waitForSlackEvent(name: string) {
+async function waitForSlackEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {
     if (getSlackHandlers()?.has(name)) {
       return;
@@ -142,7 +142,7 @@ export async function stopSlackMonitor(params: {
   await params.run;
 }
 
-export async function runSlackEventOnce(
+async function runSlackEventOnce(
   monitorSlackProvider: SlackProviderMonitor,
   name: string,
   args: unknown,

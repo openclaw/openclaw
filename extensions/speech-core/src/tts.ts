@@ -1318,11 +1318,13 @@ export async function textToSpeechTelephony(params: {
   text: string;
   cfg: OpenClawConfig;
   prefsPath?: string;
+  overrides?: TtsDirectiveOverrides;
 }): Promise<TtsTelephonyResult> {
   const setup = resolveTtsRequestSetup({
     text: params.text,
     cfg: params.cfg,
     prefsPath: params.prefsPath,
+    providerOverride: params.overrides?.provider,
   });
   if ("error" in setup) {
     return { success: false, error: setup.error };
@@ -1371,6 +1373,7 @@ export async function textToSpeechTelephony(params: {
         text: params.text,
         cfg,
         providerConfig: resolvedProvider.providerConfig,
+        providerOverrides: params.overrides?.providerOverrides?.[resolvedProvider.provider.id],
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target: "telephony",
@@ -1380,6 +1383,7 @@ export async function textToSpeechTelephony(params: {
         text: prepared.text,
         cfg,
         providerConfig: prepared.providerConfig,
+        providerOverrides: prepared.providerOverrides,
         timeoutMs: config.timeoutMs,
       });
       const latencyMs = Date.now() - providerStart;

@@ -69,7 +69,7 @@ export function resolveWindowsProviderAuth(input: {
   if (process.env.OPENCLAW_PARALLELS_OPENAI_MODEL?.trim()) {
     return auth;
   }
-  return { ...auth, modelId: "openai/gpt-4.1-mini" };
+  return { ...auth, modelId: "openai/gpt-5.5" };
 }
 
 export function providerIdFromModelId(modelId: string): string {
@@ -108,6 +108,42 @@ export function providerTimeoutConfigJson(modelId: string, platform: Platform): 
     ],
     timeoutSeconds: resolveParallelsModelTimeoutSeconds(platform),
   });
+}
+
+export function modelTransportConfigJson(modelId: string): string {
+  if (providerIdFromModelId(modelId) !== "openai") {
+    return "";
+  }
+  return JSON.stringify({
+    alias: "GPT",
+    params: {
+      transport: "sse",
+    },
+  });
+}
+
+export function configPathMapKey(key: string): string {
+  return `[${JSON.stringify(key)}]`;
+}
+
+export function modelProviderConfigBatchJson(modelId: string, platform: Platform): string {
+  const commands: Array<{ path: string; value: unknown }> = [];
+  const providerId = providerIdFromModelId(modelId);
+  const providerConfig = providerTimeoutConfigJson(modelId, platform);
+  if (providerId && providerConfig) {
+    commands.push({
+      path: `models.providers.${providerId}`,
+      value: JSON.parse(providerConfig) as unknown,
+    });
+  }
+  const modelTransportConfig = modelTransportConfigJson(modelId);
+  if (modelTransportConfig) {
+    commands.push({
+      path: `agents.defaults.models${configPathMapKey(modelId)}`,
+      value: JSON.parse(modelTransportConfig) as unknown,
+    });
+  }
+  return commands.length === 0 ? "" : JSON.stringify(commands);
 }
 
 export function parseProvider(value: string): Provider {

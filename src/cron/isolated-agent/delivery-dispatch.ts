@@ -13,6 +13,7 @@ import {
   resolveMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { OutboundDeliveryResult } from "../../infra/outbound/deliver.js";
@@ -24,6 +25,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
 import type { CronJob, CronRunTelemetry } from "../types.js";
@@ -119,6 +121,7 @@ type DispatchCronDeliveryParams = {
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
   synthesizedText?: string;
+  ttsAuto?: TtsAutoMode;
   summary?: string;
   outputText?: string;
   telemetry?: CronRunTelemetry;
@@ -183,6 +186,7 @@ let deliveryLoggerRuntimePromise:
 let subagentFollowupRuntimePromise:
   | Promise<typeof import("./subagent-followup.runtime.js")>
   | undefined;
+let ttsRuntimePromise: Promise<typeof import("../../tts/tts.runtime.js")> | undefined;
 
 const COMPLETED_DIRECT_CRON_DELIVERIES = new Map<string, CompletedDirectCronDelivery>();
 
@@ -215,6 +219,11 @@ async function loadSubagentFollowupRuntime(): Promise<
 > {
   subagentFollowupRuntimePromise ??= import("./subagent-followup.runtime.js");
   return await subagentFollowupRuntimePromise;
+}
+
+async function loadTtsRuntime(): Promise<typeof import("../../tts/tts.runtime.js")> {
+  ttsRuntimePromise ??= import("../../tts/tts.runtime.js");
+  return await ttsRuntimePromise;
 }
 
 async function logCronDeliveryWarn(message: string): Promise<void> {
@@ -301,6 +310,40 @@ function getCompletedDirectCronDelivery(
     return undefined;
   }
   return cloneDeliveryResults(cached.results);
+}
+
+async function maybeApplyTtsToCronPayloads(params: {
+  cfg: OpenClawConfig;
+  payloads: ReplyPayload[];
+  delivery: SuccessfulDeliveryTarget;
+  agentId: string;
+  ttsAuto?: TtsAutoMode;
+}): Promise<ReplyPayload[]> {
+  if (
+    !shouldAttemptTtsPayload({
+      cfg: params.cfg,
+      ttsAuto: params.ttsAuto,
+      agentId: params.agentId,
+      channelId: params.delivery.channel,
+      accountId: params.delivery.accountId,
+    })
+  ) {
+    return params.payloads;
+  }
+  const { maybeApplyTtsToPayload } = await loadTtsRuntime();
+  return await Promise.all(
+    params.payloads.map((payload) =>
+      maybeApplyTtsToPayload({
+        payload,
+        cfg: params.cfg,
+        channel: params.delivery.channel,
+        kind: "final",
+        ttsAuto: params.ttsAuto,
+        agentId: params.agentId,
+        accountId: params.delivery.accountId,
+      }),
+    ),
+  );
 }
 
 function buildDirectCronDeliveryIdempotencyKey(params: {
@@ -524,7 +567,7 @@ export async function dispatchCronDelivery(
           : synthesizedText
             ? [{ text: synthesizedText }]
             : [];
-      const payloadsForDelivery = rawPayloads
+      const normalizedPayloads = rawPayloads
         .map((p) => {
           if (!p.text) {
             return p;
@@ -535,7 +578,7 @@ export async function dispatchCronDelivery(
           });
         })
         .filter((p) => hasReplyPayloadContent(p, { trimText: true }));
-      if (payloadsForDelivery.length === 0) {
+      if (normalizedPayloads.length === 0) {
         return await finishSilentReplyDelivery();
       }
       if (params.isAborted()) {
@@ -574,6 +617,18 @@ export async function dispatchCronDelivery(
           delivered: false,
           ...params.telemetry,
         });
+      }
+      const payloadsForDelivery = (
+        await maybeApplyTtsToCronPayloads({
+          cfg: params.cfgWithAgentDefaults,
+          payloads: normalizedPayloads,
+          delivery,
+          agentId: params.agentId,
+          ttsAuto: params.ttsAuto,
+        })
+      ).filter((p) => hasReplyPayloadContent(p, { trimText: true }));
+      if (payloadsForDelivery.length === 0) {
+        return await finishSilentReplyDelivery();
       }
       deliveryAttempted = true;
       const cachedResults = getCompletedDirectCronDelivery(deliveryIdempotencyKey);

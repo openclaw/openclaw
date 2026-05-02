@@ -253,10 +253,16 @@ function assertGitPlugin() {
   if (!installPath || !fs.existsSync(installPath)) {
     throw new Error(`git install path missing on disk: ${installPath}`);
   }
-  const extensionsRoot = path.join(process.env.HOME, ".openclaw", "extensions");
-  if (!installPath.startsWith(`${extensionsRoot}${path.sep}`)) {
-    throw new Error(`git install path is outside managed extensions root: ${installPath}`);
+  const gitRoot = path.join(process.env.HOME, ".openclaw", "git");
+  if (!installPath.endsWith(`${path.sep}repo`)) {
+    throw new Error(`git install path should point at cloned repo root: ${installPath}`);
   }
+  assertRealPathInside(gitRoot, installPath, "git install path");
+  const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
+  if (!fs.existsSync(dependencyPackagePath)) {
+    throw new Error(`missing git plugin installed dependency: ${dependencyPackagePath}`);
+  }
+  assertRealPathInside(installPath, dependencyPackagePath, "git plugin installed dependency");
 }
 
 function assertRealPathInside(parentPath, childPath, label) {
@@ -285,10 +291,39 @@ function assertClawHubExternalInstallContract(installPath) {
   }
 
   const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
-  if (!fs.existsSync(dependencyPackagePath)) {
-    throw new Error(`missing ClawHub isolated dependency: ${dependencyPackagePath}`);
+  if (fs.existsSync(dependencyPackagePath)) {
+    assertRealPathInside(installPath, dependencyPackagePath, "ClawHub isolated dependency");
   }
-  assertRealPathInside(installPath, dependencyPackagePath, "ClawHub isolated dependency");
+}
+
+function assertPluginDirDeps() {
+  const sourceDir = process.argv[3];
+  assertSimplePlugin(
+    "/tmp/plugins-dir-deps.json",
+    "/tmp/plugins-dir-deps-inspect.json",
+    "demo-plugin-dir-deps",
+    "demo.dir.deps",
+  );
+
+  const record = getInstallRecords()["demo-plugin-dir-deps"];
+  if (!record) {
+    throw new Error("missing local dependency plugin install record");
+  }
+  if (record.source !== "path") {
+    throw new Error(`unexpected local dependency plugin source: ${record.source}`);
+  }
+  if (record.sourcePath !== sourceDir) {
+    throw new Error(`unexpected local dependency plugin source path: ${record.sourcePath}`);
+  }
+  const installPath = record.installPath?.replace(/^~(?=$|\/)/u, process.env.HOME);
+  if (!installPath || !fs.existsSync(installPath)) {
+    throw new Error(`local dependency plugin install path missing on disk: ${installPath}`);
+  }
+  const dependencyPackagePath = path.join(installPath, "node_modules", "is-number", "package.json");
+  if (!fs.existsSync(dependencyPackagePath)) {
+    throw new Error(`missing copied local plugin dependency: ${dependencyPackagePath}`);
+  }
+  assertRealPathInside(installPath, dependencyPackagePath, "local plugin copied dependency");
 }
 
 function assertMarketplaceUpdated() {
@@ -458,6 +493,7 @@ const commands = {
       "demo-plugin-dir",
       "demo.dir",
     ),
+  "plugin-dir-deps": assertPluginDirDeps,
   "plugin-file": () =>
     assertSimplePlugin(
       "/tmp/plugins4.json",

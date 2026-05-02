@@ -11,10 +11,10 @@ import {
 } from "./tool-config-shared.js";
 import { type XaiWebSearchResponse } from "./web-search-shared.js";
 
-export const XAI_X_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
+const XAI_X_SEARCH_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 export const XAI_DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
 
-export type XaiXSearchConfig = {
+type XaiXSearchConfig = {
   apiKey?: unknown;
   model?: unknown;
   inlineCitations?: unknown;
@@ -31,13 +31,13 @@ export type XaiXSearchOptions = {
   enableVideoUnderstanding?: boolean;
 };
 
-export type XaiXSearchResult = {
+type XaiXSearchResult = {
   content: string;
   citations: string[];
   inlineCitations?: XaiWebSearchResponse["inline_citations"];
 };
 
-export function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
+function resolveXaiXSearchConfig(config?: Record<string, unknown>): XaiXSearchConfig {
   return coerceXaiToolConfig(config) as XaiXSearchConfig;
 }
 

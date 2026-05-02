@@ -46,6 +46,16 @@ node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir --runtime --json >/tmp/pl
 
 node scripts/e2e/lib/plugins/assertions.mjs plugin-dir
 
+echo "Testing install from local folder with preinstalled dependencies..."
+dir_deps_plugin="$(mktemp -d "/tmp/openclaw-plugin-dir-deps.XXXXXX")"
+write_fixture_plugin_with_vendored_dependency "$dir_deps_plugin" demo-plugin-dir-deps 0.0.1 demo.dir.deps "Demo Plugin DIR Deps"
+
+run_logged install-dir-deps node "$OPENCLAW_ENTRY" plugins install "$dir_deps_plugin"
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-dir-deps.json
+node "$OPENCLAW_ENTRY" plugins inspect demo-plugin-dir-deps --runtime --json >/tmp/plugins-dir-deps-inspect.json
+
+node scripts/e2e/lib/plugins/assertions.mjs plugin-dir-deps "$dir_deps_plugin"
+
 echo "Testing install from npm spec (file:)..."
 file_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-filepack.XXXXXX")"
 write_fixture_plugin "$file_pack_dir/package" demo-plugin-file 0.0.1 demo.file "Demo Plugin FILE"

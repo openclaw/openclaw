@@ -115,6 +115,10 @@ describe("collectClawHubVersionGateErrors", () => {
         {
           name: "@openclaw/demo-plugin",
           version: "2026.4.1",
+          repository: {
+            type: "git",
+            url: "https://github.com/openclaw/openclaw",
+          },
           openclaw: {
             extensions: ["./index.ts"],
             compat: {
@@ -278,6 +282,10 @@ function createTempPluginRepo(
         {
           name: `@openclaw/${currentExtensionId}`,
           version: "2026.4.1",
+          repository: {
+            type: "git",
+            url: "https://github.com/openclaw/openclaw",
+          },
           openclaw: {
             extensions: ["./index.ts"],
             ...(options.includeClawHubContract === false

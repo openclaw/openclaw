@@ -369,6 +369,17 @@ describe("xai web search response parsing", () => {
 });
 
 describe("xai provider models", () => {
+  it("publishes Grok 4.3 as the default chat model", () => {
+    expect(resolveXaiCatalogEntry("grok-4.3")).toMatchObject({
+      id: "grok-4.3",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+      cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+    });
+  });
+
   it("publishes the newer Grok fast and code models in the bundled catalog", () => {
     expect(resolveXaiCatalogEntry("grok-4-1-fast")).toMatchObject({
       id: "grok-4-1-fast",
@@ -430,6 +441,7 @@ describe("xai provider models", () => {
   });
 
   it("marks current Grok families as modern while excluding multi-agent ids", () => {
+    expect(isModernXaiModel("grok-4.3")).toBe(true);
     expect(isModernXaiModel("grok-4.20-beta-latest-reasoning")).toBe(true);
     expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
     expect(isModernXaiModel("grok-3-mini-fast")).toBe(true);
@@ -461,6 +473,18 @@ describe("xai provider models", () => {
         },
       },
     });
+    const grok43Alias = resolveXaiForwardCompatModel({
+      providerId: "xai",
+      ctx: {
+        provider: "xai",
+        modelId: "grok-4.3-latest",
+        modelRegistry: { find: () => null } as never,
+        providerConfig: {
+          api: "openai-responses",
+          baseUrl: "https://api.x.ai/v1",
+        },
+      },
+    });
     const grok3Mini = resolveXaiForwardCompatModel({
       providerId: "xai",
       ctx: {
@@ -482,6 +506,16 @@ describe("xai provider models", () => {
       reasoning: true,
       contextWindow: 2_000_000,
       maxTokens: 30_000,
+    });
+    expect(grok43Alias).toMatchObject({
+      provider: "xai",
+      id: "grok-4.3-latest",
+      api: "openai-responses",
+      baseUrl: "https://api.x.ai/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
     });
     expect(grok420).toMatchObject({
       provider: "xai",

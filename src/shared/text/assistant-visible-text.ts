@@ -10,6 +10,7 @@ import {
 
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
+const LEGACY_BRACKET_TOOL_CALL_QUICK_RE = /\[\s*\/?\s*TOOL_CALL\s*\]/i;
 
 /**
  * Strip XML-style tool call tags that models sometimes emit as plain text.
@@ -353,6 +354,55 @@ export function stripMinimaxToolCallXml(text: string): string {
   return cleaned;
 }
 
+function isLegacyBracketToolCallPayload(value: string): boolean {
+  return (
+    /\btool\s*=>\s*["'][A-Za-z_][A-Za-z0-9_.:-]{0,119}["']/i.test(value) &&
+    /\bargs\s*=>/i.test(value)
+  );
+}
+
+export function stripLegacyBracketToolCallBlocks(text: string): string {
+  if (!text || !LEGACY_BRACKET_TOOL_CALL_QUICK_RE.test(text)) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let cursor = 0;
+  while (cursor < text.length) {
+    const openMatch = /\[\s*TOOL_CALL\s*\]/gi.exec(text.slice(cursor));
+    if (!openMatch?.[0]) {
+      result += text.slice(cursor);
+      break;
+    }
+    const openStart = cursor + (openMatch.index ?? 0);
+    const payloadStart = openStart + openMatch[0].length;
+    if (isInsideCode(openStart, codeRegions)) {
+      result += text.slice(cursor, payloadStart);
+      cursor = payloadStart;
+      continue;
+    }
+
+    const closeMatch = /\[\s*\/\s*TOOL_CALL\s*\]/gi.exec(text.slice(payloadStart));
+    const closeStart =
+      closeMatch?.[0] && !isInsideCode(payloadStart + (closeMatch.index ?? 0), codeRegions)
+        ? payloadStart + (closeMatch.index ?? 0)
+        : -1;
+    const payloadEnd = closeStart >= 0 ? closeStart : text.length;
+    const payload = text.slice(payloadStart, payloadEnd);
+    if (!isLegacyBracketToolCallPayload(payload)) {
+      result += text.slice(cursor, payloadStart);
+      cursor = payloadStart;
+      continue;
+    }
+
+    result += text.slice(cursor, openStart);
+    cursor = closeStart >= 0 ? closeStart + (closeMatch?.[0].length ?? 0) : text.length;
+  }
+
+  return result;
+}
+
 /**
  * Strip downgraded tool call text representations that leak into user-visible
  * text content when replaying history across providers.
@@ -621,6 +671,7 @@ function applyAssistantVisibleTextStagePipeline(
     cleaned = stripToolCallXmlTags(cleaned, {
       stripFunctionCallsXmlPayloads: options.stripFunctionCallsXmlPayloads,
     });
+    cleaned = stripLegacyBracketToolCallBlocks(cleaned);
     cleaned = stripPlainTextToolCallBlocks(cleaned);
     if (!options.preserveDowngradedToolText) {
       cleaned = stripDowngradedToolCallText(cleaned);

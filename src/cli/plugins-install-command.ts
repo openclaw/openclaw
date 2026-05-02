@@ -757,6 +757,10 @@ export async function runPluginInstallCommand(params: {
         clawhubPackage: result.clawhub.clawhubPackage,
         clawhubFamily: result.clawhub.clawhubFamily,
         clawhubChannel: result.clawhub.clawhubChannel,
+        clawpackSha256: result.clawhub.clawpackSha256,
+        clawpackSpecVersion: result.clawhub.clawpackSpecVersion,
+        clawpackManifestSha256: result.clawhub.clawpackManifestSha256,
+        clawpackSize: result.clawhub.clawpackSize,
       },
     });
     return;
@@ -786,6 +790,10 @@ export async function runPluginInstallCommand(params: {
           clawhubPackage: clawhubResult.clawhub.clawhubPackage,
           clawhubFamily: clawhubResult.clawhub.clawhubFamily,
           clawhubChannel: clawhubResult.clawhub.clawhubChannel,
+          clawpackSha256: clawhubResult.clawhub.clawpackSha256,
+          clawpackSpecVersion: clawhubResult.clawhub.clawpackSpecVersion,
+          clawpackManifestSha256: clawhubResult.clawhub.clawpackManifestSha256,
+          clawpackSize: clawhubResult.clawhub.clawpackSize,
         },
       });
       return;

@@ -132,17 +132,12 @@ function resolveCapabilityProviderConfig(params: {
 function createCapabilityProviderFallbackLoadOptions(params: {
   compatConfig?: OpenClawConfig;
   pluginIds: string[];
-  installBundledRuntimeDeps?: boolean;
 }): PluginLoadOptions {
-  const loadOptions: PluginLoadOptions = {
+  return {
     ...(params.compatConfig === undefined ? {} : { config: params.compatConfig }),
     onlyPluginIds: params.pluginIds,
     activate: false,
   };
-  if (params.installBundledRuntimeDeps === false) {
-    loadOptions.installBundledRuntimeDeps = false;
-  }
-  return loadOptions;
 }
 
 function resolveCapabilityProviderSnapshotCache(
@@ -400,7 +395,6 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   key: K;
   providerId: string;
   cfg?: OpenClawConfig;
-  installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K> | undefined {
   if (shouldSkipCapabilityResolution(params)) {
     return undefined;
@@ -429,7 +423,6 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
     pluginIds,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? false,
   });
   const cache = resolveCapabilityProviderSnapshotCache(params.cfg);
   const cacheKey = cache
@@ -451,7 +444,6 @@ export function resolvePluginCapabilityProvider<K extends CapabilityProviderRegi
 export function resolvePluginCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
   key: K;
   cfg?: OpenClawConfig;
-  installBundledRuntimeDeps?: boolean;
 }): CapabilityProviderForKey<K>[] {
   if (shouldSkipCapabilityResolution(params)) {
     return [];
@@ -496,7 +488,6 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
   const loadOptions = createCapabilityProviderFallbackLoadOptions({
     compatConfig,
     pluginIds,
-    installBundledRuntimeDeps: params.installBundledRuntimeDeps ?? false,
   });
   const cache = resolveCapabilityProviderSnapshotCache(params.cfg);
   const cacheKey = cache

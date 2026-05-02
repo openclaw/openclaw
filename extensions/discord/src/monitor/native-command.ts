@@ -384,6 +384,8 @@ async function dispatchDiscordCommandInteraction(params: {
       },
       allowNameMatching,
       useAccessGroups,
+      cfg,
+      rest: interaction.client.rest,
     });
     commandAuthorized = dmAccess.commandAuthorized;
     if (dmAccess.decision !== "allow") {

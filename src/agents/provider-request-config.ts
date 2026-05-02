@@ -400,7 +400,7 @@ export function normalizeBaseUrl(
   return raw.replace(/\/+$/, "");
 }
 
-export function mergeProviderRequestHeaders(
+function mergeProviderRequestHeaders(
   ...headerSets: Array<Record<string, string> | undefined>
 ): Record<string, string> | undefined {
   let merged: Record<string, string> | undefined;

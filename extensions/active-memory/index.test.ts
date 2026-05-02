@@ -1602,6 +1602,7 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 20,
@@ -1664,6 +1665,7 @@ describe("active-memory plugin", () => {
 
   it("returns partial transcript text on timeout when transcripts are temporary by default", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 20,
@@ -1719,6 +1721,7 @@ describe("active-memory plugin", () => {
 
   it("keeps timeout status when the timeout transcript is empty", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,
@@ -1749,6 +1752,7 @@ describe("active-memory plugin", () => {
 
   it("keeps timeout status when the timeout transcript path does not exist", async () => {
     __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: 1,

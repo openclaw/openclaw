@@ -41,7 +41,7 @@ export type ResolvedCliBackend = {
   nativeToolMode?: CliBackendNativeToolMode;
 };
 
-export type ResolvedCliBackendLiveTest = {
+type ResolvedCliBackendLiveTest = {
   defaultModelRef?: string;
   defaultImageProbe: boolean;
   defaultMcpProbe: boolean;

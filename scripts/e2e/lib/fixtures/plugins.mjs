@@ -5,6 +5,15 @@ function writePluginManifest(file, id) {
   writeJson(file, { id, configSchema: { type: "object", properties: {} } });
 }
 
+function writeFakeIsNumberPackage(dir) {
+  writeJson(path.join(dir, "package.json"), {
+    name: "is-number",
+    version: "7.0.0",
+    main: "index.js",
+  });
+  write(path.join(dir, "index.js"), "module.exports = (value) => typeof value === 'number';\n");
+}
+
 function writePluginDemo([dir]) {
   write(
     path.join(requireArg(dir, "dir"), "index.js"),
@@ -35,6 +44,22 @@ function writePlugin([dir, id, version, method, name]) {
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
 
+function writePluginWithVendoredDependency([dir, id, version, method, name]) {
+  writePlugin([dir, id, version, method, name]);
+  const packageJsonPath = path.join(dir, "package.json");
+  writeJson(packageJsonPath, {
+    name: `@openclaw/${id}`,
+    version,
+    dependencies: { "is-number": "7.0.0" },
+    openclaw: { extensions: ["./index.js"] },
+  });
+  write(
+    path.join(dir, "index.js"),
+    `const isNumber = require("is-number");\nmodule.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: isNumber(42) })); }, };\n`,
+  );
+  writeFakeIsNumberPackage(path.join(dir, "node_modules", "is-number"));
+}
+
 function writePluginWithCli([dir, id, version, method, name, cliRoot, cliOutput]) {
   for (const [value, label] of [
     [dir, "dir"],
@@ -50,11 +75,13 @@ function writePluginWithCli([dir, id, version, method, name, cliRoot, cliOutput]
   writeJson(path.join(dir, "package.json"), {
     name: `@openclaw/${id}`,
     version,
+    dependencies: { "is-number": "file:./deps/is-number" },
     openclaw: { extensions: ["./index.js"] },
   });
+  writeFakeIsNumberPackage(path.join(dir, "deps", "is-number"));
   write(
     path.join(dir, "index.js"),
-    `module.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: true })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
+    `const isNumber = require("is-number");\nmodule.exports = { id: ${JSON.stringify(id)}, name: ${JSON.stringify(name)}, register(api) { api.registerGatewayMethod(${JSON.stringify(method)}, async () => ({ ok: isNumber(42) })); api.registerCli(({ program }) => { const root = program.command(${JSON.stringify(cliRoot)}).description(${JSON.stringify(`${name} fixture command`)}); root.command("ping").description("Print fixture ping output").action(() => { console.log(${JSON.stringify(cliOutput)}); }); }, { descriptors: [{ name: ${JSON.stringify(cliRoot)}, description: ${JSON.stringify(`${name} fixture command`)}, hasSubcommands: true }] }); }, };\n`,
   );
   writePluginManifest(path.join(dir, "openclaw.plugin.json"), id);
 }
@@ -99,6 +126,7 @@ function writePluginMarketplace([root]) {
 export const pluginCommands = {
   "plugin-demo": writePluginDemo,
   plugin: writePlugin,
+  "plugin-vendored-dep": writePluginWithVendoredDependency,
   "plugin-cli": writePluginWithCli,
   "plugin-manifest": ([file, id]) =>
     writePluginManifest(requireArg(file, "file"), requireArg(id, "id")),

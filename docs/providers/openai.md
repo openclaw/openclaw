@@ -479,8 +479,11 @@ Legacy `plugins.entries.openai.config.personality` is still read as a compatibil
     | Format | `messages.tts.providers.openai.responseFormat` | `opus` for voice notes, `mp3` for files |
     | API key | `messages.tts.providers.openai.apiKey` | Falls back to `OPENAI_API_KEY` |
     | Base URL | `messages.tts.providers.openai.baseUrl` | `https://api.openai.com/v1` |
+    | Extra body | `messages.tts.providers.openai.extraBody` / `extra_body` | (unset) |
 
     Available models: `gpt-4o-mini-tts`, `tts-1`, `tts-1-hd`. Available voices: `alloy`, `ash`, `ballad`, `cedar`, `coral`, `echo`, `fable`, `juniper`, `marin`, `onyx`, `nova`, `sage`, `shimmer`, `verse`.
+
+    `extraBody` is merged into `/audio/speech` request JSON after OpenClaw's generated fields, so use it for OpenAI-compatible endpoints that require additional keys such as `lang`. Prototype keys are ignored.
 
     ```json5
     {

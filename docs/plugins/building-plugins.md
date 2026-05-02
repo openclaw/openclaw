@@ -22,7 +22,9 @@ falls back to npm automatically for packages that still use npm distribution.
 
 - Node >= 22 and a package manager (npm or pnpm)
 - Familiarity with TypeScript (ESM)
-- For in-repo plugins: repository cloned and `pnpm install` done
+- For in-repo plugins: repository cloned and `pnpm install` done. Source
+  checkout plugin development is pnpm-only because OpenClaw loads bundled
+  plugins from the `extensions/*` workspace packages.
 
 ## What kind of plugin?
 

@@ -512,13 +512,7 @@ function toScopedIncludePattern(arg, cwd) {
 }
 
 function isSkippedImportGraphDirectory(name) {
-  return (
-    name === ".git" ||
-    name === "dist" ||
-    name === "node_modules" ||
-    name === "vendor" ||
-    name.startsWith(".openclaw-runtime-deps")
-  );
+  return name === ".git" || name === "dist" || name === "node_modules" || name === "vendor";
 }
 
 function listImportGraphFiles(cwd, directory, files = []) {

@@ -1,9 +1,8 @@
-import fs from "node:fs";
-import path from "node:path";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
@@ -48,7 +47,6 @@ function tryLoadBundledProviderPolicySurface(
       const mod = loadBundledPluginPublicArtifactModuleSync<Record<string, unknown>>({
         dirName: pluginId,
         artifactBasename,
-        installRuntimeDeps: false,
       });
       if (hasProviderPolicyHook(mod)) {
         return mod;
@@ -77,34 +75,24 @@ function resolveBundledProviderPolicyPluginId(providerId: string): string | null
     return providerPolicyPluginIdsByProviderId.get(cacheKey) ?? null;
   }
 
-  if (!bundledPluginsDir || !fs.existsSync(bundledPluginsDir)) {
+  if (!bundledPluginsDir) {
     providerPolicyPluginIdsByProviderId.set(cacheKey, null);
     return null;
   }
 
-  for (const entry of fs
-    .readdirSync(bundledPluginsDir, { withFileTypes: true })
-    .filter((candidate) => candidate.isDirectory())
-    .map((candidate) => candidate.name)
-    .toSorted((left, right) => left.localeCompare(right))) {
-    const manifestPath = path.join(bundledPluginsDir, entry, "openclaw.plugin.json");
-    if (!fs.existsSync(manifestPath)) {
+  const registry = loadPluginManifestRegistry();
+  for (const plugin of registry.plugins.toSorted((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
+    if (plugin.origin !== "bundled") {
       continue;
     }
-    let manifest: { providers?: unknown };
-    try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as { providers?: unknown };
-    } catch {
-      continue;
-    }
-    const providers = Array.isArray(manifest.providers) ? manifest.providers : [];
-    const ownsProvider = providers.some(
-      (candidate) =>
-        typeof candidate === "string" && normalizeProviderId(candidate) === normalizedProviderId,
+    const ownsProvider = plugin.providers.some(
+      (provider) => normalizeProviderId(provider) === normalizedProviderId,
     );
     if (ownsProvider) {
-      providerPolicyPluginIdsByProviderId.set(cacheKey, entry);
-      return entry;
+      providerPolicyPluginIdsByProviderId.set(cacheKey, plugin.id);
+      return plugin.id;
     }
   }
 

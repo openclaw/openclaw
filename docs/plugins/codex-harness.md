@@ -15,6 +15,17 @@ discovery, native thread resume, native compaction, and app-server execution.
 OpenClaw still owns chat channels, session files, model selection, tools,
 approvals, media delivery, and the visible transcript mirror.
 
+When a source chat turn runs through the Codex harness, visible replies default
+to the OpenClaw `message` tool if the deployment has not explicitly configured
+`messages.visibleReplies`. The agent can still finish its Codex turn privately;
+it only posts to the channel when it calls `message(action="send")`. Set
+`messages.visibleReplies: "automatic"` to keep direct-chat final replies on the
+legacy automatic delivery path.
+
+Codex heartbeat turns also get the `heartbeat_respond` tool by default, so the
+agent can record whether the wake should stay quiet or notify without encoding
+that control flow in final text.
+
 If you are trying to orient yourself, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
 `openai/gpt-5.5` is the model ref, `codex` is the runtime, and Telegram,
@@ -447,11 +458,10 @@ By default, the plugin starts OpenClaw's managed Codex binary locally with:
 codex app-server --listen stdio://
 ```
 
-The managed binary is declared as a bundled plugin runtime dependency and staged
-with the rest of the `codex` plugin dependencies. This keeps the app-server
-version tied to the bundled plugin instead of whichever separate Codex CLI
-happens to be installed locally. Set `appServer.command` only when you
-intentionally want to run a different executable.
+The managed binary is shipped with the `codex` plugin package. This keeps the
+app-server version tied to the bundled plugin instead of whichever separate
+Codex CLI happens to be installed locally. Set `appServer.command` only when
+you intentionally want to run a different executable.
 
 By default, OpenClaw starts local Codex harness sessions in YOLO mode:
 `approvalPolicy: "never"`, `approvalsReviewer: "user"`, and
@@ -583,7 +593,8 @@ Codex dynamic tools default to the `native-first` profile. In that mode,
 OpenClaw does not expose dynamic tools that duplicate Codex-native workspace
 operations: `read`, `write`, `edit`, `apply_patch`, `exec`, `process`, and
 `update_plan`. OpenClaw integration tools such as messaging, sessions, media,
-cron, browser, nodes, gateway, and `web_search` remain available.
+cron, browser, nodes, gateway, `heartbeat_respond`, and `web_search` remain
+available.
 
 Supported top-level Codex plugin fields:
 

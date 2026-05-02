@@ -1,6 +1,6 @@
 import type { GoogleMeetMode, GoogleMeetTransport } from "../config.js";
 
-export type GoogleMeetSessionState = "active" | "ended";
+type GoogleMeetSessionState = "active" | "ended";
 
 export type GoogleMeetJoinRequest = {
   url: string;
@@ -12,14 +12,14 @@ export type GoogleMeetJoinRequest = {
   dtmfSequence?: string;
 };
 
-export type GoogleMeetManualActionReason =
+type GoogleMeetManualActionReason =
   | "google-login-required"
   | "meet-admission-required"
   | "meet-permission-required"
   | "meet-audio-choice-required"
   | "browser-control-unavailable";
 
-export type GoogleMeetSpeechBlockedReason =
+type GoogleMeetSpeechBlockedReason =
   | GoogleMeetManualActionReason
   | "not-in-call"
   | "browser-unverified"

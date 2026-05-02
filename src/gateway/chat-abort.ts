@@ -20,7 +20,7 @@ export type ChatAbortControllerEntry = {
   kind?: "chat-send" | "agent";
 };
 
-export type RegisteredChatAbortController = {
+type RegisteredChatAbortController = {
   controller: AbortController;
   registered: boolean;
   entry?: ChatAbortControllerEntry;

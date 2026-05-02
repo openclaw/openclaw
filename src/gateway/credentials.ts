@@ -17,7 +17,7 @@ export type ExplicitGatewayAuth = {
   password?: string;
 };
 
-export type ResolvedGatewayCredentials = {
+type ResolvedGatewayCredentials = {
   token?: string;
   password?: string;
 };

@@ -451,8 +451,7 @@ describe("provider-runtime", () => {
     resolvePluginProvidersMock.mockImplementation((params) =>
       params.applyAutoEnable === false &&
       params.bundledProviderAllowlistCompat === false &&
-      params.bundledProviderVitestCompat === false &&
-      params.installBundledRuntimeDeps === false
+      params.bundledProviderVitestCompat === false
         ? []
         : [runtimeProvider],
     );

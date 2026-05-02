@@ -15,7 +15,7 @@ import {
   formatTrajectoryCommandExportSummary,
 } from "../trajectory/command-export.js";
 
-export type ExportTrajectoryCommandOptions = {
+type ExportTrajectoryCommandOptions = {
   sessionKey?: string;
   output?: string;
   store?: string;

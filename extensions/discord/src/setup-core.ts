@@ -19,7 +19,7 @@ import {
 
 const channel = "discord" as const;
 
-export const DISCORD_TOKEN_HELP_LINES = [
+const DISCORD_TOKEN_HELP_LINES = [
   "1) Discord Developer Portal -> Applications -> New Application",
   "2) Bot -> Add Bot -> Reset Token -> copy token",
   "3) OAuth2 -> URL Generator -> scope 'bot' -> invite to your server",
@@ -27,7 +27,7 @@ export const DISCORD_TOKEN_HELP_LINES = [
   `Docs: ${formatDocsLink("/discord", "discord")}`,
 ];
 
-export function setDiscordGuildChannelAllowlist(
+function setDiscordGuildChannelAllowlist(
   cfg: OpenClawConfig,
   accountId: string,
   entries: Array<{

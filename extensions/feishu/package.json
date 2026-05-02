@@ -5,7 +5,7 @@
   "type": "module",
   "dependencies": {
     "@larksuiteoapi/node-sdk": "^1.62.1",
-    "typebox": "1.1.36"
+    "typebox": "1.1.37"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
@@ -47,9 +47,6 @@
     },
     "build": {
       "openclawVersion": "2026.4.25"
-    },
-    "bundle": {
-      "stageRuntimeDependencies": true
     },
     "release": {
       "publishToClawHub": true,
