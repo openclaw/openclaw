@@ -29,6 +29,7 @@ import {
   waitForGatewayHealthyRestart,
 } from "./restart-health.js";
 import { parsePortFromArgs, renderGatewayServiceStartHints } from "./shared.js";
+import { repairLoadedGatewayServiceForStart } from "./start-repair.js";
 import type { DaemonLifecycleOptions } from "./types.js";
 
 const POST_RESTART_HEALTH_ATTEMPTS = DEFAULT_RESTART_HEALTH_ATTEMPTS;
@@ -150,14 +151,23 @@ export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
 }
 
 export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
+  const service = resolveGatewayService();
   return await runServiceStart({
     serviceNoun: "Gateway",
-    service: resolveGatewayService(),
+    service,
     renderStartHints: renderGatewayServiceStartHints,
     onNotLoaded:
       process.platform === "darwin"
         ? async () => await recoverInstalledLaunchAgent({ result: "started" })
         : undefined,
+    repairLoadedService: async ({ json, stdout, state, issues }) =>
+      await repairLoadedGatewayServiceForStart({
+        service,
+        json,
+        stdout,
+        state,
+        issues,
+      }),
     opts,
   });
 }
