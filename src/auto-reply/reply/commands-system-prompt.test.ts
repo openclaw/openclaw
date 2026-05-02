@@ -24,6 +24,11 @@ vi.mock("../../agents/sandbox.js", () => ({
 
 vi.mock("../../agents/skills.js", () => ({
   buildWorkspaceSkillSnapshot: vi.fn(() => ({ prompt: "", skills: [], resolvedSkills: [] })),
+  buildWorkspaceSkillSnapshotAsync: vi.fn(async () => ({
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+  })),
 }));
 
 vi.mock("../../agents/skills/refresh.js", () => ({

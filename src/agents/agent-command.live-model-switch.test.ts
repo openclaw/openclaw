@@ -423,6 +423,8 @@ vi.mock("./provider-auth-aliases.js", () => ({
 vi.mock("./skills.js", () => ({
   buildWorkspaceSkillSnapshot: (workspaceDir: string, opts: unknown) =>
     state.buildWorkspaceSkillSnapshotMock(workspaceDir, opts),
+  buildWorkspaceSkillSnapshotAsync: async (workspaceDir: string, opts: unknown) =>
+    state.buildWorkspaceSkillSnapshotMock(workspaceDir, opts),
 }));
 
 vi.mock("./skills/filter.js", () => ({

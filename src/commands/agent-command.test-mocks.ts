@@ -192,6 +192,7 @@ vi.mock("../agents/workspace.js", () => ({
 
 vi.mock("../agents/skills.js", () => ({
   buildWorkspaceSkillSnapshot: vi.fn(() => undefined),
+  buildWorkspaceSkillSnapshotAsync: vi.fn(async () => undefined),
   loadWorkspaceSkillEntries: vi.fn(() => []),
 }));
 

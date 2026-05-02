@@ -237,34 +237,31 @@ async function listChildDirectoriesAsync(
     let scannedEntryCount = 0;
     let truncated = false;
     const handle = await fsp.opendir(dir);
-    try {
-      for await (const entry of handle) {
-        if (scannedEntryCount >= maxRawEntriesToScan) {
-          truncated = true;
-          break;
-        }
-        scannedEntryCount += 1;
+    // for-await iteration automatically closes the handle when done
+    for await (const entry of handle) {
+      if (scannedEntryCount >= maxRawEntriesToScan) {
+        truncated = true;
+        break;
+      }
+      scannedEntryCount += 1;
 
-        if (entry.name.startsWith(".")) continue;
-        if (entry.name === "node_modules") continue;
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          dirs.push(entry.name);
-          continue;
-        }
-        if (entry.isSymbolicLink()) {
-          try {
-            const stat = await fsp.stat(fullPath);
-            if (stat.isDirectory()) {
-              dirs.push(entry.name);
-            }
-          } catch {
-            // ignore broken symlinks
+      if (entry.name.startsWith(".")) continue;
+      if (entry.name === "node_modules") continue;
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        dirs.push(entry.name);
+        continue;
+      }
+      if (entry.isSymbolicLink()) {
+        try {
+          const stat = await fsp.stat(fullPath);
+          if (stat.isDirectory()) {
+            dirs.push(entry.name);
           }
+        } catch {
+          // ignore broken symlinks
         }
       }
-    } finally {
-      await handle.close();
     }
     return { dirs, scannedEntryCount, truncated };
   } catch {
