@@ -1595,13 +1595,10 @@ function extractTerminalMemorySearchResultFromSessionRecord(
   const disabled = details?.disabled === true;
   const unavailable =
     disabled || Boolean(debug?.warning) || Boolean(debug?.error) || Boolean(details?.error);
-  const hits =
-    typeof debug?.hits === "number" && Number.isFinite(debug.hits)
-      ? debug.hits
-      : results
-        ? results.length
-        : undefined;
-  if (unavailable || hits === 0) {
+  const debugHits =
+    typeof debug?.hits === "number" && Number.isFinite(debug.hits) ? debug.hits : undefined;
+  const zeroHitSearch = results !== undefined ? results.length === 0 : debugHits === 0;
+  if (unavailable || zeroHitSearch) {
     return { status: "empty", searchDebug: debug };
   }
   return undefined;

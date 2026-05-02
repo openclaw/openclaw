@@ -2342,6 +2342,49 @@ describe("active-memory plugin", () => {
     ]);
   });
 
+  it("does not fast-fail memory_search results solely because debug hits is zero", async () => {
+    __testing.setMinimumTimeoutMsForTests(1);
+    __testing.setSetupGraceTimeoutMsForTests(0);
+    api.pluginConfig = {
+      agents: ["main"],
+      timeoutMs: 500,
+      logging: true,
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+    const sessionKey = "agent:main:terminal-zero-hit-with-results";
+    hoisted.sessionStore[sessionKey] = {
+      sessionId: "s-terminal-zero-hit-with-results",
+      updatedAt: 0,
+    };
+    runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
+      await writeTranscriptJsonl(params.sessionFile, [
+        {
+          message: {
+            role: "toolResult",
+            toolName: "memory_search",
+            details: {
+              results: [{ path: "memory/food.md", text: "User usually orders ramen." }],
+              debug: { backend: "qmd", hits: 0, searchMs: 8 },
+            },
+          },
+        },
+      ]);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return { payloads: [{ text: "User usually orders ramen." }] };
+    });
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "what food do i usually order? zero hit with results", messages: [] },
+      { agentId: "main", trigger: "user", sessionKey, messageProvider: "webchat" },
+    );
+
+    expect(result?.prependContext).toContain("User usually orders ramen.");
+    expect(getActiveMemoryLines(sessionKey)).toEqual([
+      expect.stringContaining("🧩 Active Memory: status=ok"),
+      expect.stringContaining("🔎 Active Memory Debug: backend=qmd searchMs=8 hits=0"),
+    ]);
+  });
+
   it("fast-fails unavailable memory_search results without injecting provider errors", async () => {
     const CONFIGURED_TIMEOUT_MS = 1_000;
     __testing.setMinimumTimeoutMsForTests(1);
