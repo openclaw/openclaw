@@ -4898,7 +4898,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 additionalProperties: false,
                 title: "Memory Search",
                 description:
-                  "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+                  "Vector search over MEMORY.md and memory/**/*.md (per-agent overrides supported).",
               },
               contextPruning: {
                 type: "object",
@@ -26415,7 +26415,7 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     },
     "agents.defaults.memorySearch": {
       label: "Memory Search",
-      help: "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+      help: "Vector search over MEMORY.md and memory/**/*.md (per-agent overrides supported).",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.enabled": {

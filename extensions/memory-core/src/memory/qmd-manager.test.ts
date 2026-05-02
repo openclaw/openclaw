@@ -427,23 +427,51 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     expect(watchMock).toHaveBeenCalledTimes(1);
+    const firstWatchCall = watchMock.mock.calls[0];
+    expect(firstWatchCall).toBeDefined();
+    const [watchArgs, watchOptions] = firstWatchCall as unknown as [
+      string[],
+      {
+        ignored?: (
+          watchPath: string,
+          stats: { isFile(): boolean; isDirectory(): boolean } | undefined,
+        ) => boolean;
+      },
+    ];
+    expect(watchArgs).toEqual([workspaceDir]);
+    expect(typeof watchOptions.ignored).toBe("function");
+    expect(watchOptions.ignored?.(workspaceDir, undefined)).toBe(false);
+    expect(
+      watchOptions.ignored?.(path.join(workspaceDir, ".git", "index"), {
+        isFile: () => true,
+        isDirectory: () => false,
+      }),
+    ).toBe(true);
     const watcher = watchMock.mock.results[0]?.value as {
       emit: (event: string, ...args: unknown[]) => boolean;
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
-    const [, watchOptions] = watchMock.mock.calls[0] as unknown as [
-      string[],
-      { ignored?: (watchPath: string) => boolean },
-    ];
-    expect(watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(
+    expect(
+      watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"), undefined),
+    ).toBe(true);
+    expect(
+      watchOptions.ignored?.(path.join(workspaceDir, ".cache", "qmd", "note.md"), undefined),
+    ).toBe(true);
+    expect(
+      watchOptions.ignored?.(path.join(workspaceDir, "vendor", "pkg", "note.md"), undefined),
+    ).toBe(true);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "dist", "note.md"), undefined)).toBe(
       true,
     );
-    expect(watchOptions.ignored?.(path.join(workspaceDir, ".cache", "qmd", "note.md"))).toBe(true);
-    expect(watchOptions.ignored?.(path.join(workspaceDir, "vendor", "pkg", "note.md"))).toBe(true);
-    expect(watchOptions.ignored?.(path.join(workspaceDir, "dist", "note.md"))).toBe(true);
-    expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
-    expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"), undefined)).toBe(
+      true,
+    );
+    expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"), undefined)).toBe(false);
+
+    watcher.emit("change", path.join(workspaceDir, "notes.txt"));
+    await vi.advanceTimersByTimeAsync(25);
+    expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(0);
 
     watcher.emit("change", path.join(workspaceDir, "notes.md"));
     expect(manager.status().dirty).toBe(true);

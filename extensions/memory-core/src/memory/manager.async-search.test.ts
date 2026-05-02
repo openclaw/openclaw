@@ -1,18 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
-import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
+import { awaitPendingManagerWork, awaitSearchSyncIfNeeded } from "./manager-async-state.js";
 
 describe("memory search async sync", () => {
-  it("does not await sync when searching", async () => {
+  it("awaits sync when searching dirty indexes", async () => {
     let releaseSync = () => {};
+    let settled = false;
     const pending = new Promise<void>((resolve) => {
-      releaseSync = () => resolve();
+      releaseSync = () => {
+        settled = true;
+        resolve();
+      };
     });
-    const syncMock = vi.fn(async () => {
-      return pending;
-    });
+    const syncMock = vi.fn(async () => pending);
     const onError = vi.fn();
 
-    startAsyncSearchSync({
+    const searchSyncPromise = awaitSearchSyncIfNeeded({
       enabled: true,
       dirty: true,
       sessionsDirty: false,
@@ -21,8 +23,17 @@ describe("memory search async sync", () => {
     });
 
     expect(syncMock).toHaveBeenCalledTimes(1);
+    let finished = false;
+    void searchSyncPromise.then(() => {
+      finished = true;
+    });
+    await Promise.resolve();
+    expect(finished).toBe(false);
+    expect(settled).toBe(false);
+
     releaseSync();
-    await pending;
+    await searchSyncPromise;
+    expect(finished).toBe(true);
     expect(onError).not.toHaveBeenCalled();
   });
 
@@ -44,9 +55,9 @@ describe("memory search async sync", () => {
     await closePromise;
   });
 
-  it("skips background search sync when search-triggered sync is disabled", () => {
+  it("skips search sync when search-triggered sync is disabled", async () => {
     const syncMock = vi.fn(async () => {});
-    startAsyncSearchSync({
+    await awaitSearchSyncIfNeeded({
       enabled: false,
       dirty: true,
       sessionsDirty: false,

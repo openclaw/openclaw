@@ -29,7 +29,7 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
-import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
+import { awaitPendingManagerWork, awaitSearchSyncIfNeeded } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
   closeManagedCacheEntries,
@@ -334,7 +334,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     }
     const cleaned = preflight.normalizedQuery;
     void this.warmSession(opts?.sessionKey);
-    startAsyncSearchSync({
+    await awaitSearchSyncIfNeeded({
       enabled: this.settings.sync.onSearch,
       dirty: this.dirty,
       sessionsDirty: this.sessionsDirty,
@@ -343,6 +343,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         log.warn(`memory sync failed (search): ${String(err)}`);
       },
     });
+    if (this.closed) {
+      return [];
+    }
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
     }
