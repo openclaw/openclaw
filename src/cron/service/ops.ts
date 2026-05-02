@@ -320,7 +320,7 @@ export async function add(state: CronServiceState, input: CronJobCreate) {
     const job = createJob(state, input);
     const collision = findJobByName(state, job.name);
     if (collision) {
-      throw new Error(
+      throw new RangeError(
         `a cron job named '${job.name}' already exists (id=${collision.id}); use 'cron rm ${collision.id}' first or choose a different name`,
       );
     }
@@ -365,7 +365,7 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     if ("name" in patch) {
       const collision = findJobByName(state, nextJob.name);
       if (collision && collision.id !== id) {
-        throw new Error(
+        throw new RangeError(
           `a cron job named '${nextJob.name}' already exists (id=${collision.id}); choose a different name`,
         );
       }

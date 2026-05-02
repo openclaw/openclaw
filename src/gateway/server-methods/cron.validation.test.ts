@@ -603,6 +603,69 @@ describe("cron method validation", () => {
     );
   });
 
+  it("returns INVALID_REQUEST when cron.add throws a duplicate-name RangeError (#76160)", async () => {
+    const context = createCronContext();
+    context.cron.add.mockRejectedValueOnce(
+      new RangeError(
+        "a cron job named 'daily' already exists (id=abc); use 'cron rm abc' first or choose a different name",
+      ),
+    );
+    const respond = vi.fn();
+    await cronHandlers["cron.add"]({
+      req: {} as never,
+      params: {
+        name: "daily",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "ping" },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("already exists"),
+      }),
+    );
+  });
+
+  it("returns INVALID_REQUEST when cron.update throws a duplicate-name RangeError (#76160)", async () => {
+    const existingJob = createCronJob();
+    const context = createCronContext(existingJob);
+    context.cron.update.mockRejectedValueOnce(
+      new RangeError("a cron job named 'other' already exists (id=xyz); choose a different name"),
+    );
+    const respond = vi.fn();
+    await cronHandlers["cron.update"]({
+      req: {} as never,
+      params: {
+        id: existingJob.id,
+        patch: { name: "other" },
+      } as never,
+      respond: respond as never,
+      context: context as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: expect.stringContaining("already exists"),
+      }),
+    );
+  });
+
   it("re-throws non-parse errors from cron.add instead of masking as INVALID_REQUEST", async () => {
     const context = createCronContext();
     context.cron.add.mockRejectedValueOnce(new Error("DB write failed"));
