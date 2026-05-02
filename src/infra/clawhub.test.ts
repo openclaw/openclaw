@@ -9,6 +9,7 @@ import {
   downloadClawHubSkillArchive,
   fetchClawHubPackageArtifact,
   fetchClawHubPackageReadiness,
+  fetchClawHubPackageSecurity,
   normalizeClawHubSha256Integrity,
   normalizeClawHubSha256Hex,
   parseClawHubPluginSpec,
@@ -289,6 +290,40 @@ describe("clawhub helpers", () => {
     });
     expect(new URL(requestedUrl).pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/artifact",
+    );
+  });
+
+  it("fetches typed package security reports", async () => {
+    let requestedUrl = "";
+    await expect(
+      fetchClawHubPackageSecurity({
+        name: "@openclaw/diagnostics-otel",
+        version: "2026.3.22",
+        fetchImpl: async (input) => {
+          requestedUrl = input instanceof Request ? input.url : String(input);
+          return new Response(
+            JSON.stringify({
+              releaseId: "rel_demo",
+              state: "approved",
+              reasonCode: "clean",
+              createdAt: 1774256733107,
+              scanState: "clean",
+              moderationState: "approved",
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        },
+      }),
+    ).resolves.toEqual({
+      releaseId: "rel_demo",
+      state: "approved",
+      reasonCode: "clean",
+      createdAt: 1774256733107,
+      scanState: "clean",
+      moderationState: "approved",
+    });
+    expect(new URL(requestedUrl).pathname).toBe(
+      "/api/v1/packages/%40openclaw%2Fdiagnostics-otel/versions/2026.3.22/security",
     );
   });
 

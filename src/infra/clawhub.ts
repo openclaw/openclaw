@@ -62,6 +62,14 @@ export type ClawHubArtifactScanState =
   | "not-run"
   | (string & {});
 export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
+export type ClawHubPackageSecurityState =
+  | "pending"
+  | "approved"
+  | "limited"
+  | "quarantined"
+  | "rejected"
+  | "revoked"
+  | (string & {});
 export type ClawHubResolvedArtifact =
   | {
       source: "clawhub";
@@ -89,6 +97,17 @@ export type ClawHubPackageArtifactResolverResponse = {
   package?: { name?: string | null } | null;
   version?: { version?: string | null } | string | null;
   artifact?: ClawHubResolvedArtifact | null;
+};
+export type ClawHubPackageSecurityResponse = {
+  packageId?: string | null;
+  releaseId?: string | null;
+  state: ClawHubPackageSecurityState;
+  reasonCode?: string | null;
+  moderatorNote?: string | null;
+  actorId?: string | null;
+  createdAt?: number | null;
+  scanState?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
 };
 export type ClawHubPackageClawPackSummary = {
   available: boolean;
@@ -668,6 +687,25 @@ export async function fetchClawHubPackageArtifact(params: {
     path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
       params.version,
     )}/artifact`,
+    token: params.token,
+    timeoutMs: params.timeoutMs,
+    fetchImpl: params.fetchImpl,
+  });
+}
+
+export async function fetchClawHubPackageSecurity(params: {
+  name: string;
+  version: string;
+  baseUrl?: string;
+  token?: string;
+  timeoutMs?: number;
+  fetchImpl?: FetchLike;
+}): Promise<ClawHubPackageSecurityResponse> {
+  return await fetchJson<ClawHubPackageSecurityResponse>({
+    baseUrl: params.baseUrl,
+    path: `/api/v1/packages/${encodeURIComponent(params.name)}/versions/${encodeURIComponent(
+      params.version,
+    )}/security`,
     token: params.token,
     timeoutMs: params.timeoutMs,
     fetchImpl: params.fetchImpl,
