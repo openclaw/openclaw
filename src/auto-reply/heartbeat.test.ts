@@ -281,4 +281,35 @@ interval: should-not-bleed
       },
     ]);
   });
+
+  it("keeps parsing later tasks when a task entry contains an unknown indented field", () => {
+    const content = `tasks:
+  - name: foo
+    interval: 30m
+    prompt: do thing
+    notes: a custom annotation
+  - name: bar
+    interval: 1h
+    prompt: do bar
+`;
+    expect(parseHeartbeatTasks(content)).toEqual([
+      { name: "foo", interval: "30m", prompt: "do thing" },
+      { name: "bar", interval: "1h", prompt: "do bar" },
+    ]);
+  });
+
+  it("still treats top-level non-task content as the end of the tasks block", () => {
+    const content = `tasks:
+  - name: only
+    interval: 5m
+    prompt: ping
+other: top-level
+  - name: should-not-appear
+    interval: 1h
+    prompt: nope
+`;
+    expect(parseHeartbeatTasks(content)).toEqual([
+      { name: "only", interval: "5m", prompt: "ping" },
+    ]);
+  });
 });
