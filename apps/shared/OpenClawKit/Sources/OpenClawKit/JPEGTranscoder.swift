@@ -38,6 +38,26 @@ public struct JPEGTranscoder: Sendable {
         quality: Double,
         maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
     {
+        try self.transcodeToJPEG(
+            imageData: imageData,
+            maxWidthPx: maxWidthPx,
+            maxLongEdgePx: nil,
+            quality: quality,
+            maxBytes: maxBytes)
+    }
+
+    /// Re-encodes image data to JPEG, optionally downscaling so that the *oriented* longest edge is <= `maxLongEdgePx`.
+    ///
+    /// When `maxLongEdgePx` is provided it takes precedence over `maxWidthPx`.
+    /// - Important: This normalizes EXIF orientation (the output pixels are rotated if needed; orientation tag is not
+    ///   relied on).
+    public static func transcodeToJPEG(
+        imageData: Data,
+        maxWidthPx: Int? = nil,
+        maxLongEdgePx: Int?,
+        quality: Double,
+        maxBytes: Int? = nil) throws -> (data: Data, widthPx: Int, heightPx: Int)
+    {
         guard let src = CGImageSourceCreateWithData(imageData as CFData, nil) else {
             throw JPEGTranscodeError.decodeFailed
         }
@@ -63,6 +83,11 @@ public struct JPEGTranscoder: Sendable {
 
         let maxDim = max(orientedWidth, orientedHeight)
         var targetMaxPixelSize: Int = {
+            // maxLongEdgePx takes precedence: cap the longest edge directly.
+            if let maxLongEdgePx, maxLongEdgePx > 0 {
+                guard maxDim > maxLongEdgePx else { return maxDim } // never upscale
+                return maxLongEdgePx
+            }
             guard let maxWidthPx, maxWidthPx > 0 else { return maxDim }
             guard orientedWidth > maxWidthPx else { return maxDim } // never upscale
 
@@ -162,7 +187,8 @@ public struct JPEGTranscoder: Sendable {
             bitsPerComponent: 8,
             bytesPerRow: 0,
             space: colorSpace,
-            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue) else {
+            bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)
+        else {
             return image
         }
         ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
