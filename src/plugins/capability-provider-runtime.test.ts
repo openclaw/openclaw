@@ -71,9 +71,9 @@ vi.mock("./plugin-registry.js", async (importOriginal) => {
     ...actual,
     loadPluginRegistrySnapshot: mocks.loadPluginRegistrySnapshot,
     loadPluginRegistrySnapshotWithMetadata: (params?: { index?: unknown }) => {
-      const snapshot =
-        params?.index ??
-        (mocks.loadPluginRegistrySnapshot() as { plugins?: Array<Record<string, unknown>> });
+      const snapshot = (params?.index ?? mocks.loadPluginRegistrySnapshot()) as {
+        plugins?: Array<Record<string, unknown>>;
+      };
       return {
         snapshot: {
           ...snapshot,
