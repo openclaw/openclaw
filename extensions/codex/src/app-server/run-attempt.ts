@@ -72,6 +72,7 @@ import {
   type CodexServerNotification,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
+  type CodexDynamicToolCallOutputContentItem,
   type CodexTurnStartResponse,
   type JsonObject,
   type JsonValue,
@@ -905,6 +906,7 @@ export async function runCodexAppServerAttempt(
         name: call.tool,
         arguments: call.arguments,
       });
+      emitCodexDynamicToolStartEvent(params, call);
       const response = await handleDynamicToolCallWithTimeout({
         call,
         toolBridge,
@@ -928,6 +930,7 @@ export async function runCodexAppServerAttempt(
         success: response.success,
         contentItems: response.contentItems,
       });
+      emitCodexDynamicToolResultEvent(params, call, response);
       return response as JsonValue;
     } finally {
       activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
@@ -1323,6 +1326,59 @@ function failedDynamicToolResponse(message: string): CodexDynamicToolCallRespons
   return {
     success: false,
     contentItems: [{ type: "inputText", text: message }],
+  };
+}
+
+function emitCodexDynamicToolStartEvent(
+  params: EmbeddedRunAttemptParams,
+  call: CodexDynamicToolCallParams,
+): void {
+  emitCodexAppServerEvent(params, {
+    stream: "tool",
+    data: {
+      phase: "start",
+      name: call.tool,
+      toolCallId: call.callId,
+      args: call.arguments,
+    },
+  });
+}
+
+function emitCodexDynamicToolResultEvent(
+  params: EmbeddedRunAttemptParams,
+  call: CodexDynamicToolCallParams,
+  response: CodexDynamicToolCallResponse,
+): void {
+  emitCodexAppServerEvent(params, {
+    stream: "tool",
+    data: {
+      phase: "result",
+      name: call.tool,
+      toolCallId: call.callId,
+      isError: !response.success,
+      result: codexDynamicToolResponseToToolResult(response),
+    },
+  });
+}
+
+function codexDynamicToolResponseToToolResult(
+  response: CodexDynamicToolCallResponse,
+): Record<string, unknown> {
+  return {
+    content: response.contentItems.map(codexDynamicToolContentItemToToolContent),
+  };
+}
+
+function codexDynamicToolContentItemToToolContent(
+  item: CodexDynamicToolCallOutputContentItem,
+): Record<string, unknown> {
+  if (item.type === "inputText") {
+    return { type: "text", text: item.text };
+  }
+  return {
+    type: "image",
+    mimeType: "image",
+    imageUrl: item.imageUrl,
   };
 }
 
