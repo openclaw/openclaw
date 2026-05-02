@@ -2,6 +2,7 @@ import type { CliBackendConfig } from "../config/types.js";
 import { extractBalancedJsonFragments } from "../shared/balanced-json.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
+import { sanitizeToolArgs } from "./pi-embedded-subscribe.tools.js";
 
 type CliUsage = {
   input?: number;
@@ -381,8 +382,8 @@ function parseClaudeCliStreamingDelta(params: {
 
 export type CliToolEvent =
   | { phase: "start"; name: string; toolCallId: string }
-  | { phase: "delta"; toolCallId: string; partialJson: string }
-  | { phase: "end"; name: string; toolCallId: string; args: Record<string, unknown> };
+  | { phase: "update"; toolCallId: string; partialJson: string }
+  | { phase: "result"; name: string; toolCallId: string; args: Record<string, unknown> };
 
 type InFlightToolCall = {
   name: string;
@@ -444,7 +445,7 @@ export function createCliJsonlStreamingParser(params: {
         if (tool) {
           tool.partialJson += evt.delta.partial_json;
           params.onToolEvent({
-            phase: "delta",
+            phase: "update",
             toolCallId: tool.toolCallId,
             partialJson: evt.delta.partial_json,
           });
@@ -465,7 +466,12 @@ export function createCliJsonlStreamingParser(params: {
           } catch {
             // partial JSON from interrupted stream — emit empty args
           }
-          params.onToolEvent({ phase: "end", name: tool.name, toolCallId: tool.toolCallId, args });
+          params.onToolEvent({
+            phase: "result",
+            name: tool.name,
+            toolCallId: tool.toolCallId,
+            args: sanitizeToolArgs(args) as Record<string, unknown>,
+          });
         }
         return;
       }
