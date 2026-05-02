@@ -273,24 +273,6 @@ export function resolveTelegramThreadSpec(params: {
   };
 }
 
-export function shouldUseTelegramDmThreadSession(params: {
-  dmThreadId?: number;
-  directConfig?: TelegramDirectConfig;
-  topicConfig?: TelegramTopicConfig;
-}): boolean {
-  if (params.dmThreadId == null) {
-    return false;
-  }
-  const explicitPolicy = params.directConfig?.threadReplies;
-  if (explicitPolicy === "off") {
-    return false;
-  }
-  if (explicitPolicy === "inbound" || explicitPolicy === "always") {
-    return true;
-  }
-  return params.directConfig?.requireTopic === true || params.topicConfig !== undefined;
-}
-
 /**
  * Build thread params for Telegram API calls (messages, media).
  *
