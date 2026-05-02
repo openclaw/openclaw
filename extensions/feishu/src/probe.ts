@@ -1,6 +1,10 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { raceWithTimeoutAndAbort } from "./async.js";
-import { createFeishuClient, type FeishuClientCredentials } from "./client.js";
+import {
+  createFeishuClient,
+  type FeishuClientCredentials,
+  type FeishuClientLogger,
+} from "./client.js";
 import type { FeishuProbeResult } from "./types.js";
 
 /** Cache probe results to reduce repeated health-check calls.
@@ -16,6 +20,14 @@ export const FEISHU_PROBE_REQUEST_TIMEOUT_MS = 10_000;
 export type ProbeFeishuOptions = {
   timeoutMs?: number;
   abortSignal?: AbortSignal;
+};
+
+const silentProbeLogger: FeishuClientLogger = {
+  error() {},
+  warn() {},
+  info() {},
+  debug() {},
+  trace() {},
 };
 
 type FeishuPingResponse = {
@@ -79,7 +91,9 @@ export async function probeFeishu(
   }
 
   try {
-    const client = createFeishuClient(creds) as FeishuRequestClient;
+    const client = createFeishuClient(creds, {
+      logger: silentProbeLogger,
+    }) as FeishuRequestClient;
     // Feishu-provided endpoint for OpenClaw, supported on both Feishu (CN)
     // and Lark (international). No OAuth scopes required. Validates
     // credentials and registers the app as an AI agent (智能体).
