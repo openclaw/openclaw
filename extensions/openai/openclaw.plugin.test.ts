@@ -17,6 +17,12 @@ const manifest = JSON.parse(
   }>;
 };
 
+const packageJson = JSON.parse(
+  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
+) as {
+  dependencies?: Record<string, string>;
+};
+
 function manifestComparableWizardFields(choice: {
   choiceId?: string;
   choiceLabel?: string;
@@ -53,6 +59,11 @@ function providerWizardByKey() {
 }
 
 describe("OpenAI plugin manifest", () => {
+  it("keeps runtime dependencies in the package manifest", () => {
+    expect(packageJson.dependencies?.["@mariozechner/pi-ai"]).toBe("0.71.1");
+    expect(packageJson.dependencies?.ws).toBe("^8.20.0");
+  });
+
   it("keeps removed Codex CLI import auth choice as a deprecated browser-login alias", () => {
     const codexBrowserLogin = manifest.providerAuthChoices?.find(
       (choice) => choice.choiceId === "openai-codex",

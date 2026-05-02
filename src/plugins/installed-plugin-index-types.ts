@@ -48,15 +48,19 @@ export type InstalledPluginInstallRecordInfo = Pick<
   | "clawhubPackage"
   | "clawhubFamily"
   | "clawhubChannel"
+  | "clawpackSha256"
+  | "clawpackSpecVersion"
+  | "clawpackManifestSha256"
+  | "clawpackSize"
+  | "gitUrl"
+  | "gitRef"
+  | "gitCommit"
   | "marketplaceName"
   | "marketplaceSource"
   | "marketplacePlugin"
 >;
 
-export type InstalledPluginPackageChannelInfo = Pick<
-  PluginPackageChannel,
-  "id" | "label" | "blurb" | "preferOver" | "commands"
->;
+export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
 
 export type InstalledPluginIndexRecord = {
   pluginId: string;
@@ -122,4 +126,5 @@ export type LoadInstalledPluginIndexParams = {
 
 export type RefreshInstalledPluginIndexParams = LoadInstalledPluginIndexParams & {
   reason: InstalledPluginIndexRefreshReason;
+  policyPluginIds?: readonly string[];
 };

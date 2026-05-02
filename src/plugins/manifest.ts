@@ -155,11 +155,9 @@ export type PluginManifestActivationCapability = "provider" | "channel" | "tool"
 
 export type PluginManifestActivation = {
   /**
-   * Explicit Gateway startup activation. Every plugin should set this as
-   * OpenClaw moves away from implicit startup sidecar loading. Set true when
-   * the plugin must be imported during Gateway startup; set false to opt out
-   * of the deprecated implicit startup sidecar fallback when no other
-   * activation trigger matches.
+   * Explicit Gateway startup activation. Set true when the plugin must be
+   * imported during Gateway startup; set false when narrower activation
+   * triggers should load it on demand.
    */
   onStartup?: boolean;
   /**
@@ -1483,6 +1481,10 @@ export type PluginPackageChannel = {
   configuredState?: {
     specifier?: string;
     exportName?: string;
+    env?: {
+      allOf?: readonly string[];
+      anyOf?: readonly string[];
+    };
   };
   persistedAuthState?: {
     specifier?: string;
@@ -1528,6 +1530,10 @@ export type OpenClawPackageSetupFeatures = {
   legacySessionSurfaces?: boolean;
 };
 
+export type OpenClawPackageBundle = {
+  includeInCore?: boolean;
+};
+
 export type OpenClawPackageManifest = {
   extensions?: string[];
   runtimeExtensions?: string[];
@@ -1536,6 +1542,7 @@ export type OpenClawPackageManifest = {
   setupFeatures?: OpenClawPackageSetupFeatures;
   channel?: PluginPackageChannel;
   install?: PluginPackageInstall;
+  bundle?: OpenClawPackageBundle;
   startup?: OpenClawPackageStartup;
 };
 
@@ -1566,6 +1573,12 @@ export function getPackageManifestMetadata(
     return undefined;
   }
   return manifest[MANIFEST_KEY];
+}
+
+export function isPackageIncludedInCoreBundle(
+  manifest: OpenClawPackageManifest | undefined,
+): boolean {
+  return manifest?.bundle?.includeInCore !== false;
 }
 
 export function resolvePackageExtensionEntries(

@@ -52,10 +52,10 @@ import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load
 import { recordInboundSession } from "../../channels/session.js";
 import {
   buildChannelTurnContext,
-  dispatchAssembledChannelTurn,
   runChannelTurn,
   runPreparedChannelTurn,
   runResolvedChannelTurn,
+  dispatchAssembledChannelTurn,
 } from "../../channels/turn/kernel.js";
 import {
   resolveChannelGroupPolicy,

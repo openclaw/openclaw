@@ -201,7 +201,7 @@ describe("registerPreActionHooks", () => {
     await preActionHook(program, actionCommand);
   }
 
-  it("handles debug mode and plugin-required command preaction", async () => {
+  it("handles debug mode and config-only command preaction", async () => {
     const processTitleSetSpy = vi.spyOn(process, "title", "set");
     await runPreAction({
       parseArgv: ["status"],
@@ -229,7 +229,7 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["agents", "list"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     processTitleSetSpy.mockRestore();
   });
 
@@ -243,7 +243,9 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["agent", "hi"],
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+    });
   });
 
   it("loads plugins for json local agent runs", async () => {
@@ -257,7 +259,9 @@ describe("registerPreActionHooks", () => {
       commandPath: ["agent", "hi"],
       suppressDoctorStdout: true,
     });
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({ scope: "all" });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "all",
+    });
   });
 
   it("keeps setup alias and channels add manifest-first", async () => {
@@ -506,25 +510,21 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "channels", "send", "--json"],
     });
 
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledWith({
+      scope: "configured-channels",
+    });
     expect(stderrDuringPluginLoad).toBe(true);
     // Flag must be restored after plugin loading completes
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
-  it("does not route logs to stderr during plugin loading without --json", async () => {
-    let stderrDuringPluginLoad = false;
-    ensurePluginRegistryLoadedMock.mockImplementation(() => {
-      stderrDuringPluginLoad = loggingState.forceConsoleToStderr;
-    });
-
+  it("does not preload plugins or route logs to stderr for agents list without --json", async () => {
     await runPreAction({
       parseArgv: ["agents", "list"],
       processArgv: ["node", "openclaw", "agents", "list"],
     });
 
-    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalled();
-    expect(stderrDuringPluginLoad).toBe(false);
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
     expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 

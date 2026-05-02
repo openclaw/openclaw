@@ -17,6 +17,7 @@ import {
   recordSlackThreadParticipation,
 } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
+import { clearSlackAllowFromCacheForTest } from "../auth.js";
 import type { SlackMonitorContext } from "../context.js";
 import { resetSlackThreadStarterCacheForTest } from "../thread.js";
 import { resolveSlackMessageContent } from "./prepare-content.js";
@@ -26,6 +27,17 @@ import {
   createSlackSessionStoreFixture,
   createSlackTestAccount,
 } from "./prepare.test-helpers.js";
+import { clearSlackSubteamMentionCacheForTest } from "./subteam-mentions.js";
+
+const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
+  return {
+    ...actual,
+    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  };
+});
 
 describe("slack prepareSlackMessage inbound contract", () => {
   const storeFixture = createSlackSessionStoreFixture("openclaw-slack-thread-");
@@ -37,6 +49,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
   beforeEach(() => {
     resetSlackThreadStarterCacheForTest();
     clearSlackThreadParticipationCache();
+    clearSlackAllowFromCacheForTest();
+    clearSlackSubteamMentionCacheForTest();
+    enqueueSystemEventMock.mockClear();
   });
 
   afterAll(() => {
@@ -86,6 +101,37 @@ describe("slack prepareSlackMessage inbound contract", () => {
     } as SlackMessageEvent;
   }
 
+  function createBotRoomMessage(overrides: Partial<SlackMessageEvent> = {}): SlackMessageEvent {
+    return createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      user: undefined,
+      bot_id: "B0AGV8EQYA3",
+      subtype: "bot_message",
+      username: "deploy-bot",
+      text: "Readiness probe failed",
+      ...overrides,
+    });
+  }
+
+  function createOwnerScopedBotRoomCtx(params: { members: string[] }) {
+    const members = vi.fn().mockResolvedValue({
+      members: params.members,
+      response_metadata: { next_cursor: "" },
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      appClient: { conversations: { members } } as unknown as App["client"],
+      defaultRequireMention: false,
+    });
+    slackCtx.allowFrom = ["UOWNER"];
+    return { slackCtx, members };
+  }
+
   async function prepareMessageWith(
     ctx: SlackMonitorContext,
     account: ResolvedSlackAccount,
@@ -98,6 +144,20 @@ describe("slack prepareSlackMessage inbound contract", () => {
       opts: { source: "message" },
     });
   }
+
+  it("queues inbound message system events as untrusted", async () => {
+    const prepared = await prepareWithDefaultCtx(createSlackMessage({}));
+
+    expect(prepared).toBeTruthy();
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
+      expect.stringContaining("Slack DM from Alice: hi"),
+      expect.objectContaining({
+        sessionKey: expect.any(String),
+        contextKey: "slack:message:D123:1.000",
+        trusted: false,
+      }),
+    );
+  });
 
   function createThreadSlackCtx(params: { cfg: OpenClawConfig; replies: unknown }) {
     return createInboundSlackCtx({
@@ -351,6 +411,33 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared!.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
   });
 
+  it("recovers full Slack DM text from top-level rich text blocks when text is only a preview", async () => {
+    const preview = "Yo Molty what is uppppp ".repeat(7).slice(0, 160);
+    const fullText = `${preview}and this tail should still reach the agent`;
+
+    const prepared = await prepareWithDefaultCtx(
+      createSlackMessage({
+        text: preview,
+        blocks: [
+          {
+            type: "rich_text",
+            block_id: "b1",
+            elements: [
+              {
+                type: "rich_text_section",
+                elements: [{ type: "text", text: fullText }],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toBe(fullText);
+    expect(prepared!.ctxPayload.BodyForAgent).toContain(fullText);
+  });
+
   it("ignores non-forward attachments when no direct text/files are present", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
@@ -422,6 +509,83 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
+  });
+
+  it("drops bot-authored room messages when allowBots is true but no owner is present (#59284)", async () => {
+    const { slackCtx, members } = createOwnerScopedBotRoomCtx({ members: ["UOTHER"] });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createBotRoomMessage(),
+    );
+
+    expect(prepared).toBeNull();
+    expect(members).toHaveBeenCalledWith(
+      expect.objectContaining({ token: "token", channel: "C123", limit: 999 }),
+    );
+  });
+
+  it("allows bot-authored room messages when an explicit owner is present (#59284)", async () => {
+    const { slackCtx, members } = createOwnerScopedBotRoomCtx({ members: ["UOWNER"] });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createBotRoomMessage(),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
+    expect(members).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows bot-authored room messages when the bot is explicitly channel-allowlisted (#59284)", async () => {
+    const members = vi.fn();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      appClient: { conversations: { members } } as unknown as App["client"],
+      defaultRequireMention: false,
+      channelsConfig: {
+        C123: { users: ["B0AGV8EQYA3"] },
+      },
+    });
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createBotRoomMessage(),
+    );
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("Readiness probe failed");
+    expect(members).not.toHaveBeenCalled();
+  });
+
+  it("drops bot-authored room messages when owner presence lookup fails (#59284)", async () => {
+    const members = vi.fn().mockRejectedValue(new Error("missing_scope"));
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: { enabled: true },
+        },
+      } as OpenClawConfig,
+      appClient: { conversations: { members } } as unknown as App["client"],
+      defaultRequireMention: false,
+    });
+    slackCtx.allowFrom = ["UOWNER"];
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackAccount({ allowBots: true }),
+      createBotRoomMessage(),
+    );
+
+    expect(prepared).toBeNull();
   });
 
   it("keeps channel metadata out of GroupSystemPrompt", async () => {
@@ -1019,6 +1183,95 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(root!.ctxPayload.WasMentioned).toBe(true);
     expect(followUp!.ctxPayload.WasMentioned).toBe(true);
     expect(new Set([root!.ctxPayload.SessionKey, followUp!.ctxPayload.SessionKey]).size).toBe(1);
+  });
+
+  it("treats Slack user-group mentions as explicit mentions when the bot is a member", async () => {
+    const usergroupsUsersList = vi.fn().mockResolvedValue({
+      ok: true,
+      users: ["U_OTHER", "B1"],
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            channels: { C0AGENTS: { requireMention: true } },
+          },
+        },
+      } as OpenClawConfig,
+      appClient: {
+        usergroups: { users: { list: usergroupsUsersList } },
+      } as unknown as App["client"],
+      defaultRequireMention: true,
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount(),
+      message: {
+        type: "message",
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<!subteam^S0AGENTS|agents> triage this",
+        ts: "1777244692.409919",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(usergroupsUsersList).toHaveBeenCalledWith({
+      usergroup: "S0AGENTS",
+      team_id: "T1",
+    });
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("drops Slack user-group mentions when the bot is not a member", async () => {
+    const usergroupsUsersList = vi.fn().mockResolvedValue({
+      ok: true,
+      users: ["U_OTHER"],
+    });
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            channels: { C0AGENTS: { requireMention: true } },
+          },
+        },
+      } as OpenClawConfig,
+      appClient: {
+        usergroups: { users: { list: usergroupsUsersList } },
+      } as unknown as App["client"],
+      defaultRequireMention: true,
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount(),
+      message: {
+        type: "message",
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<!subteam^S0AGENTS|agents> triage this",
+        ts: "1777244692.409920",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(usergroupsUsersList).toHaveBeenCalledWith({
+      usergroup: "S0AGENTS",
+      team_id: "T1",
+    });
+    expect(prepared).toBeNull();
   });
 
   it("keeps a regex-mentioned Slack thread root and URL-only follow-up on one parent session", async () => {

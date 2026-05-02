@@ -30,12 +30,12 @@ interface EmbeddedGatewayRuntime {
     opts?: { maxChars?: number; maxMessages?: number },
   ) => unknown[];
   capArrayByJsonBytes: (items: unknown[], maxBytes: number) => { items: unknown[] };
-  listSessionsFromStore: (opts: {
+  listSessionsFromStoreAsync: (opts: {
     cfg: OpenClawConfig;
     storePath: string;
     store: unknown;
     opts: SessionsListParams;
-  }) => SessionsListResult;
+  }) => Promise<SessionsListResult>;
   loadCombinedSessionStoreForGateway: (cfg: OpenClawConfig) => {
     storePath: string;
     store: unknown;
@@ -49,7 +49,11 @@ interface EmbeddedGatewayRuntime {
     storePath: string | undefined;
     entry: Record<string, unknown> | undefined;
   };
-  readSessionMessages: (sessionId: string, storePath: string, sessionFile?: string) => unknown[];
+  readSessionMessagesAsync: (
+    sessionId: string,
+    storePath: string,
+    sessionFile?: string,
+  ) => Promise<unknown[]>;
   resolveSessionModelRef: (
     cfg: OpenClawConfig,
     entry: unknown,
@@ -70,7 +74,7 @@ async function handleSessionsList(params: Record<string, unknown>) {
   const rt = await getRuntime();
   const cfg = rt.getRuntimeConfig();
   const { storePath, store } = rt.loadCombinedSessionStoreForGateway(cfg);
-  return rt.listSessionsFromStore({
+  return rt.listSessionsFromStoreAsync({
     cfg,
     storePath,
     store,
@@ -111,7 +115,11 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
 
   const localMessages =
     sessionId && storePath
-      ? rt.readSessionMessages(sessionId, storePath, entry?.sessionFile as string | undefined)
+      ? await rt.readSessionMessagesAsync(
+          sessionId,
+          storePath,
+          entry?.sessionFile as string | undefined,
+        )
       : [];
 
   const rawMessages = rt.augmentChatHistoryWithCliSessionImports({

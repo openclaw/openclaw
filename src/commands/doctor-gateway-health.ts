@@ -11,6 +11,13 @@ export type GatewayMemoryProbe = {
   checked: boolean;
   ready: boolean;
   error?: string;
+  /**
+   * True when the probe was intentionally skipped by the gateway (probe: false
+   * path). Distinct from checked: false caused by a network timeout or
+   * unavailable gateway. Renderers should suppress warnings only for skipped
+   * probes, not for transport failures.
+   */
+  skipped: boolean;
 };
 
 function isGatewayCallTimeout(message: string): boolean {
@@ -86,10 +93,19 @@ export async function probeGatewayMemoryStatus(params: {
       timeoutMs,
       config: params.cfg,
     });
+    // Propagate the gateway's checked flag. When the gateway skips the embedding
+    // probe (probe: false path), it returns checked: false to signal that no
+    // readiness determination was made. Mapping that to checked: true here would
+    // cause the renderer to treat a skipped probe as a checked-but-not-ready
+    // failure and emit a false-positive warning for key-optional providers.
+    // We also carry skipped: true so renderers can distinguish an intentional
+    // non-deep skip from a transport timeout (which also returns checked: false).
+    const gatewayChecked = payload.embedding.checked !== false;
     return {
-      checked: true,
+      checked: gatewayChecked,
       ready: payload.embedding.ok,
       error: payload.embedding.error,
+      skipped: !gatewayChecked,
     };
   } catch (err) {
     const message = formatErrorMessage(err);
@@ -98,12 +114,14 @@ export async function probeGatewayMemoryStatus(params: {
         checked: false,
         ready: false,
         error: `gateway memory probe timed out: ${message}`,
+        skipped: false,
       };
     }
     return {
       checked: true,
       ready: false,
       error: `gateway memory probe unavailable: ${message}`,
+      skipped: false,
     };
   }
 }

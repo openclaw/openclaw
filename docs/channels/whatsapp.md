@@ -293,6 +293,10 @@ When the linked self number is also present in `allowFrom`, WhatsApp self-chat s
     ```
 
     Reply metadata fields are also populated when available (`ReplyToId`, `ReplyToBody`, `ReplyToSender`, sender JID/E.164).
+    When the quoted reply target is downloadable media, OpenClaw saves it through
+    the normal inbound media store and exposes it as `MediaPath`/`MediaType` so
+    the agent can inspect the referenced image instead of only seeing
+    `<media:image>`.
 
   </Accordion>
 
@@ -492,6 +496,8 @@ Behavior notes:
   <Accordion title="Logout behavior">
     `openclaw channels logout --channel whatsapp [--account <id>]` clears WhatsApp auth state for that account.
 
+    When a Gateway is reachable, logout first stops the live WhatsApp listener for the selected account so the linked session does not keep receiving messages until the next restart. `openclaw channels remove --channel whatsapp` also stops the live listener before disabling or deleting account config.
+
     In legacy auth directories, `oauth.json` is preserved while Baileys auth files are removed.
 
   </Accordion>
@@ -551,6 +557,14 @@ Behavior notes:
     openclaw logs --follow
     ```
 
+    If `~/.openclaw/logs/whatsapp-health.log` says `Gateway inactive` but
+    `openclaw gateway status` and `openclaw channels status --probe` show the
+    gateway and WhatsApp are healthy, run `openclaw doctor`. On Linux, doctor
+    warns about legacy crontab entries that still invoke
+    `~/.openclaw/bin/ensure-whatsapp.sh`; remove those stale entries with
+    `crontab -e` because cron can lack the systemd user-bus environment and
+    make that old script misreport gateway health.
+
     If needed, re-link with `channels login`.
 
   </Accordion>
@@ -566,6 +580,15 @@ Behavior notes:
     Outbound sends fail fast when no active gateway listener exists for the target account.
 
     Make sure gateway is running and the account is linked.
+
+  </Accordion>
+
+  <Accordion title="Reply appears in transcript but not in WhatsApp">
+    Transcript rows record what the agent generated. WhatsApp delivery is checked separately: OpenClaw only treats an auto-reply as sent after Baileys returns an outbound message id for at least one visible text or media send.
+
+    Ack reactions are independent pre-reply receipts. A successful reaction does not prove that the later text or media reply was accepted by WhatsApp.
+
+    Check gateway logs for `auto-reply delivery failed` or `auto-reply was not accepted by WhatsApp provider`.
 
   </Accordion>
 

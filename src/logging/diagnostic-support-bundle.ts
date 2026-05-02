@@ -13,7 +13,7 @@ export type DiagnosticSupportBundleContent = {
   bytes: number;
 };
 
-export function supportBundleByteLength(content: string): number {
+function supportBundleByteLength(content: string): number {
   return Buffer.byteLength(content, "utf8");
 }
 
@@ -60,7 +60,7 @@ export function supportBundleContents(
   }));
 }
 
-export function assertSafeBundleRelativePath(pathName: string): string {
+function assertSafeBundleRelativePath(pathName: string): string {
   const normalized = pathName.replaceAll("\\", "/");
   if (
     !normalized ||
@@ -72,12 +72,12 @@ export function assertSafeBundleRelativePath(pathName: string): string {
   return normalized;
 }
 
-export function prepareSupportBundleDirectory(outputDir: string): void {
+function prepareSupportBundleDirectory(outputDir: string): void {
   fs.mkdirSync(path.dirname(outputDir), { recursive: true, mode: 0o700 });
   fs.mkdirSync(outputDir, { mode: 0o700 });
 }
 
-export function resolveSupportBundleFilePath(outputDir: string, pathName: string): string {
+function resolveSupportBundleFilePath(outputDir: string, pathName: string): string {
   const safePath = assertSafeBundleRelativePath(pathName);
   const resolvedBase = path.resolve(outputDir);
   const resolvedFile = path.resolve(resolvedBase, safePath);
@@ -88,7 +88,7 @@ export function resolveSupportBundleFilePath(outputDir: string, pathName: string
   return resolvedFile;
 }
 
-export function writeSupportBundleFile(outputDir: string, file: DiagnosticSupportBundleFile): void {
+function writeSupportBundleFile(outputDir: string, file: DiagnosticSupportBundleFile): void {
   const filePath = resolveSupportBundleFilePath(outputDir, file.path);
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(filePath, file.content, {
@@ -96,23 +96,6 @@ export function writeSupportBundleFile(outputDir: string, file: DiagnosticSuppor
     flag: "wx",
     mode: 0o600,
   });
-}
-
-export function copySupportBundleFile(params: {
-  outputDir: string;
-  sourceFile: string;
-  path: string;
-}): DiagnosticSupportBundleContent {
-  const outputPath = resolveSupportBundleFilePath(params.outputDir, params.path);
-  fs.mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o700 });
-  fs.copyFileSync(params.sourceFile, outputPath, fs.constants.COPYFILE_EXCL);
-  fs.chmodSync(outputPath, 0o600);
-  const stat = fs.statSync(outputPath);
-  return {
-    path: assertSafeBundleRelativePath(params.path),
-    mediaType: "application/x-ndjson",
-    bytes: stat.size,
-  };
 }
 
 export function writeSupportBundleDirectory(params: {

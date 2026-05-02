@@ -1,5 +1,7 @@
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
+import type { ContextVisibilityMode } from "../../config/types.base.js";
+import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
 import type {
   AccessFacts,
   ConversationFacts,
@@ -28,6 +30,7 @@ export type BuildChannelTurnContextParams = {
   access?: AccessFacts;
   media?: InboundMediaFacts[];
   supplemental?: SupplementalContextFacts;
+  contextVisibility?: ContextVisibilityMode;
   extra?: Record<string, unknown>;
 };
 
@@ -51,11 +54,70 @@ function commandAuthorized(access: AccessFacts | undefined): boolean | undefined
   return commands.authorizers.some((entry) => entry.allowed);
 }
 
+function keepSupplementalContext(params: {
+  mode?: ContextVisibilityMode;
+  kind: "quote" | "forwarded" | "thread";
+  senderAllowed?: boolean;
+}): boolean {
+  if (!params.mode || params.mode === "all") {
+    return true;
+  }
+  if (params.senderAllowed === undefined) {
+    return false;
+  }
+  return shouldIncludeSupplementalContext({
+    mode: params.mode,
+    kind: params.kind,
+    senderAllowed: params.senderAllowed,
+  });
+}
+
+export function filterChannelTurnSupplementalContext(params: {
+  supplemental?: SupplementalContextFacts;
+  contextVisibility?: ContextVisibilityMode;
+}): SupplementalContextFacts | undefined {
+  const supplemental = params.supplemental;
+  if (!supplemental) {
+    return undefined;
+  }
+  const quote = keepSupplementalContext({
+    mode: params.contextVisibility,
+    kind: "quote",
+    senderAllowed: supplemental.quote?.senderAllowed,
+  })
+    ? supplemental.quote
+    : undefined;
+  const forwarded = keepSupplementalContext({
+    mode: params.contextVisibility,
+    kind: "forwarded",
+    senderAllowed: supplemental.forwarded?.senderAllowed,
+  })
+    ? supplemental.forwarded
+    : undefined;
+  const thread = keepSupplementalContext({
+    mode: params.contextVisibility,
+    kind: "thread",
+    senderAllowed: supplemental.thread?.senderAllowed,
+  })
+    ? supplemental.thread
+    : undefined;
+
+  return {
+    ...supplemental,
+    quote,
+    forwarded,
+    thread,
+  };
+}
+
 export function buildChannelTurnContext(
   params: BuildChannelTurnContextParams,
 ): FinalizedMsgContext {
   const media = params.media ?? [];
-  const supplemental = params.supplemental;
+  const supplemental = filterChannelTurnSupplementalContext({
+    supplemental: params.supplemental,
+    contextVisibility: params.contextVisibility,
+  });
   const body = params.message.body ?? params.message.rawBody;
 
   return finalizeInboundContext({

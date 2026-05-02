@@ -169,6 +169,7 @@ Base manifest (Socket Mode default):
   "features": {
     "bot_user": { "display_name": "OpenClaw", "always_online": true },
     "app_home": {
+      "home_tab_enabled": true,
       "messages_tab_enabled": true,
       "messages_tab_read_only_enabled": false
     },
@@ -204,6 +205,7 @@ Base manifest (Socket Mode default):
         "pins:write",
         "reactions:read",
         "reactions:write",
+        "usergroups:read",
         "users:read"
       ]
     }
@@ -212,6 +214,7 @@ Base manifest (Socket Mode default):
     "socket_mode_enabled": true,
     "event_subscriptions": {
       "bot_events": [
+        "app_home_opened",
         "app_mention",
         "channel_rename",
         "member_joined_channel",
@@ -263,6 +266,8 @@ For **HTTP Request URLs mode**, replace `settings` with the HTTP variant and add
 ### Additional manifest settings
 
 Surface different features that extend the above defaults.
+
+The default manifest enables the Slack App Home **Home** tab and subscribes to `app_home_opened`. When a workspace member opens the Home tab, OpenClaw publishes a safe default Home view with `views.publish`; no conversation payload or private configuration is included. The **Messages** tab remains enabled for Slack DMs.
 
 <AccordionGroup>
   <Accordion title="Optional native slash commands">
@@ -568,6 +573,7 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     Mention sources:
 
     - explicit app mention (`<@botId>`)
+    - Slack user-group mention (`<!subteam^S...>`) when the bot user is a member of that user group; requires `usergroups:read`
     - mention regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - implicit reply-to-bot thread behavior (disabled when `thread.requireExplicitMention` is `true`)
 
@@ -581,6 +587,8 @@ Current Slack message actions include `send`, `upload-file`, `download-file`, `r
     - `tools`, `toolsBySender`
     - `toolsBySender` key format: `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
       (legacy unprefixed keys still map to `id:` only)
+
+    `allowBots` is conservative for channels and private channels: bot-authored room messages are accepted only when the sending bot is explicitly listed in that room's `users` allowlist, or when at least one explicit Slack owner ID from `channels.slack.allowFrom` is currently a room member. Wildcards and display-name owner entries do not satisfy owner presence. Owner presence uses Slack `conversations.members`; make sure the app has the matching read scope for the room type (`channels:read` for public channels, `groups:read` for private channels). If the member lookup fails, OpenClaw drops the bot-authored room message.
 
   </Tab>
 </Tabs>

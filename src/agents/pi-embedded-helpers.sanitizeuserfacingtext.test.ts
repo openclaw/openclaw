@@ -217,6 +217,24 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
   });
 
+  it("strips legacy uppercase TOOL_CALL blocks before user-facing delivery", () => {
+    const input = [
+      "Before",
+      '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+      "After",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
+  it("strips legacy uppercase TOOL_RESULT blocks before user-facing delivery", () => {
+    const input = ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join(
+      "\n",
+    );
+
+    expect(sanitizeUserFacingText(input)).toBe("Before\n\nAfter");
+  });
+
   it("keeps ordinary inline mentions of the replay placeholder", () => {
     expect(sanitizeUserFacingText("What does [tool calls omitted] mean?")).toBe(
       "What does [tool calls omitted] mean?",

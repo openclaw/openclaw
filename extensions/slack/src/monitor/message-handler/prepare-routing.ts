@@ -17,7 +17,7 @@ export type SlackRoutingContextDeps = {
   threadHistoryScope: "thread" | "channel";
 };
 
-export type SlackRoutingContext = {
+type SlackRoutingContext = {
   route: ReturnType<typeof resolveAgentRoute>;
   runtimeBinding: RuntimeConversationBindingRouteResult["bindingRecord"];
   runtimeBoundSessionKey: string | undefined;

@@ -98,17 +98,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("retries transient bundled runtime deps staging failures during agent turns", () => {
-    expect(
-      shouldRetryCrossOsAgentTurnError(
-        new Error("document-extract: failed to install bundled runtime deps: npm install failed"),
-      ),
-    ).toBe(true);
-    expect(
-      shouldRetryCrossOsAgentTurnError(
-        new Error("document-extract failed to stage bundled runtime deps after 463ms"),
-      ),
-    ).toBe(true);
+  it("retries transient agent-turn failures", () => {
     expect(
       shouldRetryCrossOsAgentTurnError(
         new Error("Agent output did not contain the expected OK marker."),
@@ -145,6 +135,19 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       })?.model,
     ).toBe("openai/gpt-5.4-nano");
     expect(resolveProviderConfig("openai", {})?.model).toBe("openai/gpt-5.5");
+  });
+
+  it("keeps release cross-OS OpenAI smoke on GPT-5.5", () => {
+    const workflow = readFileSync(
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      "utf8",
+    );
+    const releaseChecks = readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8");
+
+    expect(workflow).toContain(
+      "OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}",
+    );
+    expect(releaseChecks).toContain("openai_model: openai/gpt-5.5");
   });
 
   it("keeps release smoke plugin allowlists focused on agent-turn essentials", () => {
@@ -566,7 +569,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     });
   });
 
-  it("accepts a successful packaged update followed by the old self-swapped process import miss", () => {
+  it("rejects a successful packaged update followed by an old self-swapped process import miss", () => {
     expect(() =>
       verifyPackagedUpgradeUpdateResult(
         {
@@ -581,7 +584,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         },
         { candidateVersion: "2026.4.27" },
       ),
-    ).not.toThrow();
+    ).toThrow(/Packaged upgrade failed/u);
   });
 
   it("rejects packaged update failures before the candidate package lands", () => {
@@ -671,7 +674,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
-  it("rejects bundled runtime-deps staging debris before candidate inventory generation", async () => {
+  it("rejects legacy plugin dependency staging debris before candidate inventory generation", async () => {
     const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-stage-debris-"));
     try {
       mkdirSync(
@@ -689,7 +692,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
           sourceDir: packageRoot,
           logPath: join(packageRoot, "npm-pack-dry-run.log"),
         }),
-      ).rejects.toThrow("unexpected bundled-runtime-deps install staging debris");
+      ).rejects.toThrow("unexpected legacy plugin dependency staging debris");
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

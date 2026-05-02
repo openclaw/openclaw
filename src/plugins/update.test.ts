@@ -15,6 +15,7 @@ function appBundledPluginRoot(pluginId: string): string {
 const installPluginFromNpmSpecMock = vi.fn();
 const installPluginFromMarketplaceMock = vi.fn();
 const installPluginFromClawHubMock = vi.fn();
+const installPluginFromGitSpecMock = vi.fn();
 const resolveBundledPluginSourcesMock = vi.fn();
 const runCommandWithTimeoutMock = vi.fn();
 const tempDirs: string[] = [];
@@ -28,11 +29,20 @@ vi.mock("./install.js", () => ({
   },
 }));
 
+vi.mock("./git-install.js", () => ({
+  installPluginFromGitSpec: (...args: unknown[]) => installPluginFromGitSpecMock(...args),
+}));
+
 vi.mock("./marketplace.js", () => ({
   installPluginFromMarketplace: (...args: unknown[]) => installPluginFromMarketplaceMock(...args),
 }));
 
 vi.mock("./clawhub.js", () => ({
+  CLAWHUB_INSTALL_ERROR_CODE: {
+    PACKAGE_NOT_FOUND: "package_not_found",
+    VERSION_NOT_FOUND: "version_not_found",
+    ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
+  },
   installPluginFromClawHub: (...args: unknown[]) => installPluginFromClawHubMock(...args),
 }));
 
@@ -65,6 +75,36 @@ function createSuccessfulNpmUpdateResult(params?: {
     version: params?.version ?? "0.2.6",
     extensions: ["index.ts"],
     ...(params?.npmResolution ? { npmResolution: params.npmResolution } : {}),
+  };
+}
+
+function createSuccessfulClawHubUpdateResult(params?: {
+  pluginId?: string;
+  targetDir?: string;
+  version?: string;
+  clawhubPackage?: string;
+}) {
+  return {
+    ok: true,
+    pluginId: params?.pluginId ?? "legacy-chat",
+    targetDir: params?.targetDir ?? "/tmp/openclaw-plugins/legacy-chat",
+    version: params?.version ?? "2026.5.1-beta.2",
+    extensions: ["index.ts"],
+    packageName: params?.clawhubPackage ?? "legacy-chat",
+    clawhub: {
+      source: "clawhub" as const,
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: params?.clawhubPackage ?? "legacy-chat",
+      clawhubFamily: "code-plugin" as const,
+      clawhubChannel: "official" as const,
+      version: params?.version ?? "2026.5.1-beta.2",
+      integrity: "sha256-clawpack",
+      resolvedAt: "2026-05-01T00:00:00.000Z",
+      clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      clawpackSpecVersion: 1,
+      clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      clawpackSize: 4096,
+    },
   };
 }
 
@@ -137,6 +177,26 @@ function createClawHubInstallConfig(params: {
           clawhubPackage: params.clawhubPackage,
           clawhubFamily: params.clawhubFamily,
           clawhubChannel: params.clawhubChannel,
+        },
+      },
+    },
+  };
+}
+
+function createGitInstallConfig(params: {
+  pluginId: string;
+  spec: string;
+  installPath: string;
+  commit?: string;
+}): OpenClawConfig {
+  return {
+    plugins: {
+      installs: {
+        [params.pluginId]: {
+          source: "git" as const,
+          spec: params.spec,
+          installPath: params.installPath,
+          ...(params.commit ? { gitCommit: params.commit } : {}),
         },
       },
     },
@@ -277,7 +337,9 @@ describe("updateNpmInstalledPlugins", () => {
     installPluginFromNpmSpecMock.mockReset();
     installPluginFromMarketplaceMock.mockReset();
     installPluginFromClawHubMock.mockReset();
+    installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
     runCommandWithTimeoutMock.mockReset();
   });
 
@@ -976,6 +1038,10 @@ describe("updateNpmInstalledPlugins", () => {
         clawhubChannel: "official",
         integrity: "sha256-next",
         resolvedAt: "2026-03-22T00:00:00.000Z",
+        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        clawpackSize: 4096,
       },
     });
 
@@ -1010,7 +1076,102 @@ describe("updateNpmInstalledPlugins", () => {
       clawhubFamily: "code-plugin",
       clawhubChannel: "official",
       integrity: "sha256-next",
+      clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      clawpackSpecVersion: 1,
+      clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      clawpackSize: 4096,
     });
+  });
+
+  it("skips ClawHub plugin update when bundled version is newer", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "whatsapp",
+          {
+            pluginId: "whatsapp",
+            localPath: appBundledPluginRoot("whatsapp"),
+            version: "2026.4.20",
+          },
+        ],
+      ]),
+    );
+
+    const config = createClawHubInstallConfig({
+      pluginId: "whatsapp",
+      installPath: "/tmp/whatsapp",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "whatsapp",
+      clawhubFamily: "bundle-plugin",
+      clawhubChannel: "community",
+    });
+    (config.plugins!.installs!.whatsapp as Record<string, unknown>).version = "2026.2.9";
+
+    const warnMessages: string[] = [];
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["whatsapp"],
+      logger: { warn: (msg) => warnMessages.push(msg) },
+    });
+
+    expect(installPluginFromClawHubMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.outcomes).toEqual([
+      expect.objectContaining({
+        pluginId: "whatsapp",
+        status: "skipped",
+        message: expect.stringContaining("bundled version 2026.4.20 is newer"),
+      }),
+    ]);
+    expect(warnMessages).toEqual([expect.stringContaining("bundled version 2026.4.20 is newer")]);
+  });
+
+  it("proceeds with ClawHub plugin update when bundled version is older", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(
+      new Map([
+        [
+          "demo",
+          {
+            pluginId: "demo",
+            localPath: appBundledPluginRoot("demo"),
+            version: "1.0.0",
+          },
+        ],
+      ]),
+    );
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/demo",
+      version: "2.0.0",
+      clawhub: {
+        source: "clawhub",
+        clawhubUrl: "https://clawhub.ai",
+        clawhubPackage: "demo",
+        clawhubFamily: "code-plugin",
+        clawhubChannel: "official",
+        integrity: "sha256-new",
+        resolvedAt: "2026-04-30T00:00:00.000Z",
+      },
+    });
+
+    const config = createClawHubInstallConfig({
+      pluginId: "demo",
+      installPath: "/tmp/demo",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "demo",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+    });
+    (config.plugins!.installs!.demo as Record<string, unknown>).version = "1.5.0";
+
+    const result = await updateNpmInstalledPlugins({
+      config,
+      pluginIds: ["demo"],
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalled();
+    expect(result.changed).toBe(true);
   });
 
   it("migrates legacy unscoped install keys when a scoped npm package updates", async () => {
@@ -1181,6 +1342,50 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("updates git installs and records resolved commit metadata", async () => {
+    installPluginFromGitSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: "/tmp/demo",
+      version: "1.3.0",
+      extensions: ["index.ts"],
+      git: {
+        url: "https://github.com/acme/demo.git",
+        ref: "main",
+        commit: "def456",
+        resolvedAt: "2026-04-30T00:00:00.000Z",
+      },
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createGitInstallConfig({
+        pluginId: "demo",
+        installPath: "/tmp/demo",
+        spec: "git:github.com/acme/demo@main",
+        commit: "abc123",
+      }),
+      pluginIds: ["demo"],
+    });
+
+    expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "git:github.com/acme/demo@main",
+        expectedPluginId: "demo",
+        mode: "update",
+      }),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins?.installs?.demo).toMatchObject({
+      source: "git",
+      spec: "git:github.com/acme/demo@main",
+      installPath: "/tmp/demo",
+      version: "1.3.0",
+      gitUrl: "https://github.com/acme/demo.git",
+      gitRef: "main",
+      gitCommit: "def456",
+    });
+  });
+
   it("forwards dangerous force unsafe install to plugin update installers", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
@@ -1242,6 +1447,19 @@ describe("updateNpmInstalledPlugins", () => {
       marketplaceSource: "acme/plugins",
       marketplacePlugin: "demo",
     });
+    installPluginFromGitSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      version: "1.2.0",
+      extensions: ["index.ts"],
+      git: {
+        url: "https://github.com/acme/demo.git",
+        ref: "main",
+        commit: "abc123",
+        resolvedAt: "2026-04-30T00:00:00.000Z",
+      },
+    });
 
     await updateNpmInstalledPlugins({
       config: createNpmInstallConfig({
@@ -1271,6 +1489,14 @@ describe("updateNpmInstalledPlugins", () => {
       }),
       pluginIds: ["demo"],
     });
+    await updateNpmInstalledPlugins({
+      config: createGitInstallConfig({
+        pluginId: "demo",
+        installPath,
+        spec: "git:github.com/acme/demo@main",
+      }),
+      pluginIds: ["demo"],
+    });
 
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
       expect.objectContaining({ extensionsDir }),
@@ -1281,12 +1507,17 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromMarketplaceMock).toHaveBeenCalledWith(
       expect.objectContaining({ extensionsDir }),
     );
+    expect(installPluginFromGitSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({ extensionsDir }),
+    );
   });
 });
 
 describe("syncPluginsForUpdateChannel", () => {
   beforeEach(() => {
     installPluginFromNpmSpecMock.mockReset();
+    installPluginFromClawHubMock.mockReset();
+    installPluginFromGitSpecMock.mockReset();
     resolveBundledPluginSourcesMock.mockReset();
   });
 
@@ -1465,6 +1696,193 @@ describe("syncPluginsForUpdateChannel", () => {
       resolvedVersion: "2.0.0",
       resolvedSpec: "@openclaw/legacy-chat@2.0.0",
     });
+  });
+
+  it("installs a ClawHub-preferred externalized bundled plugin", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromClawHubMock.mockResolvedValue(
+      createSuccessfulClawHubUpdateResult({
+        pluginId: "legacy-chat",
+        targetDir: "/tmp/openclaw-plugins/legacy-chat",
+        version: "2026.5.1-beta.2",
+        clawhubPackage: "legacy-chat",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:legacy-chat@2026.5.1-beta.2",
+          clawhubUrl: "https://clawhub.ai",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: [appBundledPluginRoot("legacy-chat")] },
+          installs: {
+            "legacy-chat": {
+              source: "path",
+              sourcePath: appBundledPluginRoot("legacy-chat"),
+              installPath: appBundledPluginRoot("legacy-chat"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "clawhub:legacy-chat@2026.5.1-beta.2",
+        baseUrl: "https://clawhub.ai",
+        mode: "update",
+        expectedPluginId: "legacy-chat",
+      }),
+    );
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(true);
+    expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);
+    expect(result.summary.switchedToNpm).toEqual([]);
+    expect(result.summary.errors).toEqual([]);
+    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "clawhub",
+      spec: "clawhub:legacy-chat@2026.5.1-beta.2",
+      installPath: "/tmp/openclaw-plugins/legacy-chat",
+      version: "2026.5.1-beta.2",
+      integrity: "sha256-clawpack",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: "legacy-chat",
+      clawhubFamily: "code-plugin",
+      clawhubChannel: "official",
+      clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      clawpackSpecVersion: 1,
+      clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      clawpackSize: 4096,
+    });
+  });
+
+  it("falls back from ClawHub to npm only when the ClawHub package is absent", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "package_not_found",
+      error: "Package not found on ClawHub.",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "legacy-chat",
+        targetDir: "/tmp/openclaw-plugins/legacy-chat",
+        version: "2.0.0",
+      }),
+    );
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:legacy-chat@2026.5.1-beta.2",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config: {
+        channels: {
+          "legacy-chat": {
+            enabled: true,
+          },
+        },
+        plugins: {
+          load: { paths: [appBundledPluginRoot("legacy-chat")] },
+          installs: {
+            "legacy-chat": {
+              source: "path",
+              sourcePath: appBundledPluginRoot("legacy-chat"),
+              installPath: appBundledPluginRoot("legacy-chat"),
+            },
+          },
+        },
+      },
+    });
+
+    expect(installPluginFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        spec: "@openclaw/legacy-chat",
+        mode: "update",
+        expectedPluginId: "legacy-chat",
+      }),
+    );
+    expect(result.changed).toBe(true);
+    expect(result.summary.switchedToClawHub).toEqual([]);
+    expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
+    expect(result.summary.warnings).toEqual([
+      "ClawHub clawhub:legacy-chat@2026.5.1-beta.2 unavailable for legacy-chat; falling back to npm @openclaw/legacy-chat.",
+    ]);
+    expect(result.summary.errors).toEqual([]);
+    expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
+      source: "npm",
+      spec: "@openclaw/legacy-chat",
+      installPath: "/tmp/openclaw-plugins/legacy-chat",
+      version: "2.0.0",
+    });
+  });
+
+  it("fails closed without npm fallback when ClawHub returns integrity drift", async () => {
+    resolveBundledPluginSourcesMock.mockReturnValue(new Map());
+    installPluginFromClawHubMock.mockResolvedValue({
+      ok: false,
+      code: "archive_integrity_mismatch",
+      error: "ClawHub ClawPack integrity mismatch.",
+    });
+    const config: OpenClawConfig = {
+      channels: {
+        "legacy-chat": {
+          enabled: true,
+        },
+      },
+      plugins: {
+        load: { paths: [appBundledPluginRoot("legacy-chat")] },
+        installs: {
+          "legacy-chat": {
+            source: "path",
+            sourcePath: appBundledPluginRoot("legacy-chat"),
+            installPath: appBundledPluginRoot("legacy-chat"),
+          },
+        },
+      },
+    };
+
+    const result = await syncPluginsForUpdateChannel({
+      channel: "stable",
+      externalizedBundledPluginBridges: [
+        {
+          bundledPluginId: "legacy-chat",
+          preferredSource: "clawhub",
+          clawhubSpec: "clawhub:legacy-chat@2026.5.1-beta.2",
+          npmSpec: "@openclaw/legacy-chat",
+          channelIds: ["legacy-chat"],
+        },
+      ],
+      config,
+    });
+
+    expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
+    expect(result.changed).toBe(false);
+    expect(result.config).toBe(config);
+    expect(result.summary.errors).toEqual([
+      "Failed to update legacy-chat: ClawHub ClawPack integrity mismatch. (ClawHub clawhub:legacy-chat@2026.5.1-beta.2).",
+    ]);
   });
 
   it("externalizes bundled plugins that were enabled by default", async () => {

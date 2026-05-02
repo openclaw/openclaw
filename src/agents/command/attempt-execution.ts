@@ -11,6 +11,8 @@ import { annotateInterSessionPromptText } from "../../sessions/input-provenance.
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
+import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
+import { ensureAuthProfileStore } from "../auth-profiles/store.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../bootstrap-budget.js";
 import { runCliAgent } from "../cli-runner.js";
 import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
@@ -84,6 +86,82 @@ type PersistTextTurnTranscriptParams = {
     usage?: TranscriptUsage;
   };
 };
+
+type HarnessAuthProfileSelection = {
+  authProfileId?: string;
+  authProfileIdSource?: "auto" | "user";
+  authProfileProvider: string;
+};
+
+function resolveProfileProviderFromStore(params: {
+  agentDir: string;
+  profileId: string | undefined;
+}): string | undefined {
+  const profileId = params.profileId?.trim();
+  if (!profileId) {
+    return undefined;
+  }
+  return ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  }).profiles[profileId]?.provider;
+}
+
+function resolveHarnessAuthProfileSelection(params: {
+  config: OpenClawConfig;
+  agentDir: string;
+  workspaceDir: string;
+  provider: string;
+  authProfileProvider: string;
+  sessionAuthProfileId?: string;
+  sessionAuthProfileSource?: "auto" | "user";
+  harnessId?: string;
+  harnessRuntime?: string;
+  allowHarnessAuthProfileForwarding: boolean;
+}): HarnessAuthProfileSelection {
+  const sessionAuthProfileId = params.sessionAuthProfileId?.trim();
+  if (sessionAuthProfileId) {
+    return {
+      authProfileId: sessionAuthProfileId,
+      authProfileIdSource: params.sessionAuthProfileSource,
+      authProfileProvider:
+        resolveProfileProviderFromStore({
+          agentDir: params.agentDir,
+          profileId: sessionAuthProfileId,
+        }) ?? params.authProfileProvider,
+    };
+  }
+
+  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+    provider: params.provider,
+    authProfileProvider: params.authProfileProvider,
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    harnessId: params.harnessId,
+    harnessRuntime: params.harnessRuntime,
+    allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
+  });
+  const harnessAuthProvider = runtimeAuthPlan.harnessAuthProvider;
+  if (!harnessAuthProvider) {
+    return { authProfileProvider: params.authProfileProvider };
+  }
+
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  const authProfileId = resolveAuthProfileOrder({
+    cfg: params.config,
+    store,
+    provider: harnessAuthProvider,
+  })[0];
+
+  return authProfileId
+    ? {
+        authProfileId,
+        authProfileIdSource: "auto",
+        authProfileProvider: harnessAuthProvider,
+      }
+    : { authProfileProvider: params.authProfileProvider };
+}
 
 function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistant"]["usage"]) {
   if (!usage) {
@@ -246,6 +324,7 @@ export function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
+  fastMode?: boolean;
   timeoutMs: number;
   runId: string;
   opts: AgentCommandOpts & { senderIsOwner: boolean };
@@ -264,6 +343,7 @@ export function runAgentAttempt(params: {
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
   allowTransientCooldownProbe?: boolean;
+  modelFallbacksOverride?: string[];
   sessionHasHistory?: boolean;
 }) {
   const isRawModelRun = params.opts.modelRun === true || params.opts.promptMode === "none";
@@ -320,10 +400,22 @@ export function runAgentAttempt(params: {
         agentId: params.sessionAgentId,
         sessionKey: params.sessionKey ?? params.sessionId,
       });
-  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+  const harnessAuthSelection = resolveHarnessAuthProfileSelection({
+    config: params.cfg,
+    agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
     provider: params.providerOverride,
     authProfileProvider: params.authProfileProvider,
     sessionAuthProfileId: params.sessionEntry?.authProfileOverride,
+    sessionAuthProfileSource: params.sessionEntry?.authProfileOverrideSource,
+    harnessId: sessionPinnedAgentHarnessId,
+    harnessRuntime: agentHarnessPolicy.runtime,
+    allowHarnessAuthProfileForwarding: !isCliProvider(cliExecutionProvider, params.cfg),
+  });
+  const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
+    provider: params.providerOverride,
+    authProfileProvider: harnessAuthSelection.authProfileProvider,
+    sessionAuthProfileId: harnessAuthSelection.authProfileId,
     config: params.cfg,
     workspaceDir: params.workspaceDir,
     harnessId: sessionPinnedAgentHarnessId,
@@ -391,7 +483,7 @@ export function runAgentAttempt(params: {
         skillsSnapshot: params.skillsSnapshot,
         messageChannel: params.messageChannel,
         streamParams: params.opts.streamParams,
-        messageProvider: params.messageChannel,
+        messageProvider: params.opts.messageProvider ?? params.messageChannel,
         agentAccountId: params.runContext.accountId,
         senderIsOwner: params.opts.senderIsOwner,
         cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
@@ -460,6 +552,7 @@ export function runAgentAttempt(params: {
     agentId: params.sessionAgentId,
     trigger: "user",
     messageChannel: params.messageChannel,
+    messageProvider: params.opts.messageProvider ?? params.messageChannel,
     agentAccountId: params.runContext.accountId,
     messageTo: params.opts.replyTo ?? params.opts.to,
     messageThreadId: params.opts.threadId,
@@ -483,9 +576,11 @@ export function runAgentAttempt(params: {
     clientTools: params.opts.clientTools,
     provider: params.providerOverride,
     model: params.modelOverride,
+    modelFallbacksOverride: params.modelFallbacksOverride,
     authProfileId,
-    authProfileIdSource: authProfileId ? params.sessionEntry?.authProfileOverrideSource : undefined,
+    authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
+    fastMode: params.fastMode,
     verboseLevel: params.resolvedVerboseLevel,
     timeoutMs: params.timeoutMs,
     runId: params.runId,

@@ -12,6 +12,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
+import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
 import { stableStringify } from "../stable-stringify.js";
@@ -404,7 +405,8 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   // It is internal scaffolding, so drop standalone placeholder lines before delivery
   // while preserving ordinary inline mentions a user may be discussing.
   const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(stripped);
-  const trimmed = withoutPlaceholder.trim();
+  const withoutToolCallBlocks = stripLegacyBracketToolCallBlocks(withoutPlaceholder);
+  const trimmed = withoutToolCallBlocks.trim();
   if (!trimmed) {
     return "";
   }
@@ -467,6 +469,6 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
     }
   }
 
-  const withoutLeadingEmptyLines = withoutPlaceholder.replace(/^(?:[ \t]*\r?\n)+/, "");
+  const withoutLeadingEmptyLines = withoutToolCallBlocks.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }

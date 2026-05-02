@@ -61,9 +61,7 @@ function resolveSchedulePayload(
   return schedulePayloadFromRecord(job);
 }
 
-export function cronScheduleIdentity(
-  job: Pick<CronJob, "schedule"> & { enabled?: boolean },
-): string {
+function cronScheduleIdentity(job: Pick<CronJob, "schedule"> & { enabled?: boolean }): string {
   const schedule = resolveSchedulePayload(job as unknown as Record<string, unknown>);
   if (!schedule) {
     throw new Error("Unsupported cron schedule kind");

@@ -585,7 +585,7 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.enabled":
     "Master toggle for diagnostics instrumentation output in logs and telemetry wiring paths. Defaults to enabled; set false only in tightly constrained environments.",
   "diagnostics.stuckSessionWarnMs":
-    "Age threshold in milliseconds for emitting stuck-session warnings while a session remains in processing state. Increase for long multi-tool turns to reduce false positives; decrease for faster hang detection.",
+    "No-progress age threshold in milliseconds for classifying long processing sessions as long-running, stalled, or stuck. Reply, tool, status, block, and ACP progress reset the timer; repeated stuck diagnostics back off while unchanged.",
   "diagnostics.otel.enabled":
     "Enables OpenTelemetry export pipeline for traces, metrics, and logs based on configured endpoint/protocol settings. Keep disabled unless your collector endpoint and auth are fully configured.",
   "diagnostics.otel.endpoint":
@@ -698,7 +698,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.media.concurrency":
     "Maximum number of concurrent media understanding operations per turn across image, audio, and video tasks. Lower this in resource-constrained deployments to prevent CPU/network saturation.",
   "tools.media.asyncCompletion.directSend":
-    "Enable direct channel sends for completed async music/video generation tasks instead of relying on the requester session wake path. Default off so detached media completion keeps the legacy model-delivery flow unless you opt in.",
+    "Enable direct channel sends for completed async media generation tasks that support direct completion delivery. Currently this applies to video generation; music generation always stays requester-session mediated. Default off so detached media completion uses the requester session wake path.",
   "tools.media.image.enabled":
     "Enable image understanding so attached or referenced images can be interpreted into textual context. Disable if you need text-only operation or want to avoid image-processing cost.",
   "tools.media.image.maxBytes":
@@ -958,6 +958,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Maximum same-provider auth-profile rotations allowed for rate-limit errors before switching to model fallback (default: 1).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
+  "agents.defaults.skipOptionalBootstrapFiles":
+    "Optional bootstrap files that should not be created in agent workspaces. Valid values: SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md.",
   "agents.defaults.contextInjection":
     'Controls when workspace bootstrap files are injected into the system prompt: "always" (default) or "continuation-skip" for safe continuation turns after a completed assistant response.',
   "agents.defaults.bootstrapMaxChars":
@@ -1307,6 +1309,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Enables summary quality audits and regeneration retries for safeguard compaction. Default: true in safeguard mode.",
   "agents.defaults.compaction.qualityGuard.maxRetries":
     "Maximum number of regeneration retries after a failed safeguard summary quality audit. Use small values to bound extra latency and token cost.",
+  "agents.defaults.compaction.midTurnPrecheck":
+    "Optional Pi tool-loop precheck that detects context pressure after a tool result is appended and before the next model call. When enabled, OpenClaw reuses existing precheck recovery to truncate tool results or compact before retrying.",
+  "agents.defaults.compaction.midTurnPrecheck.enabled":
+    "Enable structured mid-turn context pressure checks for Pi tool loops. Default: false. Keep disabled unless long tool-heavy sessions hit context overflow before normal turn-end compaction can run.",
   "agents.defaults.compaction.postIndexSync":
     'Controls post-compaction session memory reindex mode: "off", "async", or "await" (default: "async"). Use "await" for strongest freshness, "async" for lower compaction latency, and "off" only when session-memory sync is handled elsewhere.',
   "agents.defaults.compaction.postCompactionSections":

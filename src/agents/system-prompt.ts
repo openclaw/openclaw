@@ -351,6 +351,9 @@ function buildMessagingSection(params: {
   const showGenericInlineButtonHint = params.runtimeChannel !== "slack";
   const hasSessionsSpawn = params.availableTools.has("sessions_spawn");
   const hasSubagents = params.availableTools.has("subagents");
+  const completionEventGuidance = messageToolOnly
+    ? "- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to a silent placeholder)."
+    : `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`;
   const subagentOrchestrationGuidance = hasSessionsSpawn
     ? hasSubagents
       ? '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.'
@@ -365,7 +368,7 @@ function buildMessagingSection(params: {
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
-    `- Runtime-generated completion events may ask for a user update. Rewrite those in your normal assistant voice and send the update (do not forward raw internal metadata or default to ${SILENT_REPLY_TOKEN}).`,
+    completionEventGuidance,
     "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
     params.availableTools.has("message")
       ? [
@@ -521,7 +524,7 @@ export function buildAgentSystemPrompt(params: {
     ls: "List directory contents",
     exec: "Run shell commands (pty available for TTY-required CLIs)",
     process: "Manage background exec sessions",
-    web_search: "Search the web (Brave API)",
+    web_search: "Search the web using the configured provider",
     web_fetch: "Fetch and extract readable content from a URL",
     // Channel docking: add login tools here when a channel needs interactive linking.
     browser: "Control web browser",
@@ -665,7 +668,10 @@ export function buildAgentSystemPrompt(params: {
   const messageChannelOptions = listDeliverableMessageChannels().join("|");
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
-  const silentReplyPromptMode = params.silentReplyPromptMode ?? "generic";
+  const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const silentReplyPromptMode = sourceMessageToolOnly
+    ? "none"
+    : (params.silentReplyPromptMode ?? "generic");
   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
   const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace

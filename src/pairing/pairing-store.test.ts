@@ -185,6 +185,7 @@ async function withAllowFromCacheReadSpy(params: {
     accountId: "yy",
     allowFrom: ["1001"],
   });
+  clearPairingAllowFromReadCacheForTest();
   const readSpy = params.createReadSpy(filePath);
   try {
     await assertAllowFromCacheInvalidation({
@@ -469,6 +470,32 @@ describe("pairing store", () => {
       });
       expect(removedAgain.changed).toBe(false);
       expect(removedAgain.allowFrom).toEqual(["67890"]);
+    });
+  });
+
+  it("rethrows unexpected stat errors after allowFrom writes", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const allowFromPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      const error = Object.assign(new Error("stat failed"), { code: "EACCES" });
+      const originalStat = fsSync.promises.stat.bind(fsSync.promises);
+      const statSpy = vi.spyOn(fsSync.promises, "stat").mockImplementation(async (target) => {
+        if (String(target) === allowFromPath) {
+          throw error;
+        }
+        return await originalStat(target);
+      });
+
+      try {
+        await expect(
+          addChannelAllowFromStoreEntry({
+            channel: "telegram",
+            accountId: "yy",
+            entry: "12345",
+          }),
+        ).rejects.toBe(error);
+      } finally {
+        statSpy.mockRestore();
+      }
     });
   });
 

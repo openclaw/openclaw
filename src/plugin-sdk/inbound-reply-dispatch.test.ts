@@ -3,7 +3,12 @@ import type { DispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/rep
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { RecordInboundSession } from "../channels/session.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { recordInboundSessionAndDispatchReply } from "./inbound-reply-dispatch.js";
+import {
+  hasFinalInboundReplyDispatch,
+  hasVisibleInboundReplyDispatch,
+  recordInboundSessionAndDispatchReply,
+  resolveInboundReplyDispatchCounts,
+} from "./inbound-reply-dispatch.js";
 
 describe("recordInboundSessionAndDispatchReply", () => {
   it("delegates record and dispatch through the channel turn kernel once", async () => {
@@ -62,6 +67,32 @@ describe("recordInboundSessionAndDispatchReply", () => {
       mediaUrl: undefined,
       sensitiveMedia: undefined,
       replyToId: undefined,
+    });
+  });
+
+  it("exports shared visible reply dispatch helpers", () => {
+    expect(hasVisibleInboundReplyDispatch(undefined)).toBe(false);
+    expect(
+      hasVisibleInboundReplyDispatch({
+        queuedFinal: false,
+        counts: { tool: 0, block: 1, final: 0 },
+      }),
+    ).toBe(true);
+    expect(
+      hasFinalInboundReplyDispatch({
+        queuedFinal: false,
+        counts: { tool: 0, block: 1, final: 0 },
+      }),
+    ).toBe(false);
+    expect(
+      hasFinalInboundReplyDispatch(undefined, {
+        fallbackDelivered: true,
+      }),
+    ).toBe(true);
+    expect(resolveInboundReplyDispatchCounts(undefined)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
     });
   });
 });

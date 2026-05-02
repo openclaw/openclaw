@@ -11,7 +11,7 @@ import { buildConfigSchema, type ConfigSchemaResponse } from "./schema.js";
 
 function loadManifestRegistry(config: OpenClawConfig, env?: NodeJS.ProcessEnv) {
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-  const currentSnapshot = getCurrentPluginMetadataSnapshot({ config, workspaceDir });
+  const currentSnapshot = getCurrentPluginMetadataSnapshot({ config, env, workspaceDir });
   if (currentSnapshot) {
     return currentSnapshot.manifestRegistry;
   }

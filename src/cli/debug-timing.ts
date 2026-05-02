@@ -16,7 +16,7 @@ type TimingPayload = {
 type TimingWriter = (line: string) => void;
 type NonPromise<T> = T extends PromiseLike<unknown> ? never : T;
 
-export type CliDebugTiming = {
+type CliDebugTiming = {
   enabled: boolean;
   mark: (phase: string, details?: TimingDetails) => void;
   time: <T>(

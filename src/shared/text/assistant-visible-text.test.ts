@@ -179,6 +179,48 @@ describe("stripAssistantInternalScaffolding", () => {
       );
     });
 
+    it("strips legacy uppercase TOOL_CALL blocks with hash-style payloads", () => {
+      expectVisibleText(
+        [
+          "Before",
+          '[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}}[/TOOL_CALL]',
+          "After",
+        ].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("hides dangling legacy uppercase TOOL_CALL blocks to end-of-string", () => {
+      expectVisibleText(
+        'Before\n[TOOL_CALL]{tool => "web_search", args => {"query":"NET stock price"}',
+        "Before\n",
+      );
+    });
+
+    it("strips legacy uppercase TOOL_RESULT blocks with object payloads", () => {
+      expectVisibleText(
+        ["Before", '[TOOL_RESULT]{"output":"secret result"}[/TOOL_RESULT]', "After"].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("preserves literal legacy TOOL_CALL examples without tool args payloads", () => {
+      expectVisibleText(
+        "Use `[TOOL_CALL]` only when describing legacy logs.",
+        "Use `[TOOL_CALL]` only when describing legacy logs.",
+      );
+    });
+
+    it("preserves legacy uppercase TOOL_CALL blocks inside fenced code", () => {
+      const input = [
+        "```text",
+        '[TOOL_CALL]{tool => "web_search", args => {"query":"x"}}[/TOOL_CALL]',
+        "```",
+        "Visible",
+      ].join("\n");
+      expectVisibleText(input, input);
+    });
+
     it("strips Qwen-style <tool_call> with nested <function=...> XML", () => {
       expectVisibleText(
         "prefix\n<tool_call><function=read><parameter=path>/home/user</parameter></function></tool_call>\nsuffix",

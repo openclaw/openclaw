@@ -1,12 +1,8 @@
 import type { webhook } from "@line/bot-sdk";
 import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
-import { runPreparedInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
-import {
-  dispatchReplyWithBufferedBlockDispatcher,
-  chunkMarkdownText,
-} from "openclaw/plugin-sdk/reply-runtime";
+import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
+import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
 import {
   danger,
   logVerbose,
@@ -29,6 +25,7 @@ import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
 import { processLineMessage } from "./markdown-to-line.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
+import { getLineRuntime } from "./runtime.js";
 import {
   createFlexMessage,
   createImageMessage,
@@ -233,21 +230,36 @@ export async function monitorLineProvider(
           accountId: route.accountId,
         });
 
-        const { dispatchResult } = await runPreparedInboundReplyTurn({
+        const core = getLineRuntime();
+        const turnResult = await core.channel.turn.run({
           channel: "line",
           accountId: route.accountId,
-          routeSessionKey: route.sessionKey,
-          storePath: ctx.turn.storePath,
-          ctxPayload,
-          recordInboundSession,
-          record: ctx.turn.record,
-          runDispatch: () =>
-            dispatchReplyWithBufferedBlockDispatcher({
-              ctx: ctxPayload,
+          raw: ctx,
+          adapter: {
+            ingest: () => ({
+              id: ctxPayload.MessageSid ?? `${ctxPayload.From}:${Date.now()}`,
+              rawText: ctxPayload.RawBody ?? ctxPayload.BodyForAgent ?? "",
+            }),
+            resolveTurn: () => ({
               cfg: config,
+              channel: "line",
+              accountId: route.accountId,
+              agentId: route.agentId,
+              routeSessionKey: route.sessionKey,
+              storePath: ctx.turn.storePath,
+              ctxPayload,
+              recordInboundSession: core.channel.session.recordInboundSession,
+              dispatchReplyWithBufferedBlockDispatcher:
+                core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+              record: ctx.turn.record,
               dispatcherOptions: {
                 ...replyPipeline,
-                deliver: async (payload, _info) => {
+              },
+              replyOptions: {
+                onModelSelected,
+              },
+              delivery: {
+                deliver: async (payload) => {
                   const lineData = (payload.channelData?.line as LineChannelData | undefined) ?? {};
 
                   if (ctx.userId && !ctx.isGroup) {
@@ -301,14 +313,11 @@ export async function monitorLineProvider(
                   runtime.error?.(danger(`line ${info.kind} reply failed: ${String(err)}`));
                 },
               },
-              replyOptions: {
-                onModelSelected,
-              },
             }),
+          },
         });
-        const queuedFinal = dispatchResult.queuedFinal;
-
-        if (!queuedFinal) {
+        const dispatchResult = turnResult.dispatched ? turnResult.dispatchResult : undefined;
+        if (!hasFinalInboundReplyDispatch(dispatchResult)) {
           logVerbose(`line: no response generated for message from ${ctxPayload.From}`);
         }
       } catch (err) {

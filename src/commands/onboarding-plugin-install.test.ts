@@ -32,9 +32,10 @@ vi.mock("../plugins/install.js", () => ({
 }));
 
 const enablePluginInConfig = vi.hoisted(() =>
-  vi.fn<(cfg: OpenClawConfig, pluginId: string) => PluginEnableResult>((cfg) => ({
+  vi.fn<(cfg: OpenClawConfig, pluginId: string) => PluginEnableResult>((cfg, pluginId) => ({
     config: cfg,
     enabled: true,
+    pluginId,
   })),
 );
 vi.mock("../plugins/enable.js", () => ({
@@ -342,6 +343,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       enablePluginInConfig.mockReturnValueOnce({
         config: {},
         enabled: false,
+        pluginId: "demo",
         reason: "blocked by allowlist",
       });
       const note = vi.fn(async () => {});
@@ -561,6 +563,7 @@ describe("ensureOnboardingPluginInstalled", () => {
           },
         },
         enabled: true,
+        pluginId: "discord",
       });
 
       const result = await ensureOnboardingPluginInstalled({

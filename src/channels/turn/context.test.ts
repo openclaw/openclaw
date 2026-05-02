@@ -1,5 +1,40 @@
 import { describe, expect, it } from "vitest";
-import { buildChannelTurnContext } from "./context.js";
+import { buildChannelTurnContext, type BuildChannelTurnContextParams } from "./context.js";
+
+function createBaseContextParams(
+  overrides: Partial<BuildChannelTurnContextParams> = {},
+): BuildChannelTurnContextParams {
+  return {
+    channel: "test",
+    accountId: "acct",
+    messageId: "msg-1",
+    from: "test:user:u1",
+    sender: {
+      id: "u1",
+    },
+    conversation: {
+      kind: "group",
+      id: "room-1",
+      routePeer: {
+        kind: "group",
+        id: "room-1",
+      },
+    },
+    route: {
+      agentId: "main",
+      routeSessionKey: "agent:main:test:group:room-1",
+    },
+    reply: {
+      to: "test:room:room-1",
+      originatingTo: "test:room:room-1",
+    },
+    message: {
+      rawBody: "hello",
+      envelopeFrom: "User One",
+    },
+    ...overrides,
+  };
+}
 
 describe("buildChannelTurnContext", () => {
   it("maps normalized turn facts into a finalized message context", () => {
@@ -138,5 +173,93 @@ describe("buildChannelTurnContext", () => {
         ThreadLabel: "thread label",
       }),
     );
+  });
+
+  it("filters supplemental context with channel visibility policy", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        supplemental: {
+          quote: {
+            id: "quote-1",
+            body: "quoted",
+            sender: "Quoted User",
+            senderAllowed: false,
+            isQuote: true,
+          },
+          forwarded: {
+            from: "Forwarded User",
+            fromId: "f1",
+            senderAllowed: false,
+          },
+          thread: {
+            starterBody: "thread starter",
+            historyBody: "thread history",
+            senderAllowed: false,
+          },
+        },
+        contextVisibility: "allowlist",
+      }),
+    );
+
+    expect(ctx.ReplyToBody).toBeUndefined();
+    expect(ctx.ReplyToSender).toBeUndefined();
+    expect(ctx.ForwardedFrom).toBeUndefined();
+    expect(ctx.ThreadStarterBody).toBeUndefined();
+    expect(ctx.ThreadHistoryBody).toBeUndefined();
+  });
+
+  it("keeps quoted context in allowlist_quote mode", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        supplemental: {
+          quote: {
+            id: "quote-1",
+            body: "quoted",
+            sender: "Quoted User",
+            senderAllowed: false,
+            isQuote: true,
+          },
+          thread: {
+            starterBody: "thread starter",
+            senderAllowed: false,
+          },
+        },
+        contextVisibility: "allowlist_quote",
+      }),
+    );
+
+    expect(ctx.ReplyToBody).toBe("quoted");
+    expect(ctx.ReplyToSender).toBe("Quoted User");
+    expect(ctx.ThreadStarterBody).toBeUndefined();
+  });
+
+  it("drops supplemental context with unknown sender allow state in restrictive modes", () => {
+    const ctx = buildChannelTurnContext(
+      createBaseContextParams({
+        supplemental: {
+          quote: {
+            id: "quote-1",
+            body: "quoted",
+            sender: "Quoted User",
+            isQuote: true,
+          },
+          forwarded: {
+            from: "Forwarded User",
+            fromId: "f1",
+          },
+          thread: {
+            starterBody: "thread starter",
+            historyBody: "thread history",
+          },
+        },
+        contextVisibility: "allowlist_quote",
+      }),
+    );
+
+    expect(ctx.ReplyToBody).toBeUndefined();
+    expect(ctx.ReplyToSender).toBeUndefined();
+    expect(ctx.ForwardedFrom).toBeUndefined();
+    expect(ctx.ThreadStarterBody).toBeUndefined();
+    expect(ctx.ThreadHistoryBody).toBeUndefined();
   });
 });

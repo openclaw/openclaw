@@ -1,14 +1,21 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type {
   ProviderApplyConfigDefaultsContext,
   ProviderNormalizeConfigContext,
   ProviderResolveConfigApiKeyContext,
 } from "./provider-config-context.types.js";
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "./provider-thinking.types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "./public-surface-loader.js";
 
 const PROVIDER_POLICY_ARTIFACT_CANDIDATES = ["provider-policy-api.js"] as const;
+const providerPolicyPluginIdsByProviderId = new Map<string, string | null>();
 
 export type BundledProviderPolicySurface = {
   normalizeConfig?: (ctx: ProviderNormalizeConfigContext) => ModelProviderConfig | null | undefined;
@@ -16,6 +23,9 @@ export type BundledProviderPolicySurface = {
     ctx: ProviderApplyConfigDefaultsContext,
   ) => OpenClawConfig | null | undefined;
   resolveConfigApiKey?: (ctx: ProviderResolveConfigApiKeyContext) => string | null | undefined;
+  resolveThinkingProfile?: (
+    ctx: ProviderDefaultThinkingPolicyContext,
+  ) => ProviderThinkingProfile | null | undefined;
 };
 
 function hasProviderPolicyHook(
@@ -24,7 +34,8 @@ function hasProviderPolicyHook(
   return (
     typeof mod.normalizeConfig === "function" ||
     typeof mod.applyConfigDefaults === "function" ||
-    typeof mod.resolveConfigApiKey === "function"
+    typeof mod.resolveConfigApiKey === "function" ||
+    typeof mod.resolveThinkingProfile === "function"
   );
 }
 
@@ -53,6 +64,42 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
+function resolveBundledProviderPolicyPluginId(providerId: string): string | null {
+  const normalizedProviderId = normalizeProviderId(providerId);
+  if (!normalizedProviderId) {
+    return null;
+  }
+  const bundledPluginsDir = resolveBundledPluginsDir();
+  const cacheKey = `${bundledPluginsDir ?? "<none>"}::${normalizedProviderId}`;
+  if (providerPolicyPluginIdsByProviderId.has(cacheKey)) {
+    return providerPolicyPluginIdsByProviderId.get(cacheKey) ?? null;
+  }
+
+  if (!bundledPluginsDir) {
+    providerPolicyPluginIdsByProviderId.set(cacheKey, null);
+    return null;
+  }
+
+  const registry = loadPluginManifestRegistry();
+  for (const plugin of registry.plugins.toSorted((left, right) =>
+    left.id.localeCompare(right.id),
+  )) {
+    if (plugin.origin !== "bundled") {
+      continue;
+    }
+    const ownsProvider = plugin.providers.some(
+      (provider) => normalizeProviderId(provider) === normalizedProviderId,
+    );
+    if (ownsProvider) {
+      providerPolicyPluginIdsByProviderId.set(cacheKey, plugin.id);
+      return plugin.id;
+    }
+  }
+
+  providerPolicyPluginIdsByProviderId.set(cacheKey, null);
+  return null;
+}
+
 export function resolveBundledProviderPolicySurface(
   providerId: string,
 ): BundledProviderPolicySurface | null {
@@ -60,5 +107,10 @@ export function resolveBundledProviderPolicySurface(
   if (!normalizedProviderId) {
     return null;
   }
-  return tryLoadBundledProviderPolicySurface(normalizedProviderId);
+  return (
+    tryLoadBundledProviderPolicySurface(normalizedProviderId) ??
+    tryLoadBundledProviderPolicySurface(
+      resolveBundledProviderPolicyPluginId(normalizedProviderId) ?? normalizedProviderId,
+    )
+  );
 }

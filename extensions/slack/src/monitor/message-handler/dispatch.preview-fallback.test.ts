@@ -17,6 +17,8 @@ const startSlackStreamMock = vi.fn(async () => ({
   pendingText: "",
 }));
 const stopSlackStreamMock = vi.fn(async () => {});
+const reactSlackMessageMock = vi.fn(async () => {});
+const removeSlackReactionMock = vi.fn(async () => {});
 class TestSlackStreamNotDeliveredError extends Error {
   readonly pendingText: string;
   readonly slackCode: string;
@@ -32,6 +34,14 @@ let mockedBlockStreamingEnabled: boolean | undefined = false;
 let capturedReplyOptions: { disableBlockStreaming?: boolean } | undefined;
 let mockedReplyThreadTs: string | undefined = THREAD_TS;
 let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
+let capturedTyping:
+  | {
+      start: () => Promise<void>;
+      stop?: () => Promise<void>;
+      onStartError: (err: unknown) => void;
+      onStopError?: (err: unknown) => void;
+    }
+  | undefined;
 let mockedDispatchSequence: Array<{
   kind: "tool" | "block" | "final";
   payload: {
@@ -62,6 +72,8 @@ function createDraftStreamStub() {
 }
 
 function createPreparedSlackMessage(params?: {
+  cfg?: Record<string, unknown>;
+  ctxPayload?: Record<string, unknown>;
   message?: Partial<{
     channel: string;
     ts: string;
@@ -69,21 +81,27 @@ function createPreparedSlackMessage(params?: {
     user: string;
   }>;
   replyToMode?: "off" | "first" | "all" | "batched";
+  setSlackThreadStatus?: (params: {
+    channelId: string;
+    threadTs?: string;
+    status: string;
+  }) => Promise<void>;
+  typingReaction?: string;
 }) {
   return {
     ctx: {
-      cfg: {},
+      cfg: params?.cfg ?? {},
       runtime: {},
       botToken: "xoxb-test",
       app: { client: { chat: { postMessage: postMessageMock } } },
       teamId: "T1",
       textLimit: 4000,
-      typingReaction: "",
+      typingReaction: params?.typingReaction ?? "",
       removeAckAfterReply: false,
       historyLimit: 0,
       channelHistories: new Map(),
       allowFrom: [],
-      setSlackThreadStatus: async () => undefined,
+      setSlackThreadStatus: params?.setSlackThreadStatus ?? (async () => undefined),
     },
     account: {
       accountId: "default",
@@ -106,6 +124,7 @@ function createPreparedSlackMessage(params?: {
     replyTarget: "channel:C123",
     ctxPayload: {
       MessageThreadId: THREAD_TS,
+      ...params?.ctxPayload,
     },
     turn: {
       storePath: "/tmp/slack-sessions.json",
@@ -149,12 +168,29 @@ vi.mock("../conversation.runtime.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-reply-pipeline", () => ({
-  createChannelReplyPipeline: () => ({
-    typingCallbacks: {
-      onIdle: vi.fn(),
-    },
-    onModelSelected: undefined,
-  }),
+  createChannelReplyPipeline: (params: {
+    typing?: {
+      start: () => Promise<void>;
+      stop?: () => Promise<void>;
+      onStartError: (err: unknown) => void;
+      onStopError?: (err: unknown) => void;
+    };
+  }) => {
+    capturedTyping = params.typing;
+    return {
+      ...(params.typing
+        ? {
+            typingCallbacks: {
+              onReplyStart: params.typing.start,
+              onIdle: () => {
+                void params.typing?.stop?.();
+              },
+            },
+          }
+        : {}),
+      onModelSelected: undefined,
+    };
+  },
   resolveChannelSourceReplyDeliveryMode: (params: {
     cfg?: { messages?: { groupChat?: { visibleReplies?: string } } };
     ctx?: { ChatType?: string };
@@ -220,8 +256,8 @@ vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
 }));
 
 vi.mock("../../actions.js", () => ({
-  reactSlackMessage: async () => {},
-  removeSlackReaction: async () => {},
+  reactSlackMessage: reactSlackMessageMock,
+  removeSlackReaction: removeSlackReactionMock,
 }));
 
 vi.mock("../../draft-stream.js", () => ({
@@ -370,9 +406,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
     stopSlackStreamMock.mockReset();
+    reactSlackMessageMock.mockReset();
+    removeSlackReactionMock.mockReset();
     mockedNativeStreaming = false;
     mockedBlockStreamingEnabled = false;
     capturedReplyOptions = undefined;
+    capturedTyping = undefined;
     mockedReplyThreadTs = THREAD_TS;
     mockedReplyThreadTsSequence = undefined;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
@@ -437,6 +476,48 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("keeps Slack typing callbacks when channel replies are message-tool-only", async () => {
+    const setSlackThreadStatus = vi.fn(async () => undefined);
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+        ctxPayload: { ChatType: "channel" },
+        setSlackThreadStatus,
+        typingReaction: "hourglass_flowing_sand",
+      }),
+    );
+
+    expect(capturedTyping).toBeDefined();
+    expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+
+    await capturedTyping?.start();
+    await capturedTyping?.stop?.();
+
+    expect(setSlackThreadStatus).toHaveBeenCalledWith({
+      channelId: "C123",
+      threadTs: THREAD_TS,
+      status: "is typing...",
+    });
+    expect(setSlackThreadStatus).toHaveBeenCalledWith({
+      channelId: "C123",
+      threadTs: THREAD_TS,
+      status: "",
+    });
+    expect(reactSlackMessageMock).toHaveBeenCalledWith(
+      "C123",
+      "171234.111",
+      "hourglass_flowing_sand",
+      expect.objectContaining({ token: "xoxb-test" }),
+    );
+    expect(removeSlackReactionMock).toHaveBeenCalledWith(
+      "C123",
+      "171234.111",
+      "hourglass_flowing_sand",
+      expect.objectContaining({ token: "xoxb-test" }),
+    );
   });
 
   it("escapes Slack mrkdwn in tool progress preview labels", async () => {
