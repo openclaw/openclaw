@@ -400,6 +400,7 @@ describe("runCli exit behavior", () => {
   });
 
   it.each([
+    ["auth", ["node", "openclaw", "auth", "--help"]],
     ["tool", ["node", "openclaw", "tool", "image_generate"]],
     ["tools", ["node", "openclaw", "tools", "effective"]],
   ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
