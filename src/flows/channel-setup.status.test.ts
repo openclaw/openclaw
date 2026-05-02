@@ -12,6 +12,10 @@ type FormatChannelPrimerLine = typeof import("../channels/registry.js").formatCh
 type FormatChannelSelectionLine =
   typeof import("../channels/registry.js").formatChannelSelectionLine;
 type IsChannelConfigured = typeof import("../config/channel-configured.js").isChannelConfigured;
+type ResolveBundledPluginSources =
+  typeof import("../plugins/bundled-sources.js").resolveBundledPluginSources;
+type FindBundledPluginSourceInMap =
+  typeof import("../plugins/bundled-sources.js").findBundledPluginSourceInMap;
 type NoteChannelPrimerChannels = Parameters<
   typeof import("./channel-setup.status.js").noteChannelPrimer
 >[1];
@@ -33,6 +37,21 @@ const formatChannelSelectionLine = vi.hoisted(() =>
   vi.fn<FormatChannelSelectionLine>((meta) => `${meta.label} — ${meta.blurb}`),
 );
 const isChannelConfigured = vi.hoisted(() => vi.fn<IsChannelConfigured>(() => false));
+const resolveBundledPluginSources = vi.hoisted(() =>
+  vi.fn<ResolveBundledPluginSources>(() => new Map()),
+);
+const findBundledPluginSourceInMap = vi.hoisted(() =>
+  vi.fn<FindBundledPluginSourceInMap>(({ bundled, lookup }) => {
+    const value = lookup.value.trim();
+    if (!value) {
+      return undefined;
+    }
+    if (lookup.kind === "pluginId") {
+      return bundled.get(value);
+    }
+    return Array.from(bundled.values()).find((source) => source.npmSpec === value);
+  }),
+);
 
 vi.mock("../channels/chat-meta.js", () => ({
   listChatChannels: () => listChatChannels(),
@@ -62,20 +81,20 @@ vi.mock("../config/channel-configured.js", () => ({
   ) => isChannelConfigured(cfg, channelId),
 }));
 
-// Avoid touching the real `extensions/<id>` tree from unit tests. Status
-// rendering for installable catalog entries asks `bundled-sources` whether
-// a plugin already lives in-tree to decide between
-// "install plugin to enable" vs "bundled · enable to use". For these tests
-// we want the installable-catalog branch unconditionally, so we stub the
-// bundled lookup to "nothing is bundled".
+// Avoid touching the real `extensions/<id>` tree from unit tests. Tests opt
+// into bundled-source entries explicitly when they cover bundled catalog
+// rendering; the default fixture behaves as if nothing is bundled.
 vi.mock("../plugins/bundled-sources.js", () => ({
-  resolveBundledPluginSources: () => new Map(),
-  findBundledPluginSourceInMap: () => undefined,
+  resolveBundledPluginSources: (params: Parameters<ResolveBundledPluginSources>[0]) =>
+    resolveBundledPluginSources(params),
+  findBundledPluginSourceInMap: (params: Parameters<FindBundledPluginSourceInMap>[0]) =>
+    findBundledPluginSourceInMap(params),
 }));
 
 import {
   collectChannelStatus,
   noteChannelPrimer,
+  resolveCatalogChannelSelectionHint,
   resolveChannelSelectionNoteLines,
   resolveChannelSetupSelectionContributions,
 } from "./channel-setup.status.js";
@@ -93,6 +112,17 @@ describe("resolveChannelSetupSelectionContributions", () => {
     );
     formatChannelSelectionLine.mockImplementation((meta) => `${meta.label} — ${meta.blurb}`);
     isChannelConfigured.mockReturnValue(false);
+    resolveBundledPluginSources.mockReturnValue(new Map());
+    findBundledPluginSourceInMap.mockImplementation(({ bundled, lookup }) => {
+      const value = lookup.value.trim();
+      if (!value) {
+        return undefined;
+      }
+      if (lookup.kind === "pluginId") {
+        return bundled.get(value);
+      }
+      return Array.from(bundled.values()).find((source) => source.npmSpec === value);
+    });
   });
 
   it("sorts channels alphabetically by picker label", () => {
@@ -156,6 +186,67 @@ describe("resolveChannelSetupSelectionContributions", () => {
         label: "Zalo (Bot API)",
       },
     ]);
+  });
+
+  it("describes installable catalog choices as remote npm installs", () => {
+    expect(
+      resolveCatalogChannelSelectionHint({
+        install: { npmSpec: "@openclaw/googlechat" },
+      }),
+    ).toBe("remote install from npm: @openclaw/googlechat");
+  });
+
+  it("sanitizes remote npm install hints", () => {
+    expect(
+      resolveCatalogChannelSelectionHint({
+        install: { npmSpec: "@openclaw/googlechat\u001B[31m\nbeta" },
+      }),
+    ).toBe("remote install from npm: @openclaw/googlechat\\nbeta");
+  });
+
+  it("suppresses remote install hints for bundled channels", () => {
+    expect(
+      resolveCatalogChannelSelectionHint(
+        {
+          install: { npmSpec: "@openclaw/googlechat" },
+        },
+        { bundledLocalPath: "extensions/googlechat" },
+      ),
+    ).toBe("");
+  });
+
+  it("renders bundled catalog statuses without remote install hints", async () => {
+    const entry = makeCatalogEntry("slack", "Slack", {
+      pluginId: "@openclaw/slack",
+      install: { npmSpec: "@openclaw/slack" },
+    });
+    listChatChannels.mockReturnValue([]);
+    resolveBundledPluginSources.mockReturnValue(
+      new Map([
+        [
+          "@openclaw/slack",
+          {
+            pluginId: "@openclaw/slack",
+            localPath: "extensions/slack",
+            npmSpec: "@openclaw/slack",
+          },
+        ],
+      ]),
+    );
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        installableCatalogEntries: [entry],
+      }),
+    );
+
+    const summary = await collectChannelStatus({
+      cfg: {} as never,
+      accountOverrides: {},
+      installedPlugins: [],
+    });
+
+    expect(summary.statusLines).toEqual(["Slack: bundled · enable to use"]);
+    expect(summary.statusByChannel.get("slack")?.selectionHint).toBe("");
   });
 
   it("combines real status and disabled hints when available", () => {
