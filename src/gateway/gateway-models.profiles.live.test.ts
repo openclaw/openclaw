@@ -30,6 +30,7 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
+import { isBillingErrorMessage } from "../agents/pi-embedded-helpers/failover-matches.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
@@ -1963,6 +1964,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (google rate limit)`);
+            break;
+          }
+          if (isBillingErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (billing drift)`);
             break;
           }
           if (
