@@ -7,7 +7,7 @@ export type StdioMcpServerLaunchConfig = {
   cwd?: string;
 };
 
-type StdioMcpServerLaunchResult =
+export type StdioMcpServerLaunchResult =
   | { ok: true; config: StdioMcpServerLaunchConfig }
   | { ok: false; reason: string };
 
