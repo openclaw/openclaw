@@ -165,6 +165,25 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("includes TaskFlow runtime guidance in full and minimal prompts", () => {
+    const fullPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+    });
+    const minimalPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+    });
+
+    for (const prompt of [fullPrompt, minimalPrompt]) {
+      expect(prompt).toContain("## TaskFlow Runtime");
+      expect(prompt).toContain("Simple one-turn answers may complete inline.");
+      expect(prompt).toContain("use OpenClaw Tasks / TaskFlow as the durable execution surface");
+      expect(prompt).toContain("`sessions_spawn` / subagents for detached work");
+      expect(prompt).toContain("api.runtime.tasks.flow");
+      expect(prompt).toContain("Do not create legacy `memory/task-capsules` state.");
+    }
+  });
+
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

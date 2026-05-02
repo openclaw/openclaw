@@ -140,6 +140,17 @@ function buildHeartbeatSection(params: { isMinimal: boolean; heartbeatPrompt?: s
   ];
 }
 
+function buildTaskFlowSection() {
+  return [
+    "## TaskFlow Runtime",
+    "Simple one-turn answers may complete inline.",
+    "For non-trivial work that needs multiple steps, code changes, background execution, waiting, handoff, or recovery after interruption, use OpenClaw Tasks / TaskFlow as the durable execution surface.",
+    "Prefer existing TaskFlow-aware paths: `sessions_spawn` / subagents for detached work, plugin runtime `api.runtime.tasks.flow` for orchestrated plugins, and `openclaw tasks` for inspection and recovery.",
+    "Memory files are evidence and recovery notes, not the source of truth for active task runtime. Do not create legacy `memory/task-capsules` state.",
+    "",
+  ];
+}
+
 function buildExecApprovalPromptGuidance(params: {
   runtimeChannel?: string;
   inlineButtonsEnabled?: boolean;
@@ -761,6 +772,7 @@ export function buildAgentSystemPrompt(params: {
       : []),
     "Do not poll `subagents list` / `sessions_list` in a loop; only check status on-demand (for intervention, debugging, or when explicitly asked).",
     "",
+    ...buildTaskFlowSection(),
     ...buildOverridablePromptSection({
       override: providerSectionOverrides.interaction_style,
       fallback: [],

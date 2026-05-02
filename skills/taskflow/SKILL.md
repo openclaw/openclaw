@@ -10,11 +10,14 @@ Use TaskFlow when a job needs to outlive one prompt or one detached run, but you
 
 ## When to use it
 
+- Any non-trivial agent work that needs multiple steps, code changes, background execution, waiting, handoff, or recovery after interruption
 - Multi-step background work with one owner
 - Work that waits on detached ACP or subagent tasks
 - Jobs that may need to emit one clear update back to the owner
 - Jobs that need small persisted state between steps
 - Plugin or tool work that must survive restarts and revision conflicts cleanly
+
+Simple one-turn answers do not need TaskFlow. Everything else should either use a TaskFlow-aware execution path (`sessions_spawn` / subagents for detached work, plugin runtime `api.runtime.tasks.flow` for orchestrated plugins) or explicitly identify the existing TaskFlow record before continuing.
 
 ## What TaskFlow owns
 
