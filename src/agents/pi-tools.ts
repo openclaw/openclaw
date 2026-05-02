@@ -365,6 +365,8 @@ export function createOpenClawCodingTools(options?: {
   ownerOnlyToolAllowlist?: string[];
   /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
   authProfileStore?: AuthProfileStore;
+  /** Diagnostic callback for tool preparation stage timing (Langfuse traces). */
+  recordToolPrepStage?: (name: string) => void;
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {

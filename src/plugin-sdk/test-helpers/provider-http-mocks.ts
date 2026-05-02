@@ -13,6 +13,7 @@ type SanitizeConfiguredModelProviderRequestParams = Parameters<
   typeof sanitizeConfiguredModelProviderRequest
 >[0];
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- vi.hoisted inferred type is not portable across the DTS boundary
 const providerHttpMocks = vi.hoisted(() => ({
   resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "provider-key" })),
   postJsonRequestMock: vi.fn(),
@@ -85,8 +86,10 @@ vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   waitProviderOperationPollInterval: async () => {},
 }));
 
-export function getProviderHttpMocks() {
-  return providerHttpMocks;
+// Use Record<string, unknown> return type to avoid TS2883 portability issue with vitest Mock types
+export function getProviderHttpMocks(): Record<string, unknown> {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-return
+  return providerHttpMocks as Record<string, unknown>;
 }
 
 export function installProviderHttpMockCleanup(): void {
