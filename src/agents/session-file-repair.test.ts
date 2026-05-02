@@ -128,17 +128,17 @@ describe("repairSessionFileIfNeeded", () => {
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(poisonedAssistantEntry)}\n${JSON.stringify(followUp)}\n`;
     await fs.writeFile(file, original, "utf-8");
 
-    const warn = vi.fn();
-    const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
     expect(result.backupPath).toBeTruthy();
-    expect(warn).toHaveBeenCalledTimes(1);
-    const warnMessage = warn.mock.calls[0]?.[0] as string;
-    expect(warnMessage).toContain("rewrote 1 assistant message(s)");
-    expect(warnMessage).not.toContain("dropped");
+    expect(debug).toHaveBeenCalledTimes(1);
+    const debugMessage = debug.mock.calls[0]?.[0] as string;
+    expect(debugMessage).toContain("rewrote 1 assistant message(s)");
+    expect(debugMessage).not.toContain("dropped");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
@@ -167,13 +167,13 @@ describe("repairSessionFileIfNeeded", () => {
     const original = `${JSON.stringify(header)}\n${JSON.stringify(blankUserEntry)}\n${JSON.stringify(message)}\n`;
     await fs.writeFile(file, original, "utf-8");
 
-    const warn = vi.fn();
-    const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
     expect(result.droppedBlankUserMessages).toBe(0);
-    expect(warn.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
+    expect(debug.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
@@ -243,7 +243,7 @@ describe("repairSessionFileIfNeeded", () => {
     ]);
   });
 
-  it("reports both drops and rewrites in the warn message when both occur", async () => {
+  it("reports both drops and rewrites in the debug message when both occur", async () => {
     const { file } = await createTempSessionPath();
     const { header } = buildSessionHeaderAndMessage();
     const poisonedAssistantEntry = {
@@ -264,15 +264,15 @@ describe("repairSessionFileIfNeeded", () => {
     const original = `${JSON.stringify(header)}\n${JSON.stringify(poisonedAssistantEntry)}\n{"type":"message"`;
     await fs.writeFile(file, original, "utf-8");
 
-    const warn = vi.fn();
-    const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
 
     expect(result.repaired).toBe(true);
     expect(result.droppedLines).toBe(1);
     expect(result.rewrittenAssistantMessages).toBe(1);
-    const warnMessage = warn.mock.calls[0]?.[0] as string;
-    expect(warnMessage).toContain("dropped 1 malformed line(s)");
-    expect(warnMessage).toContain("rewrote 1 assistant message(s)");
+    const debugMessage = debug.mock.calls[0]?.[0] as string;
+    expect(debugMessage).toContain("dropped 1 malformed line(s)");
+    expect(debugMessage).toContain("rewrote 1 assistant message(s)");
   });
 
   it("does not rewrite silent-reply turns (stopReason=stop, content=[]) on disk", async () => {
@@ -329,12 +329,12 @@ describe("repairSessionFileIfNeeded", () => {
     const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry)}\n`;
     await fs.writeFile(file, original, "utf-8");
 
-    const warn = vi.fn();
-    const result = await repairSessionFileIfNeeded({ sessionFile: file, warn });
+    const debug = vi.fn();
+    const result = await repairSessionFileIfNeeded({ sessionFile: file, debug });
 
     expect(result.repaired).toBe(true);
     expect(result.trimmedTrailingAssistantMessages).toBe(1);
-    expect(warn.mock.calls[0]?.[0]).toContain("trimmed 1 trailing assistant message(s)");
+    expect(debug.mock.calls[0]?.[0]).toContain("trimmed 1 trailing assistant message(s)");
 
     const repaired = await fs.readFile(file, "utf-8");
     const repairedLines = repaired.trim().split("\n");
