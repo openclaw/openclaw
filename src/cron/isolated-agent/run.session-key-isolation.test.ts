@@ -116,4 +116,37 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
       "agent:default:cron:cli-monitor",
     );
   });
+  it("allows explicit persistent hook runs to reuse the stored session", async () => {
+    resolveCronSessionMock.mockReturnValue(
+      makeCronSession({
+        sessionEntry: {
+          ...makeCronSession().sessionEntry,
+          sessionId: "persistent-hook-run-1",
+        },
+        isNewSession: false,
+      }),
+    );
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        sessionKey: "hook:webhook:customer-42",
+        sessionMode: "persistent",
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(result.sessionKey).toBe("agent:default:hook:webhook:customer-42");
+    expect(resolveCronSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forceNew: false,
+        sessionKey: "agent:default:hook:webhook:customer-42",
+      }),
+    );
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      sessionId: "persistent-hook-run-1",
+      sessionKey: "agent:default:hook:webhook:customer-42",
+    });
+  });
 });

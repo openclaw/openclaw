@@ -429,6 +429,8 @@ type RunCronAgentTurnParams = {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  /** Hook-only opt-in that lets stable hook session keys reuse fresh session ids. */
+  sessionMode?: "isolated" | "persistent";
 };
 
 type WithRunSession = (
@@ -530,7 +532,7 @@ async function prepareCronRunContext(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
-    forceNew: input.job.sessionTarget === "isolated",
+    forceNew: input.job.sessionTarget === "isolated" && input.sessionMode !== "persistent",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   if (!cronSession.sessionEntry.sessionFile?.trim()) {
@@ -1015,6 +1017,8 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   agentId?: string;
   lane?: string;
+  /** Hook-only opt-in that lets stable hook session keys reuse fresh session ids. */
+  sessionMode?: "isolated" | "persistent";
 }): Promise<RunCronAgentTurnResult> {
   const abortSignal = params.abortSignal ?? params.signal;
   const isAborted = () => abortSignal?.aborted === true;

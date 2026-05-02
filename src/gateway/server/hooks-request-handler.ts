@@ -298,6 +298,7 @@ export function createHooksRequestHandler(
           model: normalized.value.model ?? null,
           thinking: normalized.value.thinking ?? null,
           timeoutSeconds: normalized.value.timeoutSeconds ?? null,
+          sessionMode: normalized.value.sessionMode ?? null,
         },
       });
       const cachedRunId = resolveCachedHookRunId(replayKey, now);
@@ -405,6 +406,7 @@ export function createHooksRequestHandler(
               model: mapped.action.model ?? null,
               thinking: mapped.action.thinking ?? null,
               timeoutSeconds: mapped.action.timeoutSeconds ?? null,
+              sessionMode: mapped.action.sessionMode ?? null,
             },
           });
           const cachedRunId = resolveCachedHookRunId(replayKey, now);
@@ -419,6 +421,7 @@ export function createHooksRequestHandler(
             agentId: targetAgentId,
             wakeMode: mapped.action.wakeMode,
             sessionKey: normalizedDispatchSessionKey,
+            sessionMode: mapped.action.sessionMode,
             sourcePath: `${basePath}/${subPath}`,
             deliver: resolveHookDeliver(mapped.action.deliver),
             channel,

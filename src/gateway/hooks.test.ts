@@ -125,7 +125,23 @@ describe("gateway hooks helpers", () => {
       expect(ok.value.channel).toBe("last");
       expect(ok.value.name).toBe("Hook");
       expect(ok.value.deliver).toBe(true);
+      expect(ok.value.sessionMode).toBeUndefined();
     }
+
+    const persistent = normalizeAgentPayload({ message: "hello", sessionMode: "persistent" });
+    expect(persistent.ok).toBe(true);
+    if (persistent.ok) {
+      expect(persistent.value.sessionMode).toBe("persistent");
+    }
+
+    const isolated = normalizeAgentPayload({ message: "hello", sessionMode: "isolated" });
+    expect(isolated.ok).toBe(true);
+    if (isolated.ok) {
+      expect(isolated.value.sessionMode).toBe("isolated");
+    }
+
+    const invalidMode = normalizeAgentPayload({ message: "hello", sessionMode: "shared" });
+    expect(invalidMode.ok).toBe(false);
 
     const explicitNoDeliver = normalizeAgentPayload({ message: "hello", deliver: false });
     expect(explicitNoDeliver.ok).toBe(true);

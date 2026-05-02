@@ -8,6 +8,8 @@ export type HookMappingTransform = {
   export?: string;
 };
 
+export type HookSessionMode = "isolated" | "persistent";
+
 export type HookMappingConfig = {
   id?: string;
   match?: HookMappingMatch;
@@ -17,6 +19,13 @@ export type HookMappingConfig = {
   /** Route this hook to a specific agent (unknown ids fall back to the default agent). */
   agentId?: string;
   sessionKey?: string;
+  /**
+   * Controls session lifecycle for hook agent runs.
+   * - "isolated" (default): each hook dispatch creates a fresh session.
+   * - "persistent": reuse an existing fresh session for the same sessionKey,
+   *   enabling multi-turn conversation history across hook invocations.
+   */
+  sessionMode?: HookSessionMode;
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
