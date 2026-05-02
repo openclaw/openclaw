@@ -27,7 +27,8 @@ describe("memory_search unavailable payloads", () => {
     expectUnavailableMemorySearchDetails(result.details, {
       error: "openai embeddings failed: 429 insufficient_quota",
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
-      action: "Top up or switch embedding provider, then retry memory_search.",
+      action:
+        "Embedding provider quota exhausted. Wait and retry, or switch provider via `openclaw configure`.",
     });
   });
 
@@ -42,6 +43,35 @@ describe("memory_search unavailable payloads", () => {
       error: "embedding provider timeout",
       warning: "Memory search is unavailable due to an embedding/provider error.",
       action: "Check embedding provider configuration and retry memory_search.",
+    });
+  });
+
+  it("surfaces leaked-key remediation hint in unavailable action", async () => {
+    setMemorySearchImpl(async () => {
+      throw new Error("gemini embeddings rejected: API key leaked and disabled");
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("leaked", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: "gemini embeddings rejected: API key leaked and disabled",
+      warning: "Memory search is unavailable due to an embedding/provider error.",
+      action:
+        "The embedding API key was flagged as leaked by the provider. Generate a new key, update it via `openclaw configure`, and restart the gateway.",
+    });
+  });
+
+  it("surfaces invalid-key remediation hint in unavailable action", async () => {
+    setMemorySearchImpl(async () => {
+      throw new Error("openai embeddings failed: 401 unauthorized");
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("invalid_key", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: "openai embeddings failed: 401 unauthorized",
+      warning: "Memory search is unavailable due to an embedding/provider error.",
+      action: "API key is invalid or expired. Update it via `openclaw configure`.",
     });
   });
 

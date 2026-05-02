@@ -123,15 +123,56 @@ export function createMemoryTool(params: {
   };
 }
 
+function resolveEmbeddingErrorKind(
+  error: string | undefined,
+): "leaked" | "quota" | "invalid_key" | null {
+  const lower = normalizeLowercaseStringOrEmpty(error ?? "");
+  if (!lower) {
+    return null;
+  }
+  if (lower.includes("leaked")) {
+    return "leaked";
+  }
+  if (lower.includes("quota") || lower.includes("rate limit") || lower.includes("429")) {
+    return "quota";
+  }
+  if (
+    lower.includes("401") ||
+    lower.includes("unauthorized") ||
+    lower.includes("invalid key") ||
+    lower.includes("invalid_key")
+  ) {
+    return "invalid_key";
+  }
+  return null;
+}
+
+function resolveEmbeddingErrorHint(error: string | undefined): string | undefined {
+  switch (resolveEmbeddingErrorKind(error)) {
+    case "leaked":
+      return "The embedding API key was flagged as leaked by the provider. Generate a new key, update it via `openclaw configure`, and restart the gateway.";
+    case "quota":
+      return "Embedding provider quota exhausted. Wait and retry, or switch provider via `openclaw configure`.";
+    case "invalid_key":
+      return "API key is invalid or expired. Update it via `openclaw configure`.";
+    default:
+      return undefined;
+  }
+}
+
 export function buildMemorySearchUnavailableResult(error: string | undefined) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
-  const isQuotaError = /insufficient_quota|quota|429/.test(normalizeLowercaseStringOrEmpty(reason));
+  const kind = resolveEmbeddingErrorKind(reason);
+  const isQuotaError = kind === "quota";
   const warning = isQuotaError
     ? "Memory search is unavailable because the embedding provider quota is exhausted."
     : "Memory search is unavailable due to an embedding/provider error.";
-  const action = isQuotaError
-    ? "Top up or switch embedding provider, then retry memory_search."
-    : "Check embedding provider configuration and retry memory_search.";
+  const hint = resolveEmbeddingErrorHint(reason);
+  const action =
+    hint ??
+    (isQuotaError
+      ? "Top up or switch embedding provider, then retry memory_search."
+      : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,
