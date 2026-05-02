@@ -11,7 +11,7 @@ import {
   setupCronRegressionFixtures,
   writeCronJobs,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import * as schedule from "../schedule.js";
 import type { CronAgentExecutionStarted, CronJob } from "../types.js";
 import { computeJobNextRunAtMs } from "./jobs.js";
@@ -827,18 +827,16 @@ describe("cron service timer regressions", () => {
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
   });
 
-  it("finishes recurring wake-now main jobs quickly when the main lane is busy (#58833)", async () => {
+  it("retries recurring wake-now main jobs until temporary lane pressure clears (#75964)", async () => {
     let now = 0;
     const nowMs = () => {
       now += 10;
       return now;
     };
-    const runHeartbeatOnce = vi.fn(
-      async (): Promise<HeartbeatRunResult> => ({
-        status: "skipped",
-        reason: "requests-in-flight",
-      }),
-    );
+    const runHeartbeatOnce = vi
+      .fn<() => Promise<HeartbeatRunResult>>()
+      .mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY })
+      .mockResolvedValueOnce({ status: "ran", durationMs: 12 });
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeatNow = vi.fn();
     const job: CronJob = {
@@ -862,20 +860,19 @@ describe("cron service timer regressions", () => {
       requestHeartbeatNow,
       runHeartbeatOnce,
       wakeNowHeartbeatBusyMaxWaitMs: 120_000,
-      wakeNowHeartbeatBusyRetryDelayMs: 250,
+      wakeNowHeartbeatBusyRetryDelayMs: 1,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     state.store = { version: 1, jobs: [job] };
 
-    await executeJob(state, job, nowMs(), { forced: false });
+    const runPromise = executeJob(state, job, nowMs(), { forced: false });
+    await vi.advanceTimersByTimeAsync(1);
+    await runPromise;
 
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeatNow).toHaveBeenCalledWith(
-      expect.objectContaining({ reason: "cron:busy-recurring-main" }),
-    );
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(2);
+    expect(requestHeartbeatNow).not.toHaveBeenCalled();
     expect(job.state.lastStatus).toBe("ok");
-    expect(job.state.lastDurationMs).toBeLessThan(100);
     expect(job.state.runningAtMs).toBeUndefined();
   });
 

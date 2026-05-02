@@ -47,9 +47,10 @@ describe("cron main job passes heartbeat target=last", () => {
   }
 
   async function runSingleTick(cron: CronService) {
-    await cron.start();
+    const startPromise = cron.start();
     await vi.advanceTimersByTimeAsync(2_000);
     await vi.advanceTimersByTimeAsync(1_000);
+    await startPromise;
     cron.stop();
   }
 
@@ -102,7 +103,7 @@ describe("cron main job passes heartbeat target=last", () => {
 
     const runHeartbeatOnce = vi.fn<RunHeartbeatOnce>(async () => ({
       status: "skipped" as const,
-      reason: "requests-in-flight",
+      reason: "cron-in-progress",
     }));
 
     const { cron, requestHeartbeatNow } = createCronWithSpies({
