@@ -122,6 +122,11 @@ export type DoctorMemoryStatusPayload = {
     checkedAtMs?: number;
     cacheExpiresAtMs?: number;
   };
+  fts?: {
+    enabled: boolean;
+    available: boolean;
+    error?: string;
+  };
   dreaming?: DoctorMemoryDreamingPayload;
 };
 
@@ -899,12 +904,17 @@ export const doctorHandlers: GatewayRequestHandlers = {
       let embedding = shouldProbe
         ? await manager.probeEmbeddingAvailability()
         : (manager.getCachedEmbeddingAvailability?.() ?? SKIPPED_MEMORY_EMBEDDING_PROBE);
+      const statusRecord = status as Record<string, unknown>;
+      const ftsRecord = asRecord(statusRecord.fts);
+      const ftsEnabled = ftsRecord?.enabled;
+      const ftsAvailable = ftsRecord?.available;
+      const ftsError = normalizeTrimmedString(ftsRecord?.error);
       if (!embedding.ok && !embedding.error) {
         embedding = { ok: false, error: "memory embeddings unavailable" };
       }
       const nowMs = Date.now();
       const dreamingConfig = resolveDreamingConfig(cfg);
-      const workspaceDir = normalizeTrimmedString((status as Record<string, unknown>).workspaceDir);
+      const workspaceDir = normalizeTrimmedString(statusRecord.workspaceDir);
       const configuredWorkspaces = resolveMemoryDreamingWorkspaces(cfg, {
         primaryWorkspaceDir: workspaceDir,
         primaryAgentId: resolveDefaultAgentId(cfg),
@@ -937,6 +947,15 @@ export const doctorHandlers: GatewayRequestHandlers = {
         agentId,
         provider: status.provider,
         embedding,
+        ...(typeof ftsEnabled === "boolean" && typeof ftsAvailable === "boolean"
+          ? {
+              fts: {
+                enabled: ftsEnabled,
+                available: ftsAvailable,
+                ...(ftsError ? { error: ftsError } : {}),
+              },
+            }
+          : {}),
         dreaming: {
           ...dreamingConfig,
           ...storeStats,
