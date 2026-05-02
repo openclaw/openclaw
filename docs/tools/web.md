@@ -296,7 +296,8 @@ show the `x_search` prompt.
 
 <Warning>
   Not all parameters work with all providers. Brave `llm-context` mode
-  rejects `ui_lang`, `freshness`, `date_after`, and `date_before`.
+  rejects `ui_lang`; `date_before` also needs `date_after` because Brave custom
+  freshness ranges require both start and end dates.
   Gemini, Grok, and Kimi return one synthesized answer with citations. They
   accept `count` for shared-tool compatibility, but it does not change the
   grounded answer shape.
