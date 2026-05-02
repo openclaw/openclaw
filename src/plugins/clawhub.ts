@@ -25,7 +25,7 @@ import {
   type ClawHubPackageCompatibility,
   type ClawHubPackageDetail,
   type ClawHubPackageFamily,
-  type ClawHubPackageStorePackSummary,
+  type ClawHubPackageClawPackSummary,
   type ClawHubPackageVersion,
 } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -66,10 +66,10 @@ export type ClawHubPluginInstallRecordFields = {
   integrity?: string;
   resolvedAt?: string;
   installedAt?: string;
-  storepackSha256?: string;
-  storepackSpecVersion?: number;
-  storepackManifestSha256?: string;
-  storepackSize?: number;
+  clawpackSha256?: string;
+  clawpackSpecVersion?: number;
+  clawpackManifestSha256?: string;
+  clawpackSize?: number;
 };
 
 type ClawHubInstallFailure = {
@@ -127,38 +127,36 @@ type ClawHubArchiveEntryLimits = {
   addArchiveBytes: (bytes: number) => boolean;
 };
 
-function normalizeClawHubStorePackInstallFields(
-  storepack: ClawHubPackageStorePackSummary | null | undefined,
+function normalizeClawHubClawPackInstallFields(
+  clawpack: ClawHubPackageClawPackSummary | null | undefined,
 ): Pick<
   ClawHubPluginInstallRecordFields,
-  "storepackSha256" | "storepackSpecVersion" | "storepackManifestSha256" | "storepackSize"
+  "clawpackSha256" | "clawpackSpecVersion" | "clawpackManifestSha256" | "clawpackSize"
 > {
-  if (storepack?.available !== true) {
+  if (clawpack?.available !== true) {
     return {};
   }
-  const storepackSha256 =
-    typeof storepack.sha256 === "string" ? normalizeClawHubSha256Hex(storepack.sha256) : null;
-  const storepackManifestSha256 =
-    typeof storepack.manifestSha256 === "string"
-      ? normalizeClawHubSha256Hex(storepack.manifestSha256)
+  const clawpackSha256 =
+    typeof clawpack.sha256 === "string" ? normalizeClawHubSha256Hex(clawpack.sha256) : null;
+  const clawpackManifestSha256 =
+    typeof clawpack.manifestSha256 === "string"
+      ? normalizeClawHubSha256Hex(clawpack.manifestSha256)
       : null;
-  const storepackSpecVersion =
-    typeof storepack.specVersion === "number" &&
-    Number.isSafeInteger(storepack.specVersion) &&
-    storepack.specVersion >= 0
-      ? storepack.specVersion
+  const clawpackSpecVersion =
+    typeof clawpack.specVersion === "number" &&
+    Number.isSafeInteger(clawpack.specVersion) &&
+    clawpack.specVersion >= 0
+      ? clawpack.specVersion
       : undefined;
-  const storepackSize =
-    typeof storepack.size === "number" &&
-    Number.isSafeInteger(storepack.size) &&
-    storepack.size >= 0
-      ? storepack.size
+  const clawpackSize =
+    typeof clawpack.size === "number" && Number.isSafeInteger(clawpack.size) && clawpack.size >= 0
+      ? clawpack.size
       : undefined;
   return {
-    ...(storepackSha256 ? { storepackSha256 } : {}),
-    ...(storepackSpecVersion !== undefined ? { storepackSpecVersion } : {}),
-    ...(storepackManifestSha256 ? { storepackManifestSha256 } : {}),
-    ...(storepackSize !== undefined ? { storepackSize } : {}),
+    ...(clawpackSha256 ? { clawpackSha256 } : {}),
+    ...(clawpackSpecVersion !== undefined ? { clawpackSpecVersion } : {}),
+    ...(clawpackManifestSha256 ? { clawpackManifestSha256 } : {}),
+    ...(clawpackSize !== undefined ? { clawpackSize } : {}),
   };
 }
 
@@ -641,7 +639,7 @@ async function resolveCompatiblePackageVersion(params: {
       version: string;
       compatibility?: ClawHubPackageCompatibility | null;
       verification: ClawHubArchiveVerification | null;
-      storepack?: ClawHubPackageStorePackSummary | null;
+      clawpack?: ClawHubPackageClawPackSummary | null;
     }
   | ClawHubInstallFailure
 > {
@@ -676,7 +674,7 @@ async function resolveCompatiblePackageVersion(params: {
       compatibility:
         versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
       verification: null,
-      storepack: versionDetail.version?.storepack ?? null,
+      clawpack: versionDetail.version?.clawpack ?? null,
     };
   }
   const verificationState = resolveClawHubArchiveVerification(
@@ -693,7 +691,7 @@ async function resolveCompatiblePackageVersion(params: {
     compatibility:
       versionDetail.version?.compatibility ?? params.detail.package?.compatibility ?? null,
     verification: verificationState.verification,
-    storepack: versionDetail.version?.storepack ?? null,
+    clawpack: versionDetail.version?.clawpack ?? null,
   };
 }
 
@@ -922,7 +920,7 @@ export async function installPluginFromClawHub(
     }
 
     const pkg = detail.package!;
-    const storepackFields = normalizeClawHubStorePackInstallFields(versionState.storepack);
+    const clawpackFields = normalizeClawHubClawPackInstallFields(versionState.clawpack);
     const clawhubFamily =
       pkg.family === "code-plugin" || pkg.family === "bundle-plugin" ? pkg.family : null;
     if (!clawhubFamily) {
@@ -948,7 +946,7 @@ export async function installPluginFromClawHub(
         // server-attested sha256hash from ClawHub version metadata.
         integrity: archive.integrity,
         resolvedAt: new Date().toISOString(),
-        ...storepackFields,
+        ...clawpackFields,
       },
     };
   } finally {

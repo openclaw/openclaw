@@ -192,37 +192,37 @@ describe("plugin index install records store", () => {
     });
   });
 
-  it("preserves ClawHub StorePack install metadata in persisted records", async () => {
+  it("preserves ClawHub ClawPack install metadata in persisted records", async () => {
     const stateDir = makeStateDir();
-    const candidate = createPluginCandidate(stateDir, "storepack-demo");
+    const candidate = createPluginCandidate(stateDir, "clawpack-demo");
     await writePersistedInstalledPluginIndexInstallRecords(
       {
-        "storepack-demo": {
+        "clawpack-demo": {
           source: "clawhub",
-          spec: "clawhub:storepack-demo",
-          installPath: path.join(stateDir, "plugins", "storepack-demo"),
+          spec: "clawhub:clawpack-demo",
+          installPath: path.join(stateDir, "plugins", "clawpack-demo"),
           clawhubUrl: "https://clawhub.ai",
-          clawhubPackage: "storepack-demo",
+          clawhubPackage: "clawpack-demo",
           clawhubFamily: "code-plugin",
           clawhubChannel: "official",
-          storepackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          storepackSpecVersion: 1,
-          storepackManifestSha256:
+          clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          clawpackSpecVersion: 1,
+          clawpackManifestSha256:
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-          storepackSize: 4096,
+          clawpackSize: 4096,
         },
       },
       { stateDir, candidates: [candidate] },
     );
 
     await expect(loadInstalledPluginIndexInstallRecords({ stateDir })).resolves.toMatchObject({
-      "storepack-demo": {
+      "clawpack-demo": {
         source: "clawhub",
-        spec: "clawhub:storepack-demo",
-        storepackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        storepackSpecVersion: 1,
-        storepackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        storepackSize: 4096,
+        spec: "clawhub:clawpack-demo",
+        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        clawpackSize: 4096,
       },
     });
   });

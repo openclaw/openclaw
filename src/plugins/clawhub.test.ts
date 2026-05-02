@@ -53,8 +53,8 @@ const { CLAWHUB_INSTALL_ERROR_CODE, formatClawHubSpecifier, installPluginFromCla
   await import("./clawhub.js");
 
 const DEMO_ARCHIVE_INTEGRITY = "sha256-qerEjGEpvES2+Tyan0j2xwDRkbcnmh4ZFfKN9vWbsa8=";
-const DEMO_STOREPACK_SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-const DEMO_STOREPACK_MANIFEST_SHA256 =
+const DEMO_CLAWPACK_SHA256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const DEMO_CLAWPACK_MANIFEST_SHA256 =
   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 const tempDirs: string[] = [];
 
@@ -293,7 +293,7 @@ describe("installPluginFromClawHub", () => {
     );
   });
 
-  it("returns StorePack metadata from compatible ClawHub package versions", async () => {
+  it("returns ClawPack metadata from compatible ClawHub package versions", async () => {
     fetchClawHubPackageVersionMock.mockResolvedValueOnce({
       version: {
         version: "2026.3.22",
@@ -304,14 +304,14 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        storepack: {
+        clawpack: {
           available: true,
           specVersion: 1,
-          format: "storepack.zip",
-          sha256: DEMO_STOREPACK_SHA256,
+          format: "clawpack.zip",
+          sha256: DEMO_CLAWPACK_SHA256,
           size: 4096,
           fileCount: 7,
-          manifestSha256: DEMO_STOREPACK_MANIFEST_SHA256,
+          manifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
           builtAt: 1774200000000,
           buildVersion: "2026.3.22",
           hostTargets: [],
@@ -329,15 +329,15 @@ describe("installPluginFromClawHub", () => {
     expect(result).toMatchObject({
       ok: true,
       clawhub: {
-        storepackSha256: DEMO_STOREPACK_SHA256,
-        storepackSpecVersion: 1,
-        storepackManifestSha256: DEMO_STOREPACK_MANIFEST_SHA256,
-        storepackSize: 4096,
+        clawpackSha256: DEMO_CLAWPACK_SHA256,
+        clawpackSpecVersion: 1,
+        clawpackManifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
+        clawpackSize: 4096,
       },
     });
   });
 
-  it("does not persist package-level StorePack metadata for version records without StorePack facts", async () => {
+  it("does not persist package-level ClawPack metadata for version records without ClawPack facts", async () => {
     parseClawHubPluginSpecMock.mockReturnValueOnce({ name: "demo", version: "2026.3.21" });
     fetchClawHubPackageDetailMock.mockResolvedValueOnce({
       package: {
@@ -352,14 +352,14 @@ describe("installPluginFromClawHub", () => {
           pluginApiRange: ">=2026.3.22",
           minGatewayVersion: "2026.3.0",
         },
-        storepack: {
+        clawpack: {
           available: true,
           specVersion: 1,
-          format: "storepack.zip",
-          sha256: DEMO_STOREPACK_SHA256,
+          format: "clawpack.zip",
+          sha256: DEMO_CLAWPACK_SHA256,
           size: 4096,
           fileCount: 7,
-          manifestSha256: DEMO_STOREPACK_MANIFEST_SHA256,
+          manifestSha256: DEMO_CLAWPACK_MANIFEST_SHA256,
           builtAt: 1774200000000,
           buildVersion: "2026.3.22",
           hostTargets: [],
@@ -395,10 +395,10 @@ describe("installPluginFromClawHub", () => {
     if (!result.ok) {
       throw new Error(result.error);
     }
-    expect(result.clawhub.storepackSha256).toBeUndefined();
-    expect(result.clawhub.storepackSpecVersion).toBeUndefined();
-    expect(result.clawhub.storepackManifestSha256).toBeUndefined();
-    expect(result.clawhub.storepackSize).toBeUndefined();
+    expect(result.clawhub.clawpackSha256).toBeUndefined();
+    expect(result.clawhub.clawpackSpecVersion).toBeUndefined();
+    expect(result.clawhub.clawpackManifestSha256).toBeUndefined();
+    expect(result.clawhub.clawpackSize).toBeUndefined();
   });
 
   it("installs when ClawHub advertises a wildcard plugin API range", async () => {

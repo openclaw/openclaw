@@ -52,10 +52,10 @@ function normalizeInstallRecord(
   setInstallStringField(normalized, "clawhubPackage", record.clawhubPackage);
   setInstallStringField(normalized, "clawhubFamily", record.clawhubFamily);
   setInstallStringField(normalized, "clawhubChannel", record.clawhubChannel);
-  setInstallStringField(normalized, "storepackSha256", record.storepackSha256);
-  setInstallNumberField(normalized, "storepackSpecVersion", record.storepackSpecVersion);
-  setInstallStringField(normalized, "storepackManifestSha256", record.storepackManifestSha256);
-  setInstallNumberField(normalized, "storepackSize", record.storepackSize);
+  setInstallStringField(normalized, "clawpackSha256", record.clawpackSha256);
+  setInstallNumberField(normalized, "clawpackSpecVersion", record.clawpackSpecVersion);
+  setInstallStringField(normalized, "clawpackManifestSha256", record.clawpackManifestSha256);
+  setInstallNumberField(normalized, "clawpackSize", record.clawpackSize);
   setInstallStringField(normalized, "gitUrl", record.gitUrl);
   setInstallStringField(normalized, "gitRef", record.gitRef);
   setInstallStringField(normalized, "gitCommit", record.gitCommit);

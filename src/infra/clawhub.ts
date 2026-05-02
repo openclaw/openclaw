@@ -39,7 +39,7 @@ export type ClawHubPackageEnvironmentSummary = {
   supportsRemoteHost?: boolean;
   knownUnsupported?: string[];
 };
-export type ClawHubPackageStorePackSummary = {
+export type ClawHubPackageClawPackSummary = {
   available: boolean;
   specVersion?: number | null;
   format?: string | null;
@@ -68,10 +68,10 @@ export type ClawHubPackageListItem = {
   capabilityTags?: string[];
   executesCode?: boolean;
   verificationTier?: string | null;
-  storepackAvailable?: boolean;
+  clawpackAvailable?: boolean;
   hostTargetKeys?: string[];
   environmentFlags?: string[];
-  storepack?: ClawHubPackageStorePackSummary;
+  clawpack?: ClawHubPackageClawPackSummary;
 };
 export type ClawHubPackageDetail = {
   package:
@@ -99,7 +99,7 @@ export type ClawHubPackageDetail = {
           hasProvenance?: boolean;
           scanStatus?: string;
         } | null;
-        storepack?: ClawHubPackageStorePackSummary;
+        clawpack?: ClawHubPackageClawPackSummary;
       })
     | null;
   owner?: {
@@ -138,7 +138,7 @@ export type ClawHubPackageVersion = {
         ? C
         : never
       : never;
-    storepack?: ClawHubPackageStorePackSummary;
+    clawpack?: ClawHubPackageClawPackSummary;
   } | null;
 };
 
