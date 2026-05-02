@@ -39,7 +39,12 @@ async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
 }
 
 async function formatSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
-  const filePaths = files.map((file) => path.resolve(root, file.path));
+  const filePaths = files
+    .filter((file) => file.path.endsWith(".json"))
+    .map((file) => path.resolve(root, file.path));
+  if (filePaths.length === 0) {
+    return;
+  }
   await execFileAsync(oxfmtPath, ["--write", "--threads=1", ...filePaths], {
     cwd: repoRoot,
   });

@@ -6,7 +6,11 @@ import {
   createFormattedPromptSnapshotFiles,
   deleteStalePromptSnapshotFiles,
 } from "../../scripts/generate-prompt-snapshots.js";
-import { HAPPY_PATH_PROMPT_SNAPSHOT_DIR } from "../helpers/agents/happy-path-prompt-snapshots.js";
+import { renderCodexModelInstructions } from "../../scripts/sync-codex-model-prompt-fixture.js";
+import {
+  CODEX_MODEL_PROMPT_FIXTURE_DIR,
+  HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+} from "../helpers/agents/happy-path-prompt-snapshots.js";
 
 describe("happy path prompt snapshots", () => {
   it("matches the committed Codex prompt snapshot artifacts", async () => {
@@ -39,5 +43,54 @@ describe("happy path prompt snapshots", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
+  });
+
+  it("renders the Codex model-bound prompt layers", async () => {
+    const generated = await createFormattedPromptSnapshotFiles();
+    const telegram = generated.find((file) =>
+      file.path.endsWith("telegram-direct-codex-message-tool.md"),
+    );
+
+    expect(telegram?.content).toContain("## Reconstructed Model-Bound Prompt Layers");
+    expect(telegram?.content).toContain(
+      "### System: Codex Model Instructions (gpt-5.5, pragmatic)",
+    );
+    expect(telegram?.content).toContain("You are Codex, a coding agent based on GPT-5.");
+    expect(telegram?.content).toContain("### Developer: Codex Permission Instructions");
+    expect(telegram?.content).toContain(
+      "Approval policy is currently never. Do not provide the `sandbox_permissions`",
+    );
+    expect(telegram?.content).toContain("### Tools: Dynamic Tool Catalog");
+  });
+
+  it("keeps the Codex model prompt fixture next to its source metadata", () => {
+    expect(
+      fs.existsSync(path.join(CODEX_MODEL_PROMPT_FIXTURE_DIR, "gpt-5.5.pragmatic.instructions.md")),
+    ).toBe(true);
+    expect(
+      fs.existsSync(path.join(CODEX_MODEL_PROMPT_FIXTURE_DIR, "gpt-5.5.pragmatic.source.json")),
+    ).toBe(true);
+  });
+
+  it("renders Codex model catalog instructions with the selected personality", () => {
+    const rendered = renderCodexModelInstructions({
+      model: {
+        slug: "gpt-5.5",
+        base_instructions: "fallback",
+        model_messages: {
+          instructions_template: "Intro\n{{ personality }}\nEnd",
+          instructions_variables: {
+            personality_pragmatic: "Pragmatic voice",
+          },
+        },
+      },
+      personality: "pragmatic",
+    });
+
+    expect(rendered).toEqual({
+      instructions: "Intro\nPragmatic voice\nEnd",
+      field:
+        "model_messages.instructions_template + model_messages.instructions_variables.personality_pragmatic",
+    });
   });
 });
