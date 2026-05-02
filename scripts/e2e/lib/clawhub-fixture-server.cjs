@@ -11,6 +11,15 @@ const JSZip = requireFromApp("jszip");
 const packageName = "@openclaw/kitchen-sink";
 const pluginId = "openclaw-kitchen-sink-fixture";
 
+const buildClawPackSummary = ({ sha256hash, manifestSha256, size }) => ({
+  available: true,
+  specVersion: 1,
+  format: "clawpack.zip",
+  sha256: sha256hash,
+  size,
+  manifestSha256,
+});
+
 const profiles = {
   "kitchen-sink-plugin": {
     version: "0.1.3",
@@ -87,7 +96,8 @@ export default definePluginEntry({
         properties: {},
       },
     },
-    packageDetail(sha256hash) {
+    packageDetail(artifact) {
+      const clawpack = buildClawPackSummary(artifact);
       const packageDetail = {
         package: {
           name: packageName,
@@ -121,6 +131,7 @@ export default definePluginEntry({
             hasProvenance: false,
             scanStatus: "passed",
           },
+          clawpack,
         },
       };
       return {
@@ -136,10 +147,11 @@ export default definePluginEntry({
             createdAt: 0,
             changelog: "Fixture package for kitchen-sink plugin prerelease CI.",
             distTags: ["latest"],
-            sha256hash,
+            sha256hash: artifact.sha256hash,
             compatibility: packageDetail.package.compatibility,
             capabilities: packageDetail.package.capabilities,
             verification: packageDetail.package.verification,
+            clawpack,
           },
         },
         betaStatus: 404,
@@ -191,11 +203,12 @@ export default definePluginEntry({
         properties: {},
       },
     },
-    packageDetail(sha256hash) {
+    packageDetail(artifact) {
       const compatibility = {
         pluginApiRange: ">=2026.4.26",
         minGatewayVersion: "2026.4.26",
       };
+      const clawpack = buildClawPackSummary(artifact);
       return {
         packageDetail: {
           package: {
@@ -209,6 +222,7 @@ export default definePluginEntry({
             createdAt: 0,
             updatedAt: 0,
             compatibility,
+            clawpack,
           },
         },
         versionDetail: {
@@ -216,8 +230,9 @@ export default definePluginEntry({
             version: this.version,
             createdAt: 0,
             changelog: "Kitchen-sink fixture package for Docker plugin E2E.",
-            sha256hash,
+            sha256hash: artifact.sha256hash,
             compatibility,
+            clawpack,
           },
         },
       };
@@ -237,13 +252,17 @@ async function main() {
     date: new Date(0),
   });
   zip.file("package/index.js", fixture.indexJs, { date: new Date(0) });
-  zip.file("package/openclaw.plugin.json", `${JSON.stringify(fixture.manifest, null, 2)}\n`, {
-    date: new Date(0),
-  });
+  const manifestJson = `${JSON.stringify(fixture.manifest, null, 2)}\n`;
+  zip.file("package/openclaw.plugin.json", manifestJson, { date: new Date(0) });
 
   const archive = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
   const sha256hash = crypto.createHash("sha256").update(archive).digest("hex");
-  const { packageDetail, versionDetail, betaStatus } = fixture.packageDetail(sha256hash);
+  const manifestSha256 = crypto.createHash("sha256").update(manifestJson).digest("hex");
+  const { packageDetail, versionDetail, betaStatus } = fixture.packageDetail({
+    sha256hash,
+    manifestSha256,
+    size: archive.length,
+  });
 
   const json = (response, value, status = 200) => {
     response.writeHead(status, { "content-type": "application/json" });
@@ -279,6 +298,19 @@ async function main() {
       response.writeHead(200, {
         "content-type": "application/zip",
         "content-length": String(archive.length),
+      });
+      response.end(archive);
+      return;
+    }
+    if (
+      url.pathname ===
+      `/api/v1/packages/${encodeURIComponent(packageName)}/versions/${fixture.version}/clawpack`
+    ) {
+      response.writeHead(200, {
+        "content-type": "application/zip",
+        "content-length": String(archive.length),
+        "X-ClawHub-ClawPack-Sha256": sha256hash,
+        "X-ClawHub-ClawPack-Spec-Version": "1",
       });
       response.end(archive);
       return;
