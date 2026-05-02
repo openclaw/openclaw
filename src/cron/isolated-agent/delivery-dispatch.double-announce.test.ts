@@ -619,6 +619,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -632,7 +633,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
@@ -646,6 +647,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const params = makeBaseParams({ synthesizedText: "HEARTBEAT_OK 🦞" });
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -655,7 +657,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
@@ -670,6 +672,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -1090,6 +1093,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       threadId: 42,
     };
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -1099,7 +1103,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
@@ -1148,6 +1152,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       { text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" },
     ] as never;
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -1157,7 +1162,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
@@ -1228,6 +1233,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
+    params.agentSessionKey = "agent:main:cron:test-job";
 
     const state = await dispatchCronDelivery(params);
 
@@ -1241,7 +1247,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
-        key: "agent:main",
+        key: "agent:main:cron:test-job",
         deleteTranscript: true,
         emitLifecycleHooks: false,
       },
