@@ -705,10 +705,22 @@ export async function runPluginRegistryPostinstallMigration(params = {}) {
 
 export function isSourceCheckoutRoot(params) {
   const pathExists = params.existsSync ?? existsSync;
+  const readFile = params.readFileSync ?? readFileSync;
   const hasPostinstallInventory = pathExists(join(params.packageRoot, DIST_INVENTORY_PATH));
+  let hasDeclaredMirroredPackageRuntimeDeps = false;
+  try {
+    const packageJson = JSON.parse(readFile(join(params.packageRoot, "package.json"), "utf8"));
+    const mirrored = packageJson?.openclaw?.bundle?.mirroredRootRuntimeDependencies;
+    hasDeclaredMirroredPackageRuntimeDeps = Array.isArray(mirrored) && mirrored.length > 0;
+  } catch {
+    hasDeclaredMirroredPackageRuntimeDeps = false;
+  }
+  const hasPackagedRuntimeDepsLayout =
+    hasPostinstallInventory || hasDeclaredMirroredPackageRuntimeDeps;
   return (
     (pathExists(join(params.packageRoot, ".git")) ||
-      (pathExists(join(params.packageRoot, "pnpm-workspace.yaml")) && !hasPostinstallInventory)) &&
+      (pathExists(join(params.packageRoot, "pnpm-workspace.yaml")) &&
+        !hasPackagedRuntimeDepsLayout)) &&
     pathExists(join(params.packageRoot, "src")) &&
     pathExists(join(params.packageRoot, "extensions"))
   );
