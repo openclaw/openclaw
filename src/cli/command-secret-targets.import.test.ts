@@ -25,6 +25,29 @@ describe("command secret targets module import", () => {
     expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
   });
 
+  it("loads registry lazily for web search plugin credential targets", async () => {
+    const listSecretTargetRegistryEntries = vi.fn(() => [
+      { id: "plugins.entries.example.config.webSearch.apiKey" },
+      { id: "plugins.entries.example.config.webFetch.apiKey" },
+      { id: "plugins.entries.example.config.other.apiKey" },
+    ]);
+
+    vi.doMock("../secrets/target-registry.js", () => ({
+      discoverConfigSecretTargetsByIds: vi.fn(() => []),
+      listSecretTargetRegistryEntries,
+    }));
+
+    const mod = await import("./command-secret-targets.js");
+
+    expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
+    const ids = mod.getWebSearchCommandSecretTargetIds();
+    expect(ids.has("tools.web.search.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.example.config.webSearch.apiKey")).toBe(true);
+    expect(ids.has("plugins.entries.example.config.webFetch.apiKey")).toBe(false);
+    expect(ids.has("plugins.entries.example.config.other.apiKey")).toBe(false);
+    expect(listSecretTargetRegistryEntries).toHaveBeenCalledTimes(1);
+  });
+
   it("loads registry lazily for agent runtime plugin credential targets", async () => {
     const listSecretTargetRegistryEntries = vi.fn(() => [
       { id: "plugins.entries.example.config.webSearch.apiKey" },
