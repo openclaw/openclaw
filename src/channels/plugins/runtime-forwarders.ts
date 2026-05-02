@@ -38,44 +38,44 @@ export function createRuntimeDirectoryLiveAdapter<Runtime>(params: {
     runtime: Runtime,
   ) => ChannelDirectoryAdapter["listGroupMembers"] | null | undefined;
 }): Pick<ChannelDirectoryAdapter, DirectoryMethod> {
-  return {
-    self: params.self
-      ? async (ctx: DirectorySelfParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.self!,
-            })
-          )(ctx)
-      : undefined,
-    listPeersLive: params.listPeersLive
-      ? async (ctx: DirectoryListParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listPeersLive!,
-            })
-          )(ctx)
-      : undefined,
-    listGroupsLive: params.listGroupsLive
-      ? async (ctx: DirectoryListParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listGroupsLive!,
-            })
-          )(ctx)
-      : undefined,
-    listGroupMembers: params.listGroupMembers
-      ? async (ctx: DirectoryGroupMembersParams) =>
-          await (
-            await resolveForwardedMethod({
-              getRuntime: params.getRuntime,
-              resolve: params.listGroupMembers!,
-            })
-          )(ctx)
-      : undefined,
-  };
+  const adapter: Pick<ChannelDirectoryAdapter, DirectoryMethod> = {};
+  if (params.self) {
+    adapter.self = async (ctx: DirectorySelfParams) =>
+      await (
+        await resolveForwardedMethod({
+          getRuntime: params.getRuntime,
+          resolve: params.self!,
+        })
+      )(ctx);
+  }
+  if (params.listPeersLive) {
+    adapter.listPeersLive = async (ctx: DirectoryListParams) =>
+      await (
+        await resolveForwardedMethod({
+          getRuntime: params.getRuntime,
+          resolve: params.listPeersLive!,
+        })
+      )(ctx);
+  }
+  if (params.listGroupsLive) {
+    adapter.listGroupsLive = async (ctx: DirectoryListParams) =>
+      await (
+        await resolveForwardedMethod({
+          getRuntime: params.getRuntime,
+          resolve: params.listGroupsLive!,
+        })
+      )(ctx);
+  }
+  if (params.listGroupMembers) {
+    adapter.listGroupMembers = async (ctx: DirectoryGroupMembersParams) =>
+      await (
+        await resolveForwardedMethod({
+          getRuntime: params.getRuntime,
+          resolve: params.listGroupMembers!,
+        })
+      )(ctx);
+  }
+  return adapter;
 }
 
 export function createRuntimeOutboundDelegates<Runtime>(params: {
