@@ -35,6 +35,11 @@ type DiscordChannelOverrideConfig = {
   autoThread?: boolean;
   autoThreadName?: "message" | "generated";
   autoArchiveDuration?: "60" | "1440" | "4320" | "10080" | 60 | 1440 | 4320 | 10080;
+  thread?: DiscordChannelThreadOverrideConfig;
+};
+
+export type DiscordChannelThreadOverrideConfig = {
+  requireMention?: boolean;
 };
 
 export type DiscordGuildEntryResolved = {
@@ -421,6 +426,7 @@ function resolveDiscordChannelConfigEntry(
     autoThread: entry.autoThread,
     autoThreadName: entry.autoThreadName,
     autoArchiveDuration: entry.autoArchiveDuration,
+    thread: entry.thread,
   };
   return resolved;
 }
@@ -506,6 +512,12 @@ export function resolveDiscordShouldRequireMention(params: {
   const isBotThread = params.isAutoThreadOwnedByBot ?? isDiscordAutoThreadOwnedByBot(params);
   if (isBotThread) {
     return false;
+  }
+  if (params.isThread) {
+    const threadOverride = params.channelConfig?.thread?.requireMention;
+    if (threadOverride !== undefined) {
+      return threadOverride;
+    }
   }
   return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
 }

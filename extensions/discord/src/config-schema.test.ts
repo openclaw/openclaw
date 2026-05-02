@@ -137,6 +137,40 @@ describe("discord config schema", () => {
     expect(cfg.guilds?.["123"]?.channels?.general?.autoThread).toBe(true);
   });
 
+  it("accepts per-channel thread.requireMention override", () => {
+    const cfg = expectValidDiscordConfig({
+      guilds: {
+        "123": {
+          channels: {
+            "456": {
+              requireMention: true,
+              thread: { requireMention: false },
+            },
+          },
+        },
+      },
+    });
+
+    const channel = cfg.guilds?.["123"]?.channels?.["456"];
+    expect(channel?.requireMention).toBe(true);
+    expect(channel?.thread?.requireMention).toBe(false);
+  });
+
+  it("rejects unknown fields under channel thread override", () => {
+    const issues = expectInvalidDiscordConfig({
+      guilds: {
+        "123": {
+          channels: {
+            "456": {
+              thread: { requireMention: false, foo: true },
+            },
+          },
+        },
+      },
+    });
+    expect(issues.some((issue) => issue.path.join(".").includes("thread"))).toBe(true);
+  });
+
   it("accepts voice model override field", () => {
     const cfg = expectValidDiscordConfig({
       voice: {
