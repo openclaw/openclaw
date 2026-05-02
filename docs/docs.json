@@ -1336,6 +1336,7 @@
                   "providers/anthropic",
                   "providers/arcee",
                   "providers/azure-speech",
+                  "providers/cerebras",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1370,6 +1371,7 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
+                  "providers/senseaudio",
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
@@ -1575,6 +1577,7 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
+                      "cli/crestodian",
                       "cli/daemon",
                       "cli/doctor",
                       "cli/gateway",
@@ -1710,7 +1713,7 @@
               },
               {
                 "group": "Project",
-                "pages": ["reference/credits"]
+                "pages": ["reference/application-modernization-plan", "reference/credits"]
               },
               {
                 "group": "Release and CI",

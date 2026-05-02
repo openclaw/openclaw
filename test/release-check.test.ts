@@ -84,7 +84,11 @@ describe("packed CLI smoke", () => {
   });
 
   it("repairs bundled runtime deps before the read-only plugin doctor smoke", () => {
-    expect(PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS).toEqual(["plugins", "deps", "--repair"]);
+    expect(PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS).toEqual([
+      "doctor",
+      "--fix",
+      "--non-interactive",
+    ]);
   });
 
   it("keeps packed completion smoke scoped to one shell cache", () => {
@@ -123,6 +127,7 @@ describe("packed CLI smoke", () => {
       SystemRoot: "C:\\Windows",
       OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
       OPENCLAW_NO_ONBOARD: "1",
+      OPENCLAW_SERVICE_REPAIR_POLICY: "external",
       OPENCLAW_SUPPRESS_NOTES: "1",
       OPENCLAW_STATE_DIR: "/tmp/smoke-state",
     });
@@ -491,16 +496,15 @@ describe("collectMissingPackPaths", () => {
         "scripts/lib/package-dist-imports.mjs",
         "scripts/postinstall-bundled-plugins.mjs",
         "dist/task-registry-control.runtime.js",
-        bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
-        bundledDistPluginFile("matrix", "helper-api.js"),
-        bundledDistPluginFile("matrix", "runtime-api.js"),
-        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
-        bundledDistPluginFile("matrix", "openclaw.plugin.json"),
-        bundledDistPluginFile("matrix", "package.json"),
-        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "openclaw.plugin.json"),
-        bundledDistPluginFile("whatsapp", "package.json"),
+        bundledDistPluginFile("acpx", "runtime-api.js"),
+        bundledDistPluginFile("acpx", "openclaw.plugin.json"),
+        bundledDistPluginFile("acpx", "package.json"),
+        bundledDistPluginFile("googlechat", "runtime-api.js"),
+        bundledDistPluginFile("googlechat", "openclaw.plugin.json"),
+        bundledDistPluginFile("googlechat", "package.json"),
+        bundledDistPluginFile("line", "runtime-api.js"),
+        bundledDistPluginFile("line", "openclaw.plugin.json"),
+        bundledDistPluginFile("line", "package.json"),
       ]),
     );
   });
@@ -514,7 +518,6 @@ describe("collectMissingPackPaths", () => {
         "dist/extensions/acpx/error-format.mjs",
         "dist/extensions/acpx/mcp-command-line.mjs",
         "dist/extensions/acpx/mcp-proxy.mjs",
-        bundledDistPluginFile("diffs", "assets/viewer-runtime.js"),
         ...requiredBundledPluginPackPaths,
         ...requiredPluginSdkPackPaths,
         ...WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -537,11 +540,9 @@ describe("collectMissingPackPaths", () => {
   it("requires bundled plugin runtime sidecars that dynamic plugin boundaries resolve at runtime", () => {
     expect(requiredBundledPluginPackPaths).toEqual(
       expect.arrayContaining([
-        bundledDistPluginFile("matrix", "helper-api.js"),
-        bundledDistPluginFile("matrix", "runtime-api.js"),
-        bundledDistPluginFile("matrix", "thread-bindings-runtime.js"),
-        bundledDistPluginFile("whatsapp", "light-runtime-api.js"),
-        bundledDistPluginFile("whatsapp", "runtime-api.js"),
+        bundledDistPluginFile("acpx", "runtime-api.js"),
+        bundledDistPluginFile("googlechat", "runtime-api.js"),
+        bundledDistPluginFile("line", "runtime-api.js"),
       ]),
     );
   });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  collectRootPackageExcludedExtensionDirs,
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
@@ -68,7 +69,7 @@ describe("bundled plugin build entries", () => {
   });
 
   it("packs the Matrix packaged runtime shim", () => {
-    const artifacts = listBundledPluginPackArtifacts();
+    const artifacts = listBundledPluginPackArtifacts({ includeRootPackageExcludedDirs: true });
 
     expect(artifacts).toContain("dist/extensions/matrix/plugin-entry.handlers.runtime.js");
   });
@@ -91,12 +92,22 @@ describe("bundled plugin build entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
+    expect(Object.keys(entries).some((entry) => entry.startsWith("extensions/bluebubbles/"))).toBe(
+      true,
+    );
+    expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/bluebubbles/"))).toBe(
+      false,
+    );
+    expect(artifacts).toContain("dist/extensions/acpx/index.js");
+    expect(artifacts).toContain("dist/extensions/googlechat/index.js");
+    expect(artifacts).toContain("dist/extensions/line/index.js");
     expect(Object.keys(entries).some((entry) => entry.startsWith("extensions/qqbot/"))).toBe(false);
     expect(artifacts.some((artifact) => artifact.startsWith("dist/extensions/qqbot/"))).toBe(false);
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
     const artifacts = listBundledPluginPackArtifacts();
+    const excludedPackageDirs = collectRootPackageExcludedExtensionDirs();
     const offenders: string[] = [];
     const secretBackedPluginIds = new Set<string>();
 
@@ -114,6 +125,9 @@ describe("bundled plugin build entries", () => {
     expect(offenders).toEqual([]);
 
     for (const pluginId of [...secretBackedPluginIds].toSorted()) {
+      if (excludedPackageDirs.has(pluginId)) {
+        continue;
+      }
       const secretApiPath = path.join("extensions", pluginId, "secret-contract-api.ts");
       expect(fs.readFileSync(secretApiPath, "utf8")).toContain("channelSecrets");
       expect(artifacts).toContain(`dist/extensions/${pluginId}/secret-contract-api.js`);

@@ -27,7 +27,10 @@ import {
   type BundledExtension,
   type ExtensionPackageJson as PackageJson,
 } from "./lib/bundled-extension-manifest.ts";
-import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
+import {
+  collectRootPackageExcludedExtensionDirs,
+  listBundledPluginPackArtifacts,
+} from "./lib/bundled-plugin-build-entries.mjs";
 import { collectPackUnpackedSizeErrors as collectNpmPackUnpackedSizeErrors } from "./lib/npm-pack-budget.mjs";
 import { collectBundledPluginPackageDependencySpecs } from "./lib/plugin-package-dependencies.mjs";
 import { listPluginSdkDistArtifacts } from "./lib/plugin-sdk-entries.mjs";
@@ -45,13 +48,17 @@ export { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs"
 type PackFile = { path: string };
 type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number };
 
+const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
 const requiredPathGroups = [
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],
   ...listPluginSdkDistArtifacts(),
   ...listBundledPluginPackArtifacts(),
-  ...listStaticExtensionAssetOutputs(),
+  ...listStaticExtensionAssetOutputs().filter((relativePath) => {
+    const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
+    return !match || !rootPackageExcludedExtensionDirs.has(match[1]);
+  }),
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
   "scripts/npm-runner.mjs",
   "scripts/preinstall-package-manager-warning.mjs",
@@ -119,7 +126,11 @@ export const PACKED_CLI_SMOKE_COMMANDS = [
   ["config", "schema"],
   ["models", "list", "--provider", "amazon-bedrock"],
 ] as const;
-export const PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS = ["plugins", "deps", "--repair"] as const;
+export const PACKED_BUNDLED_RUNTIME_DEPS_REPAIR_ARGS = [
+  "doctor",
+  "--fix",
+  "--non-interactive",
+] as const;
 export const PACKED_COMPLETION_SMOKE_ARGS = [
   "completion",
   "--write-state",
@@ -291,6 +302,7 @@ export function createPackedCliSmokeEnv(
     AWS_CONFIG_FILE: homeDir ? join(homeDir, ".aws", "config") : undefined,
     OPENCLAW_DISABLE_BUNDLED_ENTRY_SOURCE_FALLBACK: "1",
     OPENCLAW_NO_ONBOARD: "1",
+    OPENCLAW_SERVICE_REPAIR_POLICY: "external",
     OPENCLAW_SUPPRESS_NOTES: "1",
     ...overrides,
   };
