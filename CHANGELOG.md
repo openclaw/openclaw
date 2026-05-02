@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Onboarding/TUI: prevent embedded TUI runs from hanging for up to 48 hours during provider or auth failures by adding a 5-minute default timeout, making the streaming watchdog actively abort stuck runs with actionable diagnostic guidance, and wrapping OpenAI OAuth authentication with a 5-minute timeout. Adds diagnostic logging for TUI runs and OAuth flows to help troubleshoot hangs during onboarding hatching. Fixes #76132.
 - Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
 - Plugins/source checkout: discover source-only plugins such as Codex from the `extensions/*` workspace while using npm package excludes as the packaged-core boundary, removing the stale core-bundle metadata path.
 - Plugins/ClawHub: install ClawPack artifacts from the explicit npm-pack `.tgz` resolver path and persist artifact kind, npm integrity, shasum, and tarball metadata for update and diagnostics flows. Thanks @vincentkoc.
