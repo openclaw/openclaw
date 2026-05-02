@@ -116,6 +116,7 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import { getCronJobPayload } from "./cron-payload.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "./external-link.ts";
 import { icons } from "./icons.ts";
 import { createLazyView, renderLazyView } from "./lazy-view.ts";
@@ -838,10 +839,11 @@ export function renderApp(state: AppViewState) {
         ...resolveConfiguredCronModelSuggestions(configValue),
         ...state.cronJobs
           .map((job) => {
-            if (job.payload.kind !== "agentTurn" || typeof job.payload.model !== "string") {
+            const payload = getCronJobPayload(job);
+            if (payload?.kind !== "agentTurn" || typeof payload.model !== "string") {
               return "";
             }
-            return job.payload.model.trim();
+            return payload.model.trim();
           })
           .filter(Boolean),
       ].filter(Boolean),
