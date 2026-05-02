@@ -93,6 +93,11 @@ function handleMessagingAction(
   isActionEnabled: (key: keyof DiscordActionConfig) => boolean,
   cfg: OpenClawConfig = DISCORD_TEST_CFG,
   options?: {
+    mediaAccess?: {
+      localRoots?: readonly string[];
+      readFile?: (filePath: string) => Promise<Buffer>;
+      workspaceDir?: string;
+    };
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
   },
@@ -463,6 +468,8 @@ describe("handleDiscordMessagingAction", () => {
 
   it("forwards trusted mediaLocalRoots into sendMessageDiscord", async () => {
     sendMessageDiscord.mockClear();
+    const mediaReadFile = vi.fn(async () => Buffer.from("image"));
+    const mediaAccess = { localRoots: ["/tmp/agent-root"], readFile: mediaReadFile };
     await handleMessagingAction(
       "sendMessage",
       {
@@ -472,11 +479,35 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
       DISCORD_TEST_CFG,
-      { mediaLocalRoots: ["/tmp/agent-root"] },
+      { mediaAccess, mediaLocalRoots: ["/tmp/agent-root"], mediaReadFile },
     );
     expect(sendMessageDiscord).toHaveBeenCalledWith(
       "channel:123",
       "hello",
+      expect.objectContaining({
+        mediaAccess,
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+        mediaReadFile,
+      }),
+    );
+  });
+
+  it("allows media-only message sends", async () => {
+    sendMessageDiscord.mockClear();
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        mediaUrl: "/tmp/image.png",
+      },
+      enableAllActions,
+      DISCORD_TEST_CFG,
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "",
       expect.objectContaining({
         mediaUrl: "/tmp/image.png",
         mediaLocalRoots: ["/tmp/agent-root"],
