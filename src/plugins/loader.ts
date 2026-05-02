@@ -1225,6 +1225,12 @@ export function resolveRuntimePluginRegistry(
   return loadOpenClawPlugins(options);
 }
 
+export function getRuntimePluginRegistryForLoadOptions(
+  options?: PluginLoadOptions,
+): PluginRegistry | undefined {
+  return resolveRuntimePluginRegistry(options);
+}
+
 export function resolvePluginRegistryLoadCacheKey(options: PluginLoadOptions = {}): string {
   return resolvePluginLoadCacheContext(options).cacheKey;
 }

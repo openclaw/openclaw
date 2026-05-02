@@ -3,9 +3,9 @@ import { resolveBundledPluginCompatibleActivationInputs } from "./activation-con
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
+  getRuntimePluginRegistryForLoadOptions,
   isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
-  resolveRuntimePluginRegistry,
   type PluginLoadOptions,
 } from "./loader.js";
 import { hasExplicitPluginIdScope } from "./plugin-scope.js";
@@ -312,13 +312,13 @@ export function resolvePluginProviders(params: {
   const loadState = resolveRuntimeProviderPluginLoadState(params, base);
   const registry =
     loadState.loadOptions.onlyPluginIds?.length === 0
-      ? resolveRuntimePluginRegistry(loadState.loadOptions)
+      ? undefined
       : (getLoadedRuntimePluginRegistry({
           env: base.env,
           loadOptions: loadState.loadOptions,
           workspaceDir: base.workspaceDir,
           requiredPluginIds: loadState.loadOptions.onlyPluginIds,
-        }) ?? resolveRuntimePluginRegistry(loadState.loadOptions));
+        }) ?? getRuntimePluginRegistryForLoadOptions(loadState.loadOptions));
   if (!registry) {
     return [];
   }
