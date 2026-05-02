@@ -81,25 +81,17 @@ function resolveEmbeddingErrorKind(error: string): "leaked" | "quota" | "invalid
   return null;
 }
 
-function resolveEmbeddingErrorRemediation(error: string, provider?: string): string | null {
+function resolveEmbeddingErrorRemediation(error: string): string | null {
   const kind = resolveEmbeddingErrorKind(error);
   if (!kind) {
     return null;
   }
   switch (kind) {
     case "leaked": {
-      const keyEnvHint =
-        provider === "gemini" || provider === "google"
-          ? "GEMINI_API_KEY"
-          : provider === "openai"
-            ? "OPENAI_API_KEY"
-            : provider === "voyage"
-              ? "VOYAGE_API_KEY"
-              : null;
       const steps = [
         "Your API key was flagged as leaked by the provider.",
         "1. Generate a new API key from your provider's console.",
-        `2. Update it: openclaw configure (or set ${keyEnvHint ?? "the API key env var"} and restart the gateway).`,
+        "2. Rotate the stored auth profile: openclaw configure (env-var fallback alone is unreliable while a stale auth profile is selected).",
         "3. Restart the gateway: openclaw gateway restart",
       ];
       return steps.join(" ");
@@ -107,7 +99,7 @@ function resolveEmbeddingErrorRemediation(error: string, provider?: string): str
     case "quota":
       return "Embedding provider quota exhausted. Wait and retry, or switch provider via: openclaw configure";
     case "invalid_key":
-      return "API key is invalid or expired. Update it via: openclaw configure";
+      return "API key is invalid or expired. Update the stored auth profile via: openclaw configure";
     default:
       return null;
   }
@@ -890,7 +882,7 @@ export async function runMemoryStatus(opts: MemoryCommandOptions) {
       lines.push(`${label("Embeddings")} ${colorize(rich, stateColor, state)}`);
       if (embeddingProbe.error) {
         lines.push(`${label("Embeddings error")} ${warn(embeddingProbe.error)}`);
-        const remediation = resolveEmbeddingErrorRemediation(embeddingProbe.error, status.provider);
+        const remediation = resolveEmbeddingErrorRemediation(embeddingProbe.error);
         if (remediation) {
           lines.push(`${label("Fix")} ${muted(remediation)}`);
         }
