@@ -63,8 +63,7 @@ private struct GatewayTailscaleApplyMessages {
 private typealias GatewayTailscaleSettingsSaver = @MainActor @Sendable (
     GatewayTailscaleSettingsSnapshot,
     AppState.ConnectionMode,
-    Bool
-) async -> (Bool, String?)
+    Bool) async -> (Bool, String?)
 
 struct TailscaleIntegrationSection: View {
     let connectionMode: AppState.ConnectionMode
@@ -326,7 +325,7 @@ struct TailscaleIntegrationSection: View {
             mode: tailscaleMode,
             requireCredentialsForServe: requireCredentialsForServe,
             password: password)
-        let root = self.buildTailscaleConfigRoot(root: await ConfigStore.load(), settings: settings)
+        let root = await self.buildTailscaleConfigRoot(root: ConfigStore.load(), settings: settings)
 
         do {
             try await ConfigStore.save(root, allowGatewayAuthMutation: true)
@@ -575,11 +574,10 @@ extension TailscaleIntegrationSection {
         validationMessage: String? = nil,
         connectionMode: AppState.ConnectionMode,
         isPaused: Bool) -> (
-            statusMessage: String?,
-            validationMessage: String?,
-            shouldRecordSuccess: Bool,
-            shouldRestartGateway: Bool
-        )
+        statusMessage: String?,
+        validationMessage: String?,
+        shouldRecordSuccess: Bool,
+        shouldRestartGateway: Bool)
     {
         let messages = self.messages(
             for: GatewayTailscaleApplyResult(
