@@ -35,6 +35,7 @@ type BuildTelegramMessageContextForTestParams = {
   options?: BuildTelegramMessageContextParams["options"];
   cfg?: Record<string, unknown>;
   accountId?: string;
+  dmThreadReplies?: BuildTelegramMessageContextParams["dmThreadReplies"];
   runtime?: BuildTelegramMessageContextParams["runtime"];
   sessionRuntime?: BuildTelegramMessageContextParams["sessionRuntime"] | null;
   resolveGroupActivation?: BuildTelegramMessageContextParams["resolveGroupActivation"];
@@ -97,6 +98,7 @@ export async function buildTelegramMessageContextForTest(
     historyLimit: 0,
     groupHistories: new Map(),
     dmPolicy: "open",
+    dmThreadReplies: params.dmThreadReplies,
     allowFrom: [],
     groupAllowFrom: [],
     ackReactionScope: "off",

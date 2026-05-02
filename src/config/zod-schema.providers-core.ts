@@ -157,6 +157,8 @@ const AutoTopicLabelSchema = z
   ])
   .optional();
 
+const TelegramDmThreadRepliesSchema = z.enum(["off", "inbound", "always"]).optional();
+
 export const TelegramDirectSchema = z
   .object({
     dmPolicy: DmPolicySchema.optional(),
@@ -171,6 +173,7 @@ export const TelegramDirectSchema = z
     errorCooldownMs: z.number().int().nonnegative().optional(),
     requireTopic: z.boolean().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
+    dmThreadReplies: TelegramDmThreadRepliesSchema,
   })
   .strict();
 
@@ -236,6 +239,7 @@ export const TelegramAccountSchemaBase = z
     dmHistoryLimit: z.number().int().min(0).optional(),
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
+    dmThreadReplies: TelegramDmThreadRepliesSchema,
     textChunkLimit: z.number().int().positive().optional(),
     streaming: ChannelPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),

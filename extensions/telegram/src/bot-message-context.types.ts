@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
 import type {
   DmPolicy,
   TelegramDirectConfig,
+  TelegramDmThreadReplies,
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-runtime";
@@ -78,6 +79,8 @@ export type BuildTelegramMessageContextParams = {
   historyLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
+  /** Account-level default for DM thread session isolation (off|inbound|always). Default: "off". */
+  dmThreadReplies?: TelegramDmThreadReplies;
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   ackReactionScope: "off" | "none" | "group-mentions" | "group-all" | "direct" | "all";

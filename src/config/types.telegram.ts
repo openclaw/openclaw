@@ -124,6 +124,14 @@ export type TelegramAccountConfig = {
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;
+  /**
+   * Controls whether message_thread_id in DMs creates separate sessions (account-level default):
+   * - "off" (default): ignore message_thread_id for session key derivation in DMs
+   * - "inbound": use thread IDs only when the message is a reply-with-quote
+   * - "always": always use thread IDs for session isolation (legacy behavior)
+   * Per-DM overrides in `direct.<chatId>.dmThreadReplies` take precedence.
+   */
+  dmThreadReplies?: TelegramDmThreadReplies;
   /** DM allowlist (numeric Telegram user IDs). Onboarding can resolve @username to IDs. */
   allowFrom?: Array<string | number>;
   /** Default delivery target for CLI `--deliver` when no explicit `--reply-to` is provided. */
@@ -278,6 +286,8 @@ export type AutoTopicLabelConfig =
       prompt?: string;
     };
 
+export type TelegramDmThreadReplies = "off" | "inbound" | "always";
+
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
@@ -302,6 +312,13 @@ export type TelegramDirectConfig = {
   errorCooldownMs?: number;
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
+  /**
+   * Controls whether message_thread_id in DMs creates separate sessions:
+   * - "off" (default): ignore message_thread_id for session key derivation in DMs
+   * - "inbound": use thread IDs only when the message is a reply-with-quote
+   * - "always": always use thread IDs for session isolation (legacy behavior)
+   */
+  dmThreadReplies?: TelegramDmThreadReplies;
 };
 
 export type TelegramConfig = {

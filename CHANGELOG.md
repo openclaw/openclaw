@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/DMs: stop fragmenting DM conversations when `message_thread_id` is present on reply-with-quote messages. Default `dmThreadReplies` is now `"off"` for DMs (matching Matrix behavior), so thread IDs are preserved for outbound replies but no longer split sessions. Set `channels.telegram.dmThreadReplies: "always"` to restore the previous behavior. (#75975) Thanks @Bartok9.
 - Cron/Telegram: key isolated direct-delivery dedupe to each cron execution instead of the reused session id, so recurring Telegram announce runs no longer report delivered while silently skipping later sends. (#69000) Thanks @obviyus.
 - Models/Kimi: default bundled Kimi thinking to off and normalize Anthropic-compatible `thinking` payloads so stale session `/think` state no longer silently re-enables reasoning on Kimi runs. (#68907) Thanks @frankekn.
 - Control UI/cron: keep the runtime-only `last` delivery sentinel from being materialized into persisted cron delivery and failure-alert channel configs when jobs are created or edited. (#68829) Thanks @tianhaocui.

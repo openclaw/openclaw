@@ -59,12 +59,16 @@ afterEach(() => {
 });
 
 describe("buildTelegramMessageContext dm thread sessions", () => {
-  const buildContext = async (message: Record<string, unknown>) =>
+  const buildContext = async (
+    message: Record<string, unknown>,
+    dmThreadReplies?: "off" | "inbound" | "always",
+  ) =>
     await buildTelegramMessageContextForTest({
       message,
+      dmThreadReplies,
     });
 
-  it("uses thread session key for dm topics", async () => {
+  it("ignores message_thread_id in DMs by default (dmThreadReplies=off)", async () => {
     const ctx = await buildContext({
       message_id: 1,
       chat: { id: 1234, type: "private" },
@@ -76,10 +80,29 @@ describe("buildTelegramMessageContext dm thread sessions", () => {
 
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
+    // Session key stays on the main DM session — thread ID does NOT fragment it
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main");
+  });
+
+  it("uses thread session key when dmThreadReplies=always", async () => {
+    const ctx = await buildContext(
+      {
+        message_id: 1,
+        chat: { id: 1234, type: "private" },
+        date: 1700000000,
+        text: "hello",
+        message_thread_id: 42,
+        from: { id: 42, first_name: "Alice" },
+      },
+      "always",
+    );
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(42);
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:main:thread:1234:42");
   });
 
-  it("keeps legacy dm session key when no thread id", async () => {
+  it("keeps main dm session key when no thread id", async () => {
     const ctx = await buildContext({
       message_id: 2,
       chat: { id: 1234, type: "private" },

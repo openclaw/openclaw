@@ -111,6 +111,7 @@ export const buildTelegramMessageContext = async ({
   historyLimit,
   groupHistories,
   dmPolicy,
+  dmThreadReplies,
   allowFrom,
   groupAllowFrom,
   ackReactionScope,
@@ -375,11 +376,14 @@ export const buildTelegramMessageContext = async ({
     isGroup,
     senderId,
   });
-  // DMs: use thread suffix for session isolation (works regardless of dmScope)
-  const threadKeys =
-    dmThreadId != null
-      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
-      : null;
+  // DMs: respect dmThreadReplies policy for session isolation.
+  // Per-DM override takes precedence over account-level default; default is "off" to
+  // prevent reply-with-quote message_thread_id from fragmenting the conversation.
+  const effectiveDmThreadReplies = directConfig?.dmThreadReplies ?? dmThreadReplies ?? "off";
+  const shouldUseDmThread = dmThreadId != null && effectiveDmThreadReplies !== "off";
+  const threadKeys = shouldUseDmThread
+    ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
+    : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   route = {
     ...route,

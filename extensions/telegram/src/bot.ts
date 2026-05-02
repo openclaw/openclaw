@@ -437,6 +437,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
   const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "telegram", account.accountId);
   const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
+  const dmThreadReplies = telegramCfg.dmThreadReplies ?? "off";
   const allowFrom = opts.allowFrom ?? telegramCfg.allowFrom;
   const groupAllowFrom =
     opts.groupAllowFrom ?? telegramCfg.groupAllowFrom ?? telegramCfg.allowFrom ?? allowFrom;
@@ -563,6 +564,7 @@ export function createTelegramBot(opts: TelegramBotOptions): TelegramBotInstance
     historyLimit,
     groupHistories,
     dmPolicy,
+    dmThreadReplies,
     allowFrom,
     groupAllowFrom,
     ackReactionScope,
