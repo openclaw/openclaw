@@ -21,6 +21,7 @@ import {
   computeGroundednessScore,
   evaluateGroundedness,
   GroundednessCondition,
+  parseTaggedPartition,
   type ClaimPartition,
 } from "./gsar.js";
 import {
@@ -95,25 +96,11 @@ async function runLiveLoop(
   return { turnsUsed: maxTurns, exitReason: null, replies };
 }
 
-// ─── Simple GSAR scorer from reply text ─────────────────────────────────────
+// ─── GSAR scorer ─────────────────────────────────────────────────────────────
 //
-// In production the scorer would be an LLM judge. Here we use a deterministic
-// heuristic: count grounded/ungrounded/contradicted markers Claude inserts when
-// asked to self-annotate its claims with evidence tags.
-
-function countTag(text: string, tag: string): number {
-  const re = new RegExp(`\\[${tag}\\]`, "gi");
-  return (text.match(re) ?? []).length;
-}
-
-function parsePartitionFromAnnotatedReply(text: string): ClaimPartition {
-  return {
-    grounded: countTag(text, "G") + countTag(text, "grounded"),
-    ungrounded: countTag(text, "U") + countTag(text, "ungrounded"),
-    contradicted: countTag(text, "X") + countTag(text, "contradicted"),
-    complementary: countTag(text, "K") + countTag(text, "complementary"),
-  };
-}
+// Uses parseTaggedPartition from gsar.ts — fast path when the model self-annotates.
+// In production, wrap with buildHybridScorer(buildLlmJudgeScorer(complete))
+// for robustness when the model doesn't cooperate with tagging.
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
@@ -260,7 +247,7 @@ describeLive("live — GSAR with real Claude annotations", () => {
       const replyText = extractAssistantText(response);
       process.stderr.write(`[gsar-live] annotated reply: "${replyText}"\n`);
 
-      const partition = parsePartitionFromAnnotatedReply(replyText);
+      const partition = parseTaggedPartition(replyText);
       process.stderr.write(`[gsar-live] partition: ${JSON.stringify(partition)}\n`);
 
       // Claude should produce at least one [G] tag for the boiling point claim.
@@ -286,7 +273,7 @@ describeLive("live — GSAR with real Claude annotations", () => {
       ].join("\n");
 
       const scorer = async (replyText: string): Promise<ClaimPartition> => {
-        return parsePartitionFromAnnotatedReply(replyText);
+        return parseTaggedPartition(replyText);
       };
 
       const cond = new GroundednessCondition(scorer).or(new MaxIterations(MAX_TURNS));
@@ -322,7 +309,7 @@ describeLive("live — GSAR with real Claude annotations", () => {
           timestamp: Date.now(),
         });
 
-        const partition = parsePartitionFromAnnotatedReply(replyText);
+        const partition = parseTaggedPartition(replyText);
         const score = computeGroundednessScore(partition);
         partitions.push(partition);
 
@@ -405,8 +392,8 @@ describeLive("live — GSAR with real Claude annotations", () => {
       const vagueText = extractAssistantText(vagueResp);
       const groundedText = extractAssistantText(groundedResp);
 
-      const vaguePartition = parsePartitionFromAnnotatedReply(vagueText);
-      const groundedPartition = parsePartitionFromAnnotatedReply(groundedText);
+      const vaguePartition = parseTaggedPartition(vagueText);
+      const groundedPartition = parseTaggedPartition(groundedText);
 
       const vagueScore = computeGroundednessScore(vaguePartition);
       const groundedScore = computeGroundednessScore(groundedPartition);
