@@ -16,6 +16,43 @@ export const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 10
 const MAX_SAFE_TIMEOUT_MS = 2_147_000_000;
 
 /**
+ * Detects loopback / private-network / `.local` base URLs. Local providers
+ * (Ollama, LM Studio, llama.cpp) legitimately stay silent for many minutes
+ * during prompt evaluation and thinking, so the network-silence-as-hang
+ * heuristic that motivates the default idle watchdog does not apply.
+ */
+function isLocalProviderBaseUrl(baseUrl: string): boolean {
+  let host: string;
+  try {
+    host = new URL(baseUrl).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  if (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "0.0.0.0" ||
+    host === "::1" ||
+    host === "::ffff:7f00:1" ||
+    host === "::ffff:127.0.0.1" ||
+    host.endsWith(".local")
+  ) {
+    return true;
+  }
+  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
+  if (octets.length !== 4 || octets.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+    return false;
+  }
+  const [a, b] = octets;
+  return (
+    a === 10 || (a === 172 && b !== undefined && b >= 16 && b <= 31) || (a === 192 && b === 168)
+  );
+}
+
+/**
  * Resolves the LLM idle timeout from configuration.
  * @returns Idle timeout in milliseconds, or 0 to disable
  */
@@ -24,6 +61,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
   trigger?: EmbeddedRunTrigger;
   runTimeoutMs?: number;
   modelRequestTimeoutMs?: number;
+  model?: { baseUrl?: string };
 }): number {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
   const clampImplicitTimeoutMs = (valueMs: number) =>
@@ -69,6 +107,16 @@ export function resolveLlmIdleTimeoutMs(params?: {
   }
 
   if (params?.trigger === "cron") {
+    return 0;
+  }
+
+  // The default watchdog is a network-silence-as-hang guard for cloud providers.
+  // Local providers can legitimately stream nothing for many minutes during
+  // prompt evaluation or thinking, so falling back to the default would abort
+  // valid local runs. Honor it only when the user has not opted out via the
+  // baseUrl pointing at loopback / private-network / `.local`.
+  const baseUrl = params?.model?.baseUrl;
+  if (typeof baseUrl === "string" && baseUrl.length > 0 && isLocalProviderBaseUrl(baseUrl)) {
     return 0;
   }
 

@@ -85,6 +85,51 @@ describe("resolveLlmIdleTimeoutMs", () => {
     const cfg = { agents: { defaults: { timeoutSeconds: 300 } } } as OpenClawConfig;
     expect(resolveLlmIdleTimeoutMs({ cfg, trigger: "cron" })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
+
+  it.each([
+    "http://localhost:11434",
+    "http://127.0.0.1:11434",
+    "http://0.0.0.0:11434",
+    "http://[::1]:11434",
+    "http://my-rig.local:11434",
+    "http://10.0.0.5:11434",
+    "http://172.16.5.10:11434",
+    "http://192.168.1.20:11434",
+  ])("disables the default idle watchdog for local provider baseUrl %s", (baseUrl) => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
+  });
+
+  it("keeps the default idle watchdog for remote provider baseUrls", () => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "https://api.openai.com/v1" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "https://ollama.com" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+  });
+
+  it("ignores malformed baseUrl and keeps the default idle watchdog", () => {
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "not-a-url" } })).toBe(
+      DEFAULT_LLM_IDLE_TIMEOUT_MS,
+    );
+    expect(resolveLlmIdleTimeoutMs({ model: { baseUrl: "" } })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("still honors an explicit provider request timeout for local providers", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: { baseUrl: "http://127.0.0.1:11434" },
+        modelRequestTimeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("still applies agents.defaults.timeoutSeconds cap for local providers", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 30 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, model: { baseUrl: "http://127.0.0.1:11434" } })).toBe(
+      30_000,
+    );
+  });
 });
 
 describe("streamWithIdleTimeout", () => {
