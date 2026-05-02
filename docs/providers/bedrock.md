@@ -171,6 +171,9 @@ For explicit `models.providers["amazon-bedrock"]` entries, OpenClaw can still re
                 refreshInterval: 3600,
                 defaultContextWindow: 32000,
                 defaultMaxTokens: 4096,
+                modelContextWindowOverrides: {
+                  "claude-opus-4-6": 200000,
+                },
               },
             },
           },
@@ -187,6 +190,7 @@ For explicit `models.providers["amazon-bedrock"]` entries, OpenClaw can still re
     | `refreshInterval` | `3600` | Cache duration in seconds. Set to `0` to disable caching. |
     | `defaultContextWindow` | `32000` | Context window used for discovered models (override if you know your model limits). |
     | `defaultMaxTokens` | `4096` | Max output tokens used for discovered models (override if you know your model limits). |
+    | `modelContextWindowOverrides` | (none) | Per-model context window overrides for Bedrock models not yet covered by the built-in lookup table. Maps regex patterns to context window values (e.g. `{"claude-sonnet-4-6": 200000}`). Patterns are sorted alphabetically by key and the first (lexicographically earliest) matching pattern wins; built-in entries always take precedence. |
 
   </Accordion>
 </AccordionGroup>
