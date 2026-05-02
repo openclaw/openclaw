@@ -179,6 +179,16 @@ describe("sessions_spawn context modes", () => {
       agentId: "main",
       sessionsDir: path.dirname(storePath),
     });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.delete",
+        params: expect.objectContaining({
+          key: result.childSessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        }),
+      }),
+    );
     expect(prepareSubagentSpawn).not.toHaveBeenCalled();
   });
 

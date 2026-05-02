@@ -20,23 +20,46 @@ type MockResolvedDiscordAccount = {
   };
 };
 
-const hookMocks = vi.hoisted(() => ({
-  resolveDiscordAccount: vi.fn(
-    (params?: { accountId?: string }): MockResolvedDiscordAccount => ({
-      accountId: params?.accountId?.trim() || "default",
+type MockResolveDiscordAccountParams = {
+  cfg?: {
+    channels?: {
+      discord?: {
+        defaultAccount?: string;
+        accounts?: Record<
+          string,
+          { threadBindings?: MockResolvedDiscordAccount["config"]["threadBindings"] }
+        >;
+      };
+    };
+  };
+  accountId?: string;
+};
+
+const hookMocks = vi.hoisted(() => {
+  const resolveDiscordAccountImpl = (
+    params?: MockResolveDiscordAccountParams,
+  ): MockResolvedDiscordAccount => {
+    const accountId =
+      params?.accountId?.trim() || params?.cfg?.channels?.discord?.defaultAccount || "default";
+    return {
+      accountId,
       config: {
-        threadBindings: {
+        threadBindings: params?.cfg?.channels?.discord?.accounts?.[accountId]?.threadBindings ?? {
           spawnSessions: true,
         },
       },
-    }),
-  ),
-  autoBindSpawnedDiscordSubagent: vi.fn(
-    async (): Promise<{ threadId: string } | null> => ({ threadId: "thread-1" }),
-  ),
-  listThreadBindingsBySessionKey: vi.fn((_params?: unknown): ThreadBindingRecord[] => []),
-  unbindThreadBindingsBySessionKey: vi.fn(() => []),
-}));
+    };
+  };
+  return {
+    resolveDiscordAccountImpl,
+    resolveDiscordAccount: vi.fn(resolveDiscordAccountImpl),
+    autoBindSpawnedDiscordSubagent: vi.fn(
+      async (): Promise<{ threadId: string } | null> => ({ threadId: "thread-1" }),
+    ),
+    listThreadBindingsBySessionKey: vi.fn((_params?: unknown): ThreadBindingRecord[] => []),
+    unbindThreadBindingsBySessionKey: vi.fn(() => []),
+  };
+});
 
 let registerDiscordSubagentHooks: typeof import("../subagent-hooks-api.js").registerDiscordSubagentHooks;
 
@@ -94,7 +117,7 @@ function createSpawnEvent(overrides?: {
   mode?: string;
   requester?: {
     channel?: string;
-    accountId?: string;
+    accountId?: string | undefined;
     to?: string;
     threadId?: string;
   };
@@ -106,7 +129,7 @@ function createSpawnEvent(overrides?: {
   mode: string;
   requester: {
     channel: string;
-    accountId: string;
+    accountId?: string;
     to: string;
     threadId?: string;
   };
@@ -172,14 +195,7 @@ describe("discord subagent hook handlers", () => {
 
   beforeEach(() => {
     hookMocks.resolveDiscordAccount.mockClear();
-    hookMocks.resolveDiscordAccount.mockImplementation((params?: { accountId?: string }) => ({
-      accountId: params?.accountId?.trim() || "default",
-      config: {
-        threadBindings: {
-          spawnSessions: true,
-        },
-      },
-    }));
+    hookMocks.resolveDiscordAccount.mockImplementation(hookMocks.resolveDiscordAccountImpl);
     hookMocks.autoBindSpawnedDiscordSubagent.mockClear();
     hookMocks.listThreadBindingsBySessionKey.mockClear();
     hookMocks.unbindThreadBindingsBySessionKey.mockClear();
@@ -227,6 +243,42 @@ describe("discord subagent hook handlers", () => {
       },
       errorContains: "spawnSessions=true",
     });
+  });
+
+  it("honors defaultAccount policy when requester omits accountId", async () => {
+    await expectSubagentSpawningError({
+      config: {
+        channels: {
+          discord: {
+            defaultAccount: "work",
+            threadBindings: {
+              spawnSessions: true,
+            },
+            accounts: {
+              work: {
+                threadBindings: {
+                  spawnSessions: false,
+                },
+              },
+            },
+          },
+        },
+      },
+      event: createSpawnEvent({
+        requester: {
+          accountId: undefined,
+          channel: "discord",
+          to: "channel:123",
+          threadId: undefined,
+        },
+      }),
+      errorContains: "spawnSessions=true",
+    });
+    expect(hookMocks.resolveDiscordAccount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: undefined,
+      }),
+    );
   });
 
   it("returns error when global thread bindings are disabled", async () => {
