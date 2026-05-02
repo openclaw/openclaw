@@ -302,6 +302,22 @@ export default definePluginEntry({
       respondError(respond, formatErrorMessage(err));
     };
 
+    const describeHistoricalCall = async (rt: VoiceCallRuntime, callId: string) => {
+      const history = await rt.manager.getCallHistory(100);
+      const call = history
+        .toReversed()
+        .find((candidate) => candidate.callId === callId || candidate.providerCallId === callId);
+      if (!call) {
+        return undefined;
+      }
+      const details = [
+        `last state=${call.state}`,
+        call.endReason ? `endReason=${call.endReason}` : undefined,
+        call.endedAt ? `endedAt=${new Date(call.endedAt).toISOString()}` : undefined,
+      ].filter(Boolean);
+      return `call is not active (${details.join(", ")})`;
+    };
+
     const resolveCallMessageRequest = async (params: GatewayRequestHandlerOptions["params"]) => {
       const callId = normalizeOptionalString(params?.callId) ?? "";
       const message = normalizeOptionalString(params?.message) ?? "";
@@ -309,7 +325,11 @@ export default definePluginEntry({
         return { error: "callId and message required" } as const;
       }
       const rt = await ensureRuntime();
-      return { rt, callId, message } as const;
+      const activeCall = rt.manager.getCall(callId) ?? rt.manager.getCallByProviderCallId(callId);
+      if (activeCall) {
+        return { rt, callId: activeCall.callId, message } as const;
+      }
+      return { error: (await describeHistoricalCall(rt, callId)) ?? "Call not found" } as const;
     };
 
     const initiateCallAndRespond = async (params: {
