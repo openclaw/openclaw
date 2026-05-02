@@ -21,7 +21,7 @@ If you are on an older build or a custom install that excludes Zalo Personal,
 install the npm package directly:
 
 - Install via CLI: `openclaw plugins install @openclaw/zalouser`
-- Beta channel: `openclaw plugins install @openclaw/zalouser@beta`
+- Pinned version: `openclaw plugins install @openclaw/zalouser@2026.5.2`
 - Or from a source checkout: `openclaw plugins install ./path/to/local/zalouser-plugin`
 - Details: [Plugins](/tools/plugin)
 

@@ -19,8 +19,8 @@ install the npm package directly:
 openclaw plugins install @openclaw/msteams
 ```
 
-Use `@openclaw/msteams@beta` when following the OpenClaw beta channel and npmjs
-shows `beta` ahead of `latest`.
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Local checkout (when running from a git repo):
 

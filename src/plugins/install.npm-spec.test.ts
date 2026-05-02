@@ -264,16 +264,16 @@ describe("installPluginFromNpmSpec", () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const warnings: string[] = [];
     mockNpmViewAndInstall({
-      spec: "@openclaw/codex@beta",
+      spec: "@openclaw/codex",
       packageName: "@openclaw/codex",
-      version: "2026.5.1-beta.1",
+      version: "2026.5.2",
       pluginId: "codex",
       npmRoot,
       indexJs: `import { spawn } from "node:child_process";\nspawn("codex", ["app-server"]);`,
     });
 
     const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/codex@beta",
+      spec: "@openclaw/codex",
       npmDir: npmRoot,
       logger: {
         info: () => {},
@@ -294,7 +294,7 @@ describe("installPluginFromNpmSpec", () => {
     expectNpmInstallIntoRoot({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
-      spec: "@openclaw/codex@beta",
+      spec: "@openclaw/codex",
     });
   });
 

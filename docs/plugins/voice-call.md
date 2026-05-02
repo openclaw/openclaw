@@ -41,8 +41,8 @@ the Gateway, then restart the Gateway to load it.
       </Tab>
     </Tabs>
 
-    Use `@openclaw/voice-call@beta` when following the OpenClaw beta channel and
-    npmjs shows `beta` ahead of `latest`.
+    Use the bare package to follow the current official release tag. Pin an
+    exact version only when you need a reproducible install.
 
     Restart the Gateway afterwards so the plugin loads.
 

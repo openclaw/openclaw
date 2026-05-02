@@ -96,7 +96,7 @@ function readInstallRecords() {
 }
 
 function assertPlugin() {
-  const spec = process.argv[3] || "npm:@openclaw/codex@beta";
+  const spec = process.argv[3] || "npm:@openclaw/codex";
   const list = readJson("/tmp/openclaw-codex-plugins-list.json");
   const inspect = readJson("/tmp/openclaw-codex-plugin-inspect.json");
   const plugin = (list.plugins || []).find((entry) => entry.id === "codex");
