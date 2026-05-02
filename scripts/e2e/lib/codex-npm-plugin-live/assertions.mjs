@@ -3,6 +3,8 @@ import path from "node:path";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const allowBetaCompatDiagnostics =
+  process.env.OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS === "1";
 
 function stateDir() {
   return process.env.OPENCLAW_STATE_DIR || path.join(process.env.HOME, ".openclaw");
@@ -127,8 +129,13 @@ function assertPlugin() {
   const errors = diagnostics
     .filter((diag) => diag?.level === "error")
     .map((diag) => String(diag.message || ""));
-  if (errors.length > 0) {
-    throw new Error(`unexpected plugin diagnostics errors: ${errors.join("; ")}`);
+  const unexpectedErrors = allowBetaCompatDiagnostics
+    ? errors.filter(
+        (message) => message !== "only bundled plugins can claim reserved command ownership: codex",
+      )
+    : errors;
+  if (unexpectedErrors.length > 0) {
+    throw new Error(`unexpected plugin diagnostics errors: ${unexpectedErrors.join("; ")}`);
   }
 
   const record = readInstallRecord();

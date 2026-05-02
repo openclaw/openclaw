@@ -44,6 +44,8 @@ echo "Running Codex npm plugin live Docker E2E..."
 echo "Profile file: $PROFILE_STATUS"
 if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS="${OPENCLAW_CODEX_NPM_PLUGIN_ALLOW_BETA_COMPAT_DIAGNOSTICS:-0}" \
+  -e OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL="${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-0}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_MODEL="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:-codex/gpt-5.4}" \
   -e OPENCLAW_CODEX_NPM_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:-npm:@openclaw/codex@beta}" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
@@ -83,6 +85,10 @@ CODEX_PLUGIN_SPEC="${OPENCLAW_CODEX_NPM_PLUGIN_SPEC:?missing OPENCLAW_CODEX_NPM_
 MODEL_REF="${OPENCLAW_CODEX_NPM_PLUGIN_MODEL:?missing OPENCLAW_CODEX_NPM_PLUGIN_MODEL}"
 SESSION_ID="codex-npm-plugin-live"
 SUCCESS_MARKER="OPENCLAW-CODEX-NPM-PLUGIN-LIVE-OK"
+PLUGIN_INSTALL_FLAGS=(--force)
+if [ "${OPENCLAW_CODEX_NPM_PLUGIN_FORCE_UNSAFE_INSTALL:-0}" = "1" ]; then
+  PLUGIN_INSTALL_FLAGS+=(--dangerously-force-unsafe-install)
+fi
 
 dump_debug_logs() {
   local status="$1"
@@ -110,7 +116,7 @@ openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
 
 echo "Installing Codex plugin from npm: $CODEX_PLUGIN_SPEC"
-openclaw plugins install "$CODEX_PLUGIN_SPEC" --force >/tmp/openclaw-codex-plugin-install.log 2>&1
+openclaw plugins install "$CODEX_PLUGIN_SPEC" "${PLUGIN_INSTALL_FLAGS[@]}" >/tmp/openclaw-codex-plugin-install.log 2>&1
 
 node scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs configure "$MODEL_REF"
 
