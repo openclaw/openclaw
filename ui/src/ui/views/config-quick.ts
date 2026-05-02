@@ -106,6 +106,7 @@ export type QuickSettingsProps = {
   ttsVoiceByProvider?: Record<string, string>;
   ttsProviders?: Array<{ id: string; name: string; configured: boolean; voices: string[] }>;
   ttsLoading?: boolean;
+  ttsProvidersLoading?: boolean;
   ttsPreviewBusy?: boolean;
   ttsPreviewError?: string | null;
   onTtsToggle?: () => void;
@@ -1057,70 +1058,76 @@ function renderTtsCard(props: QuickSettingsProps) {
             ${props.ttsEnabled ? "On" : "Off"}
           </span>
         </div>
-        ${configuredProviders.length > 0
+        ${props.ttsProvidersLoading
           ? html`
-              <div class="qs-row qs-row--col">
-                <span class="qs-row__label qs-row__label--sm">Provider</span>
-                <select
-                  class="qs-select"
-                  .value=${activeProvider ?? ""}
-                  @change=${handleProviderChange}
-                  ?disabled=${!props.ttsEnabled}
-                  aria-label="TTS provider"
-                >
-                  ${providers.map(
-                    (p) => html`
-                      <option
-                        value=${p.id}
-                        .selected=${p.id === activeProvider}
-                        ?disabled=${!p.configured}
-                      >
-                        ${p.name}${p.configured ? "" : " (not configured)"}
-                      </option>
-                    `,
-                  )}
-                </select>
-              </div>
-              ${availableVoices.length > 0
-                ? html`
-                    <div class="qs-row qs-row--col">
-                      <span class="qs-row__label qs-row__label--sm">Voice</span>
-                      <select
-                        class="qs-select"
-                        .value=${activeVoice ?? ""}
-                        @change=${handleVoiceChange}
-                        ?disabled=${!props.ttsEnabled}
-                        aria-label="TTS voice"
-                      >
-                        <option value="">Default</option>
-                        ${availableVoices.map(
-                          (v) => html`
-                            <option value=${v} .selected=${v === activeVoice}>${v}</option>
-                          `,
-                        )}
-                      </select>
-                    </div>
-                  `
-                : nothing}
               <div class="qs-row">
-                <button
-                  class="qs-row__value--action"
-                  @click=${handlePlaySample}
-                  ?disabled=${!props.ttsEnabled || props.ttsPreviewBusy}
-                  aria-label="Play TTS sample"
-                >
-                  ${props.ttsPreviewBusy ? "Playing…" : "Play sample"}
-                </button>
-                ${props.ttsPreviewError
-                  ? html`<span class="qs-tts-error muted">${props.ttsPreviewError}</span>`
-                  : nothing}
+                <span class="qs-row__value muted">Loading providers…</span>
               </div>
             `
-          : html`
-              <div class="qs-row">
-                <span class="qs-row__value muted">No TTS providers configured</span>
-              </div>
-            `}
+          : configuredProviders.length > 0
+            ? html`
+                <div class="qs-row qs-row--col">
+                  <span class="qs-row__label qs-row__label--sm">Provider</span>
+                  <select
+                    class="qs-select"
+                    .value=${activeProvider ?? ""}
+                    @change=${handleProviderChange}
+                    ?disabled=${!props.ttsEnabled}
+                    aria-label="TTS provider"
+                  >
+                    ${providers.map(
+                      (p) => html`
+                        <option
+                          value=${p.id}
+                          .selected=${p.id === activeProvider}
+                          ?disabled=${!p.configured}
+                        >
+                          ${p.name}${p.configured ? "" : " (not configured)"}
+                        </option>
+                      `,
+                    )}
+                  </select>
+                </div>
+                ${availableVoices.length > 0
+                  ? html`
+                      <div class="qs-row qs-row--col">
+                        <span class="qs-row__label qs-row__label--sm">Voice</span>
+                        <select
+                          class="qs-select"
+                          .value=${activeVoice ?? ""}
+                          @change=${handleVoiceChange}
+                          ?disabled=${!props.ttsEnabled}
+                          aria-label="TTS voice"
+                        >
+                          <option value="">Default</option>
+                          ${availableVoices.map(
+                            (v) => html`
+                              <option value=${v} .selected=${v === activeVoice}>${v}</option>
+                            `,
+                          )}
+                        </select>
+                      </div>
+                    `
+                  : nothing}
+                <div class="qs-row">
+                  <button
+                    class="qs-row__value--action"
+                    @click=${handlePlaySample}
+                    ?disabled=${!props.ttsEnabled || props.ttsPreviewBusy}
+                    aria-label="Play TTS sample"
+                  >
+                    ${props.ttsPreviewBusy ? "Playing…" : "Play sample"}
+                  </button>
+                  ${props.ttsPreviewError
+                    ? html`<span class="qs-tts-error muted">${props.ttsPreviewError}</span>`
+                    : nothing}
+                </div>
+              `
+            : html`
+                <div class="qs-row">
+                  <span class="qs-row__value muted">No TTS providers configured</span>
+                </div>
+              `}
       </div>
     </div>
   `;

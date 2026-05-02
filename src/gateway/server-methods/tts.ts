@@ -248,31 +248,28 @@ export const ttsHandlers: GatewayRequestHandlers = {
     }
   },
   "tts.setVoice": async ({ params, respond, context }) => {
+    const cfg = context.getRuntimeConfig();
+    const provider = canonicalizeSpeechProviderId(
+      normalizeOptionalString(params.provider) ?? "",
+      cfg,
+    );
+    if (!provider || !getSpeechProvider(provider, cfg)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Invalid provider. Use a registered TTS provider id.",
+        ),
+      );
+      return;
+    }
     try {
-      const provider = normalizeOptionalString(params.provider);
       const voice = normalizeOptionalString(params.voice);
-      if (!provider) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "tts.setVoice requires provider"),
-        );
-        return;
-      }
-      const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
-      const canonicalized = canonicalizeSpeechProviderId(provider);
-      if (!canonicalized) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown TTS provider: ${provider}`),
-        );
-        return;
-      }
-      setTtsVoice(prefsPath, canonicalized, voice ?? null);
-      respond(true, { provider: canonicalized, voice: voice ?? null });
+      setTtsVoice(prefsPath, provider, voice ?? null);
+      respond(true, { provider, voice: voice ?? null });
     } catch (err) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
     }
@@ -287,21 +284,27 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
 
-      const overrides =
-        providerParam || voiceParam
-          ? resolveExplicitTtsOverrides({
-              cfg,
-              prefsPath,
-              provider: providerParam,
-              voiceId: voiceParam,
-            })
-          : undefined;
+      let overrides;
+      if (providerParam || voiceParam) {
+        try {
+          overrides = resolveExplicitTtsOverrides({
+            cfg,
+            prefsPath,
+            provider: providerParam,
+            voiceId: voiceParam,
+          });
+        } catch (err) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatForLog(err)));
+          return;
+        }
+      }
 
       const result = await textToSpeech({
         text,
         cfg,
         prefsPath,
         overrides,
+        disableFallback: Boolean(providerParam || voiceParam),
         timeoutMs: 15000,
       });
 

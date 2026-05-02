@@ -6,7 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
-- Control UI/Settings: add a first-class Text-to-Speech panel in Quick Settings with an enable/disable toggle, provider selector, per-provider voice picker, and a "Play sample" button. Preferences are persisted to `~/.openclaw/settings/tts.json` via two new gateway methods (`tts.setVoice`, `tts.preview`); `tts.status` now also returns `voiceByProvider`; the selected default voice is automatically applied during synthesis when no explicit override is present. Fixes #XXXX. Thanks @copilot.
+- Control UI/Settings: add a first-class Text-to-Speech panel in Quick Settings with an enable/disable toggle, provider selector, per-provider voice picker, and a "Play sample" button. Preferences are persisted to `~/.openclaw/settings/tts.json` via two new gateway methods (`tts.setVoice`, `tts.preview`); `tts.status` now also returns `voiceByProvider`; the selected default voice is automatically applied during synthesis when no explicit override is present. (#75479) Thanks @BunsDev.
 
 - Messages/docs: clarify that `BodyForAgent` is the primary inbound model text while `Body` is the legacy envelope fallback, and add Signal coverage so channel hardening patches target the real prompt path. Refs #66198. Thanks @defonota3box.
 - Control UI/Usage: add UTC quarter-hour token buckets for the Usage Mosaic and reuse them for hour filtering, keeping the legacy session-span fallback for older summaries. (#74337) Thanks @konanok.

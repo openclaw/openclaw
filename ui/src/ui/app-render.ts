@@ -115,8 +115,6 @@ import {
   updateSkillEnabled,
 } from "./controllers/skills.ts";
 import {
-  loadTtsStatus,
-  loadTtsProviders,
   setTtsEnabled,
   setTtsProvider,
   setTtsVoice,
@@ -1137,6 +1135,7 @@ export function renderApp(state: AppViewState) {
             ttsVoiceByProvider: state.ttsVoiceByProvider,
             ttsProviders: state.ttsProviders,
             ttsLoading: state.ttsLoading,
+            ttsProvidersLoading: state.ttsProvidersLoading,
             ttsPreviewBusy: state.ttsPreviewBusy,
             ttsPreviewError: state.ttsPreviewError,
             onTtsToggle: () => {

@@ -445,6 +445,22 @@ describe("TTS card", () => {
     expect(container.querySelector("select[aria-label='TTS voice']")).not.toBeNull();
   });
 
+  it("shows loading message when providers are being fetched", () => {
+    const container = document.createElement("div");
+    render(
+      renderQuickSettings(
+        createProps({
+          ttsProvidersLoading: true,
+          ttsProviders: [],
+        }),
+      ),
+      container,
+    );
+    const card = container.querySelector(".qs-card--tts");
+    expect(card?.textContent).toContain("Loading providers");
+    expect(card?.textContent).not.toContain("No TTS providers configured");
+  });
+
   it("shows no providers message when no configured providers", () => {
     const container = document.createElement("div");
     render(
