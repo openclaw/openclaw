@@ -427,17 +427,9 @@ function assertConfiguredPluginInstalls() {
   const records = index.installRecords ?? {};
   const matrix = records.matrix;
   const bundledMatrix = (index.plugins ?? []).find((plugin) => plugin?.pluginId === "matrix");
-  if (!matrix) {
-    assert(
-      bundledMatrix,
-      "configured matrix plugin is neither present in the plugin index nor installed externally",
-    );
-    assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
-    assertExternalPluginInstall(records, "discord", "@openclaw/discord");
-    assert(!records.telegram, "internal telegram plugin should not be installed externally");
-    return;
-  }
-  assertExternalPluginInstall(records, "matrix", "@openclaw/matrix");
+  assert(!matrix, "internal matrix plugin should not be installed externally");
+  assert(bundledMatrix, "configured bundled matrix plugin is missing from the plugin index");
+  assert(bundledMatrix.enabled !== false, "configured bundled matrix plugin is disabled");
   assertExternalPluginInstall(records, "discord", "@openclaw/discord");
   assert(!records.telegram, "internal telegram plugin should not be installed externally");
 }
