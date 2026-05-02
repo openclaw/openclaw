@@ -385,6 +385,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       resolveToolPolicy: resolveSlackGroupToolPolicy,
     },
     messaging: {
+      targetPrefixes: ["slack"],
       normalizeTarget: normalizeSlackMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();

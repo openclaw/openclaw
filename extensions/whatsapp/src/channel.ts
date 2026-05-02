@@ -111,6 +111,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
         },
       },
       messaging: {
+        targetPrefixes: ["whatsapp"],
         normalizeTarget: normalizeWhatsAppMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveWhatsAppOutboundSessionRoute(params),
         parseExplicitTarget: ({ raw }) => parseWhatsAppExplicitTarget(raw),
