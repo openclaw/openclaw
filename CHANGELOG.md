@@ -80,6 +80,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/hooks: derive hook `ctx.channelId` from the conversation target instead of the provider name, so Discord and other channel plugins can keep per-channel state isolated. Fixes #59881. Thanks @bradfreels.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
+- Codex/commands: show `/codex bind` usage when option values are missing instead of starting a bind with shifted arguments. Thanks @Lucenx9.
 
 ## 2026.4.30
 

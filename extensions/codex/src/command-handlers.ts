@@ -1418,17 +1418,32 @@ function parseBindArgs(args: string[]): ParsedBindArgs {
       continue;
     }
     if (arg === "--cwd") {
-      parsed.cwd = args[index + 1];
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.cwd = value;
       index += 1;
       continue;
     }
     if (arg === "--model") {
-      parsed.model = args[index + 1];
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.model = value;
       index += 1;
       continue;
     }
     if (arg === "--provider" || arg === "--model-provider") {
-      parsed.provider = args[index + 1];
+      const value = readRequiredOptionValue(args, index);
+      if (!value) {
+        parsed.help = true;
+        continue;
+      }
+      parsed.provider = value;
       index += 1;
       continue;
     }

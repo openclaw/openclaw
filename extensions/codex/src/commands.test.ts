@@ -1434,6 +1434,34 @@ describe("codex command", () => {
     });
   });
 
+  it("shows help when bind option values are missing", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const startCodexConversationThread = vi.fn(async () => ({
+      kind: "codex-app-server-session" as const,
+      version: 1 as const,
+      sessionFile,
+      workspaceDir: "/repo",
+    }));
+    const requestConversationBinding = vi.fn();
+
+    await expect(
+      handleCodexCommand(
+        createContext("bind --cwd --model gpt-5.4", sessionFile, {
+          requestConversationBinding,
+        }),
+        {
+          deps: createDeps({
+            startCodexConversationThread,
+          }),
+        },
+      ),
+    ).resolves.toEqual({
+      text: expect.stringContaining("Usage: /codex bind"),
+    });
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+    expect(requestConversationBinding).not.toHaveBeenCalled();
+  });
+
   it("returns the binding approval reply when conversation bind needs approval", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const reply = { text: "Approve this?" };
