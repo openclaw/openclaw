@@ -150,13 +150,15 @@ describe("Control UI smoke (browser)", () => {
     app.requestUpdate();
     await settleApp(app);
 
-    const text = textContent(app);
-    expect(text).toContain("Configured");
-    expect(text).toContain("Running");
-    expect(text).toContain("Connected");
-    expect(text).toContain("Slack transport activity is stale");
-    expect(text).toContain("Slack message readback is missing_scopes");
-    expect(text).toContain("Slack (Workspace) readback is missing_scopes");
+    await vi.waitFor(() => {
+      const text = textContent(app);
+      expect(text).toContain("Configured");
+      expect(text).toContain("Running");
+      expect(text).toContain("Connected");
+      expect(text).toContain("Slack transport activity is stale");
+      expect(text).toContain("Slack message readback is missing_scopes");
+      expect(text).toContain("Slack (Workspace) readback is missing_scopes");
+    });
     expectNoObviousA11yRegressions(app);
   });
 });
