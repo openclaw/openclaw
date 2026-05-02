@@ -160,6 +160,30 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toEqual([]);
   });
 
+  it("collects external web search and ACP runtime plugins from config-only usage", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        acp: {
+          enabled: true,
+          backend: "acpx",
+        },
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual(["acpx", "brave"]);
+    expect(result.channelIds).toEqual([]);
+  });
+
   it("does not collect channel ids when the matching plugin id is blocked", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");

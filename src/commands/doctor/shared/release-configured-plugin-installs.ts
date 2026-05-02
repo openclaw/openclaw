@@ -6,6 +6,7 @@ import { detectPluginAutoEnableCandidates } from "../../../config/plugin-auto-en
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
 import { asObjectRecord } from "./object.js";
@@ -223,6 +224,29 @@ function collectAgentHarnessRuntimePluginIds(
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectWebSearchPluginIds(cfg: OpenClawConfig): string[] {
+  const providerId = cfg.tools?.web?.search?.provider;
+  if (typeof providerId !== "string") {
+    return [];
+  }
+  const entry = resolveWebSearchInstallCatalogEntry({ providerId });
+  return entry?.pluginId ? [entry.pluginId] : [];
+}
+
+function collectAcpRuntimePluginIds(cfg: OpenClawConfig): string[] {
+  const acp = asObjectRecord(cfg.acp);
+  if (!acp) {
+    return [];
+  }
+  const backend = normalizeId(acp.backend)?.toLowerCase() ?? "";
+  const configured =
+    acp.enabled === true || asObjectRecord(acp.dispatch)?.enabled === true || backend === "acpx";
+  if (!configured || (backend && backend !== "acpx")) {
+    return [];
+  }
+  return ["acpx"];
+}
+
 function addEligiblePluginId(cfg: OpenClawConfig, pluginIds: Set<string>, pluginId: string): void {
   const normalized = pluginId.trim();
   if (!normalized || isDenied(cfg, normalized) || isDisabled(cfg, normalized)) {
@@ -275,6 +299,12 @@ export function collectReleaseConfiguredPluginIds(params: {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const pluginId of collectAgentHarnessRuntimePluginIds(params.cfg, env)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectWebSearchPluginIds(params.cfg)) {
+    addEligiblePluginId(params.cfg, pluginIds, pluginId);
+  }
+  for (const pluginId of collectAcpRuntimePluginIds(params.cfg)) {
     addEligiblePluginId(params.cfg, pluginIds, pluginId);
   }
   for (const channelId of collectConfiguredChannelIds(params.cfg, env)) {

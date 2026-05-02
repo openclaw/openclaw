@@ -1,6 +1,23 @@
 {
   "entries": [
     {
+      "name": "@openclaw/acpx",
+      "description": "OpenClaw ACP runtime backend",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "acpx",
+          "label": "ACPX Runtime"
+        },
+        "install": {
+          "npmSpec": "@openclaw/acpx",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.4.25"
+        }
+      }
+    },
+    {
       "name": "@openclaw/brave-plugin",
       "description": "OpenClaw Brave plugin",
       "source": "official",
@@ -10,6 +27,21 @@
           "id": "brave",
           "label": "Brave"
         },
+        "webSearchProviders": [
+          {
+            "id": "brave",
+            "label": "Brave Search",
+            "hint": "Brave Search web results.",
+            "onboardingScopes": ["text-inference"],
+            "credentialLabel": "Brave Search API key",
+            "envVars": ["BRAVE_API_KEY"],
+            "placeholder": "BSA...",
+            "signupUrl": "https://api-dashboard.search.brave.com/app/keys",
+            "docsUrl": "https://docs.openclaw.ai/tools/brave-search",
+            "credentialPath": "plugins.entries.brave.config.webSearch.apiKey",
+            "autoDetectOrder": 10
+          }
+        ],
         "install": {
           "npmSpec": "@openclaw/brave-plugin",
           "defaultChoice": "npm",

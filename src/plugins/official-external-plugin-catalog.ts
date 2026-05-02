@@ -33,6 +33,21 @@ export type OfficialExternalProviderCatalogProvider = {
   authChoices?: readonly OfficialExternalProviderAuthChoice[];
 };
 
+export type OfficialExternalWebSearchProvider = {
+  id?: string;
+  label?: string;
+  hint?: string;
+  onboardingScopes?: readonly "text-inference"[];
+  requiresCredential?: boolean;
+  credentialLabel?: string;
+  envVars?: readonly string[];
+  placeholder?: string;
+  signupUrl?: string;
+  docsUrl?: string;
+  credentialPath?: string;
+  autoDetectOrder?: number;
+};
+
 export type OfficialExternalPluginCatalogManifest = {
   plugin?: {
     id?: string;
@@ -43,6 +58,7 @@ export type OfficialExternalPluginCatalogManifest = {
     label?: string;
   };
   providers?: readonly OfficialExternalProviderCatalogProvider[];
+  webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
   install?: PluginPackageInstall;
 };
 

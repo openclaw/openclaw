@@ -19,6 +19,7 @@ import {
 } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
 import { updateNpmInstalledPlugins } from "../../../plugins/update.js";
+import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
 import { asObjectRecord } from "./object.js";
 
 type DownloadableInstallCandidate = {
@@ -31,6 +32,11 @@ type DownloadableInstallCandidate = {
 };
 
 const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[] = [
+  {
+    pluginId: "acpx",
+    label: "ACPX Runtime",
+    npmSpec: "@openclaw/acpx",
+  },
   // Runtime-only configs do not have a provider/channel integration catalog entry.
   {
     pluginId: "codex",
@@ -86,6 +92,23 @@ function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
     if (pluginId.trim()) {
       ids.add(pluginId.trim());
     }
+  }
+  const searchProvider = cfg.tools?.web?.search?.provider;
+  if (typeof searchProvider === "string") {
+    const installEntry = resolveWebSearchInstallCatalogEntry({ providerId: searchProvider });
+    if (installEntry?.pluginId) {
+      ids.add(installEntry.pluginId);
+    }
+  }
+  const acp = asObjectRecord(cfg.acp);
+  const acpBackend = typeof acp?.backend === "string" ? acp.backend.trim().toLowerCase() : "";
+  if (
+    (acpBackend === "acpx" ||
+      acp?.enabled === true ||
+      asObjectRecord(acp?.dispatch)?.enabled === true) &&
+    (!acpBackend || acpBackend === "acpx")
+  ) {
+    ids.add("acpx");
   }
   return ids;
 }

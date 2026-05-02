@@ -17,6 +17,7 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
+import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { collectLegacySecretRefEnvMarkerCandidates } from "../secrets/legacy-secretref-env-marker.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
@@ -981,11 +982,12 @@ function validateConfigObjectWithPluginsBase(
     const { registry } = ensureRegistry();
     return [
       ...new Set(
-        registry.plugins.flatMap((record) =>
-          (record.contracts?.webSearchProviders ?? [])
-            .map((providerId) => providerId.trim())
-            .filter((providerId) => providerId.length > 0),
-        ),
+        [
+          ...registry.plugins.flatMap((record) => record.contracts?.webSearchProviders ?? []),
+          ...resolveWebSearchInstallCatalogEntries().map((entry) => entry.provider.id),
+        ]
+          .map((providerId) => providerId.trim())
+          .filter((providerId) => providerId.length > 0),
       ),
     ].toSorted((left, right) => left.localeCompare(right));
   };
