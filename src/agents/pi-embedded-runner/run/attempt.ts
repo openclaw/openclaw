@@ -818,7 +818,7 @@ export async function runEmbeddedAttempt(
     prepStages.mark("skills");
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
-    const contextInjectionMode = resolveContextInjectionMode(params.config);
+    const contextInjectionMode = resolveContextInjectionMode(params.config, sessionAgentId);
     const isRawModelRun = params.modelRun === true || params.promptMode === "none";
     if (isRawModelRun && log.isEnabled("debug")) {
       log.debug(

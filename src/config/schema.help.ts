@@ -222,6 +222,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-agent overrides for skills subsystem budgets. Use this when an agent needs a different skills prompt budget without introducing a second generic context-limits path.",
   "agents.list[].skillsLimits.maxSkillsPromptChars":
     "Per-agent override for the skills prompt character budget. This extends the existing skills.limits.maxSkillsPromptChars path instead of routing the same budget through contextLimits.",
+  "agents.list[].contextInjection":
+    "Per-agent context injection mode. Overrides agents.defaults.contextInjection for this agent. 'always' re-injects bootstrap on every turn, 'continuation-skip' skips after a completed bootstrap turn, 'never' disables injection entirely.",
   "agents.list[].contextLimits":
     "Optional per-agent overrides for the focused context budget knobs. Omitted fields inherit agents.defaults.contextLimits.",
   "agents.list[].contextLimits.memoryGetMaxChars":

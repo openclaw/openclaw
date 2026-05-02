@@ -848,6 +848,7 @@ export const AgentEntrySchema = z
     skillsLimits: AgentSkillsLimitsSchema,
     contextLimits: AgentContextLimitsSchema,
     contextTokens: z.number().int().positive().optional(),
+    contextInjection: z.enum(["always", "continuation-skip", "never"]).optional(),
     heartbeat: HeartbeatSchema,
     identity: IdentitySchema,
     groupChat: GroupChatSchema,

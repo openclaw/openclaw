@@ -92,6 +92,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list": "Agent List",
   "agents.list[].skillsLimits": "Agent Skills Limits",
   "agents.list[].skillsLimits.maxSkillsPromptChars": "Agent Skills Prompt Max Chars",
+  "agents.list[].contextInjection": "Agent Context Injection",
   "agents.list[].contextLimits": "Agent Context Limits",
   "agents.list[].contextLimits.memoryGetMaxChars": "Agent memory_get Max Chars",
   "agents.list[].contextLimits.memoryGetDefaultLines": "Agent memory_get Line Window",

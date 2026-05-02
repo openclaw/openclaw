@@ -51,7 +51,14 @@ export function _resetBootstrapWarningCacheForTest(): void {
   bootstrapWarningOrder.length = 0;
 }
 
-export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
+export function resolveContextInjectionMode(
+  config?: OpenClawConfig,
+  agentId?: string,
+): AgentContextInjection {
+  if (agentId) {
+    const entry = config?.agents?.list?.find((a) => a.id === agentId);
+    if (entry?.contextInjection) return entry.contextInjection;
+  }
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 

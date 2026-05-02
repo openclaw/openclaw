@@ -501,4 +501,57 @@ describe("resolveContextInjectionMode", () => {
       } as never),
     ).toBe("continuation-skip");
   });
+
+  it("returns per-agent override when agentId matches", () => {
+    expect(
+      resolveContextInjectionMode(
+        {
+          agents: {
+            defaults: { contextInjection: "continuation-skip" },
+            list: [{ id: "strict-agent", contextInjection: "always" }],
+          },
+        } as never,
+        "strict-agent",
+      ),
+    ).toBe("always");
+  });
+
+  it("falls back to defaults when agentId does not match", () => {
+    expect(
+      resolveContextInjectionMode(
+        {
+          agents: {
+            defaults: { contextInjection: "continuation-skip" },
+            list: [{ id: "other-agent", contextInjection: "always" }],
+          },
+        } as never,
+        "unknown-agent",
+      ),
+    ).toBe("continuation-skip");
+  });
+
+  it("falls back to defaults when per-agent contextInjection is not set", () => {
+    expect(
+      resolveContextInjectionMode(
+        {
+          agents: {
+            defaults: { contextInjection: "continuation-skip" },
+            list: [{ id: "basic-agent" }],
+          },
+        } as never,
+        "basic-agent",
+      ),
+    ).toBe("continuation-skip");
+  });
+
+  it("falls back to defaults when no agentId is provided (backward compat)", () => {
+    expect(
+      resolveContextInjectionMode({
+        agents: {
+          defaults: { contextInjection: "continuation-skip" },
+          list: [{ id: "agent", contextInjection: "always" }],
+        },
+      } as never),
+    ).toBe("continuation-skip");
+  });
 });
