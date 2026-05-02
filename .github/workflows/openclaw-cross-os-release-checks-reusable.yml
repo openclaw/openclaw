@@ -145,6 +145,11 @@ on:
         required: false
         default: ""
         type: string
+      openai_model:
+        description: OpenAI model for release cross-OS agent-turn smoke
+        required: false
+        default: ""
+        type: string
     secrets:
       OPENAI_API_KEY:
         required: false
