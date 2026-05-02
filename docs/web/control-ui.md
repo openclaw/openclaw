@@ -96,7 +96,6 @@ Imported themes are stored only in the current browser profile. They are not wri
 <AccordionGroup>
   <Accordion title="Chat and Talk">
     - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`, `chat.inject`).
-    - Dictate into the Chat composer with server-side STT (`chat.transcribeAudio`). The browser records a short microphone clip and sends it to the Gateway, which runs the configured `tools.media.audio` transcription pipeline and returns draft text without exposing provider credentials to the browser.
     - Talk through browser realtime sessions. OpenAI uses direct WebRTC, Google Live uses a constrained one-use browser token over WebSocket, and backend-only realtime voice plugins use the Gateway relay transport. The relay keeps provider credentials on the Gateway while the browser streams microphone PCM through `talk.realtime.relay*` RPCs and sends `openclaw_agent_consult` tool calls back through `chat.send` for the larger configured OpenClaw model.
     - Stream tool calls + live tool output cards in Chat (agent events).
 
@@ -150,7 +149,6 @@ Imported themes are stored only in the current browser profile. They are not wri
 <AccordionGroup>
   <Accordion title="Send and history semantics">
     - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
-    - `chat.transcribeAudio` is a one-shot dictation helper for Chat drafts. It accepts browser-recorded base64 audio, keeps uploads below the Gateway WebSocket frame limit, writes a temporary local file, runs media-understanding audio transcription with the active Gateway config, returns `{ text, provider, model }`, and removes the temporary file. It does not create an agent run and is separate from realtime Talk.
     - Chat uploads accept images plus non-video files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).

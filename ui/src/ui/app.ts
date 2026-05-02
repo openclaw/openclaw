@@ -22,10 +22,8 @@ import {
   removeQueuedMessage as removeQueuedMessageInternal,
   resetChatInputHistoryNavigation as resetChatInputHistoryNavigationInternal,
   steerQueuedChatMessage as steerQueuedChatMessageInternal,
-  transcribeChatAudio as transcribeChatAudioInternal,
   type ChatInputHistoryKeyInput,
   type ChatInputHistoryKeyResult,
-  type ChatDictationStatus,
 } from "./app-chat.ts";
 import { DEFAULT_CRON_FORM, DEFAULT_LOG_LEVEL_FILTERS } from "./app-defaults.ts";
 import type { EventLogEntry } from "./app-events.ts";
@@ -224,13 +222,6 @@ export class OpenClawApp extends LitElement {
   @state() realtimeTalkDetail: string | null = null;
   @state() realtimeTalkTranscript: string | null = null;
   private realtimeTalkSession: RealtimeTalkSession | null = null;
-  @state() chatDictationStatus: ChatDictationStatus = "idle";
-  @state() chatDictationDetail: string | null = null;
-  private chatDictationRecorder: MediaRecorder | null = null;
-  private chatDictationStream: MediaStream | null = null;
-  private chatDictationChunks: Blob[] = [];
-  private chatDictationCancelNextStop = false;
-  private chatDictationStartToken = 0;
   @state() chatManualRefreshInFlight = false;
   @state() chatMobileControlsOpen = false;
   private chatMobileControlsTrigger: HTMLElement | null = null;
@@ -951,129 +942,6 @@ export class OpenClawApp extends LitElement {
       this.realtimeTalkDetail = error instanceof Error ? error.message : String(error);
       this.lastError = this.realtimeTalkDetail;
     }
-  }
-
-  async toggleChatDictation() {
-    if (this.chatDictationRecorder && this.chatDictationStatus === "recording") {
-      this.chatDictationRecorder.stop();
-      return;
-    }
-    if (this.chatDictationStatus === "starting" || this.chatDictationStatus === "transcribing") {
-      return;
-    }
-    if (!this.client || !this.connected) {
-      this.chatDictationStatus = "error";
-      this.chatDictationDetail = "Gateway not connected";
-      this.lastError = this.chatDictationDetail;
-      return;
-    }
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
-      this.chatDictationStatus = "error";
-      this.chatDictationDetail = "Browser microphone recording is unavailable";
-      this.lastError = this.chatDictationDetail;
-      return;
-    }
-
-    const startToken = ++this.chatDictationStartToken;
-    this.chatDictationStatus = "starting";
-    this.chatDictationDetail = "Starting dictation...";
-    let stream: MediaStream | null = null;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      if (this.chatDictationStartToken !== startToken || this.chatDictationStatus !== "starting") {
-        this.stopMediaStream(stream);
-        return;
-      }
-      const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((candidate) =>
-        MediaRecorder.isTypeSupported(candidate),
-      );
-      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-      this.chatDictationStream = stream;
-      this.chatDictationRecorder = recorder;
-      this.chatDictationChunks = [];
-      recorder.addEventListener("dataavailable", (event) => {
-        if (this.chatDictationRecorder !== recorder || this.chatDictationCancelNextStop) {
-          return;
-        }
-        if (event.data.size > 0) {
-          this.chatDictationChunks.push(event.data);
-        }
-      });
-      recorder.addEventListener("error", (event) => {
-        if (this.chatDictationRecorder !== recorder) {
-          return;
-        }
-        this.chatDictationRecorder = null;
-        this.chatDictationChunks = [];
-        this.chatDictationStatus = "error";
-        this.chatDictationDetail =
-          event.message || event.error?.message || "Dictation recording failed";
-        this.lastError = this.chatDictationDetail;
-        this.stopChatDictationStream();
-      });
-      recorder.addEventListener("stop", () => {
-        if (this.chatDictationRecorder !== recorder) {
-          return;
-        }
-        const chunks = this.chatDictationChunks.splice(0);
-        const canceledByRequest = this.chatDictationCancelNextStop;
-        this.chatDictationCancelNextStop = false;
-        this.chatDictationRecorder = null;
-        this.stopChatDictationStream();
-        if (canceledByRequest) {
-          if (this.chatDictationStatus !== "error") {
-            this.chatDictationStatus = "idle";
-            this.chatDictationDetail = null;
-          }
-          return;
-        }
-        const blob = new Blob(chunks, {
-          type: recorder.mimeType || chunks[0]?.type || "audio/webm",
-        });
-        void transcribeChatAudioInternal(
-          this as unknown as Parameters<typeof transcribeChatAudioInternal>[0],
-          blob,
-        );
-      });
-      this.chatDictationStatus = "recording";
-      this.chatDictationDetail = "Recording dictation...";
-      recorder.start();
-    } catch (error) {
-      if (stream && this.chatDictationStream !== stream) {
-        this.stopMediaStream(stream);
-      }
-      if (this.chatDictationStartToken !== startToken) {
-        return;
-      }
-      this.chatDictationRecorder = null;
-      this.stopChatDictationStream();
-      this.chatDictationStatus = "error";
-      this.chatDictationDetail = error instanceof Error ? error.message : String(error);
-      this.lastError = this.chatDictationDetail;
-    }
-  }
-
-  private stopChatDictationStream() {
-    this.stopMediaStream(this.chatDictationStream);
-    this.chatDictationStream = null;
-  }
-
-  private stopMediaStream(stream: MediaStream | null) {
-    stream?.getTracks().forEach((track) => track.stop());
-  }
-
-  cancelChatDictation() {
-    this.chatDictationStartToken += 1;
-    if (this.chatDictationRecorder?.state === "recording") {
-      this.chatDictationCancelNextStop = true;
-      this.chatDictationRecorder.stop();
-    }
-    this.chatDictationRecorder = null;
-    this.chatDictationChunks = [];
-    this.chatDictationCancelNextStop = false;
-    this.stopChatDictationStream();
-    this.chatDictationStatus = "idle";
-    this.chatDictationDetail = null;
   }
 
   async steerQueuedChatMessage(id: string) {

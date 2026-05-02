@@ -9,12 +9,6 @@ type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").Ch
 type ResolveChannelSetupEntries =
   typeof import("../commands/channel-setup/discovery.js").resolveChannelSetupEntries;
 type CollectChannelStatus = typeof import("./channel-setup.status.js").collectChannelStatus;
-type FindBundledSourceForCatalogChannel =
-  typeof import("./channel-setup.status.js").findBundledSourceForCatalogChannel;
-type ResolveCatalogChannelSelectionHint =
-  typeof import("./channel-setup.status.js").resolveCatalogChannelSelectionHint;
-type ResolveChannelSetupSelectionContributions =
-  typeof import("./channel-setup.status.js").resolveChannelSetupSelectionContributions;
 type EnsureChannelSetupPluginInstalled =
   typeof import("../commands/channel-setup/plugin-install.js").ensureChannelSetupPluginInstalled;
 type LoadChannelSetupPluginRegistrySnapshotForChannel =
@@ -123,18 +117,6 @@ const collectChannelStatus = vi.hoisted(() =>
     statusLines: [],
   })),
 );
-const findBundledSourceForCatalogChannel = vi.hoisted(() =>
-  vi.fn<FindBundledSourceForCatalogChannel>(() => undefined),
-);
-const resolveCatalogChannelSelectionHint = vi.hoisted(() =>
-  vi.fn<ResolveCatalogChannelSelectionHint>((entry, options) => {
-    const npmSpec = entry.install?.npmSpec?.trim();
-    return npmSpec && !options?.bundledLocalPath ? `remote install from npm: ${npmSpec}` : "";
-  }),
-);
-const resolveChannelSetupSelectionContributions = vi.hoisted(() =>
-  vi.fn<ResolveChannelSetupSelectionContributions>(() => []),
-);
 const isChannelConfigured = vi.hoisted(() => vi.fn((_cfg?: unknown, _channel?: unknown) => true));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -196,18 +178,12 @@ vi.mock("./channel-setup.prompts.js", () => ({
 vi.mock("./channel-setup.status.js", () => ({
   collectChannelStatus: (params: Parameters<CollectChannelStatus>[0]) =>
     collectChannelStatus(params),
-  findBundledSourceForCatalogChannel: (params: Parameters<FindBundledSourceForCatalogChannel>[0]) =>
-    findBundledSourceForCatalogChannel(params),
+  findBundledSourceForCatalogChannel: vi.fn(() => undefined),
   noteChannelPrimer: vi.fn(),
   noteChannelStatus: vi.fn(),
-  resolveCatalogChannelSelectionHint: (
-    entry: Parameters<ResolveCatalogChannelSelectionHint>[0],
-    options: Parameters<ResolveCatalogChannelSelectionHint>[1],
-  ) => resolveCatalogChannelSelectionHint(entry, options),
+  resolveCatalogChannelSelectionHint: vi.fn(() => "download from <npm>"),
   resolveChannelSelectionNoteLines: vi.fn(() => []),
-  resolveChannelSetupSelectionContributions: (
-    params: Parameters<ResolveChannelSetupSelectionContributions>[0],
-  ) => resolveChannelSetupSelectionContributions(params),
+  resolveChannelSetupSelectionContributions: vi.fn(() => []),
   resolveQuickstartDefault: vi.fn(() => undefined),
 }));
 
@@ -243,12 +219,6 @@ describe("setupChannels workspace shadow exclusion", () => {
       statusByChannel: new Map(),
       statusLines: [],
     });
-    findBundledSourceForCatalogChannel.mockReturnValue(undefined);
-    resolveCatalogChannelSelectionHint.mockImplementation((entry, options) => {
-      const npmSpec = entry.install?.npmSpec?.trim();
-      return npmSpec && !options?.bundledLocalPath ? `remote install from npm: ${npmSpec}` : "";
-    });
-    resolveChannelSetupSelectionContributions.mockReturnValue([]);
     isChannelConfigured.mockReturnValue(true);
   });
 
@@ -366,48 +336,6 @@ describe("setupChannels workspace shadow exclusion", () => {
     );
     expect(listChannelSetupPlugins).not.toHaveBeenCalled();
     expect(collectChannelStatus).not.toHaveBeenCalled();
-  });
-
-  it("suppresses deferred picker remote install hints for bundled catalog choices", async () => {
-    const installableCatalogEntry = makeCatalogEntry("external-chat", "External Chat", {
-      pluginId: "@openclaw/external-chat",
-      install: { npmSpec: "@openclaw/external-chat" },
-    });
-    resolveChannelSetupEntries.mockReturnValue(
-      externalChatSetupEntries({
-        installableCatalogEntries: [installableCatalogEntry],
-        installableCatalogById: new Map([["external-chat", installableCatalogEntry]]),
-      }),
-    );
-    findBundledSourceForCatalogChannel.mockReturnValue({
-      pluginId: "@openclaw/external-chat",
-      localPath: "extensions/external-chat",
-      npmSpec: "@openclaw/external-chat",
-    });
-    const select = vi.fn(async () => "__done__");
-
-    await setupChannels(
-      {} as never,
-      {} as never,
-      {
-        confirm: vi.fn(async () => true),
-        note: vi.fn(async () => undefined),
-        select,
-      } as never,
-      {
-        deferStatusUntilSelection: true,
-        skipConfirm: true,
-      },
-    );
-
-    expect(resolveCatalogChannelSelectionHint).toHaveBeenCalledWith(installableCatalogEntry, {
-      bundledLocalPath: "extensions/external-chat",
-    });
-    expect(
-      resolveChannelSetupSelectionContributions.mock.calls[0]?.[0].statusByChannel.get(
-        "external-chat",
-      )?.selectionHint,
-    ).toBe("");
   });
 
   it("uses an active deferred setup plugin without enabling config on selection", async () => {

@@ -72,23 +72,6 @@ vi.mock("../utils/with-timeout.js", () => ({
 
 import { ensureOnboardingPluginInstalled } from "./onboarding-plugin-install.js";
 
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
-
-async function waitForMockCall(mock: { mock: { calls: unknown[][] } }) {
-  for (let i = 0; i < 20; i += 1) {
-    if (mock.mock.calls.length > 0) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 0));
-  }
-}
-
 describe("ensureOnboardingPluginInstalled", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -258,114 +241,6 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
   });
 
-  it("animates ClawHub install progress while the remote install is running", async () => {
-    const deferred = createDeferred<Awaited<ReturnType<typeof installPluginFromClawHub>>>();
-    installPluginFromClawHub.mockImplementation(async (params) => {
-      params.logger?.info?.("Downloading demo-plugin from ClawHub…");
-      return await deferred.promise;
-    });
-    const stop = vi.fn();
-    const update = vi.fn();
-
-    const install = ensureOnboardingPluginInstalled({
-      cfg: {},
-      entry: {
-        pluginId: "demo-plugin",
-        label: "Demo Provider",
-        install: {
-          clawhubSpec: "clawhub:demo-plugin@2026.5.2",
-          defaultChoice: "clawhub",
-        },
-      },
-      prompter: {
-        select: vi.fn(async () => "clawhub"),
-        progress: vi.fn(() => ({ update, stop })),
-      } as never,
-      runtime: {} as never,
-    });
-
-    await waitForMockCall(installPluginFromClawHub);
-    expect(installPluginFromClawHub).toHaveBeenCalled();
-
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(update).toHaveBeenCalledWith("Downloading");
-    expect(
-      update.mock.calls.some(
-        ([message]) =>
-          typeof message === "string" && /^Downloading {2}\[[█░]{16}\] \d+%$/u.test(message),
-      ),
-    ).toBe(true);
-
-    deferred.resolve({
-      ok: true,
-      pluginId: "demo-plugin",
-      targetDir: "/tmp/demo-plugin",
-      version: "2026.5.2",
-      packageName: "demo-plugin",
-      clawhub: {
-        source: "clawhub",
-        clawhubUrl: "https://clawhub.ai",
-        clawhubPackage: "demo-plugin",
-        clawhubFamily: "code-plugin",
-        clawhubChannel: "official",
-        version: "2026.5.2",
-        integrity: "sha256-clawpack",
-        resolvedAt: "2026-05-02T00:00:00.000Z",
-        clawpackSha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        clawpackSpecVersion: 1,
-        clawpackManifestSha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        clawpackSize: 4096,
-      },
-    });
-    await install;
-  });
-
-  it("animates npm install progress while the remote install is running", async () => {
-    const deferred = createDeferred<Awaited<ReturnType<typeof installPluginFromNpmSpec>>>();
-    installPluginFromNpmSpec.mockImplementation(async (params) => {
-      params.logger?.info?.("Resolving npm package…");
-      return await deferred.promise;
-    });
-    const stop = vi.fn();
-    const update = vi.fn();
-
-    const install = ensureOnboardingPluginInstalled({
-      cfg: {},
-      entry: {
-        pluginId: "demo-plugin",
-        label: "Demo Plugin",
-        install: {
-          npmSpec: "@demo/plugin@1.2.3",
-        },
-      },
-      prompter: {
-        select: vi.fn(async () => "npm"),
-        progress: vi.fn(() => ({ update, stop })),
-      } as never,
-      runtime: {} as never,
-    });
-
-    await waitForMockCall(installPluginFromNpmSpec);
-    expect(installPluginFromNpmSpec).toHaveBeenCalled();
-
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    expect(update).toHaveBeenCalledWith("Resolving");
-    expect(
-      update.mock.calls.some(
-        ([message]) =>
-          typeof message === "string" && /^Resolving {2}\[[█░]{16}\] \d+%$/u.test(message),
-      ),
-    ).toBe(true);
-
-    deferred.resolve({
-      ok: true,
-      pluginId: "demo-plugin",
-      targetDir: "/tmp/demo-plugin",
-      version: "1.2.3",
-    });
-    await install;
-  });
-
   it("returns a timed out status and notes the retry path when npm install hangs", async () => {
     const note = vi.fn(async () => {});
     const stop = vi.fn();
@@ -435,7 +310,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
 
     expect(captured?.options).toEqual([
-      { value: "npm", label: "Remote install from npm (@demo/plugin)" },
+      { value: "npm", label: "Download from npm (@demo/plugin)" },
       { value: "skip", label: "Skip for now" },
     ]);
     expect(captured?.initialValue).toBe("npm");
@@ -474,11 +349,8 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
 
     expect(captured?.options).toEqual([
-      {
-        value: "clawhub",
-        label: "Remote install from ClawHub (clawhub:demo-plugin@2026.5.2)",
-      },
-      { value: "npm", label: "Remote install from npm (@openclaw/demo-plugin@2026.5.2)" },
+      { value: "clawhub", label: "Download from ClawHub (clawhub:demo-plugin@2026.5.2)" },
+      { value: "npm", label: "Download from npm (@openclaw/demo-plugin@2026.5.2)" },
       { value: "skip", label: "Skip for now" },
     ]);
     expect(captured?.initialValue).toBe("clawhub");
@@ -588,7 +460,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       expect(captured).toBeDefined();
       expect(captured?.message).toBe("Install Demo Plugin\\n plugin?");
       expect(captured?.options).toEqual([
-        { value: "npm", label: "Remote install from npm (@demo/plugin@1.2.3)" },
+        { value: "npm", label: "Download from npm (@demo/plugin@1.2.3)" },
         {
           value: "local",
           label: "Use local plugin path",
@@ -802,7 +674,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       });
 
       expect(captured).toBeDefined();
-      // "Remote install from npm (@openclaw/tlon)" must NOT appear: the bundled
+      // "Download from npm (@openclaw/tlon)" must NOT appear: the bundled
       // copy is what gets enabled, so the npm hint would only confuse
       // users into thinking the plugin is missing.
       expect(captured?.options).toEqual([

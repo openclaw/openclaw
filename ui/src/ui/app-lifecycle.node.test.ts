@@ -34,8 +34,6 @@ describe("handleDisconnected", () => {
     });
     const removeSpy = vi.spyOn(window, "removeEventListener").mockImplementation(() => undefined);
     const host = createHost();
-    const cancelChatDictation = vi.fn();
-    Object.assign(host, { cancelChatDictation });
     const disconnectSpy = (
       host.topbarObserver as unknown as { disconnect: ReturnType<typeof vi.fn> }
     ).disconnect;
@@ -44,7 +42,6 @@ describe("handleDisconnected", () => {
 
     expect(removeSpy).toHaveBeenCalledWith("popstate", host.popStateHandler);
     expect(host.connectGeneration).toBe(1);
-    expect(cancelChatDictation).toHaveBeenCalledTimes(1);
     expect(host.client).toBeNull();
     expect(host.connected).toBe(false);
     expect(disconnectSpy).toHaveBeenCalledTimes(1);
