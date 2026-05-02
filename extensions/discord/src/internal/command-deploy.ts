@@ -157,12 +157,15 @@ function comparableCommand(value: unknown): unknown {
     return value;
   }
   const omit = new Set([
-    "id",
     "application_id",
+    "description_localized",
+    "dm_permission",
     "guild_id",
+    "id",
+    "name_localized",
+    "nsfw",
     "version",
     "default_permission",
-    "nsfw",
   ]);
   return stableComparableObject(
     Object.fromEntries(
@@ -171,18 +174,50 @@ function comparableCommand(value: unknown): unknown {
   );
 }
 
-function stableComparableObject(value: unknown): unknown {
+const unorderedCommandArrayFields = new Set(["channel_types", "contexts", "integration_types"]);
+const optionComparisonOmittedFields = new Set([
+  "contexts",
+  "default_member_permissions",
+  "description_localized",
+  "integration_types",
+  "name_localized",
+]);
+
+function stableComparableObject(value: unknown, path: string[] = []): unknown {
   if (Array.isArray(value)) {
-    return value.map((entry) => stableComparableObject(entry));
+    const normalized = value.map((entry) => stableComparableObject(entry, path));
+    const key = path.at(-1);
+    if (
+      key &&
+      unorderedCommandArrayFields.has(key) &&
+      normalized.every(
+        (entry) =>
+          typeof entry === "string" || typeof entry === "number" || typeof entry === "boolean",
+      )
+    ) {
+      return normalized.toSorted((left, right) => String(left).localeCompare(String(right)));
+    }
+    return normalized;
   }
   if (!value || typeof value !== "object") {
     return value;
   }
   return Object.fromEntries(
     Object.entries(value as Record<string, unknown>)
-      .filter(([, entry]) => entry !== undefined)
+      .filter(([key, entry]) => {
+        if (entry === undefined) {
+          return false;
+        }
+        if (path.includes("options") && optionComparisonOmittedFields.has(key)) {
+          return false;
+        }
+        if ((key === "required" || key === "autocomplete") && entry === false) {
+          return false;
+        }
+        return true;
+      })
       .toSorted(([a], [b]) => a.localeCompare(b))
-      .map(([key, entry]) => [key, stableComparableObject(entry)]),
+      .map(([key, entry]) => [key, stableComparableObject(entry, [...path, key])]),
   );
 }
 
