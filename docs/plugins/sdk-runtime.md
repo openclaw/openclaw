@@ -360,7 +360,12 @@ Provider and channel execution paths must use the active runtime config snapshot
 
     ```typescript
     await api.runtime.system.enqueueSystemEvent(event);
-    api.runtime.system.requestHeartbeatNow();
+    api.runtime.system.requestHeartbeat({
+      source: "other",
+      intent: "event",
+      reason: "plugin-event",
+    });
+    api.runtime.system.requestHeartbeatNow({ reason: "plugin-event" }); // Deprecated compatibility alias.
     const output = await api.runtime.system.runCommandWithTimeout(cmd, args, opts);
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
