@@ -73,12 +73,14 @@ LABEL org.opencontainers.image.source="https://github.com/1aboveio/openclaw" \
 # Upstream's slim variant ships curl/openssl but not ca-certificates, so any
 # HTTPS call from the final image (gh, gcloud, openclaw runtime) fails with
 # curl error 77 / TLS errors. ffmpeg is needed by skills/extensions that
-# transcode audio or video.
+# transcode audio or video. gcloud's copied wrapper needs a Python runtime in
+# the final stage.
 USER root
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates ffmpeg && \
+    apt-get install -y --no-install-recommends ca-certificates ffmpeg python3 && \
     rm -rf /var/lib/apt/lists/*
 USER node
+ENV CLOUDSDK_PYTHON=/usr/bin/python3
 
 # Bring over /usr/local entirely — gh, lark-cli, the full node_modules tree
 # (top-level + any flat-installed peer deps), corepack home, share/. Source
