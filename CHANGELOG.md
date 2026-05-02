@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/chat history: merge Claude CLI transcript imports for Anthropic-routed sessions that still have a Claude CLI binding, so local chat history does not hide CLI JSONL turns. Fixes #75850. Thanks @alfredjbclaw.
 - Cron: make scheduler reload schedule comparison tolerate malformed persisted jobs, so one bad cron entry no longer aborts the whole tick. Fixes #75886. Thanks @samfox-ai.
 - Doctor/channels: warn after migrations when default Telegram or Discord accounts have no configured token and their env fallback (`TELEGRAM_BOT_TOKEN` or `DISCORD_BOT_TOKEN`) is unavailable, with secret-safe migration docs for checking state-dir `.env`. Fixes #74298. Thanks @lolaopenclaw.
 - Control UI/chat: keep live replies visible when a raw session alias such as `main` sends the chat turn but Gateway emits events under the canonical session key for the same run. Fixes #73716. Thanks @teebes.
