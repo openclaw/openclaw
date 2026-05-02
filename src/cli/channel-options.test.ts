@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, resolveCliChannelOptions } from "./channel-options.js";
+import { __testing as startupMetadataTesting } from "./startup-metadata.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 
@@ -23,6 +24,7 @@ vi.mock("../channels/ids.js", () => ({
 describe("resolveCliChannelOptions", () => {
   afterEach(() => {
     __testing.resetPrecomputedChannelOptionsForTests();
+    startupMetadataTesting.clearStartupMetadataCache();
     vi.clearAllMocks();
   });
 
