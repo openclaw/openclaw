@@ -50,6 +50,17 @@ type OpenRouterModelPayload = {
   pricing?: unknown;
 };
 
+type GatewayModelPricingRefreshParams = {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  fetchImpl?: typeof fetch;
+  workspaceDir?: string;
+  pluginMetadataSnapshot?: PluginMetadataRegistryView;
+  pluginLookUpTable?: PluginMetadataRegistryView;
+  manifestRegistry?: PluginManifestRegistry;
+  signal?: AbortSignal;
+};
+
 type ExternalPricingPolicy = {
   external: boolean;
   openRouter?: ExternalPricingSourcePolicy;
@@ -141,6 +152,11 @@ function isTimeoutError(error: unknown): boolean {
     return true;
   }
   return /\bTimeoutError\b/u.test(String(error));
+}
+
+function createPricingFetchSignal(signal: AbortSignal | undefined): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
+  return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
 
 function formatPricingFetchFailure(source: "LiteLLM" | "OpenRouter", error: unknown): string {
@@ -326,10 +342,13 @@ function parseLiteLLMPricing(entry: LiteLLMModelEntry): CachedModelPricing | nul
 
 type LiteLLMPricingCatalog = Map<string, CachedModelPricing>;
 
-async function fetchLiteLLMPricingCatalog(fetchImpl: typeof fetch): Promise<LiteLLMPricingCatalog> {
+async function fetchLiteLLMPricingCatalog(
+  fetchImpl: typeof fetch,
+  signal?: AbortSignal,
+): Promise<LiteLLMPricingCatalog> {
   const response = await fetchImpl(LITELLM_PRICING_URL, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: createPricingFetchSignal(signal),
   });
   if (!response.ok) {
     throw new Error(`LiteLLM pricing fetch failed: HTTP ${response.status}`);
@@ -982,10 +1001,11 @@ export function collectConfiguredModelPricingRefs(
 
 async function fetchOpenRouterPricingCatalog(
   fetchImpl: typeof fetch,
+  signal?: AbortSignal,
 ): Promise<Map<string, OpenRouterPricingEntry>> {
   const response = await fetchImpl(OPENROUTER_MODELS_URL, {
     headers: { Accept: "application/json" },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
+    signal: createPricingFetchSignal(signal),
   });
   if (!response.ok) {
     throw new Error(`OpenRouter /models failed: HTTP ${response.status}`);
@@ -1064,14 +1084,23 @@ function resolveLiteLLMPricingForRef(params: {
   return undefined;
 }
 
-function scheduleRefresh(params: { config: OpenClawConfig; fetchImpl: typeof fetch }): void {
+function scheduleRefresh(
+  params: GatewayModelPricingRefreshParams & { fetchImpl: typeof fetch },
+): void {
   clearRefreshTimer();
+  if (params.signal?.aborted) {
+    return;
+  }
   refreshTimer = setTimeout(() => {
     refreshTimer = null;
+    if (params.signal?.aborted) {
+      return;
+    }
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
       log.warn(`pricing refresh failed: ${String(error)}`);
     });
   }, CACHE_TTL_MS);
+  refreshTimer.unref?.();
 }
 
 function collectSeededPricing(params: {
@@ -1100,17 +1129,14 @@ function collectSeededPricing(params: {
   return seeded;
 }
 
-export async function refreshGatewayModelPricingCache(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  fetchImpl?: typeof fetch;
-  workspaceDir?: string;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
-  pluginLookUpTable?: PluginMetadataRegistryView;
-  manifestRegistry?: PluginManifestRegistry;
-}): Promise<void> {
+export async function refreshGatewayModelPricingCache(
+  params: GatewayModelPricingRefreshParams,
+): Promise<void> {
   if (!isGatewayModelPricingEnabled(params.config)) {
     clearRefreshTimer();
+    return;
+  }
+  if (params.signal?.aborted) {
     return;
   }
   if (inFlightRefresh) {
@@ -1147,6 +1173,9 @@ export async function refreshGatewayModelPricingCache(params: {
       allowPluginNormalization: normalizationOptions.allowPluginNormalization,
     });
     if (refs.length === 0) {
+      if (params.signal?.aborted) {
+        return;
+      }
       replaceGatewayModelPricingCache(seededPricing);
       clearRefreshTimer();
       return;
@@ -1157,17 +1186,21 @@ export async function refreshGatewayModelPricingCache(params: {
     let openRouterFailed = false;
     let litellmFailed = false;
     const [catalogById, litellmCatalog] = await Promise.all([
-      fetchOpenRouterPricingCatalog(fetchImpl).catch((error: unknown) => {
+      fetchOpenRouterPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
         log.warn(formatPricingFetchFailure("OpenRouter", error));
         openRouterFailed = true;
         return new Map<string, OpenRouterPricingEntry>();
       }),
-      fetchLiteLLMPricingCatalog(fetchImpl).catch((error: unknown) => {
+      fetchLiteLLMPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
         log.warn(formatPricingFetchFailure("LiteLLM", error));
         litellmFailed = true;
         return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
       }),
     ]);
+
+    if (params.signal?.aborted) {
+      return;
+    }
 
     const catalogByNormalizedId = new Map<string, OpenRouterPricingEntry>();
     for (const entry of catalogById.values()) {
@@ -1226,7 +1259,7 @@ export async function refreshGatewayModelPricingCache(params: {
       if (nextPricing.size === 0 && existingMeta.size > 0) {
         // Both sources failed — retain the entire existing cache.
         log.warn("Both pricing sources returned empty data — retaining existing cache");
-        scheduleRefresh({ config: params.config, fetchImpl });
+        scheduleRefresh({ ...params, fetchImpl });
         return;
       }
       // Partial failure — back-fill missing models from the existing cache.
@@ -1244,8 +1277,11 @@ export async function refreshGatewayModelPricingCache(params: {
       }
     }
 
+    if (params.signal?.aborted) {
+      return;
+    }
     replaceGatewayModelPricingCache(nextPricing);
-    scheduleRefresh({ config: params.config, fetchImpl });
+    scheduleRefresh({ ...params, fetchImpl });
   })();
 
   try {
@@ -1255,30 +1291,28 @@ export async function refreshGatewayModelPricingCache(params: {
   }
 }
 
-export function startGatewayModelPricingRefresh(params: {
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  fetchImpl?: typeof fetch;
-  workspaceDir?: string;
-  pluginMetadataSnapshot?: PluginMetadataRegistryView;
-  pluginLookUpTable?: PluginMetadataRegistryView;
-  manifestRegistry?: PluginManifestRegistry;
-}): () => void {
+export function startGatewayModelPricingRefresh(
+  params: GatewayModelPricingRefreshParams,
+): () => void {
   if (!isGatewayModelPricingEnabled(params.config)) {
     clearRefreshTimer();
     return () => {};
   }
   let stopped = false;
+  const abortController = new AbortController();
   queueMicrotask(() => {
     if (stopped) {
       return;
     }
-    void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-      log.warn(`pricing bootstrap failed: ${String(error)}`);
-    });
+    void refreshGatewayModelPricingCache({ ...params, signal: abortController.signal }).catch(
+      (error: unknown) => {
+        log.warn(`pricing bootstrap failed: ${String(error)}`);
+      },
+    );
   });
   return () => {
     stopped = true;
+    abortController.abort();
     clearRefreshTimer();
   };
 }
