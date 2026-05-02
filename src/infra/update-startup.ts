@@ -437,6 +437,11 @@ export async function runGatewayUpdateCheck(params: {
             },
           );
         }
+        // Persist notification state so the Homebrew hint is one-shot per
+        // version/tag, even when `update.checkOnStart` is false (in which
+        // case the regular startup-hint path never populates these fields).
+        nextState.lastNotifiedVersion = resolved.version;
+        nextState.lastNotifiedTag = tag;
         await writeState(statePath, nextState);
         return;
       }

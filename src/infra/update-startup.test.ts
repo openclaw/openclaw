@@ -488,6 +488,90 @@ describe("update-startup", () => {
     );
   });
 
+  it("persists Homebrew skip notification state when checkOnStart is disabled", async () => {
+    const cellarRoot = path.join(
+      tempDir,
+      "Cellar",
+      "openclaw",
+      "2026.4.25",
+      "libexec",
+      "lib",
+      "node_modules",
+      "openclaw",
+    );
+    await fs.mkdir(cellarRoot, { recursive: true });
+
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(cellarRoot);
+    vi.mocked(checkUpdateStatus).mockResolvedValue({
+      root: cellarRoot,
+      installKind: "package",
+      packageManager: "npm",
+    } satisfies UpdateCheckResult);
+    mockNpmChannelTag("latest", "2.0.0");
+
+    const log = { info: vi.fn() };
+    const runAutoUpdate = createAutoUpdateSuccessMock();
+
+    // First run with checkOnStart: false — startup hint path is skipped, so
+    // lastNotifiedVersion/Tag must be populated by the Homebrew skip branch
+    // itself or the hint will repeat on every eligible check.
+    await runGatewayUpdateCheck({
+      cfg: {
+        update: {
+          checkOnStart: false,
+          channel: "stable",
+          auto: {
+            enabled: true,
+            stableDelayHours: 0,
+            stableJitterHours: 0,
+          },
+        },
+      },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    const statePath = path.join(tempDir, "update-check.json");
+    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
+      lastNotifiedVersion?: string;
+      lastNotifiedTag?: string;
+    };
+    expect(parsed.lastNotifiedVersion).toBe("2.0.0");
+    expect(parsed.lastNotifiedTag).toBe("latest");
+    expect(runAutoUpdate).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledWith(
+      expect.stringContaining("auto-update skipped: Homebrew-managed install"),
+      expect.objectContaining({ version: "2.0.0", tag: "latest" }),
+    );
+
+    // Second run for the same version/tag should not re-log the hint.
+    log.info.mockClear();
+    await runGatewayUpdateCheck({
+      cfg: {
+        update: {
+          checkOnStart: false,
+          channel: "stable",
+          auto: {
+            enabled: true,
+            stableDelayHours: 0,
+            stableJitterHours: 0,
+          },
+        },
+      },
+      log,
+      isNixMode: false,
+      allowInTests: true,
+      runAutoUpdate,
+    });
+
+    expect(log.info).not.toHaveBeenCalledWith(
+      expect.stringContaining("auto-update skipped: Homebrew-managed install"),
+      expect.anything(),
+    );
+  });
+
   it("scheduleGatewayUpdateCheck returns a cleanup function", async () => {
     mockPackageUpdateStatus("latest", "2.0.0");
 
