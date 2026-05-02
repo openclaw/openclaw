@@ -492,8 +492,8 @@ describe("createCliJsonlStreamingParser — tool events", () => {
     parser.finish();
 
     expect(toolEvents).toEqual([
-      { phase: "start", name: "exec", toolCallId: "toolu_01" },
       { phase: "update", toolCallId: "toolu_01" },
+      { phase: "start", name: "exec", toolCallId: "toolu_01", args: { command: "date" } },
       { phase: "result", name: "exec", toolCallId: "toolu_01", args: { command: "date" } },
     ]);
   });

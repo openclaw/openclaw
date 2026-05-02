@@ -381,7 +381,7 @@ function parseClaudeCliStreamingDelta(params: {
 }
 
 export type CliToolEvent =
-  | { phase: "start"; name: string; toolCallId: string }
+  | { phase: "start"; name: string; toolCallId: string; args: Record<string, unknown> }
   | { phase: "update"; toolCallId: string }
   | { phase: "result"; name: string; toolCallId: string; args: Record<string, unknown> };
 
@@ -431,7 +431,6 @@ export function createCliJsonlStreamingParser(params: {
         const toolCallId = evt.content_block.id;
         const name = evt.content_block.name;
         inFlightTools.set(index, { name, toolCallId, partialJson: "" });
-        params.onToolEvent({ phase: "start", name, toolCallId });
         return;
       }
 
@@ -465,11 +464,18 @@ export function createCliJsonlStreamingParser(params: {
           } catch {
             // partial JSON from interrupted stream — emit empty args
           }
+          const sanitized = sanitizeToolArgs(args) as Record<string, unknown>;
+          params.onToolEvent({
+            phase: "start",
+            name: tool.name,
+            toolCallId: tool.toolCallId,
+            args: sanitized,
+          });
           params.onToolEvent({
             phase: "result",
             name: tool.name,
             toolCallId: tool.toolCallId,
-            args: sanitizeToolArgs(args) as Record<string, unknown>,
+            args: sanitized,
           });
         }
         return;
