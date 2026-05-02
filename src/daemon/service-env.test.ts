@@ -231,6 +231,20 @@ describe("getMinimalServicePathParts - Linux user directories", () => {
     expect(result).not.toContain("/Users/testuser/.local/share/pnpm");
   });
 
+  it("can omit missing stable user-bin defaults for service PATH audits", () => {
+    const result = getMinimalServicePathPartsFromEnv({
+      platform: "darwin",
+      env: { HOME: "/Users/testuser" },
+      existsSync: (candidate) => candidate === "/Users/testuser/.local/bin",
+      includeMissingUserBinDefaults: false,
+    });
+
+    expect(result).toContain("/Users/testuser/.local/bin");
+    expect(result).not.toContain("/Users/testuser/.npm-global/bin");
+    expect(result).not.toContain("/Users/testuser/bin");
+    expect(result).not.toContain("/Users/testuser/.nix-profile/bin");
+  });
+
   it("keeps env-configured roots when fallback directories are missing", () => {
     const result = getMinimalServicePathPartsFromEnv({
       platform: "linux",

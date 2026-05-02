@@ -32,6 +32,7 @@ type MinimalServicePathOptions = {
   cwd?: string;
   env?: Record<string, string | undefined>;
   existsSync?: (candidate: string) => boolean;
+  includeMissingUserBinDefaults?: boolean;
 };
 
 type BuildServicePathOptions = MinimalServicePathOptions & {
@@ -168,10 +169,14 @@ function addCommonUserBinDirs(
   dirs: string[],
   home: string,
   existsSync: (candidate: string) => boolean,
+  includeMissingDefaults: boolean,
 ): void {
-  dirs.push(`${home}/.local/bin`);
-  dirs.push(`${home}/.npm-global/bin`);
-  dirs.push(`${home}/bin`);
+  const addDefault = includeMissingDefaults
+    ? (candidate: string) => dirs.push(candidate)
+    : (candidate: string) => addExistingDir(dirs, candidate, existsSync);
+  addDefault(`${home}/.local/bin`);
+  addDefault(`${home}/.npm-global/bin`);
+  addDefault(`${home}/bin`);
   addExistingDir(dirs, `${home}/.volta/bin`, existsSync);
   addExistingDir(dirs, `${home}/.asdf/shims`, existsSync);
   addExistingDir(dirs, `${home}/.bun/bin`, existsSync);
@@ -196,6 +201,8 @@ function addNixProfileBinDirs(
   home: string,
   env: Record<string, string | undefined> | undefined,
   options: Pick<MinimalServicePathOptions, "cwd" | "home">,
+  includeMissingDefault: boolean,
+  existsSync: (candidate: string) => boolean,
 ): void {
   const nixProfiles = env?.NIX_PROFILES?.trim();
   if (nixProfiles) {
@@ -203,7 +210,12 @@ function addNixProfileBinDirs(
       addEnvConfiguredBinDir(dirs, appendSubdir(profile, "bin"), options);
     }
   } else {
-    dirs.push(`${home}/.nix-profile/bin`);
+    const defaultProfileBin = `${home}/.nix-profile/bin`;
+    if (includeMissingDefault) {
+      dirs.push(defaultProfileBin);
+    } else {
+      addExistingDir(dirs, defaultProfileBin, existsSync);
+    }
   }
 }
 
@@ -229,7 +241,7 @@ function resolveDarwinUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
   existsSync: (candidate: string) => boolean = fs.existsSync,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home"> = {},
+  options: Pick<MinimalServicePathOptions, "cwd" | "home" | "includeMissingUserBinDefaults"> = {},
 ): string[] {
   if (!home) {
     return [];
@@ -237,6 +249,7 @@ function resolveDarwinUserBinDirs(
 
   const dirs: string[] = [];
   const pathOptions = { ...options, home };
+  const includeMissingUserBinDefaults = options.includeMissingUserBinDefaults ?? true;
 
   // Env-configured bin roots (override defaults when present).
   // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
@@ -250,10 +263,10 @@ function resolveDarwinUserBinDirs(
   // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
 
   // Common user bin directories
-  addCommonUserBinDirs(dirs, home, existsSync);
+  addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
 
   // Nix Home Manager (cross-platform)
-  addNixProfileBinDirs(dirs, home, env, pathOptions);
+  addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
 
   // Node version managers - macOS specific paths
   // nvm: no stable default path, depends on user's shell configuration
@@ -275,7 +288,7 @@ function resolveLinuxUserBinDirs(
   home: string | undefined,
   env?: Record<string, string | undefined>,
   existsSync: (candidate: string) => boolean = fs.existsSync,
-  options: Pick<MinimalServicePathOptions, "cwd" | "home"> = {},
+  options: Pick<MinimalServicePathOptions, "cwd" | "home" | "includeMissingUserBinDefaults"> = {},
 ): string[] {
   if (!home) {
     return [];
@@ -283,6 +296,7 @@ function resolveLinuxUserBinDirs(
 
   const dirs: string[] = [];
   const pathOptions = { ...options, home };
+  const includeMissingUserBinDefaults = options.includeMissingUserBinDefaults ?? true;
 
   // Env-configured bin roots (override defaults when present).
   addCommonEnvConfiguredBinDirs(dirs, env, pathOptions);
@@ -291,10 +305,10 @@ function resolveLinuxUserBinDirs(
   addEnvConfiguredBinDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"), pathOptions);
 
   // Common user bin directories
-  addCommonUserBinDirs(dirs, home, existsSync);
+  addCommonUserBinDirs(dirs, home, existsSync, includeMissingUserBinDefaults);
 
   // Nix Home Manager (cross-platform)
-  addNixProfileBinDirs(dirs, home, env, pathOptions);
+  addNixProfileBinDirs(dirs, home, env, pathOptions, includeMissingUserBinDefaults, existsSync);
 
   // Node version managers
   addExistingDir(dirs, `${home}/.nvm/current/bin`, existsSync); // nvm with current symlink

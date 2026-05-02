@@ -433,7 +433,11 @@ function auditGatewayServicePath(
     return;
   }
 
-  const expected = getMinimalServicePathPartsFromEnv({ platform, env });
+  const expected = getMinimalServicePathPartsFromEnv({
+    platform,
+    env,
+    includeMissingUserBinDefaults: false,
+  });
   const parts = servicePath
     .split(getPathModule(platform).delimiter)
     .map((entry) => entry.trim())

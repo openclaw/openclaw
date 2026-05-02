@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   auditGatewayServiceConfig,
@@ -118,6 +121,50 @@ describe("auditGatewayServiceConfig", () => {
     expect(
       audit.issues.some((issue) => issue.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs),
     ).toBe(false);
+  });
+
+  it("does not require missing unconfigured user-bin defaults in gateway service PATH", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-home-"));
+    try {
+      const localBin = path.join(home, ".local/bin");
+      await fs.mkdir(localBin, { recursive: true });
+      const servicePath = [
+        localBin,
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+      ].join(":");
+
+      const audit = await auditGatewayServiceConfig({
+        env: { HOME: home },
+        platform: "darwin",
+        command: {
+          programArguments: ["/usr/bin/node", "gateway"],
+          environment: { PATH: servicePath },
+        },
+      });
+
+      expect(hasIssue(audit, SERVICE_AUDIT_CODES.gatewayPathMissingDirs)).toBe(false);
+    } finally {
+      await fs.rm(home, { recursive: true, force: true });
+    }
+  });
+
+  it("still requires explicit env-configured tool roots in gateway service PATH", async () => {
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: "/tmp/openclaw-testuser", PNPM_HOME: "/opt/pnpm" },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/local/bin:/usr/bin:/bin" },
+      },
+    });
+
+    const issue = audit.issues.find(
+      (entry) => entry.code === SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
+    );
+    expect(issue?.message).toContain("/opt/pnpm");
   });
 
   it("accepts Linux fnm aliases/default without requiring the legacy current symlink", async () => {
