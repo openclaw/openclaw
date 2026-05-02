@@ -460,7 +460,7 @@ function buildExternalRunFailureReply(
 
 const DEFAULT_RESERVE_TOKENS_FLOOR = 20_000;
 
-function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
+export function computeContextAwareReserveTokensFloor(contextWindow: number | undefined): number {
   if (!contextWindow || contextWindow <= 0) {
     return DEFAULT_RESERVE_TOKENS_FLOOR;
   }
@@ -648,11 +648,10 @@ export function buildContextOverflowRecoveryText(params: {
   if (heartbeatHint) {
     return prefix + heartbeatHint;
   }
-  const primaryContextWindow = resolveContextTokensForModel({
+  const primaryContextWindow = resolveContextWindowForHint({
     cfg: params.cfg,
-    provider: params.primaryProvider,
-    model: params.primaryModel,
-    allowAsyncLoad: false,
+    ref: { provider: params.primaryProvider ?? "", model: params.primaryModel ?? "" },
+    activeSessionEntry: params.activeSessionEntry,
   });
   return prefix + buildContextOverflowResetHint(primaryContextWindow);
 }

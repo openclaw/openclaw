@@ -8,6 +8,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   buildContextOverflowRecoveryText,
+  computeContextAwareReserveTokensFloor,
   MAX_LIVE_SWITCH_RETRIES,
 } from "./agent-runner-execution.js";
 import type { FollowupRun } from "./queue.js";
@@ -384,6 +385,56 @@ describe("buildContextOverflowRecoveryText", () => {
 
     expect(text).toContain("reserveTokensFloor");
     expect(text).not.toContain("heartbeat model bleed");
+  });
+
+  it("uses session contextTokens as fallback when model metadata is unavailable", () => {
+    // When the primary model is not in context cache (undefined from resolveContextTokensForModel),
+    // but activeSessionEntry.contextTokens is 200000, the hint should recommend 50k (the 200k tier),
+    // not 20k (the default).
+    const text = buildContextOverflowRecoveryText({
+      cfg: {}, // no model metadata, so resolveContextTokensForModel returns undefined
+      primaryProvider: "openrouter",
+      primaryModel: "unknown-model-without-cache-entry",
+      activeSessionEntry: {
+        sessionId: "session",
+        updatedAt: 1,
+        modelProvider: "openrouter",
+        model: "some-known-model",
+        contextTokens: 200_000, // 200k session context should map to 50k tier
+      },
+    });
+
+    // Should contain "50000" (50k tier) not "20000" (default tier)
+    expect(text).toContain("50000");
+    expect(text).toContain("reserveTokensFloor");
+    expect(text).not.toContain("heartbeat model bleed");
+  });
+});
+
+describe("computeContextAwareReserveTokensFloor", () => {
+  it("returns 100_000 for context window >= 1M", () => {
+    expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
+    expect(computeContextAwareReserveTokensFloor(2_000_000)).toBe(100_000);
+  });
+
+  it("returns 50_000 for context window >= 200k and < 1M", () => {
+    expect(computeContextAwareReserveTokensFloor(200_000)).toBe(50_000);
+    expect(computeContextAwareReserveTokensFloor(500_000)).toBe(50_000);
+    expect(computeContextAwareReserveTokensFloor(999_999)).toBe(50_000);
+  });
+
+  it("returns 35_000 for context window >= 100k and < 200k", () => {
+    expect(computeContextAwareReserveTokensFloor(100_000)).toBe(35_000);
+    expect(computeContextAwareReserveTokensFloor(150_000)).toBe(35_000);
+    expect(computeContextAwareReserveTokensFloor(199_999)).toBe(35_000);
+  });
+
+  it("returns DEFAULT_RESERVE_TOKENS_FLOOR (20_000) for context window < 100k or undefined", () => {
+    expect(computeContextAwareReserveTokensFloor(99_999)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(50_000)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(undefined)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(0)).toBe(20_000);
+    expect(computeContextAwareReserveTokensFloor(-1)).toBe(20_000);
   });
 });
 
