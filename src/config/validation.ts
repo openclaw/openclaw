@@ -1,6 +1,7 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
+import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
 import {
   normalizePluginsConfig,
@@ -49,6 +50,10 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
+type ConfiguredModelRef = {
+  path: string;
+  value: string;
+};
 
 function stripDeprecatedValidationKeys(raw: unknown): unknown {
   if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
@@ -978,17 +983,26 @@ function validateConfigObjectWithPluginsBase(
     return ensureInstalledPluginRecordIds().has(normalizedChannelId);
   };
 
-  const collectKnownWebSearchProviderIds = (): string[] => {
+  const collectActiveWebSearchProviderIds = (): string[] => {
     const { registry } = ensureRegistry();
     return [
       ...new Set(
-        [
-          ...registry.plugins.flatMap((record) => record.contracts?.webSearchProviders ?? []),
-          ...resolveWebSearchInstallCatalogEntries().map((entry) => entry.provider.id),
-        ]
+        registry.plugins
+          .flatMap((record) => record.contracts?.webSearchProviders ?? [])
           .map((providerId) => providerId.trim())
           .filter((providerId) => providerId.length > 0),
       ),
+    ].toSorted((left, right) => left.localeCompare(right));
+  };
+
+  const collectKnownWebSearchProviderIds = (): string[] => {
+    return [
+      ...new Set([
+        ...collectActiveWebSearchProviderIds(),
+        ...resolveWebSearchInstallCatalogEntries()
+          .map((entry) => entry.provider.id.trim())
+          .filter((providerId) => providerId.length > 0),
+      ]),
     ].toSorted((left, right) => left.localeCompare(right));
   };
 
@@ -1034,8 +1048,23 @@ function validateConfigObjectWithPluginsBase(
       issues.push({ path, message: "web_search provider must not be empty" });
       return;
     }
+    const activeProviderIds = collectActiveWebSearchProviderIds();
+    if (activeProviderIds.includes(trimmed)) {
+      return;
+    }
+    const installCatalogEntry = resolveWebSearchInstallCatalogEntries().find(
+      (entry) => entry.provider.id === trimmed,
+    );
+    if (installCatalogEntry) {
+      issues.push({
+        path,
+        message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
+        allowedValues: collectKnownWebSearchProviderIds(),
+      });
+      return;
+    }
     const allowedValues = collectKnownWebSearchProviderIds();
-    if (allowedValues.length === 0 || allowedValues.includes(trimmed)) {
+    if (allowedValues.length === 0) {
       return;
     }
     const issue = {
@@ -1051,6 +1080,119 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     issues.push(issue);
+  };
+
+  const collectConfiguredModelRefs = (): ConfiguredModelRef[] => {
+    const refs: ConfiguredModelRef[] = [];
+    const pushModelRef = (path: string, value: unknown) => {
+      if (typeof value === "string" && value.trim()) {
+        refs.push({ path, value: value.trim() });
+      }
+    };
+    const collectModelConfig = (path: string, value: unknown) => {
+      if (typeof value === "string") {
+        pushModelRef(path, value);
+        return;
+      }
+      if (!isRecord(value)) {
+        return;
+      }
+      pushModelRef(`${path}.primary`, value.primary);
+      if (Array.isArray(value.fallbacks)) {
+        for (const [index, entry] of value.fallbacks.entries()) {
+          pushModelRef(`${path}.fallbacks.${index}`, entry);
+        }
+      }
+    };
+    const collectFromAgent = (path: string, agent: unknown) => {
+      if (!isRecord(agent)) {
+        return;
+      }
+      for (const key of [
+        "model",
+        "imageModel",
+        "imageGenerationModel",
+        "videoGenerationModel",
+        "musicGenerationModel",
+        "pdfModel",
+      ]) {
+        collectModelConfig(`${path}.${key}`, agent[key]);
+      }
+      if (isRecord(agent.models)) {
+        for (const modelRef of Object.keys(agent.models)) {
+          pushModelRef(`${path}.models.${modelRef}`, modelRef);
+        }
+      }
+    };
+
+    collectFromAgent("agents.defaults", config.agents?.defaults);
+    if (Array.isArray(config.agents?.list)) {
+      for (const [index, entry] of config.agents.list.entries()) {
+        collectFromAgent(`agents.list.${index}`, entry);
+      }
+    }
+    return refs;
+  };
+
+  const parseProviderModelRef = (value: string): { provider: string; model: string } | null => {
+    const slashIndex = value.indexOf("/");
+    if (slashIndex <= 0 || slashIndex >= value.length - 1) {
+      return null;
+    }
+    const provider = normalizeLowercaseStringOrEmpty(value.slice(0, slashIndex));
+    const model = normalizeLowercaseStringOrEmpty(value.slice(slashIndex + 1));
+    return provider && model ? { provider, model } : null;
+  };
+
+  const validateConfiguredModelRefs = () => {
+    const configuredRefs = collectConfiguredModelRefs();
+    if (configuredRefs.length === 0) {
+      return;
+    }
+    const { registry } = ensureRegistry();
+    const suppressedModels = new Map<
+      string,
+      { provider: string; model: string; reason?: string }
+    >();
+    for (const suppression of planManifestModelCatalogSuppressions({ registry }).suppressions) {
+      if (suppression.when) {
+        continue;
+      }
+      const key = `${suppression.provider}/${suppression.model}`;
+      if (!suppressedModels.has(key)) {
+        suppressedModels.set(key, {
+          provider: suppression.provider,
+          model: suppression.model,
+          ...(suppression.reason ? { reason: suppression.reason } : {}),
+        });
+      }
+    }
+    if (suppressedModels.size === 0) {
+      return;
+    }
+    const seen = new Set<string>();
+    for (const ref of configuredRefs) {
+      const parsed = parseProviderModelRef(ref.value);
+      if (!parsed) {
+        continue;
+      }
+      const suppression = suppressedModels.get(`${parsed.provider}/${parsed.model}`);
+      if (!suppression) {
+        continue;
+      }
+      const issueKey = `${ref.path}\0${parsed.provider}/${parsed.model}`;
+      if (seen.has(issueKey)) {
+        continue;
+      }
+      seen.add(issueKey);
+      const modelRef = `${suppression.provider}/${suppression.model}`;
+      issues.push({
+        path: ref.path,
+        message: suppression.reason
+          ? `Unknown model: ${modelRef}. ${suppression.reason}`
+          : `Unknown model: ${modelRef}.`,
+      });
+    }
   };
 
   const replaceChannelConfig = (channelId: string, nextValue: unknown) => {
@@ -1200,6 +1342,7 @@ function validateConfigObjectWithPluginsBase(
   }
 
   validateWebSearchProvider();
+  validateConfiguredModelRefs();
 
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {
