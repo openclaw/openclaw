@@ -1,6 +1,7 @@
 import { listChannelPluginCatalogEntries } from "../../../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../../../plugins/clawhub.js";
 import { resolveDefaultPluginExtensionsDir } from "../../../plugins/install-paths.js";
 import { installPluginFromNpmSpec } from "../../../plugins/install.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
@@ -14,9 +15,17 @@ import { asObjectRecord } from "./object.js";
 type DownloadableInstallCandidate = {
   pluginId: string;
   label: string;
-  npmSpec: string;
+  clawhubSpec?: string;
+  npmSpec?: string;
   expectedIntegrity?: string;
 };
+
+function shouldFallbackClawHubCandidateToNpm(result: { ok: false; code?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.PACKAGE_NOT_FOUND ||
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.VERSION_NOT_FOUND
+  );
+}
 
 function collectConfiguredPluginIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>();
@@ -68,14 +77,16 @@ function collectDownloadableInstallCandidates(params: {
     ) {
       continue;
     }
+    const clawhubSpec = entry.install.clawhubSpec?.trim();
     const npmSpec = entry.install.npmSpec?.trim();
-    if (!npmSpec) {
+    if (!clawhubSpec && !npmSpec) {
       continue;
     }
     candidates.set(pluginId, {
       pluginId,
       label: entry.meta.label,
-      npmSpec,
+      ...(clawhubSpec ? { clawhubSpec } : {}),
+      ...(npmSpec ? { npmSpec } : {}),
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),
@@ -90,14 +101,16 @@ function collectDownloadableInstallCandidates(params: {
     if (!configuredPluginIds.has(entry.pluginId) && !params.missingPluginIds.has(entry.pluginId)) {
       continue;
     }
+    const clawhubSpec = entry.install.clawhubSpec?.trim();
     const npmSpec = entry.install.npmSpec?.trim();
-    if (!npmSpec) {
+    if (!clawhubSpec && !npmSpec) {
       continue;
     }
     candidates.set(entry.pluginId, {
       pluginId: entry.pluginId,
       label: entry.label,
-      npmSpec,
+      ...(clawhubSpec ? { clawhubSpec } : {}),
+      ...(npmSpec ? { npmSpec } : {}),
       ...(entry.install.expectedIntegrity
         ? { expectedIntegrity: entry.install.expectedIntegrity }
         : {}),
@@ -118,6 +131,65 @@ async function installCandidate(params: {
   warnings: string[];
 }> {
   const { candidate } = params;
+  const warnings: string[] = [];
+  if (candidate.clawhubSpec) {
+    const result = await installPluginFromClawHub({
+      spec: candidate.clawhubSpec,
+      extensionsDir: resolveDefaultPluginExtensionsDir(),
+      expectedPluginId: candidate.pluginId,
+      mode: "install",
+    });
+    if (result.ok) {
+      const pluginId = result.pluginId;
+      return {
+        records: {
+          ...params.records,
+          [pluginId]: {
+            source: "clawhub",
+            spec: candidate.clawhubSpec,
+            installPath: result.targetDir,
+            version: result.version,
+            installedAt: new Date().toISOString(),
+            integrity: result.clawhub.integrity,
+            resolvedAt: result.clawhub.resolvedAt,
+            clawhubUrl: result.clawhub.clawhubUrl,
+            clawhubPackage: result.clawhub.clawhubPackage,
+            clawhubFamily: result.clawhub.clawhubFamily,
+            clawhubChannel: result.clawhub.clawhubChannel,
+            clawpackSha256: result.clawhub.clawpackSha256,
+            clawpackSpecVersion: result.clawhub.clawpackSpecVersion,
+            clawpackManifestSha256: result.clawhub.clawpackManifestSha256,
+            clawpackSize: result.clawhub.clawpackSize,
+          },
+        },
+        changes: [
+          `Installed missing configured plugin "${pluginId}" from ${candidate.clawhubSpec}.`,
+        ],
+        warnings: [],
+      };
+    }
+    if (!candidate.npmSpec || !shouldFallbackClawHubCandidateToNpm(result)) {
+      return {
+        records: params.records,
+        changes: [],
+        warnings: [
+          `Failed to install missing configured plugin "${candidate.pluginId}" from ${candidate.clawhubSpec}: ${result.error}`,
+        ],
+      };
+    }
+    warnings.push(
+      `ClawHub ${candidate.clawhubSpec} unavailable for ${candidate.pluginId}; falling back to npm ${candidate.npmSpec}.`,
+    );
+  }
+  if (!candidate.npmSpec) {
+    return {
+      records: params.records,
+      changes: [],
+      warnings: [
+        `Failed to install missing configured plugin "${candidate.pluginId}": no supported install source found.`,
+      ],
+    };
+  }
   const result = await installPluginFromNpmSpec({
     spec: candidate.npmSpec,
     extensionsDir: resolveDefaultPluginExtensionsDir(),
@@ -130,6 +202,7 @@ async function installCandidate(params: {
       records: params.records,
       changes: [],
       warnings: [
+        ...warnings,
         `Failed to install missing configured plugin "${candidate.pluginId}" from ${candidate.npmSpec}: ${result.error}`,
       ],
     };
@@ -148,7 +221,7 @@ async function installCandidate(params: {
       },
     },
     changes: [`Installed missing configured plugin "${pluginId}" from ${candidate.npmSpec}.`],
-    warnings: [],
+    warnings,
   };
 }
 

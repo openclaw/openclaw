@@ -293,15 +293,17 @@ function resolveInstallRoute(packageJson, status) {
   }
   const install = packageJson.openclaw?.install;
   const release = packageJson.openclaw?.release;
+  const clawhubSpec =
+    typeof install?.clawhubSpec === "string" ? `: \`${install.clawhubSpec}\`` : "";
   const npmSpec =
     typeof install?.npmSpec === "string" && install.npmSpec !== packageJson.name
       ? `: \`${install.npmSpec}\``
       : "";
   if (release?.publishToClawHub === true && release?.publishToNpm === true) {
-    return `ClawHub + npm${npmSpec}`;
+    return clawhubSpec ? `ClawHub${clawhubSpec}; npm${npmSpec}` : `ClawHub + npm${npmSpec}`;
   }
   if (release?.publishToClawHub === true) {
-    return `ClawHub${npmSpec}`;
+    return `ClawHub${clawhubSpec || npmSpec}`;
   }
   if (release?.publishToNpm === true || typeof install?.npmSpec === "string") {
     return `npm${npmSpec}`;
@@ -311,7 +313,9 @@ function resolveInstallRoute(packageJson, status) {
 
 function resolveStatus({ dirName, packageJson, excludedDirs }) {
   const release = packageJson.openclaw?.release;
-  const hasInstallSpec = typeof packageJson.openclaw?.install?.npmSpec === "string";
+  const hasInstallSpec =
+    typeof packageJson.openclaw?.install?.clawhubSpec === "string" ||
+    typeof packageJson.openclaw?.install?.npmSpec === "string";
   const excluded =
     excludedDirs.has(dirName) || packageJson.openclaw?.bundle?.includeInCore === false;
   if (!excluded) {
