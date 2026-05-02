@@ -1133,12 +1133,15 @@ export async function runEmbeddedPiAgent(
             timedOut,
             idleTimedOut,
             timedOutDuringCompaction,
-            timedOutDuringToolExecution,
             sessionIdUsed,
             sessionFileUsed,
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
+          // Field is optional in the public harness SDK contract; default to
+          // false here so internal code can rely on a strict boolean. Internal
+          // embedded-runner attempt sets this explicitly. See #52147.
+          const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
           }
