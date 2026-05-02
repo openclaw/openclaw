@@ -7,7 +7,6 @@ import {
   SessionManager,
   type FileEntry as PiSessionFileEntry,
 } from "@mariozechner/pi-coding-agent";
-import { v7 as uuidv7 } from "uuid";
 import { updateSessionStore } from "../config/sessions.js";
 import type {
   SessionCompactionCheckpoint,
@@ -261,7 +260,7 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
 
   const targetCwd = params.targetCwd ?? sourceHeader.cwd ?? process.cwd();
   const sessionDir = params.sessionDir ?? path.dirname(sourceFile);
-  const sessionId = uuidv7();
+  const sessionId = randomUUID();
   const timestamp = new Date().toISOString();
   const fileTimestamp = timestamp.replace(/[:.]/g, "-");
   const sessionFile = path.join(sessionDir, `${fileTimestamp}_${sessionId}.jsonl`);

@@ -64,8 +64,25 @@ function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
   }
 }
 
+function isExplicitlyDownloadablePlugin(packageJson: Record<string, unknown> | undefined): boolean {
+  const openclaw = packageJson?.openclaw;
+  if (!openclaw || typeof openclaw !== "object" || Array.isArray(openclaw)) {
+    return false;
+  }
+  const bundle = (openclaw as { bundle?: unknown }).bundle;
+  return (
+    bundle !== null &&
+    typeof bundle === "object" &&
+    !Array.isArray(bundle) &&
+    (bundle as { includeInCore?: unknown }).includeInCore === false
+  );
+}
+
 function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {
   const packageJson = readJsonRecord(path.join(pluginDir, "package.json"));
+  if (isExplicitlyDownloadablePlugin(packageJson)) {
+    return undefined;
+  }
   const extensions = normalizeBundledPluginStringList(
     packageJson?.openclaw && typeof packageJson.openclaw === "object"
       ? (packageJson.openclaw as { extensions?: unknown }).extensions

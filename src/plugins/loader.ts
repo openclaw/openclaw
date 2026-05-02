@@ -1176,6 +1176,12 @@ function activatePluginRegistry(
 }
 
 export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegistry {
+  const requestedOnlyPluginIds = normalizePluginIdScope(options.onlyPluginIds);
+  const requestedOnlyPluginIdSet = createPluginIdScopeSet(requestedOnlyPluginIds);
+  if (options.activate === false && requestedOnlyPluginIdSet?.size === 0) {
+    return createEmptyPluginRegistry();
+  }
+
   const {
     env,
     cfg,
