@@ -900,7 +900,7 @@ describe("processDiscordMessage session routing", () => {
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
   });
 
-  it("suppresses automatic status reactions for always-on guild replies", async () => {
+  it("sends the configured ack while suppressing automatic status reactions for always-on guild replies", async () => {
     const ctx = await createBaseContext({
       shouldRequireMention: false,
       effectiveWasMentioned: false,
@@ -921,7 +921,7 @@ describe("processDiscordMessage session routing", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
+    expect(getReactionEmojis()).toEqual(["👀"]);
     expect(sendMocks.removeReactionDiscord).not.toHaveBeenCalled();
   });
 
