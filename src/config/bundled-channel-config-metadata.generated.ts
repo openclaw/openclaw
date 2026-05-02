@@ -1347,6 +1347,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                         },
                       ],
                     },
+                    thread: {
+                      type: "object",
+                      properties: {
+                        requireMention: {
+                          type: "boolean",
+                        },
+                      },
+                      additionalProperties: false,
+                    },
                   },
                   additionalProperties: false,
                 },
@@ -2749,6 +2758,15 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                                 const: 10080,
                               },
                             ],
+                          },
+                          thread: {
+                            type: "object",
+                            properties: {
+                              requireMention: {
+                                type: "boolean",
+                              },
+                            },
+                            additionalProperties: false,
                           },
                         },
                         additionalProperties: false,
