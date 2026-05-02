@@ -51,6 +51,16 @@ export type PluginsConfig = {
   allow?: string[];
   /** Optional plugin denylist (plugin ids). */
   deny?: string[];
+  /**
+   * Controls whether bundled plugins bypass `allow` / `entries` on runtime
+   * provider discovery paths.
+   *
+   * - `"compat"` (default): bundled provider plugins are force-loaded on
+   *   every chat turn regardless of the allowlist (legacy behavior).
+   * - `"respect-allow"`: bundled provider plugins are gated by `allow` and
+   *   `entries.<id>.enabled` the same way third-party plugins are.
+   */
+  bundledMode?: "compat" | "respect-allow";
   load?: PluginsLoadConfig;
   slots?: PluginSlotsConfig;
   entries?: Record<string, PluginEntryConfig>;

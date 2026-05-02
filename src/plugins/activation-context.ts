@@ -78,13 +78,20 @@ export function withActivatedPluginIds(params: {
   if (params.pluginIds.length === 0) {
     return params.config;
   }
-  const allow = new Set(params.config?.plugins?.allow ?? []);
+  const originalAllow = params.config?.plugins?.allow ?? [];
+  const respectAllow =
+    params.config?.plugins?.bundledMode === "respect-allow" && originalAllow.length > 0;
+  const originalAllowSet = respectAllow ? new Set(originalAllow) : undefined;
+  const allow = new Set(originalAllow);
   const entries = {
     ...params.config?.plugins?.entries,
   };
   for (const pluginId of params.pluginIds) {
     const normalized = pluginId.trim();
     if (!normalized) {
+      continue;
+    }
+    if (originalAllowSet && !originalAllowSet.has(normalized)) {
       continue;
     }
     allow.add(normalized);
