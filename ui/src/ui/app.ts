@@ -984,11 +984,18 @@ export class OpenClawApp extends LitElement {
       this.chatDictationRecorder = recorder;
       this.chatDictationChunks = [];
       recorder.addEventListener("dataavailable", (event) => {
+        if (this.chatDictationRecorder !== recorder || this.chatDictationCancelNextStop) {
+          return;
+        }
         if (event.data.size > 0) {
           this.chatDictationChunks.push(event.data);
         }
       });
       recorder.addEventListener("error", (event) => {
+        if (this.chatDictationRecorder === recorder) {
+          this.chatDictationRecorder = null;
+        }
+        this.chatDictationChunks = [];
         this.chatDictationStatus = "error";
         this.chatDictationDetail =
           event.message || event.error?.message || "Dictation recording failed";
@@ -996,14 +1003,23 @@ export class OpenClawApp extends LitElement {
         this.stopChatDictationStream();
       });
       recorder.addEventListener("stop", () => {
-        const chunks = this.chatDictationChunks;
-        const canceled = this.chatDictationCancelNextStop;
+        const isCurrentRecorder = this.chatDictationRecorder === recorder;
+        const chunks = isCurrentRecorder ? this.chatDictationChunks : [];
+        if (isCurrentRecorder) {
+          this.chatDictationChunks = [];
+        }
+        const canceledByRequest = this.chatDictationCancelNextStop;
+        const canceled = canceledByRequest || !isCurrentRecorder;
         this.chatDictationCancelNextStop = false;
-        this.chatDictationRecorder = null;
-        this.stopChatDictationStream();
+        if (isCurrentRecorder) {
+          this.chatDictationRecorder = null;
+          this.stopChatDictationStream();
+        }
         if (canceled) {
-          this.chatDictationStatus = "idle";
-          this.chatDictationDetail = null;
+          if (canceledByRequest && this.chatDictationStatus !== "error") {
+            this.chatDictationStatus = "idle";
+            this.chatDictationDetail = null;
+          }
           return;
         }
         const blob = new Blob(chunks, {
@@ -1038,6 +1054,7 @@ export class OpenClawApp extends LitElement {
     }
     this.chatDictationRecorder = null;
     this.chatDictationChunks = [];
+    this.chatDictationCancelNextStop = false;
     this.stopChatDictationStream();
     this.chatDictationStatus = "idle";
     this.chatDictationDetail = null;
