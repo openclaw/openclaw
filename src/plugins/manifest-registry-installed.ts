@@ -59,6 +59,7 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
         installRecordHash: record.installRecordHash,
         packageInstall: record.packageInstall,
         packageChannel: record.packageChannel,
+        packageBundle: record.packageBundle,
         manifestPath: record.manifestPath,
         manifestHash: record.manifestHash,
         manifestFile: safeFileSignature(record.manifestPath),
@@ -104,22 +105,29 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
 function resolveInstalledPackageManifest(
   record: InstalledPluginIndexRecord,
 ): OpenClawPackageManifest | undefined {
+  const fallbackPackageManifest =
+    record.packageChannel || record.packageBundle
+      ? {
+          ...(record.packageChannel ? { channel: record.packageChannel } : {}),
+          ...(record.packageBundle ? { bundle: record.packageBundle } : {}),
+        }
+      : undefined;
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageJsonPath = record.packageJson?.path
     ? path.resolve(rootDir, record.packageJson.path)
     : undefined;
   if (!packageJsonPath) {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest;
   }
   const relative = path.relative(rootDir, packageJsonPath);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest;
   }
   try {
     const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as PackageManifest;
     const packageManifest = getPackageManifestMetadata(packageJson);
     if (!packageManifest) {
-      return record.packageChannel ? { channel: record.packageChannel } : undefined;
+      return fallbackPackageManifest;
     }
     const channel =
       record.packageChannel || packageManifest.channel
@@ -128,12 +136,20 @@ function resolveInstalledPackageManifest(
             ...packageManifest.channel,
           }
         : undefined;
+    const bundle =
+      record.packageBundle || packageManifest.bundle
+        ? {
+            ...record.packageBundle,
+            ...packageManifest.bundle,
+          }
+        : undefined;
     return {
       ...packageManifest,
       ...(channel ? { channel } : {}),
+      ...(bundle ? { bundle } : {}),
     };
   } catch {
-    return record.packageChannel ? { channel: record.packageChannel } : undefined;
+    return fallbackPackageManifest;
   }
 }
 

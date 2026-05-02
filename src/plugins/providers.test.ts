@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
@@ -47,6 +48,7 @@ function createManifestProviderPlugin(params: {
   activation?: PluginManifestRecord["activation"];
   setup?: PluginManifestRecord["setup"];
   contracts?: PluginManifestRecord["contracts"];
+  packageManifest?: OpenClawPackageManifest;
 }): PluginManifestRecord {
   return {
     id: params.id,
@@ -57,6 +59,7 @@ function createManifestProviderPlugin(params: {
     modelSupport: params.modelSupport,
     activation: params.activation,
     setup: params.setup,
+    packageManifest: params.packageManifest,
     contracts: params.contracts,
     skills: [],
     hooks: [],
@@ -738,6 +741,40 @@ describe("resolvePluginProviders", () => {
 
     expectLastRuntimeRegistryLoad({
       onlyPluginIds: ["google", "kilocode", "moonshot"],
+    });
+  });
+
+  it("keeps externalized bundled providers out of core bundled compat expansion", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "google",
+        providerIds: ["google"],
+      }),
+      createManifestProviderPlugin({
+        id: "codex",
+        providerIds: ["codex"],
+        packageManifest: {
+          extensions: ["./index.ts"],
+          bundle: { includeInCore: false },
+        },
+      }),
+    ]);
+
+    resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["openrouter"],
+        },
+      },
+      bundledProviderAllowlistCompat: true,
+    });
+
+    expectResolvedAllowlistState({
+      expectedAllow: ["openrouter", "google"],
+      unexpectedAllow: ["codex"],
+    });
+    expectLastRuntimeRegistryLoad({
+      onlyPluginIds: ["google"],
     });
   });
 

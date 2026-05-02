@@ -872,11 +872,11 @@
           "type": "string"
         },
         "message_id": {
-          "description": "snake_case alias of messageId. If omitted, defaults to the current inbound message id when available.",
+          "description": "snake_case alias of messageId. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
           "type": "string"
         },
         "messageId": {
-          "description": "Target message id for reaction. If omitted, defaults to the current inbound message id when available.",
+          "description": "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
           "type": "string"
         },
         "mimeType": {
@@ -1087,7 +1087,7 @@
     "name": "heartbeat_respond"
   },
   {
-    "description": "Convert text to speech. Audio is delivered automatically from the tool result. After a successful call, follow the current conversation's reply instructions and avoid sending a duplicate text/audio response.",
+    "description": "Use only for explicit audio intent (audio, voice, speech, TTS) or active TTS config. Never use for ordinary text replies. Audio is delivered automatically from the tool result. After a successful call, follow the current conversation's reply instructions and avoid sending a duplicate text/audio response.",
     "inputSchema": {
       "properties": {
         "channel": {

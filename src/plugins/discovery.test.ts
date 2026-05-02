@@ -953,6 +953,36 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it("skips bundled package plugins that are externalized from core", () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled");
+    const pluginDir = path.join(bundledDir, "downloadable");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/downloadable",
+        openclaw: {
+          extensions: ["./index.ts"],
+          bundle: {
+            includeInCore: false,
+          },
+        },
+      }),
+      "utf-8",
+    );
+    writePluginManifest({ pluginDir, id: "downloadable" });
+    writePluginEntry(path.join(pluginDir, "index.ts"));
+
+    const { candidates } = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      }),
+    });
+
+    expectCandidateIds(candidates, { excludes: ["downloadable"] });
+  });
+
   it("does not discover nested node_modules copies under installed plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "opik-openclaw");

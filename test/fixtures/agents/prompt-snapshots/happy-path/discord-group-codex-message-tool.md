@@ -520,11 +520,11 @@ can you audit whether this prompt path has conflicting silence instructions?
           "type": "string"
         },
         "message_id": {
-          "description": "snake_case alias of messageId. If omitted, defaults to the current inbound message id when available.",
+          "description": "snake_case alias of messageId. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
           "type": "string"
         },
         "messageId": {
-          "description": "Target message id for reaction. If omitted, defaults to the current inbound message id when available.",
+          "description": "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
           "type": "string"
         },
         "mimeType": {

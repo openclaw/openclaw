@@ -20,7 +20,7 @@ import type {
 } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
-import { loadBundledPluginApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 export const HAPPY_PATH_PROMPT_SNAPSHOT_DIR = "test/fixtures/agents/prompt-snapshots/happy-path";
 
@@ -92,7 +92,7 @@ type PromptScenario = {
   toolSnapshotFile: string;
 };
 
-const codexApi = loadBundledPluginApiSync("codex") as CodexPromptSnapshotApi;
+const codexApi = loadBundledPluginTestApiSync("codex") as CodexPromptSnapshotApi;
 
 const baseConfig: OpenClawConfig = {
   messages: {

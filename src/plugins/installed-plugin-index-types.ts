@@ -5,7 +5,7 @@ import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import type { PluginPackageChannel } from "./manifest.js";
+import type { OpenClawPackageBundle, PluginPackageChannel } from "./manifest.js";
 
 export const INSTALLED_PLUGIN_INDEX_VERSION = 1;
 export const INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION = 1;
@@ -61,6 +61,7 @@ export type InstalledPluginInstallRecordInfo = Pick<
 >;
 
 export type InstalledPluginPackageChannelInfo = PluginPackageChannel;
+export type InstalledPluginPackageBundleInfo = OpenClawPackageBundle;
 
 export type InstalledPluginIndexRecord = {
   pluginId: string;
@@ -79,6 +80,7 @@ export type InstalledPluginIndexRecord = {
    */
   packageInstall?: PluginInstallSourceInfo;
   packageChannel?: InstalledPluginPackageChannelInfo;
+  packageBundle?: InstalledPluginPackageBundleInfo;
   manifestPath: string;
   manifestHash: string;
   format?: PluginManifestRecord["format"];

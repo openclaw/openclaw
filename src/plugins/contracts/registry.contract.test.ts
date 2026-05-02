@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
-import { loadPluginManifestRegistry } from "../manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRecord } from "../manifest-registry.js";
 import { isPackageIncludedInCoreBundle } from "../manifest.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
 import {
@@ -16,34 +16,14 @@ describe("plugin contract registry", () => {
 
   function expectRegistryPluginIds(params: {
     actualPluginIds: readonly string[];
-    predicate: (plugin: {
-      origin: string;
-      providers: unknown[];
-      contracts?: {
-        speechProviders?: unknown[];
-        realtimeTranscriptionProviders?: unknown[];
-        realtimeVoiceProviders?: unknown[];
-        migrationProviders?: unknown[];
-      };
-    }) => boolean;
+    predicate: (plugin: PluginManifestRecord) => boolean;
   }) {
     expect(uniqueSortedStrings(params.actualPluginIds)).toEqual(
       resolveBundledManifestPluginIds(params.predicate),
     );
   }
 
-  function resolveBundledManifestPluginIds(
-    predicate: (plugin: {
-      origin: string;
-      providers: unknown[];
-      contracts?: {
-        speechProviders?: unknown[];
-        realtimeTranscriptionProviders?: unknown[];
-        realtimeVoiceProviders?: unknown[];
-        migrationProviders?: unknown[];
-      };
-    }) => boolean,
-  ) {
+  function resolveBundledManifestPluginIds(predicate: (plugin: PluginManifestRecord) => boolean) {
     return loadPluginManifestRegistry({})
       .plugins.filter(
         (plugin) =>
