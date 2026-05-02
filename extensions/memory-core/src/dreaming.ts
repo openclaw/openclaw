@@ -749,14 +749,14 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     ].join("|");
 
   const reconcileManagedDreamingCron = async (params: {
-    reason: "startup" | "runtime";
+    reason: "startup" | "runtime" | "startup_retry";
     startupConfig?: OpenClawConfig;
     startupCron?: (() => CronServiceLike | null) | null;
   }): Promise<ShortTermPromotionDreamingConfig> => {
     const startupCfg =
       params.reason === "startup" ? (params.startupConfig ?? api.config) : resolveCurrentConfig();
     const pluginConfig =
-      params.reason === "runtime"
+      params.reason === "runtime" || params.reason === "startup_retry"
         ? resolveMemoryCorePluginConfig(startupCfg)
         : (resolveMemoryCorePluginConfig(startupCfg) ??
           resolveMemoryCorePluginConfig(api.config) ??
@@ -773,7 +773,11 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     // This handles the case where the cron service was not yet available during
     // gateway_start (250ms deferred init race in startGatewaySidecars) but is
     // available now.  Fixes #67362.
-    if (!cron && params.reason === "runtime" && gatewayContext) {
+    if (
+      !cron &&
+      (params.reason === "runtime" || params.reason === "startup_retry") &&
+      gatewayContext
+    ) {
       try {
         cron = resolveCronServiceFromGatewayContext(gatewayContext);
         if (cron) {
@@ -787,11 +791,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     const configKey = runtimeConfigKey(config);
     if (!cron && config.enabled && !unavailableCronWarningEmitted) {
       // Avoid a noisy startup-path warning when the gateway has not exposed cron yet.
-      // The runtime reconciliation path (heartbeat-driven) will still warn if the
-      // cron service remains unavailable after boot.
-      if (params.reason === "startup") {
+      // Only suppress when the reconciliation was explicitly triggered by the startup
+      // retry callback or initial startup, not ambient runtime heartbeats.
+      if (params.reason === "startup" || params.reason === "startup_retry") {
         api.logger.debug?.(
-          "memory-core: cron service not yet available at gateway_start; deferring to runtime reconciliation.",
+          params.reason === "startup"
+            ? "memory-core: cron service not yet available at gateway_start; deferring to runtime reconciliation."
+            : "memory-core: managed dreaming cron not yet reconciled during startup retry window (cron service unavailable).",
         );
       } else {
         api.logger.warn(
@@ -804,7 +810,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       unavailableCronWarningEmitted = false;
       clearStartupCronRetry();
     }
-    if (params.reason === "runtime") {
+    if (params.reason === "runtime" || params.reason === "startup_retry") {
       const now = Date.now();
       const withinThrottleWindow =
         now - lastRuntimeReconcileAtMs < RUNTIME_CRON_RECONCILE_INTERVAL_MS;
@@ -841,7 +847,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return;
       }
       startupCronRetryAttempts += 1;
-      void reconcileManagedDreamingCron({ reason: "runtime" })
+      void reconcileManagedDreamingCron({ reason: "startup_retry" })
         .then(() => {
           if (disposed || hasStartupCron()) {
             clearStartupCronRetry();
