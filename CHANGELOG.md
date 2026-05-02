@@ -2,37 +2,22 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
-
-### Changes
-
-- Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
-- Plugins/diagnostics: make diagnostics OpenTelemetry and Prometheus ClawHub-first installs while keeping npm fallback metadata for release cutovers. Thanks @vincentkoc.
-- Plugins/onboarding: carry ClawHub install metadata through channel setup catalogs so missing channel plugins can install from ClawHub before npm/local fallback. Thanks @vincentkoc.
-- Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
-
-### Fixes
-
-- Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
-- Plugins/source checkout: discover source-only plugins such as Codex from the `extensions/*` workspace while using npm package excludes as the packaged-core boundary, removing the stale core-bundle metadata path.
-- Plugins/ClawHub: install ClawPack artifacts from the explicit npm-pack `.tgz` resolver path instead of the legacy ZIP-shaped placeholder route. Thanks @vincentkoc.
-- Plugins/ClawHub: persist ClawHub artifact kind plus npm integrity, shasum, and tarball metadata on ClawPack install records for update and diagnostics flows. Thanks @vincentkoc.
-- Control UI: allow deployments to configure grouped chat message max-width with a validated `gateway.controlUi.chatMessageMaxWidth` setting instead of patching bundled CSS after upgrades. Fixes #67935. Thanks @xiew4589-lang.
-- Control UI/Cron: ignore malformed persisted cron rows without valid payloads before they enter UI state and guard stale cron render paths, preventing blank Control UI sections after a bad cron snapshot. Fixes #55047 and #54439; supersedes #54550 and #54552.
-- Control UI/sessions: bound the default Sessions tab query to recent activity and fewer rows, avoiding expensive full-history loads while keeping filters editable. Fixes #76050. (#76051) Thanks @Neomail2.
-- Plugins/doctor: repair missing configured provider and channel plugins from ClawHub before npm fallback, preserving ClawPack metadata in the install record. Thanks @vincentkoc.
-- Gateway/channels: cap startup fanout at four channel/account handoffs and recover from Bonjour ciao self-probe races, reducing Windows startup stalls with many Telegram accounts. Fixes #75687.
-- Gateway/sessions: keep `sessions.list` polling responsive on large session stores by reusing list-safe session cache/indexes and returning a lightweight compaction checkpoint preview instead of heavyweight summaries. Thanks @rolandrscheel.
-- Control UI/Gateway: keep long-running dashboard WebSocket sessions alive with protocol pings and keep Stop available after reconnect or reload by recovering session-scoped active-run abort state. Fixes #70991. Thanks @alexandre-leng.
-- CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
-- Agents/failover: exempt run-level timeouts that fire during tool execution from model fallback, timeout-triggered compaction, and generic timeout payload synthesis. Long `process(poll)`, browser, or `exec` tool calls that exceed `agents.defaults.timeoutSeconds` previously rotated auth profiles, switched to a fallback model, and surfaced a misleading "LLM request timed out" error even though the primary model had already responded. Mirrors the existing `timedOutDuringCompaction` precedent (#46889). Fixes #52147. (#75873) Thanks @simonusa.
-- Docker: copy Bun 1.3.13 from a digest-pinned image and keep CI on the same version. Fixes #74356. Thanks @fede-kamel and @sallyom.
-- Agents/compaction: keep prior context on consecutive turns against z.ai-style providers (z.ai direct, openrouter z-ai/\*, in-house GLM gateways); Pi's internal auto-compaction was misfiring after successful turns and clearing state.messages before the next provider request. (#76056) Thanks @openperf.
-
 ## 2026.5.2
 
+### Highlights
+
+- Alpha prerelease support adds the `vYYYY.M.D-alpha.N` tag shape, npm `alpha` dist-tag, release workflow inputs, package acceptance, Telegram package checks, and upgrade-survivor validation paths.
+- ClawHub-first plugin installation now covers diagnostics, onboarding, doctor repair, channel setup, install/update records, and artifact metadata while keeping npm fallback for cutovers. Thanks @vincentkoc.
+- Gateway startup, session listing, task maintenance, prompt prep, plugin loading, and filesystem hot paths get targeted cache and fanout reductions for large or plugin-heavy installs.
+- Control UI and WebChat reliability improves across Sessions, Cron, long-running Gateway WebSockets, grouped-message width, slash-command feedback, iOS PWA bounds, selection contrast, and Talk diagnostics.
+- Channel and provider fixes cover Telegram topic commands and networking, Discord delivery and startup edge cases, OpenAI-compatible TTS/Realtime, OpenRouter/DeepSeek replay, Anthropic-compatible streaming, Brave/SearXNG/Firecrawl web search, and voice-call routing.
+
 ### Changes
 
+- Release: add first-class alpha prerelease support across version parsing, release workflows, package specs, published-package validation, plugin publish planning, and release docs.
+- Gateway/startup: skip plugin-backed auth-profile overlays during startup secrets preflight, reducing gateway readiness latency while keeping reload and OAuth recovery paths overlay-capable. (#68327) Thanks @JIRBOY.
+- Plugins/ClawHub: make diagnostics, onboarding, doctor repair, and channel setup prefer ClawHub installs while carrying ClawPack metadata through install records and npm fallback paths. Thanks @vincentkoc.
+- Plugins/runtime: scope broad runtime preloads to the effective plugin ids derived from config, startup planning, configured channels, slots, and auto-enable rules instead of importing every discoverable plugin.
 - Agents/runtime: reuse the startup-loaded plugin registry for request-time providers, tools, channel actions, web/capability/memory/migration helpers, and memoized provider extra-params so stable embedded-run inputs no longer repeat plugin registry resolution while model-specific transport hook patches stay isolated. Thanks @DmitryPogodaev.
 - Agents/runtime: memoize transcript replay-policy resolution for stable config and process-env runs while preserving custom-env provider hook behavior. Thanks @DmitryPogodaev.
 - Infra/path-guards: add a fast path for canonical absolute POSIX containment checks, avoiding repeated `path.resolve` and `path.relative` work in hot filesystem walkers. Refs #75895, #75575, and #68782. Thanks @Enderfga.
@@ -63,6 +48,19 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Codex/app-server: resolve managed binaries from bundled `dist` chunks and from the `@openai/codex` package bin when installs do not provide a nearby `.bin/codex` shim, avoiding false missing-binary startup failures.
+- Plugins/source checkout: discover source-only plugins such as Codex from the `extensions/*` workspace while using npm package excludes as the packaged-core boundary, removing the stale core-bundle metadata path.
+- Plugins/ClawHub: install ClawPack artifacts from the explicit npm-pack `.tgz` resolver path and persist artifact kind, npm integrity, shasum, and tarball metadata for update and diagnostics flows. Thanks @vincentkoc.
+- Control UI: allow deployments to configure grouped chat message max-width with a validated `gateway.controlUi.chatMessageMaxWidth` setting instead of patching bundled CSS after upgrades. Fixes #67935. Thanks @xiew4589-lang.
+- Control UI/Cron: ignore malformed persisted cron rows without valid payloads before they enter UI state and guard stale cron render paths, preventing blank Control UI sections after a bad cron snapshot. Fixes #55047 and #54439; supersedes #54550 and #54552.
+- Control UI/sessions: bound the default Sessions tab query to recent activity and fewer rows, avoiding expensive full-history loads while keeping filters editable. Fixes #76050. (#76051) Thanks @Neomail2.
+- Gateway/channels: cap startup fanout at four channel/account handoffs and recover from Bonjour ciao self-probe races, reducing Windows startup stalls with many Telegram accounts. Fixes #75687.
+- Gateway/sessions: keep `sessions.list` polling responsive on large session stores by reusing list-safe session cache/indexes and returning a lightweight compaction checkpoint preview instead of heavyweight summaries. Thanks @rolandrscheel.
+- Control UI/Gateway: keep long-running dashboard WebSocket sessions alive with protocol pings and keep Stop available after reconnect or reload by recovering session-scoped active-run abort state. Fixes #70991. Thanks @alexandre-leng.
+- CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
+- Agents/failover: exempt run-level timeouts that fire during tool execution from model fallback, timeout-triggered compaction, and generic timeout payload synthesis, avoiding misleading "LLM request timed out" errors after the primary model has already responded. Fixes #52147. (#75873) Thanks @simonusa.
+- Docker: copy Bun 1.3.13 from a digest-pinned image and keep CI on the same version. Fixes #74356. Thanks @fede-kamel and @sallyom.
+- Agents/compaction: keep prior context on consecutive turns against z.ai-style providers (z.ai direct, openrouter z-ai/\*, in-house GLM gateways), avoiding accidental Pi state reset after successful turns. (#76056) Thanks @openperf.
 - Doctor/plugins: run a one-time 2026.5.2 configured-plugin install repair based on `meta.lastTouchedVersion`, installing actively used downloadable OpenClaw plugins from ClawHub with npm fallback before marking the config touched for the release.
 - Sessions/transcripts: use one `session.writeLock.acquireTimeoutMs` policy for session transcript lock acquisitions and raise the default wait to 60 seconds, avoiding user-visible lock timeouts during legitimate slow prep, cleanup, compaction, and mirror work. Fixes #75894. Thanks @shandutta.
 - Control UI: contain the standalone iOS PWA viewport with safe-area-aware document locking, so Add-to-Home-Screen launches cannot scroll past the device bounds. Refs #76072. Thanks @kvncrw.
