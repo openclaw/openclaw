@@ -129,6 +129,7 @@ type FieldMeta = {
   label: string;
   help?: string;
   tags: string[];
+  docLink?: string;
 };
 
 function isSecretRefObject(value: unknown): value is {
@@ -273,7 +274,44 @@ function resolveFieldMeta(
     label,
     help,
     tags: hintTags.length > 0 ? hintTags : schemaTags,
+    docLink: hint?.docLink,
   };
+}
+
+function renderHelpBlock(
+  help: string | undefined,
+  docLink: string | undefined,
+  tags: string[],
+): TemplateResult | typeof nothing {
+  if (!help && !docLink && tags.length === 0) {
+    return nothing;
+  }
+  return html`
+    ${help
+      ? html`<div class="cfg-field__help">
+          ${help}${docLink
+            ? html` <a
+                class="cfg-field__doc-link"
+                href="https://docs.openclaw.ai/${docLink}"
+                target="_blank"
+                rel="noopener noreferrer"
+                >Docs ↗</a
+              >`
+            : nothing}
+        </div>`
+      : docLink
+        ? html`<div class="cfg-field__help">
+            <a
+              class="cfg-field__doc-link"
+              href="https://docs.openclaw.ai/${docLink}"
+              target="_blank"
+              rel="noopener noreferrer"
+              >Docs ↗</a
+            >
+          </div>`
+        : nothing}
+    ${renderTags(tags)}
+  `;
 }
 
 function matchesText(text: string, candidates: Array<string | undefined>): boolean {
@@ -306,7 +344,7 @@ function matchesNodeSelf(params: {
   if (!hasSearchCriteria(criteria)) {
     return true;
   }
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help, tags, docLink } = resolveFieldMeta(path, schema, hints);
   if (!matchesTags(criteria.tags, tags)) {
     return false;
   }
@@ -446,7 +484,7 @@ export function renderNode(params: {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const type = schemaType(schema);
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help, tags, docLink } = resolveFieldMeta(path, schema, hints);
   const key = pathKey(path);
   const criteria = params.searchCriteria;
 
@@ -494,7 +532,7 @@ export function renderNode(params: {
       return html`
         <div class="cfg-field">
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-          ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
+          ${renderHelpBlock(help, docLink, tags)}
           <div class="cfg-segmented">
             ${literals.map(
               (lit) => html`
@@ -569,7 +607,7 @@ export function renderNode(params: {
       return html`
         <div class="cfg-field">
           ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-          ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
+          ${renderHelpBlock(help, docLink, tags)}
           <div class="cfg-segmented">
             ${options.map(
               (opt) => html`
@@ -614,7 +652,19 @@ export function renderNode(params: {
       <label class="cfg-toggle-row ${disabled ? "disabled" : ""}">
         <div class="cfg-toggle-row__content">
           <span class="cfg-toggle-row__label">${label}</span>
-          ${help ? html`<span class="cfg-toggle-row__help">${help}</span>` : nothing}
+          ${help || docLink
+            ? html`<span class="cfg-toggle-row__help"
+                >${help}${docLink
+                  ? html` <a
+                      class="cfg-field__doc-link"
+                      href="https://docs.openclaw.ai/${docLink}"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      >Docs ↗</a
+                    >`
+                  : nothing}</span
+              >`
+            : nothing}
           ${renderTags(tags)}
         </div>
         <div class="cfg-toggle">
@@ -667,7 +717,7 @@ function renderTextInput(params: {
   const { schema, value, path, hints, disabled, onPatch, inputType } = params;
   const showLabel = params.showLabel ?? true;
   const hint = hintForPath(path, hints);
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help, tags, docLink } = resolveFieldMeta(path, schema, hints);
   const sensitiveState = getSensitiveRenderState({
     path,
     value,
@@ -698,7 +748,7 @@ function renderTextInput(params: {
   return html`
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
+      ${renderHelpBlock(help, docLink, tags)}
       <div class="cfg-input-wrap">
         <input
           type=${effectiveInputType}
@@ -778,14 +828,14 @@ function renderNumberInput(params: {
 }): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help, tags, docLink } = resolveFieldMeta(path, schema, hints);
   const displayValue = value ?? schema.default ?? "";
   const numValue = typeof displayValue === "number" ? displayValue : 0;
 
   return html`
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
+      ${renderHelpBlock(help, docLink, tags)}
       <div class="cfg-number">
         <button
           type="button"
@@ -832,7 +882,7 @@ function renderSelect(params: {
 }): TemplateResult {
   const { schema, value, path, hints, disabled, options, onPatch } = params;
   const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help, tags, docLink } = resolveFieldMeta(path, schema, hints);
   const resolvedValue = value ?? schema.default;
   const currentIndex = options.findIndex(
     (opt) => opt === resolvedValue || String(opt) === String(resolvedValue),
@@ -842,7 +892,7 @@ function renderSelect(params: {
   return html`
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
+      ${renderHelpBlock(help, docLink, tags)}
       <select
         class="cfg-select"
         ?disabled=${disabled}
@@ -878,7 +928,7 @@ function renderJsonTextarea(params: {
 }): TemplateResult {
   const { schema, value, path, hints, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help, tags, docLink } = resolveFieldMeta(path, schema, hints);
   const fallback = jsonValue(value);
   const sensitiveState = getSensitiveRenderState({
     path,
@@ -892,7 +942,7 @@ function renderJsonTextarea(params: {
   return html`
     <div class="cfg-field">
       ${showLabel ? html`<label class="cfg-field__label">${label}</label>` : nothing}
-      ${help ? html`<div class="cfg-field__help">${help}</div>` : nothing} ${renderTags(tags)}
+      ${renderHelpBlock(help, docLink, tags)}
       <div class="cfg-input-wrap">
         <textarea
           class="cfg-textarea${sensitiveState.isRedacted ? " cfg-textarea--redacted" : ""}"
@@ -964,7 +1014,7 @@ function renderObject(params: {
     onToggleSensitivePath,
   } = params;
   const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help, tags, docLink } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
@@ -993,23 +1043,98 @@ function renderObject(params: {
   const additional = schema.additionalProperties;
   const allowExtra = Boolean(additional) && typeof additional === "object";
 
+  const renderFieldNode = ([propKey, node]: [string, JsonSchema]) =>
+    renderNode({
+      schema: node,
+      value: obj[propKey],
+      path: [...path, propKey],
+      hints,
+      rawAvailable,
+      unsupported,
+      disabled,
+      searchCriteria: childSearchCriteria,
+      revealSensitive,
+      isSensitivePathRevealed,
+      onToggleSensitivePath,
+      onPatch,
+    });
+
+  // For top-level sections, split basic vs advanced fields unless searching
+  if (path.length === 1) {
+    const isSearchActive = childSearchCriteria && hasSearchCriteria(childSearchCriteria);
+    if (isSearchActive) {
+      const allFields = html`
+        ${sorted.map(renderFieldNode)}
+        ${allowExtra
+          ? renderMapField({
+              schema: additional,
+              value: obj,
+              path,
+              hints,
+              rawAvailable,
+              unsupported,
+              disabled,
+              reservedKeys: reserved,
+              searchCriteria: childSearchCriteria,
+              revealSensitive,
+              isSensitivePathRevealed,
+              onToggleSensitivePath,
+              onPatch,
+            })
+          : nothing}
+      `;
+      return html`<div class="cfg-fields">${allFields}</div>`;
+    }
+
+    const basicEntries = sorted.filter(
+      ([propKey]) => !hintForPath([...path, propKey], hints)?.advanced,
+    );
+    const advancedEntries = sorted.filter(
+      ([propKey]) => hintForPath([...path, propKey], hints)?.advanced === true,
+    );
+
+    const basicFields = basicEntries.map(renderFieldNode);
+    const advancedFields = advancedEntries.map(renderFieldNode);
+    const hasAdvanced = advancedEntries.length > 0;
+
+    return html`
+      <div class="cfg-fields">
+        ${basicFields}
+        ${hasAdvanced
+          ? html`
+              <details class="cfg-advanced-section">
+                <summary class="cfg-advanced-section__summary">
+                  <span class="cfg-advanced-section__label">Advanced</span>
+                  <span class="cfg-advanced-section__count">${advancedEntries.length}</span>
+                  <span class="cfg-advanced-section__chevron">${icons.chevronDown}</span>
+                </summary>
+                <div class="cfg-advanced-section__content">${advancedFields}</div>
+              </details>
+            `
+          : nothing}
+        ${allowExtra
+          ? renderMapField({
+              schema: additional,
+              value: obj,
+              path,
+              hints,
+              rawAvailable,
+              unsupported,
+              disabled,
+              reservedKeys: reserved,
+              searchCriteria: childSearchCriteria,
+              revealSensitive,
+              isSensitivePathRevealed,
+              onToggleSensitivePath,
+              onPatch,
+            })
+          : nothing}
+      </div>
+    `;
+  }
+
   const fields = html`
-    ${sorted.map(([propKey, node]) =>
-      renderNode({
-        schema: node,
-        value: obj[propKey],
-        path: [...path, propKey],
-        hints,
-        rawAvailable,
-        unsupported,
-        disabled,
-        searchCriteria: childSearchCriteria,
-        revealSensitive,
-        isSensitivePathRevealed,
-        onToggleSensitivePath,
-        onPatch,
-      }),
-    )}
+    ${sorted.map(renderFieldNode)}
     ${allowExtra
       ? renderMapField({
           schema: additional,
@@ -1028,11 +1153,6 @@ function renderObject(params: {
         })
       : nothing}
   `;
-
-  // For top-level, don't wrap in collapsible
-  if (path.length === 1) {
-    return html` <div class="cfg-fields">${fields}</div> `;
-  }
 
   if (!showLabel) {
     return html` <div class="cfg-fields cfg-fields--inline">${fields}</div> `;
@@ -1084,7 +1204,7 @@ function renderArray(params: {
     onToggleSensitivePath,
   } = params;
   const showLabel = params.showLabel ?? true;
-  const { label, help, tags } = resolveFieldMeta(path, schema, hints);
+  const { label, help, tags, docLink } = resolveFieldMeta(path, schema, hints);
   const selfMatched =
     searchCriteria && hasSearchCriteria(searchCriteria)
       ? matchesNodeSelf({ schema, path, hints, criteria: searchCriteria })
@@ -1124,7 +1244,19 @@ function renderArray(params: {
           Add
         </button>
       </div>
-      ${help ? html`<div class="cfg-array__help">${help}</div>` : nothing}
+      ${help || docLink
+        ? html`<div class="cfg-array__help">
+            ${help}${docLink
+              ? html` <a
+                  class="cfg-field__doc-link"
+                  href="https://docs.openclaw.ai/${docLink}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  >Docs ↗</a
+                >`
+              : nothing}
+          </div>`
+        : nothing}
       ${arr.length === 0
         ? html` <div class="cfg-array__empty">No items yet. Click "Add" to create one.</div> `
         : html`
