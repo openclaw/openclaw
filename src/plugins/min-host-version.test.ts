@@ -59,6 +59,26 @@ describe("min-host-version", () => {
     expect(parseMinHostVersionRequirement(">=2026.3.22")).toEqual(MIN_HOST_REQUIREMENT);
   });
 
+  it("can parse legacy bare semver floors for runtime upgrade compatibility", () => {
+    expect(parseMinHostVersionRequirement("2026.3.22", { allowLegacyBareSemver: true })).toEqual({
+      raw: "2026.3.22",
+      minimumLabel: "2026.3.22",
+    });
+    expect(
+      checkMinHostVersion({
+        currentVersion: "2026.3.22",
+        minHostVersion: "2026.3.22",
+        allowLegacyBareSemver: true,
+      }),
+    ).toEqual({
+      ok: true,
+      requirement: {
+        raw: "2026.3.22",
+        minimumLabel: "2026.3.22",
+      },
+    });
+  });
+
   it.each(["2026.3.22", 123, ">=2026.3.22 garbage"] as const)(
     "rejects invalid floor syntax and host checks: %p",
     (minHostVersion) => {

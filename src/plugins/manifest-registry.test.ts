@@ -1528,6 +1528,41 @@ describe("loadPluginManifestRegistry", () => {
     }
   });
 
+  it("accepts legacy bare minHostVersion metadata for recorded installed globals", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, { id: "codex", configSchema: { type: "object" } });
+
+    const registry = loadPluginManifestRegistry({
+      installRecords: {
+        codex: {
+          source: "npm",
+          installPath: dir,
+        },
+      },
+      candidates: [
+        createPluginCandidate({
+          idHint: "codex",
+          rootDir: dir,
+          packageDir: dir,
+          origin: "global",
+          packageManifest: {
+            install: {
+              npmSpec: "@openclaw/codex",
+              minHostVersion: "2026.3.22",
+            },
+          },
+        }),
+      ],
+    });
+
+    expect(registry.plugins.map((plugin) => plugin.id)).toEqual(["codex"]);
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("openclaw.install.minHostVersion must use"),
+      ),
+    ).toBe(false);
+  });
+
   it.each([
     {
       name: "reports bundled plugins as the duplicate winner for auto-discovered globals",
