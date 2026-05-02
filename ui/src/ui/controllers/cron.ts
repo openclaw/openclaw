@@ -45,6 +45,18 @@ export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron";
 export type CronJobsLastStatusFilter = "all" | "ok" | "error" | "skipped";
 export type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
+function resolveCronJobScheduleKind(
+  job: CronJob,
+): Exclude<CronJobsScheduleKindFilter, "all"> | null {
+  const kind = (job as { schedule?: { kind?: unknown } }).schedule?.kind;
+  return kind === "at" || kind === "every" || kind === "cron" ? kind : null;
+}
+
+function resolveCronJobPayloadKind(job: CronJob): "systemEvent" | "agentTurn" | null {
+  const kind = (job as { payload?: { kind?: unknown } }).payload?.kind;
+  return kind === "systemEvent" || kind === "agentTurn" ? kind : null;
+}
+
 export type CronState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -361,9 +373,10 @@ export function getVisibleCronJobs(
   state: Pick<CronState, "cronJobs" | "cronJobsScheduleKindFilter" | "cronJobsLastStatusFilter">,
 ): CronJob[] {
   return state.cronJobs.filter((job) => {
+    const scheduleKind = resolveCronJobScheduleKind(job);
     if (
       state.cronJobsScheduleKindFilter !== "all" &&
-      job.schedule.kind !== state.cronJobsScheduleKindFilter
+      scheduleKind !== state.cronJobsScheduleKindFilter
     ) {
       return false;
     }
@@ -443,7 +456,9 @@ function parseStaggerSchedule(
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
   const failureAlert = job.failureAlert;
+  const scheduleKind = resolveCronJobScheduleKind(job) ?? prev.scheduleKind;
   const payload = getCronJobPayload(job);
+  const payloadKind = payload?.kind ?? prev.payloadKind;
   const next: CronFormState = {
     ...prev,
     name: job.name,
@@ -453,7 +468,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     clearAgent: false,
     enabled: job.enabled,
     deleteAfterRun: job.deleteAfterRun ?? false,
-    scheduleKind: job.schedule.kind,
+    scheduleKind,
     scheduleAt: "",
     everyAmount: prev.everyAmount,
     everyUnit: prev.everyUnit,
@@ -464,7 +479,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     staggerUnit: "seconds",
     sessionTarget: job.sessionTarget,
     wakeMode: job.wakeMode,
-    payloadKind: payload?.kind ?? DEFAULT_CRON_FORM.payloadKind,
+    payloadKind,
     payloadText: payload?.kind === "systemEvent" ? payload.text : (payload?.message ?? ""),
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
@@ -507,16 +522,29 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
         : "",
   };
 
-  if (job.schedule.kind === "at") {
-    next.scheduleAt = formatDateTimeLocal(job.schedule.at);
-  } else if (job.schedule.kind === "every") {
-    const parsed = parseEverySchedule(job.schedule.everyMs);
+  const schedule = (
+    job as {
+      schedule?: {
+        at?: unknown;
+        everyMs?: unknown;
+        expr?: unknown;
+        tz?: unknown;
+        staggerMs?: unknown;
+      };
+    }
+  ).schedule;
+  if (scheduleKind === "at" && typeof schedule?.at === "string") {
+    next.scheduleAt = formatDateTimeLocal(schedule.at);
+  } else if (scheduleKind === "every" && typeof schedule?.everyMs === "number") {
+    const parsed = parseEverySchedule(schedule.everyMs);
     next.everyAmount = parsed.everyAmount;
     next.everyUnit = parsed.everyUnit;
-  } else {
-    next.cronExpr = job.schedule.expr;
-    next.cronTz = job.schedule.tz ?? "";
-    const staggerFields = parseStaggerSchedule(job.schedule.staggerMs);
+  } else if (scheduleKind === "cron") {
+    next.cronExpr = typeof schedule?.expr === "string" ? schedule.expr : "";
+    next.cronTz = typeof schedule?.tz === "string" ? schedule.tz : "";
+    const staggerFields = parseStaggerSchedule(
+      typeof schedule?.staggerMs === "number" ? schedule.staggerMs : undefined,
+    );
     next.scheduleExact = staggerFields.scheduleExact;
     next.staggerAmount = staggerFields.staggerAmount;
     next.staggerUnit = staggerFields.staggerUnit;

@@ -279,7 +279,7 @@ describe("cron service store seam coverage", () => {
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(dueNextRunAtMs);
   });
 
-  it("clears stale nextRunAtMs without throwing when a force-reloaded schedule is malformed", async () => {
+  it("drops force-reloaded jobs with unrecoverable malformed schedules", async () => {
     const { storePath } = await makeStorePath();
     const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
 
@@ -304,9 +304,97 @@ describe("cron service store seam coverage", () => {
       undefined,
     );
 
-    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
-    expect(reloadedJob.schedule).toBe("0 17 * * *");
-    expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
+    expect(state.store?.jobs.map((job) => job.id)).toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "reload-cron-expr-job", index: 0 }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
+  });
+
+  it("recovers legacy persisted jobs with top-level schedule and payload fields", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeSingleJobStore(storePath, {
+      id: "legacy-top-level-job",
+      name: "legacy top level job",
+      enabled: true,
+      createdAtMs: STORE_TEST_NOW - 60_000,
+      updatedAtMs: STORE_TEST_NOW - 60_000,
+      expr: "15 9 * * *",
+      tz: "UTC",
+      text: "daily ping",
+      state: {},
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs).toHaveLength(1);
+    expect(state.store?.jobs[0]).toEqual(
+      expect.objectContaining({
+        id: "legacy-top-level-job",
+        schedule: { kind: "cron", expr: "15 9 * * *", tz: "UTC" },
+        payload: { kind: "systemEvent", text: "daily ping" },
+      }),
+    );
+  });
+
+  it("ignores malformed persisted jobs instead of keeping dashboard-breaking rows", async () => {
+    const { storePath } = await makeStorePath();
+
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            createReloadCronJob({ id: "valid-job" }),
+            {
+              id: "missing-schedule-job",
+              name: "missing schedule job",
+              enabled: true,
+              payload: { kind: "systemEvent", text: "tick" },
+              state: {},
+            },
+            {
+              id: "missing-payload-job",
+              name: "missing payload job",
+              enabled: true,
+              schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
+              state: {},
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual(["valid-job"]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "missing-schedule-job", index: 1 }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ jobId: "missing-payload-job", index: 2 }),
+      expect.stringContaining("ignoring malformed persisted job"),
+    );
+
+    await persist(state);
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    expect(persisted.jobs.map((job) => job.id)).toEqual([
+      "valid-job",
+      "missing-schedule-job",
+      "missing-payload-job",
+    ]);
   });
 
   it("preserves nextRunAtMs after force reload when scheduling inputs are unchanged", async () => {

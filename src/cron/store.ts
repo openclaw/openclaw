@@ -50,13 +50,21 @@ type CronStateFile = {
   jobs: Record<string, CronStateFileEntry>;
 };
 
-function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
+function stripRuntimeOnlyCronJob(job: unknown): unknown {
+  if (!job || typeof job !== "object" || Array.isArray(job)) {
+    return job;
+  }
+  const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job as Record<string, unknown>;
+  return { ...rest, state: {} };
+}
+
+function stripRuntimeOnlyCronFields(store: CronStoreFile, extraJobs?: readonly unknown[]): unknown {
   return {
     version: store.version,
-    jobs: store.jobs.map((job) => {
-      const { state: _state, updatedAtMs: _updatedAtMs, ...rest } = job;
-      return { ...rest, state: {} };
-    }),
+    jobs: [
+      ...store.jobs.map(stripRuntimeOnlyCronJob),
+      ...(extraJobs ?? []).map(stripRuntimeOnlyCronJob),
+    ],
   };
 }
 
@@ -322,6 +330,7 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
 type SaveCronStoreOptions = {
   skipBackup?: boolean;
   stateOnly?: boolean;
+  preserveConfigJobs?: readonly unknown[];
 };
 
 async function setSecureFileMode(filePath: string): Promise<void> {
@@ -365,7 +374,11 @@ export async function saveCronStore(
   opts?: SaveCronStoreOptions,
 ) {
   const stateOnly = opts?.stateOnly === true;
-  const configJson = JSON.stringify(stripRuntimeOnlyCronFields(store), null, 2);
+  const configJson = JSON.stringify(
+    stripRuntimeOnlyCronFields(store, opts?.preserveConfigJobs),
+    null,
+    2,
+  );
   const stateFile = extractStateFile(store);
   const stateJson = JSON.stringify(stateFile, null, 2);
 
