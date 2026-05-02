@@ -616,7 +616,7 @@ describe("firecrawl tools", () => {
       firecrawlClientTesting.resolveEndpoint("http://127.0.0.1:8787", "/v2/scrape"),
     ).resolves.toEqual({
       url: "http://127.0.0.1:8787/v2/scrape",
-      mode: "trusted",
+      mode: "selfHosted",
     });
     await expect(
       firecrawlClientTesting.resolveEndpoint(
@@ -625,7 +625,7 @@ describe("firecrawl tools", () => {
       ),
     ).resolves.toEqual({
       url: "https://host.openshell.internal:444/v2/search",
-      mode: "trusted",
+      mode: "selfHosted",
     });
     await expect(
       firecrawlClientTesting.resolveEndpoint("http://api.firecrawl.dev", "/v2/scrape"),
@@ -638,7 +638,7 @@ describe("firecrawl tools", () => {
     ).rejects.toThrow("Firecrawl baseUrl must use http:// or https://.");
   });
 
-  it("routes private self-hosted Firecrawl endpoints through the trusted fetch guard", async () => {
+  it("routes private self-hosted Firecrawl endpoints through the self-hosted fetch guard", async () => {
     ssrfMock?.mockRestore();
     ssrfMock = mockPinnedHostnameResolution(["127.0.0.1"]);
     const fetchSpy = vi.fn(

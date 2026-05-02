@@ -7,8 +7,8 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   truncateText,
+  withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
-  withTrustedWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
@@ -45,7 +45,7 @@ const FIRECRAWL_SELF_HOSTED_PRIVATE_ERROR =
 const FIRECRAWL_HTTP_PRIVATE_ERROR =
   "Firecrawl HTTP baseUrl must target a private or internal self-hosted endpoint. Use https:// for public hosts.";
 
-type FirecrawlEndpointMode = "strict" | "trusted";
+type FirecrawlEndpointMode = "selfHosted" | "strict";
 type FirecrawlResolvedEndpoint = {
   url: string;
   mode: FirecrawlEndpointMode;
@@ -124,7 +124,7 @@ async function validateFirecrawlBaseUrl(
 
   const isPrivateTarget = await firecrawlEndpointTargetsPrivateNetwork(url, lookupFn);
   if (isPrivateTarget) {
-    return "trusted";
+    return "selfHosted";
   }
   if (url.protocol === "http:") {
     throw new Error(FIRECRAWL_HTTP_PRIVATE_ERROR);
@@ -161,7 +161,7 @@ async function postFirecrawlJson<T>(
   const apiKey = normalizeSecretInput(params.apiKey);
   const mode = params.mode ?? (await validateFirecrawlBaseUrl(params.url));
   const withEndpoint =
-    mode === "trusted" ? withTrustedWebToolsEndpoint : withStrictWebToolsEndpoint;
+    mode === "selfHosted" ? withSelfHostedWebToolsEndpoint : withStrictWebToolsEndpoint;
   return await withEndpoint(
     {
       url: params.url,

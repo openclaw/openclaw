@@ -66,8 +66,11 @@ describe("searxng client", () => {
 
   it("allows https public hosts", async () => {
     await expect(
-      __testing.validateSearxngBaseUrl("https://search.example.com/searxng"),
-    ).resolves.toBeUndefined();
+      __testing.validateSearxngBaseUrl(
+        "https://search.example.com/searxng",
+        createLookupFn([{ address: "93.184.216.34", family: 4 }]),
+      ),
+    ).resolves.toBe("strict");
   });
 
   it("allows cleartext private-network hosts", async () => {
@@ -76,7 +79,16 @@ describe("searxng client", () => {
         "http://matrix-synapse:8080",
         createLookupFn([{ address: "10.0.0.5", family: 4 }]),
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("selfHosted");
+  });
+
+  it("routes https private-network hosts through the self-hosted guard", async () => {
+    await expect(
+      __testing.validateSearxngBaseUrl(
+        "https://search.internal/searxng",
+        createLookupFn([{ address: "10.0.0.5", family: 4 }]),
+      ),
+    ).resolves.toBe("selfHosted");
   });
 
   it("rejects cleartext public hosts", async () => {

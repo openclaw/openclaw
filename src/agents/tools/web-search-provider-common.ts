@@ -16,7 +16,7 @@ import {
 
 type WebGuardedFetchModule = Pick<
   typeof import("./web-guarded-fetch.js"),
-  "withTrustedWebToolsEndpoint"
+  "withSelfHostedWebToolsEndpoint" | "withTrustedWebToolsEndpoint"
 >;
 
 let webGuardedFetchPromise: Promise<WebGuardedFetchModule> | null = null;
@@ -26,6 +26,13 @@ async function loadTrustedWebToolsEndpoint(): Promise<
 > {
   webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
   return (await webGuardedFetchPromise).withTrustedWebToolsEndpoint;
+}
+
+async function loadSelfHostedWebToolsEndpoint(): Promise<
+  WebGuardedFetchModule["withSelfHostedWebToolsEndpoint"]
+> {
+  webGuardedFetchPromise ??= import("./web-guarded-fetch.js");
+  return (await webGuardedFetchPromise).withSelfHostedWebToolsEndpoint;
 }
 
 export type SearchConfigRecord = (NonNullable<OpenClawConfig["tools"]>["web"] extends infer Web
@@ -85,6 +92,27 @@ export async function withTrustedWebSearchEndpoint<T>(
 ): Promise<T> {
   const withTrustedWebToolsEndpoint = await loadTrustedWebToolsEndpoint();
   return withTrustedWebToolsEndpoint(
+    {
+      url: params.url,
+      init: params.init,
+      timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
+    },
+    async ({ response }) => run(response),
+  );
+}
+
+export async function withSelfHostedWebSearchEndpoint<T>(
+  params: {
+    url: string;
+    timeoutSeconds: number;
+    init: RequestInit;
+    signal?: AbortSignal;
+  },
+  run: (response: Response) => Promise<T>,
+): Promise<T> {
+  const withSelfHostedWebToolsEndpoint = await loadSelfHostedWebToolsEndpoint();
+  return withSelfHostedWebToolsEndpoint(
     {
       url: params.url,
       init: params.init,
