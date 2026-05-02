@@ -23,6 +23,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/models: keep legacy CLI runtime model refs such as `claude-cli/*` in the configured allowlist after canonical runtime migration, so cron `payload.model` overrides keep working. Fixes #75753. Thanks @RyanSandoval.
 - CLI/directory: report unsupported directory operations for installed channel plugins instead of prompting to reinstall the plugin when it lacks a directory adapter. Fixes #75770. Thanks @lawong888.
 - Web search: keep public provider requests on the strict SSRF guard and reserve private-network access for explicit self-hosted SearXNG/Firecrawl endpoints. Fixes #74357 and supersedes #74360. Thanks @fede-kamel.
 - Web search/Firecrawl: allow self-hosted private/internal Firecrawl `baseUrl` endpoints, including HTTP for private targets, while keeping hosted Firecrawl on the strict official endpoint. Fixes #63877 and supersedes #59666, #63941, and #74013. Thanks @jhthompson12, @jzakirov, @Mlightsnow, and @shad0wca7.
