@@ -74,6 +74,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
+import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClient } from "./shared-client.js";
 import {
   buildDeveloperInstructions,
@@ -400,9 +401,9 @@ export async function runCodexAppServerAttempt(
     },
   });
   const hadSessionFile = await fileExists(params.sessionFile);
-  const sessionManager = SessionManager.open(params.sessionFile);
+  const sessionManager = activeContextEngine ? SessionManager.open(params.sessionFile) : undefined;
   let historyMessages =
-    readMirroredSessionHistoryMessages(params.sessionFile, sessionManager) ?? [];
+    (await readMirroredSessionHistoryMessages(params.sessionFile, sessionManager)) ?? [];
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
@@ -430,7 +431,8 @@ export async function runCodexAppServerAttempt(
       runMaintenance: runHarnessContextEngineMaintenance,
       warn: (message) => embeddedAgentLog.warn(message),
     });
-    historyMessages = readMirroredSessionHistoryMessages(params.sessionFile) ?? historyMessages;
+    historyMessages =
+      (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
   }
   const baseDeveloperInstructions = buildDeveloperInstructions(params);
   let promptText = params.prompt;
@@ -1097,7 +1099,7 @@ export async function runCodexAppServerAttempt(
     }
     if (activeContextEngine) {
       const finalMessages =
-        readMirroredSessionHistoryMessages(params.sessionFile) ??
+        (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
         historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
@@ -1553,19 +1555,17 @@ function readString(record: JsonObject, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-function readMirroredSessionHistoryMessages(
+async function readMirroredSessionHistoryMessages(
   sessionFile: string,
-  sessionManager?: SessionManager,
-): AgentMessage[] | undefined {
-  try {
-    return (sessionManager ?? SessionManager.open(sessionFile)).buildSessionContext().messages;
-  } catch (error) {
+  sessionManager?: Pick<SessionManager, "buildSessionContext">,
+): Promise<AgentMessage[] | undefined> {
+  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile, sessionManager);
+  if (!messages) {
     embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      error,
       sessionFile,
     });
-    return undefined;
   }
+  return messages;
 }
 
 async function mirrorTranscriptBestEffort(params: {
