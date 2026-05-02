@@ -104,7 +104,8 @@ const discordMessageActions = {
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["resolveExecutionMode"]>>[0],
   ) =>
     resolveRuntimeDiscordMessageActions()?.resolveExecutionMode?.(ctx) ??
-    discordMessageActionsImpl.resolveExecutionMode?.(ctx),
+    discordMessageActionsImpl.resolveExecutionMode?.(ctx) ??
+    "local",
   describeMessageTool: (
     ctx: Parameters<NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>>[0],
   ): ChannelMessageToolDiscovery | null =>
