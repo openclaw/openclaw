@@ -23,7 +23,7 @@ export function runGatewayWatchTmuxMain(params?: {
     options: unknown,
   ) => {
     error?: NodeJS.ErrnoException;
-    signal?: NodeJS.Signals | null;
+    signal?: string | null;
     status?: number | null;
     stderr?: string;
     stdout?: string;

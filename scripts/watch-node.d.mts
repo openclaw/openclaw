@@ -4,7 +4,7 @@ export function runWatchMain(params?: {
     args: string[],
     options: unknown,
   ) => {
-    kill?: (signal?: NodeJS.Signals | number) => void;
+    kill?: (signal?: string | number) => void;
     on: (event: "exit", cb: (code: number | null, signal: string | null) => void) => void;
   };
   createWatcher?: (
