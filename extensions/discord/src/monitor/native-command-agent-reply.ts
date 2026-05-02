@@ -111,7 +111,7 @@ export async function dispatchDiscordNativeAgentReply(params: {
 
   await safeDiscordInteractionCall("interaction empty fallback", async () => {
     const payload = {
-      content: "✅ Done.",
+      content: "⚠️ Command produced no visible reply.",
       ephemeral: true,
     };
     if (params.preferFollowUp) {

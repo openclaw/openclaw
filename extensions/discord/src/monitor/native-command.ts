@@ -535,7 +535,7 @@ async function dispatchDiscordCommandInteraction(params: {
       threadParentId: pluginThreadParentId,
     });
     if (!hasRenderableReplyPayload(pluginReply)) {
-      await respond("Done.");
+      await respond("⚠️ Command produced no visible reply.");
       return { accepted: true, effectiveRoute };
     }
     await deliverDiscordInteractionReply({
