@@ -121,19 +121,18 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       streamingWatchdogRunId = null;
-      state.activeChatRunId = null;
-      state.activityStatus = "idle";
-      setActivityStatus("idle");
       if (reconnectPendingRunId === runId) {
         reconnectPendingRunId = null;
         pendingHistoryRefresh = false;
+        state.activeChatRunId = null;
+        state.activityStatus = "idle";
+        setActivityStatus("idle");
         void loadHistory?.();
         tui.requestRender();
         return;
       }
-      flushPendingHistoryRefreshIfIdle();
 
-      // Abort the hanging run if possible
+      // Abort the hanging run if possible (before clearing state)
       if (abortActive && localMode) {
         void abortActive().catch(() => {
           // Ignore abort errors; the run is already stuck
@@ -150,6 +149,11 @@ export function createEventHandlers(context: EventHandlerContext) {
           )}s; resetting status. The backend may have dropped this run silently — send a new message to resync.`,
         );
       }
+
+      state.activeChatRunId = null;
+      state.activityStatus = "idle";
+      setActivityStatus("idle");
+      flushPendingHistoryRefreshIfIdle();
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;

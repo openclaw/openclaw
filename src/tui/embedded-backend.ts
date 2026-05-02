@@ -3,6 +3,7 @@ import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { updateSessionStore } from "../config/sessions.js";
@@ -100,9 +101,9 @@ function payloadText(parts: unknown): string {
     .trim();
 }
 
-// Default timeout for TUI runs: 5 minutes (much shorter than the 48-hour agent default)
-// to prevent onboarding hangs when providers fail silently
-const DEFAULT_TUI_TIMEOUT_MS = 5 * 60 * 1000;
+// Minimum timeout for TUI runs: 5 minutes to prevent onboarding hangs
+// when providers fail silently, while still respecting longer configured timeouts
+const MIN_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 function timeoutSecondsFromMs(timeoutMs?: number): string | undefined {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs < 0) {
@@ -176,13 +177,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
       registered: false,
     });
 
+    // Resolve timeout: use explicit timeout if provided, otherwise resolve from config
+    // and apply a minimum to prevent onboarding hangs
+    let timeoutMs = opts.timeoutMs;
+    if (timeoutMs === undefined) {
+      const cfg = getRuntimeConfig();
+      const configuredTimeout = resolveAgentTimeoutMs({ cfg });
+      timeoutMs = Math.max(MIN_TUI_TIMEOUT_MS, configuredTimeout);
+    }
+
     void this.runTurn({
       runId,
       sessionKey: opts.sessionKey,
       message: opts.message,
       thinking: opts.thinking,
       deliver: opts.deliver,
-      timeoutMs: opts.timeoutMs ?? DEFAULT_TUI_TIMEOUT_MS,
+      timeoutMs,
       controller,
     });
 

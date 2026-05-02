@@ -20,18 +20,22 @@ const localManualFallbackGraceMs = 1_000;
 const OAUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => {
-        reject(
-          new Error(
-            `${operation} timed out after ${Math.round(timeoutMs / 1000)}s. This may indicate a network issue, firewall block, or provider outage.`,
-          ),
-        );
-      }, timeoutMs);
-    }),
-  ]);
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<T>((_, reject) => {
+    timeoutHandle = setTimeout(() => {
+      reject(
+        new Error(
+          `${operation} timed out after ${Math.round(timeoutMs / 1000)}s. This may indicate a network issue, firewall block, or provider outage.`,
+        ),
+      );
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  });
 }
 
 type OpenAICodexOAuthFailureCode =
