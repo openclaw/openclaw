@@ -36,7 +36,7 @@ const SUPPORTED_SUITES = new Set([
 
 export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
-  1200,
+  600,
 );
 const CROSS_OS_AGENT_TURN_OPTIONAL = parseBooleanEnv("OPENCLAW_CROSS_OS_AGENT_TURN_OPTIONAL", true);
 
@@ -1962,11 +1962,11 @@ async function runInstalledAgentTurn(params) {
       return result;
     } catch (error) {
       lastError = error;
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      if (skipped) {
+        return skipped;
+      }
       if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
-        const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
-        if (skipped) {
-          return skipped;
-        }
         throw error;
       }
       appendFileSync(
@@ -2763,11 +2763,11 @@ async function runAgentTurn(params) {
       return result;
     } catch (error) {
       lastError = error;
+      const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
+      if (skipped) {
+        return skipped;
+      }
       if (attempt >= 2 || !shouldRetryCrossOsAgentTurnError(error)) {
-        const skipped = maybeBuildOptionalAgentTurnSkipResult(error, params.logPath);
-        if (skipped) {
-          return skipped;
-        }
         throw error;
       }
       appendFileSync(
@@ -2782,7 +2782,7 @@ async function runAgentTurn(params) {
 }
 
 function maybeBuildOptionalAgentTurnSkipResult(error, logPath) {
-  if (!CROSS_OS_AGENT_TURN_OPTIONAL || !shouldRetryCrossOsAgentTurnError(error)) {
+  if (!CROSS_OS_AGENT_TURN_OPTIONAL || !shouldSkipOptionalCrossOsAgentTurnError(error, logPath)) {
     return null;
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -2798,6 +2798,26 @@ function maybeBuildOptionalAgentTurnSkipResult(error, logPath) {
     }),
     stderr: "",
   };
+}
+
+export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (
+    /model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+      message,
+    )
+  ) {
+    return true;
+  }
+  if (!/Agent output did not contain the expected OK marker/u.test(message)) {
+    return false;
+  }
+  try {
+    const log = readFileSync(logPath, "utf8");
+    return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
+  } catch {
+    return false;
+  }
 }
 
 function buildReleaseAgentTurnArgs(sessionId) {
