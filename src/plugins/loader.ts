@@ -554,7 +554,7 @@ function setCachedPluginRegistry(
 
 function getReusableCachedPluginRegistry(params: {
   cacheKey: string;
-  onlyPluginIds?: string[];
+  onlyPluginIds: string[] | undefined;
   runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
   options: PluginLoadOptions;
 }):
@@ -1026,7 +1026,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     loadModules: options.loadModules,
     runtimeSubagentMode,
     pluginSdkResolution: options.pluginSdkResolution,
-    coreGatewayMethodNames,
+    ...(coreGatewayMethodNames !== undefined && { coreGatewayMethodNames }),
     activate: options.activate,
   });
   return {

@@ -119,6 +119,8 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Direct-message threading behavior. Defaults to flat DM sessions. */
+  dm?: TelegramDmConfig;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;
@@ -216,6 +218,13 @@ export type TelegramAccountConfig = {
   trustedLocalFileRoots?: string[];
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
+};
+
+export type TelegramDmThreadReplies = "off" | "inbound" | "always";
+
+export type TelegramDmConfig = {
+  /** DM-only session threading override for message_thread_id (off|inbound|always). Default: off. */
+  threadReplies?: TelegramDmThreadReplies;
 };
 
 export type TelegramTopicConfig = {

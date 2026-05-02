@@ -491,7 +491,7 @@ export class GoogleMeetRuntime {
         session.notes.push(
           this.params.config.voiceCall.enabled
             ? dtmfSequence
-              ? "Twilio transport delegated the call to the voice-call plugin and queued configured DTMF."
+              ? "Twilio transport delegated the phone leg to the voice-call plugin, then sent configured DTMF after connect before speaking."
               : "Twilio transport delegated the call to the voice-call plugin without configured DTMF."
             : "Twilio transport is an explicit dial plan; voice-call delegation is disabled.",
         );

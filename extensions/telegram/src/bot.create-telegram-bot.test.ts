@@ -248,7 +248,7 @@ describe("createTelegramBot", () => {
     );
   });
 
-  it("honors low timeoutSeconds when no polling floor is requested", () => {
+  it("keeps low timeoutSeconds above the outbound request guard", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
@@ -258,12 +258,12 @@ describe("createTelegramBot", () => {
     expect(botCtorSpy).toHaveBeenCalledWith(
       "tok",
       expect.objectContaining({
-        client: expect.objectContaining({ timeoutSeconds: 10 }),
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
       }),
     );
   });
 
-  it("keeps polling client timeout above the getUpdates request guard", () => {
+  it("keeps polling client timeout above the outbound request guard", () => {
     loadConfig.mockReturnValue({
       channels: {
         telegram: { dmPolicy: "open", allowFrom: ["*"], timeoutSeconds: 10 },
@@ -273,7 +273,7 @@ describe("createTelegramBot", () => {
     expect(botCtorSpy).toHaveBeenCalledWith(
       "tok",
       expect.objectContaining({
-        client: expect.objectContaining({ timeoutSeconds: 45 }),
+        client: expect.objectContaining({ timeoutSeconds: 60 }),
       }),
     );
   });

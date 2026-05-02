@@ -147,6 +147,14 @@ export const TelegramGroupSchema = z
   })
   .strict();
 
+const TelegramDmThreadRepliesSchema = z.enum(["off", "inbound", "always"]);
+
+const TelegramDmSchema = z
+  .object({
+    threadReplies: TelegramDmThreadRepliesSchema.optional(),
+  })
+  .strict();
+
 const AutoTopicLabelSchema = z
   .union([
     z.boolean(),
@@ -229,6 +237,7 @@ export const TelegramAccountSchemaBase = z
     botToken: SecretInputSchema.optional().register(sensitive),
     tokenFile: z.string().optional(),
     replyToMode: ReplyToModeSchema.optional(),
+    dm: TelegramDmSchema.optional(),
     groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     defaultTo: z.union([z.string(), z.number()]).optional(),

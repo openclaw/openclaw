@@ -66,6 +66,43 @@ describe("telegram custom commands schema", () => {
     }
   });
 
+  it("accepts DM thread reply policy overrides", () => {
+    const res = TelegramConfigSchema.safeParse({
+      dm: { threadReplies: "off" },
+      direct: {
+        "123456789": {
+          threadReplies: "inbound",
+        },
+      },
+      accounts: {
+        ops: {
+          dm: { threadReplies: "always" },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.dm?.threadReplies).toBe("off");
+      expect(res.data.direct?.["123456789"]?.threadReplies).toBe("inbound");
+      expect(res.data.accounts?.ops?.dm?.threadReplies).toBe("always");
+    }
+  });
+
+  it("rejects unknown DM thread reply policy values", () => {
+    expectTelegramConfigIssue({ dm: { threadReplies: "first" } }, "dm.threadReplies");
+    expectTelegramConfigIssue(
+      {
+        direct: {
+          "123456789": {
+            threadReplies: "first",
+          },
+        },
+      },
+      "direct.123456789.threadReplies",
+    );
+  });
+
   it("rejects pollingStallThresholdMs outside the watchdog bounds", () => {
     expectTelegramConfigIssue({ pollingStallThresholdMs: 29_999 }, "pollingStallThresholdMs");
     expectTelegramConfigIssue({ pollingStallThresholdMs: 600_001 }, "pollingStallThresholdMs");

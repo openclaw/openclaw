@@ -8,7 +8,7 @@ import type { TelegramDirectConfig, TelegramGroupConfig } from "openclaw/plugin-
 import { deriveLastRoutePolicy } from "openclaw/plugin-sdk/routing";
 import { normalizeAccountId, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { resolveDefaultTelegramAccountId } from "./accounts.js";
+import { mergeTelegramAccountConfig, resolveDefaultTelegramAccountId } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { firstDefined, normalizeAllowFrom, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import { resolveTelegramInboundBody } from "./bot-message-context.body.js";
@@ -225,6 +225,7 @@ export const buildTelegramMessageContext = async ({
   const freshCfg =
     loadFreshConfig?.() ??
     (runtime?.getRuntimeConfig ?? (await loadTelegramMessageContextRuntime()).getRuntimeConfig)();
+  const telegramCfg = mergeTelegramAccountConfig(freshCfg, account.accountId);
   let { route, configuredBinding, configuredBindingSessionKey } = resolveTelegramConversationRoute({
     cfg: freshCfg,
     accountId: account.accountId,
@@ -384,12 +385,14 @@ export const buildTelegramMessageContext = async ({
   });
   const useDmThreadSession = shouldUseTelegramDmThreadSession({
     dmThreadId,
+    accountConfig: telegramCfg,
     directConfig,
     topicConfig,
   });
-  const threadKeys = useDmThreadSession
-    ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
-    : null;
+  const threadKeys =
+    useDmThreadSession && dmThreadId != null
+      ? resolveThreadSessionKeys({ baseSessionKey, threadId: `${chatId}:${dmThreadId}` })
+      : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   route = {
     ...route,

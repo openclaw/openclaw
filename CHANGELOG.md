@@ -32,6 +32,9 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Control UI/chat: show inline feedback when local slash-command dispatch is unavailable or fails unexpectedly instead of clearing the composer silently. Fixes #52105. Thanks @MooreQiao.
+- TUI/chat: skip full provider model normalization during context-window warmup while preserving provider-owned context metadata, avoiding cold-start stalls with large model registries. Thanks @547895019.
+- Memory Wiki: accept relative Markdown links that include the `.md` suffix during broken-wikilink validation, avoiding false positives for native render-mode links. Thanks @Kenneth8128.
+- OpenAI Codex: show the device-pairing code in the interactive SSH/headless prompt while keeping the short-lived code out of persistent runtime logs. Fixes #74212. Thanks @da22le123.
 - Plugins/CLI: cache plugin CLI registration entries per command program so completion state generation does not repeat the full plugin sweep in one invocation. Thanks @ScientificProgrammer.
 - Plugins: reuse gateway-bindable plugin loader cache entries for later default-mode loads without serving default-built registries to gateway-bound requests, reducing repeated plugin registration during dispatch. Refs #61756. Thanks @DmitryPogodaev.
 - Gateway/secrets: include the caught error message in `secrets.reload` and `secrets.resolve` warning logs while keeping RPC errors generic, so operators can diagnose reload and permission failures. Thanks @davidangularme.
@@ -46,14 +49,18 @@ Docs: https://docs.openclaw.ai
 - Discord: preserve attachment and sticker filenames when saving inbound media, so agents can see human-readable file names instead of only UUID-based paths. Fixes #59744. Thanks @xela92 and @rockcent.
 - Discord: preserve non-ASCII channel names in session display labels while keeping allowlist matching on the existing ASCII slug contract. Thanks @swjeong9.
 - Discord/PluralKit: canonicalize proxied webhook turns to the original Discord message id for inbound dedupe, while preserving the proxy message id for reply routing. Thanks @acgh213.
+- Discord: only inject thread starter context on the first turn of the effective thread session, so follow-up thread replies do not repeat the starter block. Fixes #41355; supersedes #44447 and #44449. Thanks @p3nchan.
 - Gateway/diagnostics: include a bounded redacted startup error message in stability bundles, so crash-loop reports identify the failing plugin or contract without exposing secrets. Refs #75797. Thanks @ymebosma.
 - Gateway/pricing: abort in-flight model pricing catalog fetches when Gateway shutdown stops the refresh loop, and avoid post-stop cache writes or refresh timers. Fixes #72208. Thanks @rzcq.
 - Codex/app-server: make startup retry cleanup ownership-aware so concurrent Codex lanes cannot close another lane's freshly restarted shared app-server client. Thanks @vincentkoc.
 - Google Meet/Twilio: report missing dial-in details during setup and explain that Twilio cannot join Meet URLs without a phone dial plan.
+- Google Meet/Twilio: start the phone leg before sending Meet PIN DTMF, delay intro speech until after the post-connect dial sequence, and log each stage so operators can tell Twilio-leg audio from Meet-room audio.
+- Voice Call: accept provider call IDs for gateway speak/continue requests and report ended-call state from history instead of returning a generic "Call not found" for stale calls.
 - Control UI/Talk: allow the OpenAI Realtime WebRTC offer endpoint through the Control UI CSP, configure browser sessions with explicit VAD/transcription input settings, and surface OpenAI realtime error/lifecycle events instead of leaving Talk stuck as live with no diagnostic. Fixes #73427.
 - Plugins: clarify config-selected duplicate plugin override diagnostics and document manifest schema updates for bundled-plugin forks. Fixes #8582. Thanks @sachah.
 - CLI backends/Claude: make live-session JSONL turn caps bounded and configurable via `reliability.outputLimits`, raising the default guard for tool-heavy Claude CLI turns while preserving memory limits. Fixes #75838. Thanks @hcordoba840.
-- Telegram/DMs: keep incidental `message_thread_id` reply-with-quote metadata on the flat DM session by default while preserving opt-in DM topic isolation for configured topics. Fixes #75975. Thanks @ProjectEvolutionEVE.
+- Telegram/DMs: keep incidental `message_thread_id` reply-with-quote metadata on the flat DM session by default while preserving opt-in DM topic isolation for configured topics, `dm.threadReplies`, and `direct.<chatId>.threadReplies`. Fixes #75975. Thanks @ProjectEvolutionEVE.
+- Telegram/network: raise outbound text and typing Bot API request guards to 60 seconds, keep low grammY client timeouts from preempting those guards, let higher `timeoutSeconds` configs extend safe method guards, and retry timed-out typing indicators through the transport fallback without risking duplicate messages. Fixes #76013. Thanks @iaki1206.
 - Providers/OpenAI: resolve `keychain:<service>:<account>` `OPENAI_API_KEY` refs before creating OpenAI Realtime browser sessions or voice bridges, with a bounded cached Keychain lookup. Fixes #72120. Thanks @ctbritt.
 - Discord/gateway: reconnect when the gateway socket closes while waiting for the shared IDENTIFY concurrency window, instead of silently skipping IDENTIFY and leaving the bot online but unresponsive. Fixes #74617. Thanks @zeeskdr-ai.
 - Voice Call: add `sessionScope: "per-call"` for fresh per-call agent memory while preserving the default per-phone caller history. Fixes #45280. Thanks @pondcountry.

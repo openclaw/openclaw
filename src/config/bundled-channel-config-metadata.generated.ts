@@ -12962,6 +12962,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
             },
           ],
         },
+        dm: {
+          type: "object",
+          properties: {
+            threadReplies: {
+              type: "string",
+              enum: ["off", "inbound", "always"],
+            },
+          },
+          additionalProperties: false,
+        },
         groups: {
           type: "object",
           propertyNames: {
@@ -13220,6 +13230,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
               dmPolicy: {
                 type: "string",
                 enum: ["pairing", "allowlist", "open", "disabled"],
+              },
+              threadReplies: {
+                type: "string",
+                enum: ["off", "inbound", "always"],
               },
               tools: {
                 type: "object",
@@ -14010,6 +14024,16 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                   },
                 ],
               },
+              dm: {
+                type: "object",
+                properties: {
+                  threadReplies: {
+                    type: "string",
+                    enum: ["off", "inbound", "always"],
+                  },
+                },
+                additionalProperties: false,
+              },
               groups: {
                 type: "object",
                 propertyNames: {
@@ -14268,6 +14292,10 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
                     dmPolicy: {
                       type: "string",
                       enum: ["pairing", "allowlist", "open", "disabled"],
+                    },
+                    threadReplies: {
+                      type: "string",
+                      enum: ["off", "inbound", "always"],
                     },
                     tools: {
                       type: "object",
@@ -14863,6 +14891,14 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
       dmPolicy: {
         label: "Telegram DM Policy",
         help: 'Direct message access control ("pairing" recommended). "open" requires channels.telegram.allowFrom=["*"].',
+      },
+      "dm.threadReplies": {
+        label: "Telegram DM Thread Replies",
+        help: 'Controls whether Telegram DMs with message_thread_id use flat sessions ("off", default) or thread-scoped sessions ("inbound" or "always"). Thread IDs are still preserved for replies when sessions stay flat.',
+      },
+      "direct.*.threadReplies": {
+        label: "Telegram Per-DM Thread Replies",
+        help: 'Per-DM override for message_thread_id session threading. Use "inbound" only when a specific direct chat intentionally uses Telegram DM topics as separate sessions.',
       },
       configWrites: {
         label: "Telegram Config Writes",

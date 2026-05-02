@@ -21,6 +21,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
@@ -62,12 +63,12 @@ type CommandsStatusRuntimeModule = {
   buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
 };
 
-let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
+const commandsStatusRuntimeLoader = createLazyImportLoader<CommandsStatusRuntimeModule>(
+  () => import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>,
+);
 
 function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
-  commandsStatusRuntimePromise ??=
-    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
-  return commandsStatusRuntimePromise;
+  return commandsStatusRuntimeLoader.load();
 }
 
 function resolveSessionEntry(params: {
