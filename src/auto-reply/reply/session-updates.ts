@@ -26,6 +26,11 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./session-hooks.js";
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 
+// nextEntry.skillsSnapshot may carry resolvedSkills (full Skill[] with
+// SKILL.md bodies) for in-turn use. The persistence layer in
+// src/config/sessions/store-load.ts strips resolvedSkills before serializing,
+// so the on-disk sessions.json stays small. The in-memory params.sessionStore
+// reference still carries the runtime cache for the rest of this turn.
 async function persistSessionEntryUpdate(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
