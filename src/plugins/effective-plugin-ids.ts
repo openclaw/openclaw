@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -7,7 +5,6 @@ import {
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import {
   listExplicitConfiguredChannelIdsForConfig,
   resolveConfiguredChannelPluginIds,
@@ -15,7 +12,7 @@ import {
 } from "./channel-plugin-ids.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
-import { loadPluginManifest } from "./manifest.js";
+import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 function collectConfiguredChannelIds(
   config: OpenClawConfig,
@@ -45,6 +42,7 @@ function collectBundledChannelOwnerPluginIds(params: {
   config: OpenClawConfig;
   channelIds: readonly string[];
   env: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   bundledPluginsDir?: string;
 }): string[] {
   const plugins = normalizePluginsConfig(params.config.plugins);
@@ -56,32 +54,32 @@ function collectBundledChannelOwnerPluginIds(params: {
   if (channelIds.size === 0) {
     return [];
   }
-  const bundledDir = params.bundledPluginsDir ?? resolveBundledPluginsDir(params.env);
-  if (!bundledDir) {
-    return [];
-  }
-  let entries: fs.Dirent[];
-  try {
-    entries = fs.readdirSync(bundledDir, { withFileTypes: true });
-  } catch {
-    return [];
-  }
+  const env = params.bundledPluginsDir
+    ? {
+        ...params.env,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: params.bundledPluginsDir,
+        ...(params.env.VITEST || process.env.VITEST
+          ? { OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1" }
+          : {}),
+      }
+    : params.env;
+  const registry = loadPluginManifestRegistryForPluginRegistry({
+    config: params.config,
+    env,
+    workspaceDir: params.workspaceDir,
+    includeDisabled: true,
+  });
   const pluginIds = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const pluginDir = path.join(bundledDir, entry.name);
-    const manifest = loadPluginManifest(pluginDir, false);
-    if (!manifest.ok) {
+  for (const plugin of registry.plugins) {
+    if (plugin.origin !== "bundled") {
       continue;
     }
     if (
-      (manifest.manifest.channels ?? []).some((channelId) =>
+      plugin.channels.some((channelId) =>
         channelIds.has(normalizeOptionalLowercaseString(channelId) ?? ""),
       )
     ) {
-      const pluginId = normalizeOptionalLowercaseString(manifest.manifest.id);
+      const pluginId = normalizeOptionalLowercaseString(plugin.id);
       if (
         pluginId &&
         passesManifestOwnerBasePolicy({
@@ -152,6 +150,7 @@ export function resolveEffectivePluginIds(params: {
     config: effectiveConfig,
     channelIds: configuredChannelIds,
     env: params.env,
+    workspaceDir: params.workspaceDir,
     ...(params.bundledPluginsDir ? { bundledPluginsDir: params.bundledPluginsDir } : {}),
   })) {
     ids.add(pluginId);

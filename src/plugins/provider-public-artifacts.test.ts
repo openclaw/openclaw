@@ -7,7 +7,20 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import { resolveBundledProviderPolicySurface } from "./provider-public-artifacts.js";
 
 describe("provider public artifacts", () => {
+  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+
   afterEach(() => {
+    if (originalBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
+    }
+    if (originalTrustBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
+    }
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./public-surface-loader.js");
     vi.resetModules();
@@ -36,7 +49,16 @@ describe("provider public artifacts", () => {
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
       path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify({ providers: ["openai", "openai-codex"] }),
+      JSON.stringify({
+        id: "openai",
+        configSchema: { type: "object" },
+        providers: ["openai", "openai-codex"],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "index.js"),
+      "export default { register() {} };\n",
+      "utf8",
     );
 
     const resolveThinkingProfile = vi.fn(({ modelId }: { modelId: string }) => ({
@@ -52,6 +74,8 @@ describe("provider public artifacts", () => {
     vi.doMock("./bundled-dir.js", () => ({
       resolveBundledPluginsDir: () => bundledPluginsDir,
     }));
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledPluginsDir;
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
     vi.doMock("./public-surface-loader.js", () => ({
       loadBundledPluginPublicArtifactModuleSync,
     }));

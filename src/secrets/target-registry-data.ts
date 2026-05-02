@@ -1,4 +1,3 @@
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../plugins/plugin-registry.js";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
@@ -70,16 +69,14 @@ function listBundledWebProviderSecretTargetRegistryEntries(): SecretTargetRegist
 function listBundledPluginConfigSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
   const seen = new Set<string>();
-  for (const record of listBundledPluginMetadata({
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
-  })) {
-    const secretInputs = record.manifest.configContracts?.secretInputs?.paths ?? [];
+  for (const record of loadPluginManifestRegistryForPluginRegistry({ includeDisabled: true })
+    .plugins) {
+    if (record.origin !== "bundled") {
+      continue;
+    }
+    const secretInputs = record.configContracts?.secretInputs?.paths ?? [];
     for (const secretInput of secretInputs) {
-      const entry = createPluginOpenClawConfigSecretTargetEntry(
-        record.manifest.id,
-        secretInput.path,
-      );
+      const entry = createPluginOpenClawConfigSecretTargetEntry(record.id, secretInput.path);
       const key = `${entry.configFile}:${entry.pathPattern}`;
       if (seen.has(key)) {
         continue;
