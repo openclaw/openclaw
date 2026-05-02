@@ -788,11 +788,12 @@ async function resolvePluginSecretRefs(params: {
   providerName: string;
   providerConfig: SecretProviderConfig;
   env: NodeJS.ProcessEnv;
+  config: OpenClawConfig;
 }): Promise<Map<string, unknown>> {
   const sourceId = params.providerConfig.source;
   const { resolveBundledSecretProviderForSource } =
     await import("../plugins/secret-provider-resolver.js");
-  const entry = await resolveBundledSecretProviderForSource(sourceId);
+  const entry = await resolveBundledSecretProviderForSource(sourceId, params.config);
   if (!entry) {
     throw providerResolutionError({
       source: params.source,
@@ -849,6 +850,7 @@ async function resolveProviderRefs(params: {
       providerName: params.providerName,
       providerConfig: params.providerConfig,
       env: params.options.env ?? process.env,
+      config: params.options.config,
     });
   } catch (err) {
     return throwUnknownProviderResolutionError({

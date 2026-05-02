@@ -618,6 +618,10 @@ describe("plugin-owned secret provider dispatch", () => {
     );
     expect(out.get("fakecloud:myfc:MY_KEY")).toBe("the-value");
     expect(resolveSpy).toHaveBeenCalledOnce();
+    // Activation gating depends on the resolver receiving the runtime config
+    // so it can consult `isPluginEnabled` against the user's denylist /
+    // entries / allow-list. Verify the config is forwarded.
+    expect(resolveBundledSecretProviderForSourceMock).toHaveBeenCalledWith("fakecloud", config);
   });
 
   it("returns an actionable error for an unknown plugin source", async () => {
