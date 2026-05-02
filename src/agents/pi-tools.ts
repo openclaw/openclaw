@@ -465,10 +465,7 @@ export function createOpenClawCodingTools(options?: {
   const agentEnvVars =
     agentId && options?.config
       ? (() => {
-          const agentEnvCfg = options.config?.agents?.list?.find(
-            (a) => a?.id?.toLowerCase() === agentId.toLowerCase(),
-          )?.env;
-          // Only build scoped env when agent explicitly opts into isolation
+          const agentEnvCfg = resolveAgentConfig(options.config, agentId)?.env;
           if (agentEnvCfg?.scope && agentEnvCfg.scope !== "all") {
             return resolveAgentEnvVars(options.config, agentId);
           }
