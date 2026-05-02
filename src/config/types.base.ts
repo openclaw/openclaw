@@ -182,9 +182,11 @@ export type SessionConfig = {
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
   /**
-   * Max parent transcript token count allowed for thread/session forking.
-   * If parent totalTokens is above this value, OpenClaw skips parent fork and
-   * starts a fresh thread session instead. Set to 0 to disable this guard.
+   * @deprecated Compatibility guard for the historical parent fork ceiling.
+   * OpenClaw now uses a shared parent fork decision path for channel threads
+   * and subagents, and falls back to isolated context when the active parent
+   * branch is too large. Set to 0 only if you intentionally want to disable
+   * that compatibility guard.
    */
   parentForkMaxTokens?: number;
   mainKey?: string;
