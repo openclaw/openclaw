@@ -162,6 +162,9 @@ export function shouldUseLegacyProcessRestartAfterUpdate(params: {
 
 type PrePackageServiceStop = {
   stopped: boolean;
+  inspected: boolean;
+  runtimeInspected: boolean;
+  running: boolean;
   serviceEnv?: NodeJS.ProcessEnv;
 };
 
@@ -175,11 +178,19 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
     service = resolveGatewayService();
     serviceState = await readGatewayServiceState(service, { env: process.env });
   } catch {
-    return { stopped: false };
+    return { stopped: false, inspected: false, runtimeInspected: false, running: false };
   }
 
+  const runtimeStatus = serviceState.runtime?.status;
+  const runtimeInspected = runtimeStatus === "running" || runtimeStatus === "stopped";
   if (!serviceState.installed) {
-    return { stopped: false };
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected,
+      running: serviceState.running,
+      serviceEnv: serviceState.env,
+    };
   }
 
   if (!params.shouldRestart) {
@@ -190,18 +201,46 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
         ),
       );
     }
-    return { stopped: false, serviceEnv: serviceState.env };
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected,
+      running: serviceState.running,
+      serviceEnv: serviceState.env,
+    };
+  }
+
+  if (!runtimeInspected) {
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: false,
+      running: false,
+      serviceEnv: serviceState.env,
+    };
   }
 
   if (!serviceState.running) {
-    return { stopped: false, serviceEnv: serviceState.env };
+    return {
+      stopped: false,
+      inspected: true,
+      runtimeInspected: true,
+      running: false,
+      serviceEnv: serviceState.env,
+    };
   }
 
   if (!params.jsonMode) {
     defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
   }
   await service.stop({ env: serviceState.env, stdout: process.stdout });
-  return { stopped: true, serviceEnv: serviceState.env };
+  return {
+    stopped: true,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    serviceEnv: serviceState.env,
+  };
 }
 
 async function maybeRestartServiceAfterFailedPackageUpdate(params: {
@@ -237,6 +276,25 @@ function isRunningInsideGatewayService(
   }
   const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
   return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+}
+
+function shouldBlockPackageUpdateFromGatewayServiceEnv(params: {
+  prePackageServiceStop: PrePackageServiceStop | undefined;
+}): boolean {
+  if (!isRunningInsideGatewayService()) {
+    return false;
+  }
+  const stopState = params.prePackageServiceStop;
+  if (!stopState?.inspected) {
+    return true;
+  }
+  if (stopState.stopped) {
+    return false;
+  }
+  if (!stopState.runtimeInspected) {
+    return true;
+  }
+  return stopState.running;
 }
 
 function formatCommandFailure(stdout: string, stderr: string): string {
@@ -315,6 +373,13 @@ function disableUpdatedPackageCompileCacheEnv(env: NodeJS.ProcessEnv): NodeJS.Pr
     ...env,
     NODE_DISABLE_COMPILE_CACHE: "1",
   };
+}
+
+function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const resolvedEnv = { ...env };
+  delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
+  delete resolvedEnv.OPENCLAW_SERVICE_KIND;
+  return resolvedEnv;
 }
 
 function resolveUpdatedInstallCommandEnv(
@@ -1271,7 +1336,7 @@ async function continuePostCoreUpdateInFreshProcess(params: {
     const child = spawn(resolveNodeRunner(), argv, {
       stdio: "inherit",
       env: {
-        ...disableUpdatedPackageCompileCacheEnv(process.env),
+        ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel
@@ -1555,18 +1620,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  if (updateInstallKind === "package" && isRunningInsideGatewayService()) {
-    defaultRuntime.error(
-      [
-        "Package updates cannot run from inside the gateway service process.",
-        "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
-        `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
-      ].join("\n"),
-    );
-    defaultRuntime.exit(1);
-    return;
-  }
-
   if (downgradeRisk && !opts.yes) {
     if (!process.stdin.isTTY || opts.json) {
       defaultRuntime.error(
@@ -1631,6 +1684,19 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     } catch (err) {
       stop();
       defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return;
+    }
+
+    if (shouldBlockPackageUpdateFromGatewayServiceEnv({ prePackageServiceStop })) {
+      stop();
+      defaultRuntime.error(
+        [
+          "Package updates cannot run from inside the gateway service process.",
+          "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
+          `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
+        ].join("\n"),
+      );
       defaultRuntime.exit(1);
       return;
     }
