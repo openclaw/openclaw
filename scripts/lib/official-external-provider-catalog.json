@@ -16,7 +16,19 @@
             "name": "Codex",
             "docs": "/providers/models",
             "categories": ["cloud", "llm"],
-            "authChoices": []
+            "authChoices": [
+              {
+                "method": "app-server",
+                "choiceId": "codex",
+                "choiceLabel": "Codex app-server",
+                "choiceHint": "Use the Codex app-server runtime and managed model catalog.",
+                "assistantPriority": -40,
+                "groupId": "codex",
+                "groupLabel": "Codex",
+                "groupHint": "Codex app-server model provider",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
           }
         ],
         "install": {
