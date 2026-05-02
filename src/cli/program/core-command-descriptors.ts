@@ -31,6 +31,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: true,
   },
   {
+    name: "experimental",
+    description: "Toggle experimental config flags interactively",
+    hasSubcommands: false,
+  },
+  {
     name: "backup",
     description: "Create and verify local backup archives for OpenClaw state",
     hasSubcommands: true,
