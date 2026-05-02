@@ -1,12 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config xmlns:tools="http://schemas.android.com/tools">
-  <!-- This app is primarily used on a trusted tailnet; allow cleartext for IP-based endpoints too. -->
+  <!-- This app is primarily used on a trusted tailnet; allow cleartext for IP-based endpoints too.
+       base-config covers all domains — no domain-config entries needed. On Android 15+, per-domain
+       configs cause Android's RootTrustManager to require the hostname-aware checkServerTrusted
+       overload; custom X509TrustManagers must implement and forward this overload with hostname
+       context to the platform trust manager to avoid interoperability issues. -->
   <base-config cleartextTrafficPermitted="true" tools:ignore="InsecureBaseConfiguration" />
-  <!-- Allow HTTP for tailnet/local dev endpoints (e.g. canvas/background web). -->
-  <domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="true">openclaw.local</domain>
-  </domain-config>
-  <domain-config cleartextTrafficPermitted="true">
-    <domain includeSubdomains="true">ts.net</domain>
-  </domain-config>
 </network-security-config>
