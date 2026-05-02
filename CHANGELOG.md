@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway: keep directly requested plugin tools invokable under restrictive tool profiles while preserving explicit deny lists and the HTTP safety deny list, preventing catalog/invoke mismatches that surface as "Tool not available". Thanks @BunsDev.
 - Channels: keep Matrix and Mattermost bundled in the core package instead of advertising external npm installs before those channels are cut over. Thanks @vincentkoc.
 - Bonjour: disable LAN mDNS advertising after a repeated stuck-announcing recovery instead of repeatedly restarting ciao and saturating the Gateway event loop.
 - CLI/plugins: stop treating the non-plugin `auth` command root as a bundled plugin id, so restrictive `plugins.allow` configs no longer tell users to add stale `auth` plugin entries.
