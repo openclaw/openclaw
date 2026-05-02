@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - Discord/gateway: reconnect when the gateway socket closes while waiting for the shared IDENTIFY concurrency window, instead of silently skipping IDENTIFY and leaving the bot online but unresponsive. Fixes #74617. Thanks @zeeskdr-ai.
 - Voice Call: add `sessionScope: "per-call"` for fresh per-call agent memory while preserving the default per-phone caller history. Fixes #45280. Thanks @pondcountry.
 - Music generation: raise too-small tool timeouts to the provider-safe 10-second floor and collapse cascading abort fallback errors into a clearer root-cause summary. Thanks @shakkernerd.
+- Memory-core/dreaming: include the primary runtime workspace in multi-agent dreaming sweeps without mixing main-agent session transcripts into configured subagent workspaces. Fixes #70014. Thanks @ttomiczek.
 - Telegram/startup: use the existing `getMe` request guard for the gateway bot probe instead of a fixed 2.5-second budget, and honor higher `timeoutSeconds` configs for slow Telegram API paths. Fixes #75783. Thanks @tankotan.
 - Telegram/models: make model picker confirmations say selections are session-scoped and do not change the agent's persistent default. Fixes #75965. Thanks @sd1114820.
 - Control UI/slash commands: keep fallback command metadata on a browser-safe registry path, so provider thinking runtime imports cannot blank the Web UI with `process is not defined`. Fixes #75987. Thanks @novkien.
