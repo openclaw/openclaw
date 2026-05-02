@@ -29,11 +29,14 @@ left-pad: package.json
     ]);
   });
 
-  it("ignores pnpm dlx progress lines in files-only compact output", () => {
+  it("ignores warning and progress noise that is not a path:path Knip row", () => {
     expect(
       parseKnipCompactUnusedFiles(`
+(node:12345) ExperimentalWarning: glob is an experimental feature and might change at any time
+Packages: +21
 Progress: resolved 21, reused 0, downloaded 0, added 0
 src/b.ts: src/b.ts
+left-pad: package.json
 Progress: resolved 65, reused 20, downloaded 1, added 21, done
 src/a.ts: src/a.ts
 `),

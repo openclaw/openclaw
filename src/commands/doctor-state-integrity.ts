@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   clearWedgedSubagentRecoveryAbort,
@@ -84,8 +85,16 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   }
 }
 
+function resolveComparablePath(targetPath: string): string {
+  return tryResolveNativeRealPath(targetPath) ?? path.resolve(targetPath);
+}
+
 function resolveComparableTranscriptPath(filePath: string): string {
-  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
+  return resolveComparablePath(filePath);
+}
+
+function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
+  return resolveComparablePath(leftPath) === resolveComparablePath(rightPath);
 }
 
 function isReachableConfiguredAgentDir(params: {
@@ -124,6 +133,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
   }
 
   const agentsRoot = path.join(stateDir, "agents");
+  const liveCompatibilityAgentDir = resolveOpenClawAgentDir();
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
@@ -133,8 +143,12 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         agentId: normalizeAgentId(entry.name),
       }))
       .filter(({ dirName, agentId }) => {
-        const hasNestedAgentDir = existsDir(path.join(agentsRoot, dirName, "agent"));
+        const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
+        const hasNestedAgentDir = existsDir(nestedAgentDir);
         if (!hasNestedAgentDir) {
+          return false;
+        }
+        if (areComparablePathsEqual(nestedAgentDir, liveCompatibilityAgentDir)) {
           return false;
         }
         if (!configuredIds.has(agentId)) {

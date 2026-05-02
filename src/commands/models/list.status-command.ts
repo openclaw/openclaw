@@ -37,6 +37,7 @@ import {
   resolveAgentModelFallbackValues,
   resolveAgentModelPrimaryValue,
 } from "../../config/model-input.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../../plugins/provider-runtime.js";
@@ -83,6 +84,16 @@ type StatusSyntheticAuth = {
   credential?: string;
   mode?: ProviderSyntheticAuthResult["mode"];
   expiresAt?: number;
+};
+
+type ModelsStatusAgentScope = {
+  agentDir: string;
+  effectiveAgentId?: string;
+  displayAgentId?: string;
+  probeAgentId: string;
+  workspaceDir: string;
+  agentModelPrimary?: string;
+  agentFallbacksOverride?: string[];
 };
 
 function loadProviderUsageRuntime(): Promise<ProviderUsageRuntime> {
@@ -151,6 +162,43 @@ function syntheticAuthCredential(
   };
 }
 
+function hasCompatibilityAgentDirOverride(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim());
+}
+
+function resolveModelsStatusAgentScope(
+  cfg: OpenClawConfig,
+  rawAgentId?: string,
+): ModelsStatusAgentScope {
+  const explicitAgentId = resolveKnownAgentId({ cfg, rawAgentId });
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const useCompatibilityAgentDir = !explicitAgentId && hasCompatibilityAgentDirOverride();
+  const effectiveAgentId =
+    explicitAgentId ?? (useCompatibilityAgentDir ? undefined : defaultAgentId);
+  const workspaceAgentId = effectiveAgentId ?? defaultAgentId;
+  const agentDir = effectiveAgentId
+    ? resolveAgentDir(cfg, effectiveAgentId)
+    : resolveOpenClawAgentDir();
+  const workspaceDir =
+    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
+  const displayAgentId =
+    explicitAgentId ??
+    (useCompatibilityAgentDir || defaultAgentId === "main" ? undefined : defaultAgentId);
+  return {
+    agentDir,
+    effectiveAgentId,
+    displayAgentId,
+    probeAgentId: effectiveAgentId ?? defaultAgentId,
+    workspaceDir,
+    agentModelPrimary: effectiveAgentId
+      ? resolveAgentExplicitModelPrimary(cfg, effectiveAgentId)
+      : undefined,
+    agentFallbacksOverride: effectiveAgentId
+      ? resolveAgentModelFallbacksOverride(cfg, effectiveAgentId)
+      : undefined,
+  };
+}
+
 export async function modelsStatusCommand(
   opts: {
     json?: boolean;
@@ -172,15 +220,19 @@ export async function modelsStatusCommand(
   }
   const configPath = createConfigIO().configPath;
   const cfg = await loadModelsConfig({ commandName: "models status", runtime });
-  const agentId = resolveKnownAgentId({ cfg, rawAgentId: opts.agent });
-  const agentDir = agentId ? resolveAgentDir(cfg, agentId) : resolveOpenClawAgentDir();
-  const workspaceAgentId = agentId ?? resolveDefaultAgentId(cfg);
-  const workspaceDir =
-    resolveAgentWorkspaceDir(cfg, workspaceAgentId) ?? resolveDefaultAgentWorkspaceDir();
-  const agentModelPrimary = agentId ? resolveAgentExplicitModelPrimary(cfg, agentId) : undefined;
-  const agentFallbacksOverride = agentId
-    ? resolveAgentModelFallbacksOverride(cfg, agentId)
-    : undefined;
+  const agentScope = resolveModelsStatusAgentScope(cfg, opts.agent);
+  const {
+    agentDir,
+    displayAgentId,
+    probeAgentId,
+    workspaceDir,
+    agentModelPrimary,
+    agentFallbacksOverride,
+  } = agentScope;
+  const showModelConfigSources =
+    Boolean(displayAgentId) ||
+    agentModelPrimary !== undefined ||
+    agentFallbacksOverride !== undefined;
   const resolvedConfig =
     agentModelPrimary && agentModelPrimary.length > 0
       ? {
@@ -403,7 +455,7 @@ export async function modelsStatusCommand(
       async (update) => {
         return await runAuthProbes({
           cfg,
-          agentId: workspaceAgentId,
+          agentId: probeAgentId,
           agentDir,
           workspaceDir,
           providers,
@@ -491,14 +543,14 @@ export async function modelsStatusCommand(
   if (opts.json) {
     writeRuntimeJson(runtime, {
       configPath,
-      ...(agentId ? { agentId } : {}),
+      ...(displayAgentId ? { agentId: displayAgentId } : {}),
       agentDir,
       defaultModel: defaultLabel,
       resolvedDefault: resolvedLabel,
       fallbacks,
       imageModel: imageModel || null,
       imageFallbacks,
-      ...(agentId
+      ...(showModelConfigSources
         ? {
             modelConfig: {
               defaultSource: agentModelPrimary ? "agent" : "defaults",
@@ -559,16 +611,19 @@ export async function modelsStatusCommand(
     )}`,
   );
   runtime.log(
-    `${labelWithSource("Default", agentId ? (agentModelPrimary ? "agent" : "defaults") : undefined)}${colorize(
-      rich,
-      theme.muted,
-      ":",
-    )} ${colorize(rich, theme.success, displayDefault)}`,
+    `${labelWithSource(
+      "Default",
+      showModelConfigSources ? (agentModelPrimary ? "agent" : "defaults") : undefined,
+    )}${colorize(rich, theme.muted, ":")} ${colorize(rich, theme.success, displayDefault)}`,
   );
   runtime.log(
     `${labelWithSource(
       `Fallbacks (${fallbacks.length || 0})`,
-      agentId ? (agentFallbacksOverride !== undefined ? "agent" : "defaults") : undefined,
+      showModelConfigSources
+        ? agentFallbacksOverride !== undefined
+          ? "agent"
+          : "defaults"
+        : undefined,
     )}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       fallbacks.length ? theme.warn : theme.muted,
@@ -576,7 +631,7 @@ export async function modelsStatusCommand(
     )}`,
   );
   runtime.log(
-    `${labelWithSource("Image model", agentId ? "defaults" : undefined)}${colorize(
+    `${labelWithSource("Image model", showModelConfigSources ? "defaults" : undefined)}${colorize(
       rich,
       theme.muted,
       ":",
@@ -585,7 +640,7 @@ export async function modelsStatusCommand(
   runtime.log(
     `${labelWithSource(
       `Image fallbacks (${imageFallbacks.length || 0})`,
-      agentId ? "defaults" : undefined,
+      showModelConfigSources ? "defaults" : undefined,
     )}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       imageFallbacks.length ? theme.accentBright : theme.muted,

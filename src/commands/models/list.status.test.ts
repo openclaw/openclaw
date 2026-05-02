@@ -1,4 +1,4 @@
-import { describe, expect, it, type Mock, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   type MockAuthProfile = { provider: string; [key: string]: unknown };
@@ -136,6 +136,19 @@ const mocks = vi.hoisted(() => {
     loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
     resolveRuntimeSyntheticAuthProviderRefs: vi.fn().mockReturnValue([]),
     resolveProviderSyntheticAuthWithPlugin: vi.fn().mockReturnValue(undefined),
+    withProgressTotals: vi.fn(async (_params, run) => await run(() => undefined)),
+    runAuthProbes: vi.fn().mockResolvedValue({
+      startedAt: 1,
+      finishedAt: 2,
+      durationMs: 1,
+      totalTargets: 0,
+      options: {
+        timeoutMs: 8_000,
+        concurrency: 2,
+        maxTokens: 8,
+      },
+      results: [],
+    }),
   };
 });
 
@@ -232,11 +245,17 @@ vi.mock("../../infra/provider-usage.js", () => ({
   loadProviderUsageSummary: mocks.loadProviderUsageSummary,
   resolveUsageProviderId: vi.fn((providerId: string) => providerId),
 }));
+vi.mock("../../cli/progress.js", () => ({
+  withProgressTotals: mocks.withProgressTotals,
+}));
 vi.mock("../../plugins/synthetic-auth.runtime.js", () => ({
   resolveRuntimeSyntheticAuthProviderRefs: mocks.resolveRuntimeSyntheticAuthProviderRefs,
 }));
 vi.mock("../../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: mocks.resolveProviderSyntheticAuthWithPlugin,
+}));
+vi.mock("./list.probe.js", () => ({
+  runAuthProbes: mocks.runAuthProbes,
 }));
 
 import { modelsStatusCommand } from "./list.status-command.js";
@@ -244,6 +263,10 @@ import { modelsStatusCommand } from "./list.status-command.js";
 const defaultResolveEnvApiKeyImpl:
   | ((provider: string) => { apiKey: string; source: string } | null)
   | undefined = mocks.resolveEnvApiKey.getMockImplementation();
+const envSnapshot = {
+  OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
+};
 
 const runtime = {
   log: vi.fn(),
@@ -258,6 +281,44 @@ function createRuntime() {
     exit: vi.fn(),
   };
 }
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.resolveOpenClawAgentDir.mockReturnValue("/tmp/openclaw-agent");
+  mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw-agent");
+  mocks.resolveDefaultAgentId.mockReturnValue("main");
+  mocks.resolveAgentExplicitModelPrimary.mockReturnValue(undefined);
+  mocks.resolveAgentEffectiveModelPrimary.mockReturnValue(undefined);
+  mocks.resolveAgentModelFallbacksOverride.mockReturnValue(undefined);
+  mocks.withProgressTotals.mockImplementation(async (_params, run) => await run(() => undefined));
+  mocks.runAuthProbes.mockResolvedValue({
+    startedAt: 1,
+    finishedAt: 2,
+    durationMs: 1,
+    totalTargets: 0,
+    options: {
+      timeoutMs: 8_000,
+      concurrency: 2,
+      maxTokens: 8,
+    },
+    results: [],
+  });
+  delete process.env.OPENCLAW_AGENT_DIR;
+  delete process.env.PI_CODING_AGENT_DIR;
+});
+
+afterEach(() => {
+  if (envSnapshot.OPENCLAW_AGENT_DIR === undefined) {
+    delete process.env.OPENCLAW_AGENT_DIR;
+  } else {
+    process.env.OPENCLAW_AGENT_DIR = envSnapshot.OPENCLAW_AGENT_DIR;
+  }
+  if (envSnapshot.PI_CODING_AGENT_DIR === undefined) {
+    delete process.env.PI_CODING_AGENT_DIR;
+  } else {
+    process.env.PI_CODING_AGENT_DIR = envSnapshot.PI_CODING_AGENT_DIR;
+  }
+});
 
 async function withAgentScopeOverrides<T>(
   overrides: {
@@ -310,7 +371,8 @@ describe("modelsStatusCommand auth overview", () => {
     await modelsStatusCommand({ json: true }, runtime as never);
     const payload = JSON.parse(String((runtime.log as Mock).mock.calls[0]?.[0]));
 
-    expect(mocks.resolveOpenClawAgentDir).toHaveBeenCalled();
+    expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "main");
+    expect(mocks.resolveOpenClawAgentDir).not.toHaveBeenCalled();
     expect(mocks.ensureAuthProfileStore).toHaveBeenCalled();
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
@@ -362,6 +424,105 @@ describe("modelsStatusCommand auth overview", () => {
     ).toBe(true);
   });
 
+  it("reports source attribution for implicit main-agent overrides without surfacing agentId", async () => {
+    const jsonRuntime = createRuntime();
+    const textRuntime = createRuntime();
+
+    await withAgentScopeOverrides(
+      {
+        primary: "openai/gpt-5.4",
+        fallbacks: ["openai/gpt-4.1"],
+      },
+      async () => {
+        await modelsStatusCommand({ json: true }, jsonRuntime as never);
+        const payload = JSON.parse(String((jsonRuntime.log as Mock).mock.calls[0]?.[0]));
+        expect(payload.agentId).toBeUndefined();
+        expect(payload.defaultModel).toBe("openai/gpt-5.4");
+        expect(payload.fallbacks).toEqual(["openai/gpt-4.1"]);
+        expect(payload.modelConfig).toEqual({
+          defaultSource: "agent",
+          fallbacksSource: "agent",
+        });
+
+        await modelsStatusCommand({}, textRuntime as never);
+        const output = (textRuntime.log as Mock).mock.calls
+          .map((call: unknown[]) => String(call[0]))
+          .join("\n");
+        expect(output).toContain("Default (agent)");
+        expect(output).toContain("Fallbacks (1) (agent)");
+      },
+    );
+  });
+
+  it("uses the configured default agent when no --agent is provided", async () => {
+    const localRuntime = createRuntime();
+    const originalDefaultAgentId = mocks.resolveDefaultAgentId.getMockImplementation();
+    const originalAgentDir = mocks.resolveAgentDir.getMockImplementation();
+    mocks.resolveDefaultAgentId.mockReturnValue("jeremiah");
+    mocks.resolveAgentDir.mockImplementation((_cfg, agentId: string) =>
+      agentId === "jeremiah" ? "/tmp/openclaw-agent-jeremiah" : "/tmp/openclaw-agent",
+    );
+
+    try {
+      await withAgentScopeOverrides(
+        {
+          primary: "openai/gpt-5.4",
+          fallbacks: ["openai/gpt-4.1"],
+        },
+        async () => {
+          await modelsStatusCommand({ json: true }, localRuntime as never);
+          const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+          expect(mocks.resolveAgentDir).toHaveBeenCalledWith(expect.anything(), "jeremiah");
+          expect(mocks.resolveOpenClawAgentDir).not.toHaveBeenCalled();
+          expect(payload.agentId).toBe("jeremiah");
+          expect(payload.agentDir).toBe("/tmp/openclaw-agent-jeremiah");
+          expect(payload.defaultModel).toBe("openai/gpt-5.4");
+          expect(payload.fallbacks).toEqual(["openai/gpt-4.1"]);
+          expect(payload.modelConfig).toEqual({
+            defaultSource: "agent",
+            fallbacksSource: "agent",
+          });
+        },
+      );
+    } finally {
+      if (originalDefaultAgentId) {
+        mocks.resolveDefaultAgentId.mockImplementation(originalDefaultAgentId);
+      } else {
+        mocks.resolveDefaultAgentId.mockReturnValue("main");
+      }
+      if (originalAgentDir) {
+        mocks.resolveAgentDir.mockImplementation(originalAgentDir);
+      } else {
+        mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw-agent");
+      }
+    }
+  });
+
+  it("keeps OPENCLAW_AGENT_DIR compatibility overrides ahead of the configured default agent", async () => {
+    const localRuntime = createRuntime();
+    const originalDefaultAgentId = mocks.resolveDefaultAgentId.getMockImplementation();
+    mocks.resolveDefaultAgentId.mockReturnValue("jeremiah");
+    process.env.OPENCLAW_AGENT_DIR = "/tmp/compat-agent";
+    process.env.PI_CODING_AGENT_DIR = "/tmp/compat-agent";
+    mocks.resolveOpenClawAgentDir.mockReturnValue("/tmp/compat-agent");
+
+    try {
+      await modelsStatusCommand({ json: true }, localRuntime as never);
+      const payload = JSON.parse(String((localRuntime.log as Mock).mock.calls[0]?.[0]));
+      expect(mocks.resolveOpenClawAgentDir).toHaveBeenCalled();
+      expect(mocks.resolveAgentDir).not.toHaveBeenCalledWith(expect.anything(), "jeremiah");
+      expect(payload.agentId).toBeUndefined();
+      expect(payload.agentDir).toBe("/tmp/compat-agent");
+      expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
+    } finally {
+      if (originalDefaultAgentId) {
+        mocks.resolveDefaultAgentId.mockImplementation(originalDefaultAgentId);
+      } else {
+        mocks.resolveDefaultAgentId.mockReturnValue("main");
+      }
+    }
+  });
+
   it("uses agent overrides and reports sources", async () => {
     const localRuntime = createRuntime();
     await withAgentScopeOverrides(
@@ -394,6 +555,37 @@ describe("modelsStatusCommand auth overview", () => {
         });
       },
     );
+  });
+
+  it("passes the resolved agent scope into auth probes", async () => {
+    const localRuntime = createRuntime();
+    const originalDefaultAgentId = mocks.resolveDefaultAgentId.getMockImplementation();
+    const originalAgentDir = mocks.resolveAgentDir.getMockImplementation();
+    mocks.resolveDefaultAgentId.mockReturnValue("jeremiah");
+    mocks.resolveAgentDir.mockImplementation((_cfg, agentId: string) =>
+      agentId === "jeremiah" ? "/tmp/openclaw-agent-jeremiah" : "/tmp/openclaw-agent",
+    );
+
+    try {
+      await modelsStatusCommand({ json: true, probe: true }, localRuntime as never);
+      expect(mocks.runAuthProbes).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "jeremiah",
+          agentDir: "/tmp/openclaw-agent-jeremiah",
+        }),
+      );
+    } finally {
+      if (originalDefaultAgentId) {
+        mocks.resolveDefaultAgentId.mockImplementation(originalDefaultAgentId);
+      } else {
+        mocks.resolveDefaultAgentId.mockReturnValue("main");
+      }
+      if (originalAgentDir) {
+        mocks.resolveAgentDir.mockImplementation(originalAgentDir);
+      } else {
+        mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw-agent");
+      }
+    }
   });
 
   it("does not double-prefix provider-qualified resolved default models", async () => {
