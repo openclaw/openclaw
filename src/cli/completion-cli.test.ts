@@ -31,6 +31,25 @@ describe("completion-cli", () => {
     expect(script).toContain("--force[Force the action]");
   });
 
+  it("escapes zsh descriptions that contain backticks", () => {
+    const program = new Command();
+    program.name("openclaw");
+    program
+      .command("models")
+      .description("Model commands")
+      .option("--status-json", "Output JSON (alias for `models status --json`)");
+    program
+      .command("hooks")
+      .description("Hook commands")
+      .command("install")
+      .description("Deprecated: install via `openclaw plugins install`");
+
+    const script = getCompletionScript("zsh", program);
+
+    expect(script).toContain("--status-json[Output JSON (alias for \\`models status --json\\`)]");
+    expect(script).toContain("install[Deprecated: install via \\`openclaw plugins install\\`]");
+  });
+
   it("defers zsh registration until compinit is available", async () => {
     if (process.platform === "win32") {
       return;

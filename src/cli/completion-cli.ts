@@ -195,6 +195,7 @@ function generateZshArgs(cmd: Command): string {
       const short = flags.find((f) => f.startsWith("-") && !f.startsWith("--"));
       const desc = opt.description
         .replace(/\\/g, "\\\\")
+        .replace(/`/g, "\\`")
         .replace(/"/g, '\\"')
         .replace(/'/g, "'\\''")
         .replace(/\[/g, "\\[")
@@ -213,6 +214,7 @@ function generateZshSubcmdList(cmd: Command): string {
       const desc = c
         .description()
         .replace(/\\/g, "\\\\")
+        .replace(/`/g, "\\`")
         .replace(/'/g, "'\\''")
         .replace(/\[/g, "\\[")
         .replace(/\]/g, "\\]");
