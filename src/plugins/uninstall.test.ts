@@ -704,6 +704,37 @@ describe("uninstallPlugin", () => {
     }
   });
 
+  it("cleans stale policy references even when plugin code and install records are gone", async () => {
+    const result = await uninstallPlugin({
+      config: createPluginConfig({
+        allow: ["missing-plugin", "other-plugin"],
+        deny: ["missing-plugin"],
+        slots: {
+          memory: "missing-plugin",
+        },
+      }),
+      pluginId: "missing-plugin",
+      deleteFiles: true,
+    });
+
+    const successfulResult = expectSuccessfulUninstall(result);
+    expect(successfulResult.actions).toEqual({
+      entry: false,
+      install: false,
+      allowlist: true,
+      denylist: true,
+      loadPath: false,
+      memorySlot: true,
+      contextEngineSlot: false,
+      channelConfig: false,
+      directory: false,
+    });
+    expect(successfulResult.config.plugins?.allow).toEqual(["other-plugin"]);
+    expect(successfulResult.config.plugins?.deny).toBeUndefined();
+    expect(successfulResult.config.plugins?.slots?.memory).toBe("memory-core");
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
   it("removes config entries", async () => {
     const config = createPluginConfig({
       entries: createSinglePluginEntries(),
@@ -827,6 +858,24 @@ describe("uninstallPlugin", () => {
       }),
     );
     await expect(fs.access(pluginDir)).rejects.toThrow();
+  });
+
+  it("skips npm cleanup when the managed package directory is already absent", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const npmRoot = path.join(stateDir, "npm");
+    const pluginDir = path.join(npmRoot, "node_modules", "missing-plugin");
+
+    const applied = await applyPluginUninstallDirectoryRemoval({
+      target: pluginDir,
+      cleanup: {
+        kind: "npm",
+        npmRoot,
+        packageName: "missing-plugin",
+      },
+    });
+
+    expect(applied).toEqual({ directoryRemoved: false, warnings: [] });
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
   });
 
   it("warns and still removes npm package dirs when npm prune cleanup fails", async () => {
