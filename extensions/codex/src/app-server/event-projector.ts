@@ -95,6 +95,8 @@ export class CodexAppServerEventProjector {
   private promptError: unknown;
   private promptErrorSource: EmbeddedRunAttemptResult["promptErrorSource"] = null;
   private aborted = false;
+  private timedOut = false;
+  private idleTimedOut = false;
   private tokenUsage: ReturnType<typeof normalizeUsage>;
   private guardianReviewCount = 0;
   private completedCompactionCount = 0;
@@ -217,8 +219,8 @@ export class CodexAppServerEventProjector {
     return {
       aborted: this.aborted || turnInterrupted,
       externalAbort: false,
-      timedOut: false,
-      idleTimedOut: false,
+      timedOut: this.timedOut,
+      idleTimedOut: this.idleTimedOut,
       timedOutDuringCompaction: false,
       promptError,
       promptErrorSource: promptError ? this.promptErrorSource || "prompt" : null,
@@ -257,8 +259,10 @@ export class CodexAppServerEventProjector {
     };
   }
 
-  markTimedOut(): void {
+  markTimedOut(kind: "idle" | "wallclock" = "idle"): void {
     this.aborted = true;
+    this.timedOut = true;
+    this.idleTimedOut = kind === "idle";
     this.promptError = "codex app-server attempt timed out";
     this.promptErrorSource = "prompt";
   }

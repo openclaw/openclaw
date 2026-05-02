@@ -1055,7 +1055,7 @@ export async function runCodexAppServerAttempt(
   const timeout = setTimeout(
     () => {
       timedOut = true;
-      projector?.markTimedOut();
+      projector?.markTimedOut("wallclock");
       runAbortController.abort("timeout");
     },
     Math.max(100, params.timeoutMs),
