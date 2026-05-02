@@ -214,7 +214,7 @@ function loadPluginMetadataSnapshotImpl(
           config: params.config,
           workspaceDir: params.workspaceDir,
           env: params.env,
-          diagnostics: index.diagnostics,
+          diagnostics: [...index.diagnostics],
           installRecords: index.installRecords,
         })
       : loadPluginManifestRegistryForInstalledIndex({

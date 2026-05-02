@@ -112,7 +112,9 @@ export function createModelListAuthIndex(
       addProvider(provider);
     }
   }
-  const primaryModelProvider = params.cfg.agents?.defaults?.model?.primary?.split("/", 1)[0];
+  const defaultModel = params.cfg.agents?.defaults?.model;
+  const primaryModel = typeof defaultModel === "string" ? defaultModel : defaultModel?.primary;
+  const primaryModelProvider = primaryModel?.split("/", 1)[0];
   if (primaryModelProvider === "openai-codex" || primaryModelProvider === "codex") {
     addSyntheticProvider("codex");
   }
