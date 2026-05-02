@@ -57,6 +57,7 @@ Docs: https://docs.openclaw.ai
 - Hooks/doctor: warn when `hooks.transformsDir` points outside the canonical hooks transform directory, so invalid workspace skill paths get a direct recovery hint before the Gateway crash-loops. Fixes #75853. Thanks @midobk.
 - Proxy/audio: convert standard `FormData` bodies before proxy-backed undici fetches, so audio transcription and multipart uploads no longer send `[object FormData]` when `HTTP_PROXY` or `HTTPS_PROXY` is configured. Fixes #48554. Thanks @dco5.
 - Discord: allow explicitly configured ack reactions in tool-only guild channels while keeping automatic lifecycle/status reactions suppressed. Fixes #74922. Thanks @samvilian and @BlueBirdBack.
+- Discord/native commands: return an explicit warning when slash command dispatch or direct plugin execution produces no visible reply instead of a success-style completion ack. Fixes #58986; supersedes #62057. Thanks @jb510.
 - Discord: keep typing indicators alive during long tool runs and auto-compaction while keepalive ticks continue, so active sessions do not appear stalled before the final reply. Thanks @Squirbie.
 - Discord: preserve multipart Content-Type headers for attachment uploads across REST fetch paths, so generated images and other media no longer fail delivery with `CONTENT_TYPE_INVALID`. Thanks @FunJim.
 - Discord: preserve attachment and sticker filenames when saving inbound media, so agents can see human-readable file names instead of only UUID-based paths. Fixes #59744. Thanks @xela92 and @rockcent.
