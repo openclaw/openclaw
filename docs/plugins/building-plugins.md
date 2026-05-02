@@ -257,6 +257,11 @@ plugin manifest:
 }
 ```
 
+OpenClaw captures and caches the validated descriptor from the registered tool,
+so plugins do not duplicate `description` or schema data in the manifest. The
+manifest contract only declares ownership and discovery; execution still calls
+the live registered tool implementation.
+
 Users enable optional tools in config:
 
 ```json5
