@@ -5,6 +5,7 @@ const setDefaultResultOrder = vi.hoisted(() => vi.fn());
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const loggerInfo = vi.hoisted(() => vi.fn());
 const loggerDebug = vi.hoisted(() => vi.fn());
+const loggerWarn = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
@@ -70,12 +71,12 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   createSubsystemLogger: () => ({
     info: loggerInfo,
     debug: loggerDebug,
-    warn: vi.fn(),
+    warn: loggerWarn,
     error: vi.fn(),
     child: () => ({
       info: loggerInfo,
       debug: loggerDebug,
-      warn: vi.fn(),
+      warn: loggerWarn,
       error: vi.fn(),
     }),
   }),
@@ -129,6 +130,7 @@ beforeEach(() => {
   }
   loggerInfo.mockReset();
   loggerDebug.mockReset();
+  loggerWarn.mockReset();
 });
 
 afterEach(() => {
@@ -792,6 +794,13 @@ describe("resolveTelegramFetch", () => {
 
     await resolved("https://api.telegram.org/botx/sendMessage");
     await resolved("https://api.telegram.org/botx/sendChatAction");
+
+    expect(loggerDebug).toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    );
+    expect(loggerWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    );
 
     expect(undiciFetch).toHaveBeenCalledTimes(3);
 

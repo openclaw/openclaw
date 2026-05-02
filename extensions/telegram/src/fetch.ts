@@ -643,7 +643,7 @@ export function resolveTelegramTransport(
     const nextAttempt = transportAttempts[nextIndex];
     if (nextAttempt.logMessage) {
       const reasonText = reason ? `, reason=${reason}` : "";
-      log.warn(`${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`);
+      log.debug(`${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`);
     }
     stickyAttemptIndex = nextIndex;
     return true;
