@@ -569,7 +569,9 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         },
         "action": {
-          "enum": ["send"],
+          "enum": [
+            "send"
+          ],
           "type": "string"
         },
         "activityName": {
@@ -937,7 +939,9 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         }
       },
-      "required": ["action"],
+      "required": [
+        "action"
+      ],
       "type": "object"
     },
     "name": "message"

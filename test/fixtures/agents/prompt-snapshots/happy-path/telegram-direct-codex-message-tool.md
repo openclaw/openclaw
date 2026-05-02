@@ -546,7 +546,9 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "action": {
-          "enum": ["send"],
+          "enum": [
+            "send"
+          ],
           "type": "string"
         },
         "activityName": {
@@ -914,7 +916,9 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         }
       },
-      "required": ["action"],
+      "required": [
+        "action"
+      ],
       "type": "object"
     },
     "name": "message"

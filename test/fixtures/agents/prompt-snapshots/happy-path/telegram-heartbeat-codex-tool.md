@@ -548,7 +548,9 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "action": {
-          "enum": ["send"],
+          "enum": [
+            "send"
+          ],
           "type": "string"
         },
         "activityName": {
@@ -916,7 +918,9 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         }
       },
-      "required": ["action"],
+      "required": [
+        "action"
+      ],
       "type": "object"
     },
     "name": "message"
@@ -936,11 +940,21 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "boolean"
         },
         "outcome": {
-          "enum": ["no_change", "progress", "done", "blocked", "needs_attention"],
+          "enum": [
+            "no_change",
+            "progress",
+            "done",
+            "blocked",
+            "needs_attention"
+          ],
           "type": "string"
         },
         "priority": {
-          "enum": ["low", "normal", "high"],
+          "enum": [
+            "low",
+            "normal",
+            "high"
+          ],
           "type": "string"
         },
         "reason": {
@@ -950,7 +964,11 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         }
       },
-      "required": ["outcome", "notify", "summary"],
+      "required": [
+        "outcome",
+        "notify",
+        "summary"
+      ],
       "type": "object"
     },
     "name": "heartbeat_respond"
