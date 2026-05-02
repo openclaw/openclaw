@@ -20696,9 +20696,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
             type: "integer",
             minimum: 0,
             maximum: 9007199254740991,
-            title: "Session Parent Fork Max Tokens",
+            title: "Deprecated Session Parent Fork Max Tokens",
             description:
-              "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
+              "Deprecated compatibility guard for the historical parent-session fork ceiling. OpenClaw now shares the parent fork decision between channel threads and subagents and falls back to isolated context when the active parent branch is too large; set 0 only to disable that guard intentionally.",
           },
           mainKey: {
             type: "string",
@@ -27842,8 +27842,8 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       tags: ["storage"],
     },
     "session.parentForkMaxTokens": {
-      label: "Session Parent Fork Max Tokens",
-      help: "Maximum parent-session token count allowed for thread/session inheritance forking. If the parent exceeds this, OpenClaw starts a fresh thread session instead of forking; set 0 to disable this protection.",
+      label: "Deprecated Session Parent Fork Max Tokens",
+      help: "Deprecated compatibility guard for the historical parent-session fork ceiling. OpenClaw now shares the parent fork decision between channel threads and subagents and falls back to isolated context when the active parent branch is too large; set 0 only to disable that guard intentionally.",
       tags: ["security", "auth", "performance", "storage"],
     },
     "session.mainKey": {

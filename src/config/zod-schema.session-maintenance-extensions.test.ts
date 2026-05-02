@@ -14,7 +14,7 @@ describe("SessionSchema maintenance extensions", () => {
     ).not.toThrow();
   });
 
-  it("accepts parentForkMaxTokens including 0 to disable the guard", () => {
+  it("accepts deprecated parentForkMaxTokens including 0 to disable the guard", () => {
     expect(() => SessionSchema.parse({ parentForkMaxTokens: 100_000 })).not.toThrow();
     expect(() => SessionSchema.parse({ parentForkMaxTokens: 0 })).not.toThrow();
   });

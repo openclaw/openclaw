@@ -52,11 +52,37 @@ vi.mock("./session-fork.js", () => ({
     sessionForkMocks.forkSessionFromParent(...args),
   resolveParentForkTokenCount: (...args: [{ parentEntry: SessionEntry; storePath: string }]) =>
     sessionForkMocks.resolveParentForkTokenCount(...args),
-  resolveParentForkMaxTokens: (cfg: { session?: { parentForkMaxTokens?: unknown } }) => {
-    const configured = cfg.session?.parentForkMaxTokens;
-    return typeof configured === "number" && Number.isFinite(configured) && configured >= 0
-      ? Math.floor(configured)
-      : 100_000;
+  resolveParentForkDecision: async (params: {
+    cfg: { session?: { parentForkMaxTokens?: unknown } };
+    parentEntry: SessionEntry;
+    storePath: string;
+  }) => {
+    const configured = params.cfg.session?.parentForkMaxTokens;
+    const maxTokens =
+      typeof configured === "number" && Number.isFinite(configured) && configured >= 0
+        ? Math.floor(configured)
+        : 100_000;
+    if (maxTokens <= 0) {
+      return { status: "fork", maxTokens };
+    }
+    const parentTokens = await sessionForkMocks.resolveParentForkTokenCount({
+      parentEntry: params.parentEntry,
+      storePath: params.storePath,
+    });
+    if (typeof parentTokens === "number" && parentTokens > maxTokens) {
+      return {
+        status: "skip",
+        reason: "parent-too-large",
+        maxTokens,
+        parentTokens,
+        message: `Parent context is too large to fork (${parentTokens}/${maxTokens} tokens); starting with isolated context instead.`,
+      };
+    }
+    return {
+      status: "fork",
+      maxTokens,
+      ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+    };
   },
 }));
 

@@ -115,6 +115,37 @@ describe("sessions_spawn context modes", () => {
     );
   });
 
+  it("falls back to isolated context when requested fork is too large", async () => {
+    const store: SessionStore = {
+      main: {
+        sessionId: "parent-session-id",
+        sessionFile: "/tmp/parent-session.jsonl",
+        updatedAt: 1,
+        totalTokens: 170_000,
+      },
+    };
+    usePersistentStoreMock(store);
+    const prepareSubagentSpawn = vi.fn(async () => undefined);
+    resolveContextEngineMock.mockResolvedValue({ prepareSubagentSpawn });
+
+    const result = await spawnSubagentDirect(
+      { task: "inspect the current thread", context: "fork" },
+      { agentSessionKey: "main" },
+    );
+
+    expect(result).toMatchObject({ status: "accepted", runId: "run-1" });
+    expect(result.note).toContain("Parent context is too large to fork");
+    expect(forkSessionFromParentMock).not.toHaveBeenCalled();
+    expect(prepareSubagentSpawn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        parentSessionKey: "main",
+        childSessionKey: result.childSessionKey,
+        contextMode: "isolated",
+        parentSessionId: "parent-session-id",
+      }),
+    );
+  });
+
   it("forks by default for thread-bound subagent sessions", async () => {
     const store: SessionStore = {
       main: {
