@@ -931,6 +931,23 @@ function buildAssistantAttachmentUrl(
   return `${normalizedBasePath}/__openclaw__/assistant-media?${params.toString()}`;
 }
 
+function buildAssistantAttachmentNavigationUrl(
+  source: string,
+  basePath: string | undefined,
+  authToken: string | null | undefined,
+): string {
+  const attachmentUrl = buildAssistantAttachmentUrl(source, basePath);
+  if (!isLocalAssistantAttachmentSource(source)) {
+    return attachmentUrl;
+  }
+  const normalizedAuthToken = authToken?.trim() ?? "";
+  if (!normalizedAuthToken) {
+    return attachmentUrl;
+  }
+  const separator = attachmentUrl.includes("?") ? "&" : "?";
+  return `${attachmentUrl}${separator}token=${encodeURIComponent(normalizedAuthToken)}`;
+}
+
 async function resolveAssistantAttachmentBlobUrl(
   source: string,
   basePath: string | undefined,
@@ -1270,6 +1287,10 @@ function renderAssistantAttachments(
           availability.status === "available"
             ? buildAssistantAttachmentUrl(attachment.url, basePath, availability.mediaTicket)
             : null;
+        const navigationUrl =
+          availability.status === "available"
+            ? buildAssistantAttachmentNavigationUrl(attachment.url, basePath, authToken)
+            : null;
         const renderStatusCard = (badge: "Checking..." | "Unavailable") =>
           renderAssistantAttachmentStatusCard({
             kind: attachment.kind,
@@ -1351,7 +1372,7 @@ function renderAssistantAttachments(
           return renderAvailableAttachment(attachmentUrl);
         }
         if (attachment.kind === "document") {
-          return renderAvailableAttachment(attachmentUrl);
+          return renderAvailableAttachment(attachmentUrl, navigationUrl ?? attachmentUrl);
         }
         return until(
           resolveAssistantAttachmentBlobUrl(
