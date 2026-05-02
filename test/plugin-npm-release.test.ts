@@ -190,6 +190,7 @@ describe("collectPublishablePluginPackageErrors", () => {
 
 describe("collectPublishablePluginPackages", () => {
   it("keeps publishable plugin dist trees out of the core npm package files list", () => {
+    const corePackageRuntimePluginIds = new Set(["discord"]);
     const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
       files?: unknown;
     };
@@ -199,7 +200,11 @@ describe("collectPublishablePluginPackages", () => {
       ...collectClawHubPublishablePluginPackages(),
     ];
     const missingExclusions = Array.from(
-      new Set(publishablePlugins.map((plugin) => `!dist/extensions/${plugin.extensionId}/**`)),
+      new Set(
+        publishablePlugins
+          .filter((plugin) => !corePackageRuntimePluginIds.has(plugin.extensionId))
+          .map((plugin) => `!dist/extensions/${plugin.extensionId}/**`),
+      ),
     ).filter((entry) => !packageFiles.has(entry));
 
     expect(missingExclusions).toEqual([]);
