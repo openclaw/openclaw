@@ -1014,7 +1014,7 @@ export const registerTelegramHandlers = ({
           storeAllowFrom,
           {
             forceWasMentioned: true,
-            messageIdOverride: `reaction:${chatId}:${messageId}`,
+            messageIdOverride: `reaction:${chatId}:${messageId}:${ctx.update.update_id}`,
           },
         );
         logVerbose(`telegram: reaction session triggered for sessionKey=${sessionKey}`);
