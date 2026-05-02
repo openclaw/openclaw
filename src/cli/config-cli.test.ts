@@ -2212,6 +2212,35 @@ describe("config cli", () => {
     });
   });
 
+  describe("config unset - array index only removes one element (#76290)", () => {
+    it("removes only the element at the specified index", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          list: [
+            { id: "agent-a" },
+            { id: "agent-b" },
+            { id: "agent-c" },
+          ],
+        },
+      };
+      const runtimeMerged: OpenClawConfig = {
+        ...withRuntimeDefaults(resolved),
+      };
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand(["config", "unset", "agents.list[1]"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.list).toEqual([
+        { id: "agent-a" },
+        { id: "agent-c" },
+      ]);
+      // Array-index unset should NOT pass unsetPaths to avoid double-splice
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toBeUndefined();
+    });
+  });
+
   describe("config file", () => {
     it("prints the active config file path", async () => {
       const resolved: OpenClawConfig = { gateway: { port: 18789 } };

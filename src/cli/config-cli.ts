@@ -1697,10 +1697,16 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
       runtime.exit(1);
       return;
     }
+    // For array-index unset, the in-memory splice already produced the correct
+    // nextConfig and the merge-patch will carry the whole replacement array.
+    // Passing the path in unsetPaths would cause a redundant second splice
+    // during the write phase, removing an additional element (issue #76290).
+    const lastSegment = parsedPath[parsedPath.length - 1];
+    const targetsArrayIndex = /^[0-9]+$/.test(lastSegment);
     await replaceConfigFile({
       nextConfig: next,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-      writeOptions: { unsetPaths: [parsedPath] },
+      ...(targetsArrayIndex ? {} : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
