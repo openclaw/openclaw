@@ -103,6 +103,7 @@ type GatewayHost = {
   sessionKey: string;
   chatRunId: string | null;
   pendingAbort?: { runId?: string | null; sessionKey: string } | null;
+  cancelChatDictation?: () => void;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -483,6 +484,7 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       host.connected = false;
+      host.cancelChatDictation?.();
       // Code 1012 = Service Restart (expected during config saves, don't show as error)
       host.lastErrorCode =
         resolveGatewayErrorDetailCode(error) ??

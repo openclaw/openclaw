@@ -145,6 +145,7 @@ Docs: https://docs.openclaw.ai
 - Anthropic-compatible streams: recover text deltas that arrive before their matching content block, so Kimi Code and similar providers do not finish as empty `incomplete_result` replies. Fixes #76007. Thanks @vliuyt.
 - fix(infra): block workspace state-directory env override [AI]. (#75940) Thanks @pgondhi987.
 - MCP/OpenAI: normalize parameter-free tool schemas whose top-level object `properties` is missing, null, or invalid before sending tools to OpenAI, so MCP tools without params stay usable. Fixes #75362. Thanks @tolkonepiu and @SymbolStar.
+- Control UI/WebChat: add server-side chat-draft microphone dictation via the existing audio transcription pipeline, avoiding browser Web Speech while keeping provider credentials on the Gateway. Fixes #47311. Thanks @jmomford.
 - TTS: honor explicit short `[[tts:text]]...[[/tts:text]]` blocks while keeping untagged short auto-TTS suppressed, so tagged voice replies are synthesized instead of being dropped as empty voice-only payloads. Fixes #73758. Thanks @yfge.
 - Hooks/doctor: warn when `hooks.transformsDir` points outside the canonical hooks transform directory, so invalid workspace skill paths get a direct recovery hint before the Gateway crash-loops. Fixes #75853. Thanks @midobk.
 - Proxy/audio: convert standard `FormData` bodies before proxy-backed undici fetches, so audio transcription and multipart uploads no longer send `[object FormData]` when `HTTP_PROXY` or `HTTPS_PROXY` is configured. Fixes #48554. Thanks @dco5.

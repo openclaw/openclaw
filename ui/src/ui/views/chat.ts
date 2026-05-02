@@ -3,6 +3,7 @@ import { ifDefined } from "lit/directives/if-defined.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
+import type { ChatDictationStatus } from "../app-chat.ts";
 import type { CompactionStatus, FallbackStatus } from "../app-tool-stream.ts";
 import {
   getChatAttachmentPreviewUrl,
@@ -77,6 +78,8 @@ export type ChatProps = {
   realtimeTalkStatus?: RealtimeTalkStatus;
   realtimeTalkDetail?: string | null;
   realtimeTalkTranscript?: string | null;
+  chatDictationStatus?: ChatDictationStatus;
+  chatDictationDetail?: string | null;
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -110,6 +113,7 @@ export type ChatProps = {
   onSend: () => void;
   onCompact?: () => void | Promise<void>;
   onToggleRealtimeTalk?: () => void;
+  onToggleChatDictation?: () => void;
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onQueueSteer?: (id: string) => void;
@@ -1198,19 +1202,32 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
-        ${props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+        ${props.chatDictationStatus && props.chatDictationStatus !== "idle"
           ? html`
-              <div class="agent-chat__stt-interim agent-chat__talk-status">
-                ${props.realtimeTalkDetail ??
-                props.realtimeTalkTranscript ??
-                (props.realtimeTalkStatus === "thinking"
-                  ? "Asking OpenClaw..."
-                  : props.realtimeTalkStatus === "connecting"
-                    ? "Connecting Talk..."
-                    : "Talk live")}
+              <div class="agent-chat__stt-interim agent-chat__dictation-status">
+                ${props.chatDictationDetail ??
+                (props.chatDictationStatus === "starting"
+                  ? "Starting dictation..."
+                  : props.chatDictationStatus === "recording"
+                    ? "Recording dictation..."
+                    : props.chatDictationStatus === "transcribing"
+                      ? "Transcribing dictation..."
+                      : "Dictation unavailable")}
               </div>
             `
-          : nothing}
+          : props.realtimeTalkActive || props.realtimeTalkDetail || props.realtimeTalkTranscript
+            ? html`
+                <div class="agent-chat__stt-interim agent-chat__talk-status">
+                  ${props.realtimeTalkDetail ??
+                  props.realtimeTalkTranscript ??
+                  (props.realtimeTalkStatus === "thinking"
+                    ? "Asking OpenClaw..."
+                    : props.realtimeTalkStatus === "connecting"
+                      ? "Connecting Talk..."
+                      : "Talk live")}
+                </div>
+              `
+            : nothing}
 
         <div class="agent-chat__composer-combobox">
           <textarea
@@ -1252,6 +1269,29 @@ export function renderChat(props: ChatProps) {
               ${icons.paperclip}
             </button>
 
+            ${props.onToggleChatDictation
+              ? html`
+                  <button
+                    class="agent-chat__input-btn ${props.chatDictationStatus === "recording"
+                      ? "agent-chat__input-btn--dictating"
+                      : ""}"
+                    @click=${props.onToggleChatDictation}
+                    title=${props.chatDictationStatus === "recording"
+                      ? "Stop dictation"
+                      : "Dictate with server STT"}
+                    aria-label=${props.chatDictationStatus === "recording"
+                      ? "Stop dictation"
+                      : "Dictate with server STT"}
+                    ?disabled=${props.chatDictationStatus === "recording"
+                      ? false
+                      : !props.connected ||
+                        props.chatDictationStatus === "starting" ||
+                        props.chatDictationStatus === "transcribing"}
+                  >
+                    ${props.chatDictationStatus === "recording" ? icons.stop : icons.mic}
+                  </button>
+                `
+              : nothing}
             ${props.onToggleRealtimeTalk
               ? html`
                   <button

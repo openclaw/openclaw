@@ -334,6 +334,8 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       realtimeTalkStatus: "idle",
       realtimeTalkDetail: null,
       realtimeTalkTranscript: null,
+      chatDictationStatus: "idle",
+      chatDictationDetail: null,
       connected: true,
       canSend: true,
       disabledReason: null,
@@ -366,6 +368,7 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {
       onSend: () => undefined,
       onCompact: () => undefined,
       onToggleRealtimeTalk: () => undefined,
+      onToggleChatDictation: () => undefined,
       onAbort: () => undefined,
       onQueueRemove: () => undefined,
       onQueueSteer: () => undefined,
@@ -445,11 +448,47 @@ describe("chat loading skeleton", () => {
 });
 
 describe("chat voice controls", () => {
-  it("keeps Talk visible without the stale browser dictation button", () => {
+  it("shows server dictation and Talk without the stale browser dictation button", () => {
     const container = renderChatView();
 
+    expect(container.querySelector('[aria-label="Dictate with server STT"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
+  });
+
+  it("shows dictation recording state", () => {
+    const container = renderChatView({
+      chatDictationStatus: "recording",
+      chatDictationDetail: null,
+    });
+
+    expect(container.querySelector('[aria-label="Stop dictation"]')).not.toBeNull();
+    expect(container.textContent).toContain("Recording dictation");
+  });
+
+  it("disables duplicate dictation starts while microphone access is pending", () => {
+    const container = renderChatView({
+      chatDictationStatus: "starting",
+      chatDictationDetail: null,
+    });
+
+    const button = container.querySelector<HTMLButtonElement>(
+      '[aria-label="Dictate with server STT"]',
+    );
+    expect(button).not.toBeNull();
+    expect(button!.disabled).toBe(true);
+    expect(container.textContent).toContain("Starting dictation");
+  });
+
+  it("keeps stop dictation enabled while recording after disconnect", () => {
+    const container = renderChatView({
+      connected: false,
+      chatDictationStatus: "recording",
+    });
+
+    const button = container.querySelector<HTMLButtonElement>('[aria-label="Stop dictation"]');
+    expect(button).not.toBeNull();
+    expect(button!.disabled).toBe(false);
   });
 });
 
