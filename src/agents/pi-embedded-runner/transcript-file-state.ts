@@ -289,13 +289,6 @@ export async function readTranscriptFileState(sessionFile: string): Promise<Tran
   return new TranscriptFileState({ header, entries, migrated });
 }
 
-export function serializeTranscriptState(state: TranscriptFileState): string {
-  return serializeTranscriptFileEntries([
-    ...(state.header ? [state.header] : []),
-    ...state.entries,
-  ]);
-}
-
 export async function writeTranscriptFileAtomic(
   filePath: string,
   entries: Array<SessionHeader | SessionEntry>,
