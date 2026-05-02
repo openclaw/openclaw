@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- WhatsApp: close long-lived web sockets through Baileys `end(error)` before falling back to raw websocket close, so listener teardown runs Baileys cleanup instead of leaving zombie sockets. Fixes #52442. Thanks @essendigitalgroup-cyber.
 - Gateway/sessions: move hot transcript reads and mirror appends onto async bounded IO with serialized parent-linked writes, keeping large session histories from stalling Gateway requests and channel replies. Fixes #75656. Thanks @DerFlash.
 - macOS/Voice Wake: accept trigger-only phrases in the built-in Voice Wake test, matching the settings UI and runtime trigger-only path instead of requiring extra command text after the wake word. Fixes #64986. Thanks @zoiks65.
 - Cron/TTS: run cron announce payloads through the normal TTS directive transform before outbound delivery, so scheduled `[[tts]]` replies generate voice payloads instead of leaking raw tags. Fixes #52125. Thanks @kenchen3000.
