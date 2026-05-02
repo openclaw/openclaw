@@ -2,6 +2,7 @@ export const browserCoreExamples = [
   "openclaw browser status",
   "openclaw browser start",
   "openclaw browser start --headless",
+  "openclaw browser start --headed",
   "openclaw browser stop",
   "openclaw browser tabs",
   "openclaw browser open https://example.com",

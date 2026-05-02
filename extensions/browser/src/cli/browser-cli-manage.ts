@@ -352,14 +352,28 @@ export function registerBrowserManageCommands(
     .command("start")
     .description("Start the browser (no-op if already running)")
     .option("--headless", "Launch a local managed browser headless for this start")
-    .action(async (opts: { headless?: boolean }, cmd) => {
+    .option("--headed", "Launch a local managed browser headed (visible window) for this start")
+    .action(async (opts: { headless?: boolean; headed?: boolean }, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
+      if (opts.headless && opts.headed) {
+        defaultRuntime.error(
+          danger("--headless and --headed are mutually exclusive; pass at most one."),
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+      let headlessQuery: { headless: boolean } | undefined;
+      if (opts.headless) {
+        headlessQuery = { headless: true };
+      } else if (opts.headed) {
+        headlessQuery = { headless: false };
+      }
       await runBrowserCommand(async () => {
         await runBrowserToggle(parent, {
           profile,
           path: "/start",
-          query: opts.headless ? { headless: true } : undefined,
+          query: headlessQuery,
         });
       });
     });
