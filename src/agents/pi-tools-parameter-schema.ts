@@ -134,10 +134,6 @@ function isTypedSchemaMissingProperties(
   if (!("type" in schemaRecord) || conditionalKey !== null) {
     return false;
   }
-  // Treat both missing `properties` and `properties` set to a non-object value
-  // (e.g. undefined/null) as "missing properties" — MCP servers sometimes return
-  // `{ type: "object" }` or `{ type: "object", properties: undefined }` for
-  // parameter-free tools.
   if (!("properties" in schemaRecord)) {
     return true;
   }
