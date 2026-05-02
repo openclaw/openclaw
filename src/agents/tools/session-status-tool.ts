@@ -290,7 +290,7 @@ export function createSessionStatusTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = opts?.config ?? getRuntimeConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, visibility, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
@@ -346,12 +346,12 @@ export function createSessionStatusTool(opts?: {
         visibility: resolveEffectiveSessionToolsVisibility({
           cfg,
           sandboxed: opts?.sandboxed === true,
-          agentId: opts?.requesterAgentIdOverride,
+          agentId: requesterAgentId,
         }),
         a2aPolicy,
       });
       const restrictSessionIdFallbackToSpawned =
-        restrictToSpawned || (opts?.sandboxed === true && !opts?.requesterAgentIdOverride?.trim());
+        restrictToSpawned || (opts?.sandboxed === true && visibility === "spawned");
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
