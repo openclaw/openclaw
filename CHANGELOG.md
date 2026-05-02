@@ -2,6 +2,14 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Changes
+
+### Fixes
+
+- CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
+
 ## 2026.5.2
 
 ### Changes
@@ -267,6 +275,7 @@ Docs: https://docs.openclaw.ai
 - Agents/status: resolve `session_status(sessionKey="current")` for sparse channel-plugin sessions after literal current lookups miss, so Scope, Slack, Discord, and other plugin-driven agents avoid retrying through `Unknown sessionKey: current`. Fixes #74141. (#72306) Thanks @bittoby.
 - Cron: retry recurring wake-now main-session jobs through temporary heartbeat busy skips before recording success, so queued cron events no longer appear as ok ghost runs while the main lane is still busy. Fixes #75964. (#76083) Thanks @kshetrajna12 and @xuruiray.
 
+
 ## 2026.4.30
 
 ### Changes
@@ -340,7 +349,6 @@ Docs: https://docs.openclaw.ai
 - Mattermost/Matrix: keep direct-message main-session route updates pinned to the configured DM owner so paired or temporarily allowed senders cannot redirect future shared-session replies. Thanks @vincentkoc.
 - Discord: keep SecretRef-backed bot tokens discoverable for message actions without resolving the token during schema generation, and resolve scoped channel SecretRefs before outbound agent message sends even when the tool is built from a config snapshot. Fixes #75324. Thanks @slideshow-dingo and @Conan-Scott.
 - Updates: run package post-install doctor repair with the managed Gateway service profile and state paths when a daemon is installed, so shell/profile mismatches no longer repair the caller state while the restarted Gateway keeps stale config. Thanks @vincentkoc.
-- CLI/update: treat inherited Gateway service markers as origin hints and only block package replacement when the managed Gateway is still live, so self-updates can stop the service and continue safely. (#75729) Thanks @hxy91819.
 - Models/DeepInfra: declare DeepInfra manifest catalog discovery and derive its runtime fallback catalog from the manifest, restoring provider-filtered `models list --all --provider deepinfra` rows without duplicated static model data. Thanks @shakkernerd.
 - CLI/update: verify managed gateway restarts against the installed service port instead of the caller shell port, so package updates do not report a healthy daemon as failed when profiles use different gateway ports. Thanks @vincentkoc.
 - Gateway/agent: reject strict `openclaw agent --deliver` requests with missing delivery targets before starting the agent run, so users do not wait for a completed turn that cannot send anywhere. Thanks @vincentkoc.
