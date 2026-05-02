@@ -405,8 +405,7 @@ export function isTransientFileWatchError(err: unknown): boolean {
       continue;
     }
     if (
-      ((message.includes("no space left on device") || message.includes("enosp")) &&
-        hasFileWatchSignal(message)) ||
+      (message.includes("no space left on device") && hasFileWatchSignal(message)) ||
       hasFileWatchExhaustionSignal(message)
     ) {
       return true;
