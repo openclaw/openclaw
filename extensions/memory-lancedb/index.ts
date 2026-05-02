@@ -441,7 +441,14 @@ async function runWithTimeout<T>(params: {
 function createEmbeddings(api: OpenClawPluginApi, cfg: MemoryConfig): Embeddings {
   const { provider, model, dimensions, apiKey, baseUrl, timeoutMs, maxRetries } = cfg.embedding;
   if (provider === "openai" && apiKey) {
-    return new OpenAiCompatibleEmbeddings(apiKey, model, baseUrl, dimensions, timeoutMs, maxRetries);
+    return new OpenAiCompatibleEmbeddings(
+      apiKey,
+      model,
+      baseUrl,
+      dimensions,
+      timeoutMs,
+      maxRetries,
+    );
   }
   return new ProviderAdapterEmbeddings(api, cfg.embedding);
 }
