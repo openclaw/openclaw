@@ -541,7 +541,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const isSelfChatMode =
       normalizedAccount != null &&
       deps.allowFrom.some((entry) => {
-        if (entry === "*") return false;
+        if (entry === "*") {
+          return false;
+        }
         try {
           return normalizeE164(entry) === normalizedAccount;
         } catch {
