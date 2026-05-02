@@ -213,7 +213,7 @@ export function buildPreferredClawHubSpec(raw: string): string | null {
 }
 
 function normalizeReadinessPhase(readiness: ClawHubPackageReadiness): string {
-  return normalizeLowercaseStringOrEmpty(String(readiness.phase ?? readiness.status ?? ""));
+  return normalizeLowercaseStringOrEmpty(readiness.phase ?? readiness.status ?? "");
 }
 
 export function isClawHubReadinessInstallReady(
