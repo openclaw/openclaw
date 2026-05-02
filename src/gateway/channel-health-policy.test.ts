@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { evaluateChannelHealth, resolveChannelRestartReason } from "./channel-health-policy.js";
+import {
+  createChannelHealthSnapshot,
+  evaluateChannelHealth,
+  resolveChannelRestartReason,
+} from "./channel-health-policy.js";
 
 function evaluateDiscordHealth(
   account: Record<string, unknown>,
@@ -10,6 +14,7 @@ function evaluateDiscordHealth(
     channelId,
     now,
     channelConnectGraceMs: 10_000,
+    reconnectGraceMs: 60_000,
     staleEventThresholdMs: 30_000,
   });
 }
@@ -26,6 +31,7 @@ describe("evaluateChannelHealth", () => {
         channelId: "discord",
         now: 100_000,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
@@ -45,10 +51,59 @@ describe("evaluateChannelHealth", () => {
         channelId: "discord",
         now: 100_000,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
     expect(evaluation).toEqual({ healthy: true, reason: "startup-connect-grace" });
+  });
+
+  it("uses reconnect grace for recently disconnected running channels", () => {
+    const now = 100_000;
+    const evaluation = evaluateDiscordHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 300_000,
+        lastDisconnectAt: now - 5_000,
+      },
+      now,
+    );
+    expect(evaluation).toEqual({ healthy: true, reason: "reconnect-grace" });
+  });
+
+  it("flags disconnected channels after reconnect grace expires", () => {
+    const now = 100_000;
+    const evaluation = evaluateDiscordHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 300_000,
+        lastDisconnectAt: now - 61_000,
+      },
+      now,
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
+  });
+
+  it("ignores disconnect timestamps inherited from a previous lifecycle", () => {
+    const now = 100_000;
+    const evaluation = evaluateDiscordHealth(
+      {
+        running: true,
+        connected: false,
+        enabled: true,
+        configured: true,
+        lastStartAt: now - 30_000,
+        lastDisconnectAt: now - 31_000,
+      },
+      now,
+    );
+    expect(evaluation).toEqual({ healthy: false, reason: "disconnected" });
   });
 
   it("treats active runs as busy even when disconnected", () => {
@@ -66,6 +121,7 @@ describe("evaluateChannelHealth", () => {
         channelId: "discord",
         now,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
@@ -87,6 +143,7 @@ describe("evaluateChannelHealth", () => {
         channelId: "discord",
         now,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
@@ -110,6 +167,7 @@ describe("evaluateChannelHealth", () => {
         channelId: "discord",
         now,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
@@ -130,6 +188,7 @@ describe("evaluateChannelHealth", () => {
         channelId: "discord",
         now: 100_000,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
@@ -150,6 +209,7 @@ describe("evaluateChannelHealth", () => {
         channelId: "discord",
         now: 100_000,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
@@ -171,6 +231,7 @@ describe("evaluateChannelHealth", () => {
         channelId: "example",
         now: 100_000,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
@@ -192,6 +253,7 @@ describe("evaluateChannelHealth", () => {
         channelId: "example",
         now: 100_000,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
@@ -289,10 +351,35 @@ describe("evaluateChannelHealth", () => {
         channelId: "slack",
         now: 140_000,
         channelConnectGraceMs: 10_000,
+        reconnectGraceMs: 60_000,
         staleEventThresholdMs: 30_000,
       },
     );
     expect(evaluation).toEqual({ healthy: false, reason: "stale-socket" });
+  });
+});
+
+describe("createChannelHealthSnapshot", () => {
+  it("projects typed lastDisconnect timestamps into health snapshots", () => {
+    expect(
+      createChannelHealthSnapshot({
+        accountId: "default",
+        running: true,
+        connected: false,
+        lastDisconnect: { at: 123_456, status: 1006 },
+      }),
+    ).toMatchObject({ lastDisconnectAt: 123_456 });
+  });
+
+  it("does not derive reconnect grace from legacy string disconnect errors", () => {
+    expect(
+      createChannelHealthSnapshot({
+        accountId: "default",
+        running: true,
+        connected: false,
+        lastDisconnect: "socket closed",
+      }),
+    ).toMatchObject({ lastDisconnectAt: null });
   });
 });
 

@@ -192,6 +192,44 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("keeps recently disconnected running channels ready during provider reconnect grace", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {
+          discord: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: Date.now() - 5 * 60_000,
+            lastDisconnect: { at: Date.now() - 30_000, status: 1006 },
+          },
+        },
+      });
+      expect(readiness()).toEqual({ ready: true, failing: [], uptimeMs: 300_000 });
+    });
+  });
+
+  it("reports disconnected managed channels after provider reconnect grace expires", () => {
+    withReadinessClock(() => {
+      const { readiness } = createReadinessHarness({
+        startedAgoMs: 5 * 60_000,
+        accounts: {
+          discord: {
+            running: true,
+            connected: false,
+            enabled: true,
+            configured: true,
+            lastStartAt: Date.now() - 5 * 60_000,
+            lastDisconnect: { at: Date.now() - 121_000, status: 1006 },
+          },
+        },
+      });
+      expect(readiness()).toEqual({ ready: false, failing: ["discord"], uptimeMs: 300_000 });
+    });
+  });
+
   it("reports disconnected managed channels after startup grace", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({

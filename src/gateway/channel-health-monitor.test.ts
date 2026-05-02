@@ -295,6 +295,47 @@ describe("channel-health-monitor", () => {
     monitor.stop();
   });
 
+  it("skips recently disconnected running channels during provider reconnect grace", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 300_000,
+          lastDisconnect: { at: now - 5_000, status: 1006 },
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager, { timing: { reconnectGraceMs: 60_000 } });
+    expect(manager.stopChannel).not.toHaveBeenCalled();
+    expect(manager.startChannel).not.toHaveBeenCalled();
+    monitor.stop();
+  });
+
+  it("restarts disconnected running channels after provider reconnect grace expires", async () => {
+    const now = Date.now();
+    const manager = createSnapshotManager({
+      discord: {
+        default: {
+          running: true,
+          connected: false,
+          enabled: true,
+          configured: true,
+          lastStartAt: now - 300_000,
+          lastDisconnect: { at: now - 61_000, status: 1006 },
+        },
+      },
+    });
+    const monitor = await startAndRunCheck(manager, { timing: { reconnectGraceMs: 60_000 } });
+    expect(manager.stopChannel).toHaveBeenCalledWith("discord", "default");
+    expect(manager.resetRestartAttempts).toHaveBeenCalledWith("discord", "default");
+    expect(manager.startChannel).toHaveBeenCalledWith("discord", "default");
+    monitor.stop();
+  });
+
   it("skips restart when channel is busy with active runs", async () => {
     const now = Date.now();
     const manager = createSnapshotManager({

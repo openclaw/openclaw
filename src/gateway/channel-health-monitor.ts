@@ -2,7 +2,9 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+  DEFAULT_CHANNEL_RECONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
+  createChannelHealthSnapshot,
   evaluateChannelHealth,
   resolveChannelRestartReason,
   type ChannelHealthPolicy,
@@ -26,6 +28,7 @@ const ONE_HOUR_MS = 60 * 60_000;
 type ChannelHealthTimingPolicy = {
   monitorStartupGraceMs: number;
   channelConnectGraceMs: number;
+  reconnectGraceMs: number;
   staleEventThresholdMs: number;
 };
 
@@ -36,6 +39,8 @@ type ChannelHealthMonitorDeps = {
   startupGraceMs?: number;
   /** @deprecated use timing.channelConnectGraceMs */
   channelStartupGraceMs?: number;
+  /** @deprecated use timing.reconnectGraceMs */
+  reconnectGraceMs?: number;
   /** @deprecated use timing.staleEventThresholdMs */
   staleEventThresholdMs?: number;
   timing?: Partial<ChannelHealthTimingPolicy>;
@@ -56,7 +61,11 @@ type RestartRecord = {
 function resolveTimingPolicy(
   deps: Pick<
     ChannelHealthMonitorDeps,
-    "startupGraceMs" | "channelStartupGraceMs" | "staleEventThresholdMs" | "timing"
+    | "startupGraceMs"
+    | "channelStartupGraceMs"
+    | "reconnectGraceMs"
+    | "staleEventThresholdMs"
+    | "timing"
   >,
 ): ChannelHealthTimingPolicy {
   return {
@@ -66,6 +75,8 @@ function resolveTimingPolicy(
       deps.timing?.channelConnectGraceMs ??
       deps.channelStartupGraceMs ??
       DEFAULT_CHANNEL_CONNECT_GRACE_MS,
+    reconnectGraceMs:
+      deps.timing?.reconnectGraceMs ?? deps.reconnectGraceMs ?? DEFAULT_CHANNEL_RECONNECT_GRACE_MS,
     staleEventThresholdMs:
       deps.timing?.staleEventThresholdMs ??
       deps.staleEventThresholdMs ??
@@ -129,8 +140,10 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             now,
             staleEventThresholdMs: timing.staleEventThresholdMs,
             channelConnectGraceMs: timing.channelConnectGraceMs,
+            reconnectGraceMs: timing.reconnectGraceMs,
           };
-          const health = evaluateChannelHealth(status, healthPolicy);
+          const healthSnapshot = createChannelHealthSnapshot(status);
+          const health = evaluateChannelHealth(healthSnapshot, healthPolicy);
           if (health.healthy) {
             continue;
           }
@@ -153,7 +166,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
             continue;
           }
 
-          const reason = resolveChannelRestartReason(status, health);
+          const reason = resolveChannelRestartReason(healthSnapshot, health);
 
           log.info?.(`[${channelId}:${accountId}] health-monitor: restarting (reason: ${reason})`);
 
