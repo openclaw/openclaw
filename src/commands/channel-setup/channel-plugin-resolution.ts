@@ -53,7 +53,7 @@ function resolveResolvedChannelId(params: {
   return normalizeChannelId(params.catalogEntry.id) ?? (params.catalogEntry.id as ChannelId);
 }
 
-export function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
+function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
   const trimmed = normalizeOptionalLowercaseString(raw);
   if (!trimmed) {
     return undefined;
