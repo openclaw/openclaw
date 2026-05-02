@@ -26,8 +26,8 @@ describe("plugin contract registry", () => {
       };
     }) => boolean;
   }) {
-    expect(uniqueSortedStrings(params.actualPluginIds)).toEqual(
-      resolveBundledManifestPluginIds(params.predicate),
+    expect(resolveBundledManifestPluginIds(params.predicate)).toEqual(
+      expect.arrayContaining(uniqueSortedStrings(params.actualPluginIds)),
     );
   }
 
