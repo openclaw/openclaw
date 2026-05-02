@@ -25,21 +25,22 @@ describe("session-crash-recovery", () => {
       return mockSessionStores.get(storePath)!;
     });
     vi.spyOn(sessionsModule, "resolveAgentIdFromSessionKey").mockImplementation(
-      (sessionKey: string) => {
-        const parts = sessionKey.split(":");
+      (sessionKey: string | null | undefined) => {
+        const key = sessionKey ?? "";
+        const parts = key.split(":");
         return parts.length > 1 ? parts[1] : "main";
       },
     );
     vi.spyOn(sessionsModule, "resolveStorePath").mockImplementation(
-      (_storeConfig, { agentId }: { agentId: string }) => {
-        return `${testStateDir}/agents/${agentId}/sessions/sessions.json`;
+      (_storeConfig?: string, opts?: { agentId?: string }) => {
+        return `${testStateDir}/agents/${opts?.agentId ?? "main"}/sessions/sessions.json`;
       },
     );
     vi.spyOn(sessionsModule, "updateSessionStore").mockImplementation(
-      (storePath: string, updater: (store: Record<string, SessionEntry>) => void) => {
+      async (storePath: string, updater: (store: Record<string, SessionEntry>) => unknown) => {
         const store = mockSessionStores.get(storePath);
         if (store) {
-          updater(store);
+          return updater(store);
         }
       },
     );

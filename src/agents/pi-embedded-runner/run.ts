@@ -174,7 +174,9 @@ function buildContextOverflowErrorMessage(params: {
   }
 
   // Context info
-  lines.push(`Model: ${provider}/${modelId} (context window: ~${contextWindowTokens.toLocaleString()} tokens)`);
+  lines.push(
+    `Model: ${provider}/${modelId} (context window: ~${contextWindowTokens.toLocaleString()} tokens)`,
+  );
   lines.push(`Messages in session: ${messageCount}`);
 
   // Actionable guidance
@@ -186,7 +188,9 @@ function buildContextOverflowErrorMessage(params: {
     lines.push(`• The compaction system encountered an error — this may be temporary`);
   } else if (compactionAttempts >= maxCompactionAttempts) {
     lines.push(`• Use /reset or /new to start a fresh session`);
-    lines.push(`• Switch to a model with a larger context window (e.g., Claude 3.7 Sonnet, GPT-4.5)`);
+    lines.push(
+      `• Switch to a model with a larger context window (e.g., Claude 3.7 Sonnet, GPT-4.5)`,
+    );
     lines.push(`• Ask the model to summarize the current session before continuing`);
   } else if (toolResultTruncationAttempted) {
     lines.push(`• Use /reset or /new to start a fresh session`);
@@ -1304,7 +1308,7 @@ export async function runEmbeddedPiAgent(
               provider,
               modelId: model.id,
               contextWindowTokens: ctxInfo.tokens,
-              messageCount,
+              messageCount: msgCount,
               compactionAttempts: overflowCompactionAttempts,
               maxCompactionAttempts: MAX_OVERFLOW_COMPACTION_ATTEMPTS,
               toolResultTruncationAttempted,
