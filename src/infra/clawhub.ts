@@ -60,8 +60,8 @@ export type ClawHubArtifactScanState =
   | "suspicious"
   | "malicious"
   | "not-run"
-  | string;
-export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | string;
+  | (string & {});
+export type ClawHubArtifactModerationState = "approved" | "quarantined" | "revoked" | (string & {});
 export type ClawHubResolvedArtifact =
   | {
       source: "clawhub";
@@ -115,7 +115,7 @@ export type ClawHubPackageReadinessPhase =
   | "metadata-ready"
   | "blocked"
   | "ready-for-openclaw"
-  | string;
+  | (string & {});
 export type ClawHubPackageReadiness = {
   ready?: boolean | null;
   readyForOpenClaw?: boolean | null;
@@ -124,12 +124,12 @@ export type ClawHubPackageReadiness = {
   status?: ClawHubPackageReadinessPhase | null;
   package?: {
     name?: string | null;
-    family?: ClawHubPackageFamily | string | null;
-    channel?: ClawHubPackageChannel | string | null;
+    family?: ClawHubPackageFamily | (string & {}) | null;
+    channel?: ClawHubPackageChannel | (string & {}) | null;
     isOfficial?: boolean | null;
   } | null;
   packageName?: string | null;
-  artifactKind?: ClawHubArtifactKind | string | null;
+  artifactKind?: ClawHubArtifactKind | (string & {}) | null;
   blockers?: string[];
   scanState?: ClawHubArtifactScanState | null;
   moderationState?: ClawHubArtifactModerationState | null;
