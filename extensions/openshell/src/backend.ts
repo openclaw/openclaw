@@ -97,6 +97,9 @@ async function createOpenShellSandboxBackend(params: {
   if ((params.createParams.cfg.docker.binds?.length ?? 0) > 0) {
     throw new Error("OpenShell sandbox backend does not support sandbox.docker.binds.");
   }
+  if ((params.createParams.cfg.docker.volumes?.length ?? 0) > 0) {
+    throw new Error("OpenShell sandbox backend does not support sandbox.docker.volumes.");
+  }
 
   const sandboxName = buildOpenShellSandboxName(params.createParams.scopeKey);
   const execContext: OpenShellExecContext = {

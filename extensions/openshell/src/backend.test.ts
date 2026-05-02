@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { buildOpenShellSshExecEnv } from "./backend.js";
+import { buildOpenShellSshExecEnv, createOpenShellSandboxBackendFactory } from "./backend.js";
+import { resolveOpenShellPluginConfig } from "./config.js";
 
 describe("openshell backend env", () => {
   const originalEnv = { ...process.env };
@@ -25,5 +26,62 @@ describe("openshell backend env", () => {
     expect(env.ANTHROPIC_API_KEY).toBeUndefined();
     expect(env.LANG).toBe("en_US.UTF-8");
     expect(env.NODE_ENV).toBe("test");
+  });
+});
+
+describe("openshell sandbox backend", () => {
+  it("rejects docker volumes because openshell does not mount them", async () => {
+    const factory = createOpenShellSandboxBackendFactory({
+      pluginConfig: resolveOpenShellPluginConfig(undefined),
+    });
+
+    await expect(
+      factory({
+        sessionKey: "agent:worker:task",
+        scopeKey: "agent:worker",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/agent",
+        cfg: {
+          mode: "all",
+          backend: "openshell",
+          scope: "session",
+          workspaceAccess: "rw",
+          workspaceRoot: "~/.openclaw/sandboxes",
+          docker: {
+            image: "img",
+            containerPrefix: "prefix-",
+            workdir: "/workspace",
+            readOnlyRoot: true,
+            tmpfs: ["/tmp"],
+            network: "none",
+            capDrop: ["ALL"],
+            env: {},
+            volumes: [{ strategy: "named", source: "cache", target: "/cache" }],
+          },
+          ssh: {
+            command: "ssh",
+            workspaceRoot: "/remote/openclaw",
+            strictHostKeyChecking: true,
+            updateHostKeys: true,
+          },
+          browser: {
+            enabled: false,
+            image: "img",
+            containerPrefix: "prefix-",
+            network: "bridge",
+            cdpPort: 9222,
+            vncPort: 5900,
+            noVncPort: 6080,
+            headless: true,
+            enableNoVnc: false,
+            allowHostControl: false,
+            autoStart: false,
+            autoStartTimeoutMs: 1000,
+          },
+          tools: { allow: [], deny: [] },
+          prune: { idleHours: 24, maxAgeDays: 7 },
+        },
+      }),
+    ).rejects.toThrow("does not support sandbox.docker.volumes");
   });
 });
