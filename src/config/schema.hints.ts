@@ -92,6 +92,38 @@ const FIELD_PLACEHOLDERS: Record<string, string> = {
   "agents.list[].identity.avatar": "avatars/openclaw.png",
 };
 
+// Fields marked as advanced are shown in a collapsed disclosure in the config UI.
+// Basic fields (not in this set) are visible by default.
+const FIELD_ADVANCED: ReadonlySet<string> = new Set([
+  // Auth: backoff/cooldown tuning (not typical day-to-day config)
+  "auth.cooldowns",
+  // Logging: console-specific and redaction pattern overrides
+  "logging.consoleLevel",
+  "logging.consoleStyle",
+  "logging.redactPatterns",
+  // Diagnostics: all subsections except the master toggle
+  "diagnostics.otel",
+  "diagnostics.cacheTrace",
+  "diagnostics.stuckSessionWarnMs",
+  "diagnostics.flags",
+  // CLI: startup banner tweak
+  "cli.banner",
+  // Gateway: advanced networking and infra knobs
+  "gateway.controlUi",
+  "gateway.tailscale",
+  "gateway.trustedProxies",
+  "gateway.allowRealIpFallback",
+  "gateway.tools",
+  "gateway.handshakeTimeoutMs",
+  "gateway.channelHealthCheckMinutes",
+  "gateway.channelStaleEventThresholdMinutes",
+  "gateway.channelMaxRestartsPerHour",
+  "gateway.customBindHost",
+  "gateway.nodes",
+  "gateway.push",
+  "gateway.remote",
+]);
+
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
 const CHANNEL_KERNEL_HINT_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
@@ -142,6 +174,10 @@ export function buildBaseHints(): ConfigUiHints {
     }
     const current = hints[path];
     hints[path] = current ? { ...current, placeholder } : { placeholder };
+  }
+  for (const path of FIELD_ADVANCED) {
+    const current = hints[path];
+    hints[path] = current ? { ...current, advanced: true } : { advanced: true };
   }
   return applyDerivedTags(hints);
 }

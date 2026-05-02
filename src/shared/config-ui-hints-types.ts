@@ -8,6 +8,7 @@ export type ConfigUiHint = {
   sensitive?: boolean;
   placeholder?: string;
   itemTemplate?: unknown;
+  docLink?: string;
 };
 
 export type ConfigUiHints = Record<string, ConfigUiHint>;
