@@ -58,10 +58,19 @@ type ResolveWebProviderRuntimeDeps<TEntry> = {
   }) => TEntry[] | null;
 };
 
+type WebProviderRuntimeContext = {
+  env: NonNullable<PluginLoadOptions["env"]>;
+  workspaceDir?: string;
+  config: PluginLoadOptions["config"];
+  activationSourceConfig?: PluginLoadOptions["config"];
+  autoEnabledReasons: Record<string, string[]>;
+  onlyPluginIds?: string[];
+};
+
 function resolveWebProviderRuntimeContext<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
-) {
+): WebProviderRuntimeContext {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
   const { config, activationSourceConfig, autoEnabledReasons } =
@@ -89,8 +98,8 @@ function resolveWebProviderRuntimeContext<TEntry>(
   };
 }
 
-function resolveWebProviderLoadOptions<TEntry>(
-  context: ReturnType<typeof resolveWebProviderRuntimeContext<TEntry>>,
+function resolveWebProviderLoadOptions(
+  context: WebProviderRuntimeContext,
   params: ResolvePluginWebProvidersParams,
 ) {
   return buildPluginRuntimeLoadOptionsFromValues(

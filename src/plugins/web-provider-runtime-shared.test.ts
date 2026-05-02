@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({
   resolveCompatibleRuntimePluginRegistry: vi.fn(),
   resolvePluginRegistryLoadCacheKey: vi.fn((options: unknown) => JSON.stringify(options)),
   resolveRuntimePluginRegistry: vi.fn(),
-  getActivePluginRegistry: vi.fn<() => unknown | null>(() => null),
+  getActivePluginRegistry: vi.fn<() => Record<string, unknown> | null>(() => null),
   getActivePluginRegistryWorkspaceDir: vi.fn(() => undefined),
   buildPluginRuntimeLoadOptionsFromValues: vi.fn(
     (_values: unknown, overrides?: Record<string, unknown>) => ({
