@@ -552,6 +552,50 @@ function setCachedPluginRegistry(
   getPluginRegistryCache(onlyPluginIds).set(cacheKey, state);
 }
 
+function getReusableCachedPluginRegistry(params: {
+  cacheKey: string;
+  onlyPluginIds: string[];
+  runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
+  options: PluginLoadOptions;
+}):
+  | {
+      state: CachedPluginState;
+      cacheKey: string;
+      runtimeSubagentMode: "default" | "explicit" | "gateway-bindable";
+    }
+  | undefined {
+  const exact = getCachedPluginRegistry(params.cacheKey, params.onlyPluginIds);
+  if (exact) {
+    return {
+      state: exact,
+      cacheKey: params.cacheKey,
+      runtimeSubagentMode: params.runtimeSubagentMode,
+    };
+  }
+  if (params.runtimeSubagentMode !== "default") {
+    return undefined;
+  }
+  const gatewayBindableContext = resolvePluginLoadCacheContext({
+    ...params.options,
+    runtimeOptions: {
+      ...params.options.runtimeOptions,
+      allowGatewaySubagentBinding: true,
+    },
+  });
+  const gatewayBindable = getCachedPluginRegistry(
+    gatewayBindableContext.cacheKey,
+    gatewayBindableContext.onlyPluginIds,
+  );
+  if (!gatewayBindable) {
+    return undefined;
+  }
+  return {
+    state: gatewayBindable,
+    cacheKey: gatewayBindableContext.cacheKey,
+    runtimeSubagentMode: gatewayBindableContext.runtimeSubagentMode,
+  };
+}
+
 function resolveBundledPackageRootForCache(stockRoot?: string): string | undefined {
   if (!stockRoot) {
     return undefined;
@@ -1332,31 +1376,38 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
 
   const cacheEnabled = options.cache !== false;
   if (cacheEnabled) {
-    const cached = getCachedPluginRegistry(cacheKey, onlyPluginIds);
+    const cached = getReusableCachedPluginRegistry({
+      cacheKey,
+      onlyPluginIds,
+      runtimeSubagentMode,
+      options,
+    });
     if (cached) {
       if (shouldActivate) {
-        restoreRegisteredAgentHarnesses(cached.agentHarnesses);
-        restorePluginCommands(cached.commands ?? []);
-        restoreRegisteredCompactionProviders(cached.compactionProviders);
-        restoreDetachedTaskLifecycleRuntimeRegistration(cached.detachedTaskRuntimeRegistration);
-        restorePluginInteractiveHandlers(cached.interactiveHandlers ?? []);
-        restoreRegisteredMemoryEmbeddingProviders(cached.memoryEmbeddingProviders);
+        restoreRegisteredAgentHarnesses(cached.state.agentHarnesses);
+        restorePluginCommands(cached.state.commands ?? []);
+        restoreRegisteredCompactionProviders(cached.state.compactionProviders);
+        restoreDetachedTaskLifecycleRuntimeRegistration(
+          cached.state.detachedTaskRuntimeRegistration,
+        );
+        restorePluginInteractiveHandlers(cached.state.interactiveHandlers ?? []);
+        restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
         restoreMemoryPluginState({
-          capability: cached.memoryCapability,
-          corpusSupplements: cached.memoryCorpusSupplements,
-          promptBuilder: cached.memoryPromptBuilder,
-          promptSupplements: cached.memoryPromptSupplements,
-          flushPlanResolver: cached.memoryFlushPlanResolver,
-          runtime: cached.memoryRuntime,
+          capability: cached.state.memoryCapability,
+          corpusSupplements: cached.state.memoryCorpusSupplements,
+          promptBuilder: cached.state.memoryPromptBuilder,
+          promptSupplements: cached.state.memoryPromptSupplements,
+          flushPlanResolver: cached.state.memoryFlushPlanResolver,
+          runtime: cached.state.memoryRuntime,
         });
         activatePluginRegistry(
-          cached.registry,
-          cacheKey,
-          runtimeSubagentMode,
+          cached.state.registry,
+          cached.cacheKey,
+          cached.runtimeSubagentMode,
           options.workspaceDir,
         );
       }
-      return cached.registry;
+      return cached.state.registry;
     }
   }
   pluginLoaderCacheState.beginLoad(cacheKey);
