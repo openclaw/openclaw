@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 - Agents/sandbox: preserve existing workspace file modes when sandbox edits atomically replace files, so 0644 files do not collapse to 0600 after Write/Edit/apply_patch. Fixes #44077. Thanks @patosullivan.
 - Agents/models: keep legacy CLI runtime model refs such as `claude-cli/*` in the configured allowlist after canonical runtime migration, so cron `payload.model` overrides keep working. Fixes #75753. Thanks @RyanSandoval.
 - Gateway/watch: keep colored subsystem log prefixes in the managed tmux pane even when the parent shell exports `NO_COLOR`, while preserving explicit `FORCE_COLOR=0` opt-out. Thanks @vincentkoc.
+- Agents/compaction: submit a non-empty runtime-event marker for pre-compaction memory flush turns, so strict Anthropic providers no longer reject the silent flush as an empty user message. Fixes #75305. Thanks @sableassistant3777-source.
 - Plugin SDK: re-export `isPrivateIpAddress` from `plugin-sdk/ssrf-runtime`, restoring source-checkout builds for SearXNG and Firecrawl private-network guards. Thanks @vincentkoc.
 - CLI/directory: report unsupported directory operations for installed channel plugins instead of prompting to reinstall the plugin when it lacks a directory adapter. Fixes #75770. Thanks @lawong888.
 - Web search/SearXNG: show the JSON API `search.formats` prerequisite during SearXNG setup before prompting for the base URL. Supersedes #65592. Thanks @evanpaul14.

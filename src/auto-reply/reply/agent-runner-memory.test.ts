@@ -160,6 +160,7 @@ describe("runMemoryFlushIfNeeded", () => {
     };
     expect(flushCall.prompt).toContain("Pre-compaction memory flush.");
     expect(flushCall.transcriptPrompt).toBe("");
+    expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledWith({
