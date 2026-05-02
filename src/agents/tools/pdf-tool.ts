@@ -14,6 +14,7 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { type ImageModelConfig } from "./image-tool.helpers.js";
+import { coerceImageModelConfig, resolveConfiguredImageModelRefs } from "./image-tool.helpers.js";
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
@@ -23,6 +24,7 @@ import {
   resolvePromptAndModelOverride,
   resolveRemoteMediaSsrfPolicy,
 } from "./media-tool-shared.js";
+import { hasToolModelConfig } from "./model-config.helpers.js";
 import { anthropicAnalyzePdf, geminiAnalyzePdf } from "./pdf-native-providers.js";
 import {
   coercePdfAssistantText,
@@ -249,6 +251,11 @@ export function createPdfTool(options?: {
   workspaceDir?: string;
   sandbox?: PdfSandboxConfig;
   fsPolicy?: ToolFsPolicy;
+  /**
+   * Avoid resolving auto PDF/image-provider candidates while registering the
+   * tool. The concrete PDF model is still resolved before execution.
+   */
+  deferAutoModelResolution?: boolean;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir?.trim();
   if (!agentDir) {
@@ -259,13 +266,29 @@ export function createPdfTool(options?: {
     return null;
   }
 
-  const pdfModelConfig = resolvePdfModelConfigForTool({
-    cfg: options?.config,
-    agentDir,
-    workspaceDir: options?.workspaceDir,
-    authStore: options?.authProfileStore,
-  });
-  if (!pdfModelConfig) {
+  const explicitPdf = coercePdfModelConfig(options?.config);
+  const explicitImage = coerceImageModelConfig(options?.config);
+  const explicitPdfModelConfig = hasToolModelConfig(explicitPdf)
+    ? resolveConfiguredImageModelRefs({
+        cfg: options?.config,
+        imageModelConfig: explicitPdf,
+      })
+    : hasToolModelConfig(explicitImage)
+      ? resolveConfiguredImageModelRefs({
+          cfg: options?.config,
+          imageModelConfig: explicitImage,
+        })
+      : null;
+  const shouldResolveAutoPdfModel = !explicitPdfModelConfig && !options?.deferAutoModelResolution;
+  const resolvedPdfModelConfig = shouldResolveAutoPdfModel
+    ? resolvePdfModelConfigForTool({
+        cfg: options?.config,
+        agentDir,
+        workspaceDir: options?.workspaceDir,
+        authStore: options?.authProfileStore,
+      })
+    : explicitPdfModelConfig;
+  if (!resolvedPdfModelConfig && !options?.deferAutoModelResolution) {
     return null;
   }
 
@@ -448,6 +471,20 @@ export function createPdfTool(options?: {
         }
         return extractedAll;
       };
+
+      const pdfModelConfig =
+        resolvedPdfModelConfig ??
+        resolvePdfModelConfigForTool({
+          cfg: options?.config,
+          agentDir,
+          workspaceDir: options?.workspaceDir,
+          authStore: options?.authProfileStore,
+        });
+      if (!pdfModelConfig) {
+        throw new Error(
+          "PDF model unavailable: configure agents.defaults.pdfModel or imageModel, or authenticate a PDF/image-capable provider.",
+        );
+      }
 
       const result = await runPdfPrompt({
         cfg: options?.config,

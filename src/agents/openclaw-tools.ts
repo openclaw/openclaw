@@ -91,6 +91,24 @@ function isToolAllowedByFactoryAllowlist(toolName: string, allowlist?: string[])
   return expanded.has("*") || expanded.has(normalizeToolName(toolName));
 }
 
+function isToolDeniedByFactoryPolicy(toolName: string, denylist?: string[]): boolean {
+  if (!denylist || denylist.length === 0) {
+    return false;
+  }
+  return new Set(expandToolGroups(denylist)).has(normalizeToolName(toolName));
+}
+
+function isToolEnabledByFactoryPolicy(params: {
+  toolName: string;
+  allowlist?: string[];
+  denylist?: string[];
+}): boolean {
+  return (
+    isToolAllowedByFactoryAllowlist(params.toolName, params.allowlist) &&
+    !isToolDeniedByFactoryPolicy(params.toolName, params.denylist)
+  );
+}
+
 function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
@@ -159,21 +177,29 @@ function resolveOptionalMediaToolFactoryPlan(params: {
   workspaceDir?: string;
   authStore?: AuthProfileStore;
   toolAllowlist?: string[];
+  toolDenylist?: string[];
 }): OptionalMediaToolFactoryPlan {
   const defaults = params.config?.agents?.defaults;
-  const allowImageGenerate = isToolAllowedByFactoryAllowlist(
-    "image_generate",
-    params.toolAllowlist,
-  );
-  const allowVideoGenerate = isToolAllowedByFactoryAllowlist(
-    "video_generate",
-    params.toolAllowlist,
-  );
-  const allowMusicGenerate = isToolAllowedByFactoryAllowlist(
-    "music_generate",
-    params.toolAllowlist,
-  );
-  const allowPdf = isToolAllowedByFactoryAllowlist("pdf", params.toolAllowlist);
+  const allowImageGenerate = isToolEnabledByFactoryPolicy({
+    toolName: "image_generate",
+    allowlist: params.toolAllowlist,
+    denylist: params.toolDenylist,
+  });
+  const allowVideoGenerate = isToolEnabledByFactoryPolicy({
+    toolName: "video_generate",
+    allowlist: params.toolAllowlist,
+    denylist: params.toolDenylist,
+  });
+  const allowMusicGenerate = isToolEnabledByFactoryPolicy({
+    toolName: "music_generate",
+    allowlist: params.toolAllowlist,
+    denylist: params.toolDenylist,
+  });
+  const allowPdf = isToolEnabledByFactoryPolicy({
+    toolName: "pdf",
+    allowlist: params.toolAllowlist,
+    denylist: params.toolDenylist,
+  });
   const explicitImageGeneration = hasExplicitToolModelConfig(defaults?.imageGenerationModel);
   const explicitVideoGeneration = hasExplicitToolModelConfig(defaults?.videoGenerationModel);
   const explicitMusicGeneration = hasExplicitToolModelConfig(defaults?.musicGenerationModel);
@@ -348,6 +374,7 @@ export function createOpenClawTools(
     workspaceDir,
     authStore: options?.authProfileStore,
     toolAllowlist: options?.pluginToolAllowlist,
+    toolDenylist: (availabilityConfig ?? resolvedConfig)?.tools?.deny,
   });
   const imageToolAgentDir = options?.agentDir;
   const imageTool = resolveImageToolFactoryAvailable({
@@ -414,6 +441,7 @@ export function createOpenClawTools(
           workspaceDir,
           sandbox,
           fsPolicy: options?.fsPolicy,
+          deferAutoModelResolution: true,
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
