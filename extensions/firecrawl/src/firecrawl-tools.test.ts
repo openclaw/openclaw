@@ -605,19 +605,64 @@ describe("firecrawl tools", () => {
     expect(resolveFirecrawlApiKey(cfg)).toBeUndefined();
   });
 
-  it("only allows the official Firecrawl API host for fetch endpoints", () => {
-    expect(firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape")).toBe(
-      "https://api.firecrawl.dev/v2/scrape",
-    );
-    expect(() =>
+  it("allows hosted Firecrawl and private self-hosted endpoints only", async () => {
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("https://api.firecrawl.dev", "/v2/scrape"),
+    ).resolves.toEqual({
+      url: "https://api.firecrawl.dev/v2/scrape",
+      mode: "strict",
+    });
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("http://127.0.0.1:8787", "/v2/scrape"),
+    ).resolves.toEqual({
+      url: "http://127.0.0.1:8787/v2/scrape",
+      mode: "trusted",
+    });
+    await expect(
+      firecrawlClientTesting.resolveEndpoint(
+        "https://host.openshell.internal:444/v1",
+        "/v2/search",
+      ),
+    ).resolves.toEqual({
+      url: "https://host.openshell.internal:444/v2/search",
+      mode: "trusted",
+    });
+    await expect(
       firecrawlClientTesting.resolveEndpoint("http://api.firecrawl.dev", "/v2/scrape"),
-    ).toThrow("Firecrawl baseUrl must use https.");
-    expect(() =>
-      firecrawlClientTesting.resolveEndpoint("https://127.0.0.1:8787", "/v2/scrape"),
-    ).toThrow("Firecrawl baseUrl host is not allowed");
-    expect(() =>
+    ).rejects.toThrow("Firecrawl HTTP baseUrl must target a private or internal");
+    await expect(
       firecrawlClientTesting.resolveEndpoint("https://attacker.example", "/v2/search"),
-    ).toThrow("Firecrawl baseUrl host is not allowed");
+    ).rejects.toThrow("Firecrawl custom baseUrl must target a private or internal");
+    await expect(
+      firecrawlClientTesting.resolveEndpoint("ftp://127.0.0.1:8787", "/v2/scrape"),
+    ).rejects.toThrow("Firecrawl baseUrl must use http:// or https://.");
+  });
+
+  it("routes private self-hosted Firecrawl endpoints through the trusted fetch guard", async () => {
+    ssrfMock?.mockRestore();
+    ssrfMock = mockPinnedHostnameResolution(["127.0.0.1"]);
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ success: true, data: [] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    global.fetch = fetchSpy as typeof fetch;
+
+    const result = await firecrawlClientTesting.postFirecrawlJson(
+      {
+        url: "http://127.0.0.1:8787/v2/search",
+        timeoutSeconds: 5,
+        apiKey: "firecrawl-key",
+        body: { query: "openclaw" },
+        errorLabel: "Firecrawl Search",
+      },
+      async (response) => (await response.json()) as Record<string, unknown>,
+    );
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ success: true });
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {
