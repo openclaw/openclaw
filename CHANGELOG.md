@@ -50,6 +50,7 @@ Docs: https://docs.openclaw.ai
 - Discord/DMs: set inbound direct-message `ctx.To` to the semantic `user:<id>` target while keeping delivery routed through the DM channel, so mirror and recovery paths do not treat DMs as channel conversations. Fixes #68126. Thanks @illuminate0623.
 - Discord/DMs: keep no-guild inbound messages on direct-message routing when Discord channel lookup is temporarily unavailable, preventing degraded DMs from forking into channel sessions. Fixes #59817. Thanks @DooPeePey.
 - Discord: retry outbound API calls on HTTP 5xx, request-timeout, and transient transport failures instead of only Discord rate limits, reducing dropped cron and agent replies during short Discord or network outages. Fixes #52396. Thanks @sunshineo.
+- Discord: include Components v2 Text Display content from referenced replies and forwarded snapshots, so component-only messages still appear in reply context. Fixes #56228. Thanks @HollandDrive.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
 
