@@ -744,7 +744,7 @@ describe("resolvePluginProviders", () => {
     });
   });
 
-  it("keeps externalized bundled providers out of core bundled compat expansion", () => {
+  it("includes present bundled providers in bundled compat expansion", () => {
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "google",
@@ -753,10 +753,6 @@ describe("resolvePluginProviders", () => {
       createManifestProviderPlugin({
         id: "codex",
         providerIds: ["codex"],
-        packageManifest: {
-          extensions: ["./index.ts"],
-          bundle: { includeInCore: false },
-        },
       }),
     ]);
 
@@ -770,11 +766,10 @@ describe("resolvePluginProviders", () => {
     });
 
     expectResolvedAllowlistState({
-      expectedAllow: ["openrouter", "google"],
-      unexpectedAllow: ["codex"],
+      expectedAllow: ["openrouter", "google", "codex"],
     });
     expectLastRuntimeRegistryLoad({
-      onlyPluginIds: ["google"],
+      onlyPluginIds: ["codex", "google"],
     });
   });
 

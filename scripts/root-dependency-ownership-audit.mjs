@@ -171,9 +171,6 @@ function collectInternalizedBundledExtensionRuntimeDependencies(repoRoot, rootPa
       continue;
     }
     const packageJson = readJson(packageJsonPath);
-    if (packageJson?.openclaw?.bundle?.includeInCore === false) {
-      continue;
-    }
     for (const section of ["dependencies", "optionalDependencies"]) {
       for (const depName of Object.keys(packageJson[section] ?? {})) {
         const existing = dependencies.get(depName) ?? [];

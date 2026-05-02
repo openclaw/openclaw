@@ -51,8 +51,6 @@ export function diffInstalledPluginIndexInvalidationReasons(
     }
     if (
       previousPlugin.packageVersion !== currentPlugin.packageVersion ||
-      hashJson(previousPlugin.packageBundle ?? {}) !==
-        hashJson(currentPlugin.packageBundle ?? {}) ||
       previousPlugin.packageJson?.path !== currentPlugin.packageJson?.path ||
       previousPlugin.packageJson?.hash !== currentPlugin.packageJson?.hash
     ) {

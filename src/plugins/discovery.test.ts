@@ -953,7 +953,7 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
-  it("skips bundled package plugins that are externalized from core", () => {
+  it("discovers present bundled package plugins without package metadata gates", () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled");
     const pluginDir = path.join(bundledDir, "downloadable");
@@ -964,9 +964,6 @@ describe("discoverOpenClawPlugins", () => {
         name: "@openclaw/downloadable",
         openclaw: {
           extensions: ["./index.ts"],
-          bundle: {
-            includeInCore: false,
-          },
         },
       }),
       "utf-8",
@@ -980,7 +977,64 @@ describe("discoverOpenClawPlugins", () => {
       }),
     });
 
-    expectCandidateIds(candidates, { excludes: ["downloadable"] });
+    expectCandidateIds(candidates, { includes: ["downloadable"] });
+  });
+
+  it("discovers source-checkout-only bundled plugins alongside built bundled plugins", () => {
+    const stateDir = makeTempDir();
+    const packageRoot = path.join(stateDir, "openclaw");
+    const bundledDir = path.join(packageRoot, "dist", "extensions");
+    const sourceDir = path.join(packageRoot, "extensions");
+    const builtPluginDir = path.join(bundledDir, "shipped");
+    const sourceBuiltPluginDir = path.join(sourceDir, "shipped");
+    const sourceOnlyPluginDir = path.join(sourceDir, "downloadable");
+    mkdirSafe(path.join(packageRoot, "src"));
+    mkdirSafe(builtPluginDir);
+    mkdirSafe(sourceBuiltPluginDir);
+    mkdirSafe(sourceOnlyPluginDir);
+    fs.writeFileSync(path.join(packageRoot, ".git"), "gitdir: /tmp/fake.git\n", "utf-8");
+    fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n", "utf-8");
+
+    writePluginPackageManifest({
+      packageDir: builtPluginDir,
+      packageName: "@openclaw/shipped",
+      extensions: ["./index.js"],
+    });
+    writePluginManifest({ pluginDir: builtPluginDir, id: "shipped" });
+    writePluginEntry(path.join(builtPluginDir, "index.js"));
+    writePluginPackageManifest({
+      packageDir: sourceBuiltPluginDir,
+      packageName: "@openclaw/shipped",
+      extensions: ["./index.ts"],
+    });
+    writePluginManifest({ pluginDir: sourceBuiltPluginDir, id: "shipped" });
+    writePluginEntry(path.join(sourceBuiltPluginDir, "index.ts"));
+    fs.writeFileSync(
+      path.join(sourceOnlyPluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/downloadable",
+        openclaw: {
+          extensions: ["./index.ts"],
+        },
+      }),
+      "utf-8",
+    );
+    writePluginManifest({ pluginDir: sourceOnlyPluginDir, id: "downloadable" });
+    writePluginEntry(path.join(sourceOnlyPluginDir, "index.ts"));
+
+    const { candidates } = discoverOpenClawPlugins({
+      env: buildDiscoveryEnvWithOverrides(stateDir, {
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      }),
+    });
+
+    expectCandidateIds(candidates, { includes: ["shipped", "downloadable"] });
+    expect(fs.realpathSync(findCandidateById(candidates, "shipped")?.source ?? "")).toBe(
+      fs.realpathSync(path.join(builtPluginDir, "index.js")),
+    );
+    expect(fs.realpathSync(findCandidateById(candidates, "downloadable")?.source ?? "")).toBe(
+      fs.realpathSync(path.join(sourceOnlyPluginDir, "index.ts")),
+    );
   });
 
   it("does not discover nested node_modules copies under installed plugins", async () => {

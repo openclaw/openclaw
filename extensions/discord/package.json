@@ -69,9 +69,6 @@
     "build": {
       "openclawVersion": "2026.5.2"
     },
-    "bundle": {
-      "includeInCore": true
-    },
     "release": {
       "publishToClawHub": true,
       "publishToNpm": true

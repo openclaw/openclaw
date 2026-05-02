@@ -59,7 +59,6 @@ function buildInstalledManifestRegistryIndexKey(index: InstalledPluginIndex) {
         installRecordHash: record.installRecordHash,
         packageInstall: record.packageInstall,
         packageChannel: record.packageChannel,
-        packageBundle: record.packageBundle,
         manifestPath: record.manifestPath,
         manifestHash: record.manifestHash,
         manifestFile: safeFileSignature(record.manifestPath),
@@ -105,13 +104,11 @@ function resolveFallbackPluginSource(record: InstalledPluginIndexRecord): string
 function resolveInstalledPackageManifest(
   record: InstalledPluginIndexRecord,
 ): OpenClawPackageManifest | undefined {
-  const fallbackPackageManifest =
-    record.packageChannel || record.packageBundle
-      ? {
-          ...(record.packageChannel ? { channel: record.packageChannel } : {}),
-          ...(record.packageBundle ? { bundle: record.packageBundle } : {}),
-        }
-      : undefined;
+  const fallbackPackageManifest = record.packageChannel
+    ? {
+        channel: record.packageChannel,
+      }
+    : undefined;
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageJsonPath = record.packageJson?.path
     ? path.resolve(rootDir, record.packageJson.path)
@@ -136,17 +133,9 @@ function resolveInstalledPackageManifest(
             ...packageManifest.channel,
           }
         : undefined;
-    const bundle =
-      record.packageBundle || packageManifest.bundle
-        ? {
-            ...record.packageBundle,
-            ...packageManifest.bundle,
-          }
-        : undefined;
     return {
       ...packageManifest,
       ...(channel ? { channel } : {}),
-      ...(bundle ? { bundle } : {}),
     };
   } catch {
     return fallbackPackageManifest;

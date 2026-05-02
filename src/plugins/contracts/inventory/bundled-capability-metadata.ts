@@ -7,7 +7,6 @@ import {
 } from "../../bundled-plugin-scan.js";
 import {
   getPackageManifestMetadata,
-  isPackageIncludedInCoreBundle,
   PLUGIN_MANIFEST_FILENAME,
   type PackageManifest,
   type PluginManifest,
@@ -70,15 +69,32 @@ function readJsonRecord(filePath: string): Record<string, unknown> | undefined {
   }
 }
 
-function isExplicitlyDownloadablePlugin(packageJson: Record<string, unknown> | undefined): boolean {
-  return !isPackageIncludedInCoreBundle(getPackageManifestMetadata(packageJson as PackageManifest));
+function collectExcludedPackagedExtensionDirs(): ReadonlySet<string> {
+  const packageJson = readJsonRecord(path.join(OPENCLAW_PACKAGE_ROOT, "package.json"));
+  const files = packageJson?.files;
+  if (!Array.isArray(files)) {
+    return new Set();
+  }
+  const excluded = new Set<string>();
+  for (const entry of files) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+    if (match?.[1]) {
+      excluded.add(match[1]);
+    }
+  }
+  return excluded;
 }
 
+const EXCLUDED_PACKAGED_EXTENSION_DIRS = collectExcludedPackagedExtensionDirs();
+
 function readBundledCapabilityManifest(pluginDir: string): BundledCapabilityManifest | undefined {
-  const packageJson = readJsonRecord(path.join(pluginDir, "package.json"));
-  if (isExplicitlyDownloadablePlugin(packageJson)) {
+  if (EXCLUDED_PACKAGED_EXTENSION_DIRS.has(path.basename(pluginDir))) {
     return undefined;
   }
+  const packageJson = readJsonRecord(path.join(pluginDir, "package.json"));
   const packageManifest = getPackageManifestMetadata(packageJson as PackageManifest);
   const extensions = normalizeBundledPluginStringList(packageManifest?.extensions);
   if (extensions.length === 0) {
