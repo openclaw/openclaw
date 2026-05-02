@@ -402,7 +402,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const declared = normalizeAgentToolResultMiddlewareRuntimeIds(
       record.contracts?.agentToolResultMiddleware,
     );
-    const missing = runtimes.filter((runtime) => !declared.includes(runtime));
+    const declaredSet = new Set(declared);
+    const missing = runtimes.filter((runtime) => !declaredSet.has(runtime));
     if (missing.length > 0) {
       pushDiagnostic({
         level: "error",
