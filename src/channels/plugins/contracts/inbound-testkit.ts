@@ -1,13 +1,4 @@
 import { vi } from "vitest";
-import type { MsgContext } from "../../../auto-reply/templating.js";
-
-export type InboundContextCapture = {
-  ctx: MsgContext | undefined;
-};
-
-export function createInboundContextCapture(): InboundContextCapture {
-  return { ctx: undefined };
-}
 
 export function buildDispatchInboundCaptureMock<T extends Record<string, unknown>>(
   actual: T,
