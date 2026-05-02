@@ -2282,7 +2282,6 @@ describe("createBundledRuntimeDepsPackagePlan config policy", () => {
     fs.mkdirSync(path.join(packageRoot, "extensions"), { recursive: true });
     fs.mkdirSync(path.join(packageRoot, "dist"), { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages:\n  - .\n");
-    fs.writeFileSync(path.join(packageRoot, "dist", "postinstall-inventory.json"), "[]\n");
     fs.writeFileSync(
       path.join(packageRoot, "package.json"),
       JSON.stringify({

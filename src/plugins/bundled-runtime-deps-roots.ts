@@ -22,13 +22,30 @@ export type BundledRuntimeDepsInstallRootPlan = {
   searchRoots: string[];
 };
 
+function hasDeclaredMirroredPackageRuntimeDeps(packageRoot: string): boolean {
+  const packageJson = readRuntimeDepsJsonObject(path.join(packageRoot, "package.json"));
+  const openclaw = packageJson?.openclaw;
+  const bundle =
+    openclaw && typeof openclaw === "object" && !Array.isArray(openclaw)
+      ? openclaw.bundle
+      : undefined;
+  const mirrored =
+    bundle && typeof bundle === "object" && !Array.isArray(bundle)
+      ? bundle.mirroredRootRuntimeDependencies
+      : undefined;
+  return Array.isArray(mirrored) && mirrored.length > 0;
+}
+
 export function isSourceCheckoutRoot(packageRoot: string): boolean {
   const hasPostinstallInventory = fs.existsSync(
     path.join(packageRoot, "dist", "postinstall-inventory.json"),
   );
+  const hasPackagedRuntimeDepsLayout =
+    hasPostinstallInventory || hasDeclaredMirroredPackageRuntimeDeps(packageRoot);
   return (
     (fs.existsSync(path.join(packageRoot, ".git")) ||
-      (fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) && !hasPostinstallInventory)) &&
+      (fs.existsSync(path.join(packageRoot, "pnpm-workspace.yaml")) &&
+        !hasPackagedRuntimeDepsLayout)) &&
     fs.existsSync(path.join(packageRoot, "src")) &&
     fs.existsSync(path.join(packageRoot, "extensions"))
   );

@@ -8,6 +8,7 @@ import {
   createNestedNpmInstallEnv,
 } from "../../scripts/lib/bundled-runtime-deps-install.mjs";
 import {
+  isSourceCheckoutRoot,
   isDirectPostinstallInvocation,
   pruneOpenClawCompileCache,
   pruneInstalledPackageDist,
@@ -136,6 +137,32 @@ describe("bundled plugin postinstall", () => {
       npm_config_save: "false",
       npm_config_workspaces: "false",
     });
+  });
+
+  it("does not classify bundled runtime-deps package layouts as source checkouts", () => {
+    const packageRoot = "/pkg";
+    const existingPaths = new Set([
+      path.join(packageRoot, "package.json"),
+      path.join(packageRoot, "pnpm-workspace.yaml"),
+      path.join(packageRoot, "src"),
+      path.join(packageRoot, "extensions"),
+      path.join(packageRoot, "dist", "extensions"),
+    ]);
+
+    expect(
+      isSourceCheckoutRoot({
+        packageRoot,
+        existsSync: (value: string) => existingPaths.has(value),
+        readFileSync: () =>
+          JSON.stringify({
+            openclaw: {
+              bundle: {
+                mirroredRootRuntimeDependencies: ["json5"],
+              },
+            },
+          }),
+      }),
+    ).toBe(false);
   });
 
   it("does not install bundled plugin deps outside of source checkouts by default", async () => {
