@@ -34,6 +34,7 @@ import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-di
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
+import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
@@ -628,13 +629,22 @@ export function validateConfigObjectRaw(
   },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
   const normalizedRaw = stripDeprecatedValidationKeys(raw);
+  const legacyIssues = findLegacyConfigIssues(
+    normalizedRaw,
+    opts?.sourceRaw,
+    [],
+    opts?.touchedPaths,
+  );
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
   const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
       ok: false,
-      issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
+      issues: [
+        ...legacyIssues,
+        ...mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
+      ],
     };
   }
   const validatedConfig = validated.data as OpenClawConfig;
@@ -645,11 +655,14 @@ export function validateConfigObjectRaw(
   if (channelIssues.length > 0) {
     return {
       ok: false,
-      issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, channelIssues),
+      issues: [
+        ...legacyIssues,
+        ...mergeUnsupportedMutableSecretRefIssues(policyIssues, channelIssues),
+      ],
     };
   }
-  if (policyIssues.length > 0) {
-    return { ok: false, issues: policyIssues };
+  if (legacyIssues.length > 0 || policyIssues.length > 0) {
+    return { ok: false, issues: [...legacyIssues, ...policyIssues] };
   }
   const duplicates = findDuplicateAgentDirs(validatedConfig);
   if (duplicates.length > 0) {
