@@ -837,6 +837,28 @@ export function reconcileInspectableTasks(): TaskRecord[] {
 
 configureTaskAuditTaskProvider(reconcileInspectableTasks);
 
+export type ActiveTaskRestartBlocker = {
+  taskId: string;
+  status: Extract<TaskStatus, "queued" | "running">;
+  runtime: TaskRecord["runtime"];
+  runId?: string;
+  label?: string;
+  title?: string;
+};
+
+export function getInspectableActiveTaskRestartBlockers(): ActiveTaskRestartBlocker[] {
+  return reconcileInspectableTasks()
+    .filter((task) => task.status === "queued" || task.status === "running")
+    .map((task) => ({
+      taskId: task.taskId,
+      status: task.status as Extract<TaskStatus, "queued" | "running">,
+      runtime: task.runtime,
+      ...(task.runId ? { runId: task.runId } : {}),
+      ...(task.label ? { label: task.label } : {}),
+      ...(task.task ? { title: task.task } : {}),
+    }));
+}
+
 export function getInspectableTaskRegistrySummary(): TaskRegistrySummary {
   return summarizeTaskRecords(reconcileInspectableTasks());
 }

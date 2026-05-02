@@ -326,6 +326,27 @@ describe("runServiceRestart token drift", () => {
     expect(service.restart).toHaveBeenCalledTimes(1);
   });
 
+  it("writes restart force and wait options into the service-manager intent", async () => {
+    service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
+
+    await runServiceRestart({
+      ...createServiceRunArgs(),
+      opts: {
+        json: true,
+        restartIntent: {
+          waitMs: 2_500,
+        },
+      },
+    });
+
+    expect(writeGatewayRestartIntentSync).toHaveBeenCalledWith({
+      targetPid: 1234,
+      intent: {
+        waitMs: 2_500,
+      },
+    });
+  });
+
   it("clears restart intent when service-manager restart fails before signaling", async () => {
     service.readRuntime.mockResolvedValue({ status: "running", pid: 1234 });
     writeGatewayRestartIntentSync.mockReturnValueOnce(true);
