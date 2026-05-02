@@ -33,7 +33,10 @@ import { fetchDiscordApplicationId, parseApplicationIdFromToken } from "../probe
 import { normalizeDiscordToken } from "../token.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
-import { resolveDiscordSlashCommandConfig } from "./commands.js";
+import {
+  resolveDiscordSlashCommandConfig,
+  resolveDiscordSlashCommandDeployConfig,
+} from "./commands.js";
 import type { MutableDiscordGateway } from "./gateway-handle.js";
 import { createDiscordGatewayPlugin } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
@@ -61,6 +64,7 @@ import {
   registerDiscordMonitorListeners,
 } from "./provider.startup.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
+import { readDiscordSlashCommandDeployHashes } from "./slash-command-deploy-state.js";
 import { formatDiscordStartupStatusMessage } from "./startup-status.js";
 import type { DiscordMonitorStatusSink } from "./status.js";
 
@@ -272,6 +276,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const slashCommand = resolveDiscordSlashCommandConfig(discordCfg.slashCommand);
+  const slashCommandDeploy = resolveDiscordSlashCommandDeployConfig(discordCfg.slashCommandDeploy);
   const sessionPrefix = "discord:slash";
   const ephemeralDefault = slashCommand.ephemeral;
   const voiceEnabled = resolveDiscordVoiceEnabled(discordCfg.voice);
@@ -335,6 +340,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     startAt: startupStartedAt,
     details: `applicationId=${applicationId}`,
   });
+
+  let commandDeployInitialHashes: Record<string, string> | undefined;
+  if (nativeEnabled && slashCommandDeploy.mode === "changed-only") {
+    commandDeployInitialHashes = await readDiscordSlashCommandDeployHashes({
+      applicationId,
+      accountId: account.accountId,
+    });
+  }
 
   const { commandSpecs } = await resolveDiscordProviderCommandSpecs({
     cfg,
@@ -442,6 +455,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         createDiscordGatewaySupervisorForTesting ?? createDiscordGatewaySupervisor,
       createAutoPresenceController: createDiscordAutoPresenceController,
       isDisallowedIntentsError: isDiscordDisallowedIntentsError,
+      commandDeployInitialHashes,
     });
     lifecycleGateway = gateway;
     gatewaySupervisor = createdGatewaySupervisor;
@@ -464,12 +478,14 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       phase: "deploy-commands:schedule",
       startAt: startupStartedAt,
       gateway: lifecycleGateway,
-      details: `native=${nativeEnabled ? "on" : "off"} reconcile=on commandCount=${commands.length}`,
+      details: `native=${nativeEnabled ? "on" : "off"} slashCommandDeploy=${slashCommandDeploy.mode} reconcile=on commandCount=${commands.length}`,
     });
     runDiscordCommandDeployInBackground({
       client,
       runtime,
-      enabled: nativeEnabled,
+      enabled: nativeEnabled && slashCommandDeploy.mode !== "disabled",
+      applicationId,
+      slashCommandDeployMode: slashCommandDeploy.mode,
       accountId: account.accountId,
       startupStartedAt,
       shouldLogVerbose: shouldLogVerboseForTesting ?? shouldLogVerbose,
