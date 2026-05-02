@@ -1945,6 +1945,35 @@ export function listTaskRecords(): TaskRecord[] {
     .map(({ insertionIndex: _, ...task }) => task);
 }
 
+export function hasActiveTaskForChildSessionKey(params: {
+  sessionKey: string;
+  excludeTaskId?: string;
+}): boolean {
+  ensureTaskRegistryReady();
+  const sessionKey = normalizeOptionalString(params.sessionKey);
+  if (!sessionKey) {
+    return false;
+  }
+  const ids = taskIdsByRelatedSessionKey.get(sessionKey);
+  if (!ids) {
+    return false;
+  }
+  for (const taskId of ids) {
+    if (taskId === params.excludeTaskId) {
+      continue;
+    }
+    const task = tasks.get(taskId);
+    if (
+      task &&
+      isActiveTaskStatus(task.status) &&
+      normalizeOptionalString(task.childSessionKey) === sessionKey
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function getTaskRegistrySummary(): TaskRegistrySummary {
   ensureTaskRegistryReady();
   return summarizeTaskRecords(tasks.values());
