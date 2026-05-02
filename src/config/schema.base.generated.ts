@@ -4817,6 +4817,12 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                             description:
                               "Combines BM25 keyword matching with vector similarity for better recall on mixed exact + semantic queries. Keep enabled unless you are isolating ranking behavior for troubleshooting.",
                           },
+                          fusion: {
+                            enum: ["weighted", "rrf"],
+                            title: "Memory Search Fusion Mode",
+                            description:
+                              "Chooses how hybrid candidates are merged: `weighted` uses score-weighted blending, while `rrf` uses Reciprocal Rank Fusion for stronger rank-based robustness across sparse lexical/semantic overlaps.",
+                          },
                           vectorWeight: {
                             type: "number",
                             minimum: 0,
@@ -6774,6 +6780,9 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                           properties: {
                             enabled: {
                               type: "boolean",
+                            },
+                            fusion: {
+                              enum: ["weighted", "rrf"],
                             },
                             vectorWeight: {
                               type: "number",
@@ -26697,6 +26706,11 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
     "agents.defaults.memorySearch.query.hybrid.enabled": {
       label: "Memory Search Hybrid",
       help: "Combines BM25 keyword matching with vector similarity for better recall on mixed exact + semantic queries. Keep enabled unless you are isolating ranking behavior for troubleshooting.",
+      tags: ["advanced"],
+    },
+    "agents.defaults.memorySearch.query.hybrid.fusion": {
+      label: "Memory Search Fusion Mode",
+      help: "Chooses how hybrid candidates are merged: `weighted` uses score-weighted blending, while `rrf` uses Reciprocal Rank Fusion for stronger rank-based robustness across sparse lexical/semantic overlaps.",
       tags: ["advanced"],
     },
     "agents.defaults.memorySearch.query.hybrid.vectorWeight": {

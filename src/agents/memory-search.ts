@@ -79,6 +79,7 @@ export type ResolvedMemorySearchConfig = {
     minScore: number;
     hybrid: {
       enabled: boolean;
+      fusion: "weighted" | "rrf";
       vectorWeight: number;
       textWeight: number;
       candidateMultiplier: number;
@@ -108,6 +109,7 @@ const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
 const DEFAULT_HYBRID_ENABLED = true;
+const DEFAULT_HYBRID_FUSION: "weighted" | "rrf" = "weighted";
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
@@ -276,6 +278,8 @@ function mergeConfig(
       overrides?.query?.hybrid?.enabled ??
       defaults?.query?.hybrid?.enabled ??
       DEFAULT_HYBRID_ENABLED,
+    fusion:
+      overrides?.query?.hybrid?.fusion ?? defaults?.query?.hybrid?.fusion ?? DEFAULT_HYBRID_FUSION,
     vectorWeight:
       overrides?.query?.hybrid?.vectorWeight ??
       defaults?.query?.hybrid?.vectorWeight ??
@@ -365,6 +369,7 @@ function mergeConfig(
       minScore,
       hybrid: {
         enabled: hybrid.enabled,
+        fusion: hybrid.fusion === "rrf" ? "rrf" : "weighted",
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,

@@ -27,6 +27,11 @@ type HybridKeywordResult = {
   textScore: number;
 };
 
+export type HybridFusionMode = "weighted" | "rrf";
+
+/** Fixed RRF constant `k`; fusion formula is documented in `docs/reference/memory-rrf-contract.md`. */
+const DEFAULT_RRF_K = 60;
+
 export function buildFtsQuery(raw: string): string | null {
   const tokens =
     raw
@@ -56,6 +61,7 @@ export async function mergeHybridResults(params: {
   keyword: HybridKeywordResult[];
   vectorWeight: number;
   textWeight: number;
+  fusion?: HybridFusionMode;
   workspaceDir?: string;
   /** MMR configuration for diversity-aware re-ranking */
   mmr?: Partial<MMRConfig>;
@@ -75,6 +81,7 @@ export async function mergeHybridResults(params: {
     source: HybridSource;
   }>
 > {
+  const fusion: HybridFusionMode = params.fusion ?? "weighted";
   const byId = new Map<
     string,
     {
@@ -86,10 +93,12 @@ export async function mergeHybridResults(params: {
       snippet: string;
       vectorScore: number;
       textScore: number;
+      vectorRank: number | null;
+      textRank: number | null;
     }
   >();
 
-  for (const r of params.vector) {
+  for (const [idx, r] of params.vector.entries()) {
     byId.set(r.id, {
       id: r.id,
       path: r.path,
@@ -99,13 +108,16 @@ export async function mergeHybridResults(params: {
       snippet: r.snippet,
       vectorScore: r.vectorScore,
       textScore: 0,
+      vectorRank: idx + 1,
+      textRank: null,
     });
   }
 
-  for (const r of params.keyword) {
+  for (const [idx, r] of params.keyword.entries()) {
     const existing = byId.get(r.id);
     if (existing) {
       existing.textScore = r.textScore;
+      existing.textRank = idx + 1;
       if (r.snippet && r.snippet.length > 0) {
         existing.snippet = r.snippet;
       }
@@ -119,12 +131,18 @@ export async function mergeHybridResults(params: {
         snippet: r.snippet,
         vectorScore: 0,
         textScore: r.textScore,
+        vectorRank: null,
+        textRank: idx + 1,
       });
     }
   }
 
   const merged = Array.from(byId.values()).map((entry) => {
-    const score = params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
+    const score =
+      fusion === "rrf"
+        ? (entry.vectorRank ? params.vectorWeight / (DEFAULT_RRF_K + entry.vectorRank) : 0) +
+          (entry.textRank ? params.textWeight / (DEFAULT_RRF_K + entry.textRank) : 0)
+        : params.vectorWeight * entry.vectorScore + params.textWeight * entry.textScore;
     return {
       path: entry.path,
       startLine: entry.startLine,
@@ -146,7 +164,21 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const sorted = decayed.toSorted((a, b) => b.score - a.score);
+  const sorted = decayed.toSorted((a, b) => {
+    if (b.score !== a.score) {
+      return b.score - a.score;
+    }
+    if (a.path !== b.path) {
+      return a.path.localeCompare(b.path);
+    }
+    if (a.startLine !== b.startLine) {
+      return a.startLine - b.startLine;
+    }
+    if (a.endLine !== b.endLine) {
+      return a.endLine - b.endLine;
+    }
+    return a.source.localeCompare(b.source);
+  });
 
   // Apply MMR re-ranking if enabled
   const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };

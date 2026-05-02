@@ -461,6 +461,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const merged = await this.mergeHybridResults({
       vector: vectorResults,
       keyword: keywordResults,
+      fusion: hybrid.fusion,
       vectorWeight: hybrid.vectorWeight,
       textWeight: hybrid.textWeight,
       mmr: hybrid.mmr,
@@ -582,6 +583,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private mergeHybridResults(params: {
     vector: Array<MemorySearchResult & { id: string }>;
     keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
+    fusion?: "weighted" | "rrf";
     vectorWeight: number;
     textWeight: number;
     mmr?: { enabled: boolean; lambda: number };
@@ -606,6 +608,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         snippet: r.snippet,
         textScore: r.textScore,
       })),
+      fusion: params.fusion,
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
       mmr: params.mmr,
