@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Music generation: raise too-small tool timeouts to the provider-safe 10-second floor and collapse cascading abort fallback errors into a clearer root-cause summary. Thanks @shakkernerd.
 - Memory-core/dreaming: include the primary runtime workspace in multi-agent dreaming sweeps without mixing main-agent session transcripts into configured subagent workspaces. Fixes #70014. Thanks @ttomiczek.
 - Control UI: add tab/RPC timing attribution and decouple slow Overview/Cron secondary refreshes so Sessions navigation gets immediate visible feedback. Refs #64004. Thanks @WaMaSeDu.
+- Memory: retry transient SQLite index file swaps during atomic reindex on Windows, so brief `EBUSY`, `EPERM`, or `EACCES` locks do not fail memory rebuilds. Fixes #64187. Thanks @kunpeng-ai-lab.
 - Telegram/startup: use the existing `getMe` request guard for the gateway bot probe instead of a fixed 2.5-second budget, and honor higher `timeoutSeconds` configs for slow Telegram API paths. Fixes #75783. Thanks @tankotan.
 - Telegram/models: make model picker confirmations say selections are session-scoped and do not change the agent's persistent default. Fixes #75965. Thanks @sd1114820.
 - Control UI/slash commands: keep fallback command metadata on a browser-safe registry path, so provider thinking runtime imports cannot blank the Web UI with `process is not defined`. Fixes #75987. Thanks @novkien.
