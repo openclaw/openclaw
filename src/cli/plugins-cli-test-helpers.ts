@@ -151,6 +151,8 @@ function restoreRuntimeCaptureMocks() {
 
 vi.mock("../runtime.js", () => ({
   defaultRuntime,
+  writeRuntimeJson: (runtime: CliMockOutputRuntime, value: unknown, space = 2) =>
+    runtime.writeJson(value, space),
 }));
 
 vi.mock("../config/config.js", () => ({

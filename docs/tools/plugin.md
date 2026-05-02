@@ -27,6 +27,12 @@ temporary set of OpenClaw-owned plugin packages while that migration finishes.
 
   <Step title="Install a plugin">
     ```bash
+    # Search ClawHub plugins
+    openclaw plugins search "calendar"
+
+    # From ClawHub
+    openclaw plugins install clawhub:openclaw-codex-app-server
+
     # From npm
     openclaw plugins install npm:@acme/openclaw-plugin
 
@@ -433,6 +439,7 @@ openclaw plugins list                       # compact inventory
 openclaw plugins list --enabled            # only enabled plugins
 openclaw plugins list --verbose            # per-plugin detail lines
 openclaw plugins list --json               # machine-readable inventory
+openclaw plugins search <query>            # search ClawHub plugin catalog
 openclaw plugins inspect <id>              # static detail
 openclaw plugins inspect <id> --runtime    # registered hooks/tools/CLI/gateway methods
 openclaw plugins inspect <id> --json       # machine-readable
