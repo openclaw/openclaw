@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import JSON5 from "json5";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";
@@ -33,7 +34,7 @@ function readGeneratedBundledChannelConfigs(repoRoot) {
 
   let entries;
   try {
-    entries = Function(`"use strict"; return (${match[1]});`)();
+    entries = JSON5.parse(match[1]);
   } catch {
     return new Map();
   }
