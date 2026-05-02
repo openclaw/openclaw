@@ -48,6 +48,7 @@ Docs: https://docs.openclaw.ai
 - Discord: preserve attachment and sticker filenames when saving inbound media, so agents can see human-readable file names instead of only UUID-based paths. Fixes #59744. Thanks @xela92 and @rockcent.
 - Discord: preserve non-ASCII channel names in session display labels while keeping allowlist matching on the existing ASCII slug contract. Thanks @swjeong9.
 - Discord/PluralKit: canonicalize proxied webhook turns to the original Discord message id for inbound dedupe, while preserving the proxy message id for reply routing. Thanks @acgh213.
+- Discord: only inject thread starter context on the first turn of the effective thread session, so follow-up thread replies do not repeat the starter block. Fixes #41355; supersedes #44447 and #44449. Thanks @p3nchan.
 - Gateway/diagnostics: include a bounded redacted startup error message in stability bundles, so crash-loop reports identify the failing plugin or contract without exposing secrets. Refs #75797. Thanks @ymebosma.
 - Gateway/pricing: abort in-flight model pricing catalog fetches when Gateway shutdown stops the refresh loop, and avoid post-stop cache writes or refresh timers. Fixes #72208. Thanks @rzcq.
 - Codex/app-server: make startup retry cleanup ownership-aware so concurrent Codex lanes cannot close another lane's freshly restarted shared app-server client. Thanks @vincentkoc.
