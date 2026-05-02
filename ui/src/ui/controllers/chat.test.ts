@@ -223,7 +223,7 @@ describe("handleChatEvent", () => {
     expect(state.chatMessages).toEqual([]);
   });
 
-  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "keeps plain-text %s final payload from another run without clearing active stream",
     (text) => {
       const state = createActiveStreamingState();
@@ -582,7 +582,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStream).toBe(null);
   });
 
-  it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
+  it.each(["ANNOUNCE_SKIP", "REPLY_SKIP"])(
     "keeps plain-text %s final payload from own run",
     (text) => {
       const state = createState({
@@ -640,6 +640,120 @@ describe("handleChatEvent", () => {
     } as unknown as ChatEventPayload;
 
     expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("does not persist NO_REPLY prefix fragment 'NO' on final without message", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("does not persist NO_REPLY prefix fragment 'NO_' on abort", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "NO_",
+      chatStreamStartedAt: 100,
+    });
+    const payload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "aborted",
+      message: "not-an-assistant-message",
+    } as unknown as ChatEventPayload;
+
+    expect(handleChatEvent(state, payload)).toBe("aborted");
+    expect(state.chatMessages).toEqual([]);
+  });
+
+  it("does not set chatStream for NO_REPLY prefix delta 'NO'", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "NO" }] },
+    };
+
+    handleChatEvent(state, payload);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("does not persist a terminal N leftover from a NO_REPLY stream", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: null,
+      chatStreamStartedAt: 100,
+    });
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: "N" }] },
+      }),
+    ).toBe("delta");
+    expect(state.chatStream).toBe("N");
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "delta",
+        message: { role: "assistant", content: [{ type: "text", text: "NO" }] },
+      }),
+    ).toBe("delta");
+    expect(state.chatStream).toBe("N");
+
+    expect(
+      handleChatEvent(state, {
+        runId: "run-1",
+        sessionKey: "main",
+        state: "final",
+        message: { role: "assistant", content: [{ type: "text", text: "NO_REPLY" }] },
+      }),
+    ).toBe("final");
+    expect(state.chatMessages).toEqual([]);
+    expect(state.chatStream).toBe(null);
+  });
+
+  it("ignores case on NO_REPLY final — drops no_reply lowercase", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "no_reply",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "no_reply" }],
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatMessages).toEqual([]);
   });
 
@@ -710,12 +824,11 @@ describe("loadChatHistory", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toHaveLength(5);
+    expect(state.chatMessages).toHaveLength(4);
     expect(state.chatMessages[0]).toEqual(messages[0]);
-    expect(state.chatMessages[1]).toEqual(messages[2]);
-    expect(state.chatMessages[2]).toEqual(messages[3]);
-    expect(state.chatMessages[3]).toEqual(messages[4]);
-    expect(state.chatMessages[4]).toEqual(messages[5]);
+    expect(state.chatMessages[1]).toEqual(messages[3]);
+    expect(state.chatMessages[2]).toEqual(messages[4]);
+    expect(state.chatMessages[3]).toEqual(messages[5]);
     expect(state.chatThinkingLevel).toBe("low");
     expect(state.chatLoading).toBe(false);
   });
