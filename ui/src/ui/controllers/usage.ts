@@ -17,6 +17,7 @@ export type UsageState = {
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
+  usageScope: "instance" | "family";
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageTimeSeries: SessionUsageTimeSeries | null;
@@ -186,6 +187,8 @@ export async function loadUsage(
           startDate,
           endDate,
           ...dateInterpretation,
+          groupBy: state.usageScope,
+          includeHistorical: state.usageScope === "family",
           limit: 1000, // Cap at 1000 sessions
           includeContextWeight: true,
         }),
