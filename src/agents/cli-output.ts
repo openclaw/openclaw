@@ -382,7 +382,7 @@ function parseClaudeCliStreamingDelta(params: {
 
 export type CliToolEvent =
   | { phase: "start"; name: string; toolCallId: string }
-  | { phase: "update"; toolCallId: string; partialJson: string }
+  | { phase: "update"; toolCallId: string }
   | { phase: "result"; name: string; toolCallId: string; args: Record<string, unknown> };
 
 type InFlightToolCall = {
@@ -447,7 +447,6 @@ export function createCliJsonlStreamingParser(params: {
           params.onToolEvent({
             phase: "update",
             toolCallId: tool.toolCallId,
-            partialJson: evt.delta.partial_json,
           });
         }
         return;
