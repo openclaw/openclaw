@@ -328,7 +328,6 @@ async function buildGatewayInstallEnvironment(params: {
   warn?: DaemonInstallWarnFn;
   serviceEnvironment: Record<string, string | undefined>;
   existingEnvironment?: Record<string, string | undefined>;
-  platform: NodeJS.Platform;
 }): Promise<Record<string, string | undefined>> {
   const durableEnvironment = collectDurableServiceEnvVars({
     env: params.env,
@@ -451,7 +450,6 @@ export async function buildGatewayInstallPlan(params: {
       warn: params.warn,
       serviceEnvironment,
       existingEnvironment: params.existingEnvironment,
-      platform,
     }),
   };
 }
