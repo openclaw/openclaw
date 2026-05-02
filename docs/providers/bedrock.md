@@ -172,7 +172,7 @@ For explicit `models.providers["amazon-bedrock"]` entries, OpenClaw can still re
                 defaultContextWindow: 32000,
                 defaultMaxTokens: 4096,
                 modelContextWindowOverrides: {
-                  "claude-sonnet-4-6": 200000,
+                  "claude-opus-4-6": 200000,
                 },
               },
             },
