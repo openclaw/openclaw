@@ -30,6 +30,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/CLI: redact authenticated git URLs from git install command failure details, so failed clone or checkout output cannot leak credentials during plugin installs. Thanks @vincentkoc.
 - Channels/status reactions: remove stale non-terminal lifecycle reactions when a run reaches done or error, so Discord does not leave a permanent thinking emoji after completion. Fixes #75458. Thanks @davelutztx.
 - Discord/doctor: migrate unsupported per-channel `agentId` entries under guild channel config into top-level `bindings[]` routes, so `openclaw doctor --fix` preserves the intended agent route instead of stripping it as an unknown key. Fixes #62455. Thanks @lobster-biscuit.
+- Discord/DMs: set inbound direct-message `ctx.To` to the semantic `user:<id>` target while keeping delivery routed through the DM channel, so mirror and recovery paths do not treat DMs as channel conversations. Fixes #68126. Thanks @illuminate0623.
 - Gateway/config: log config health-state write failures instead of silently hiding config observe-recovery write errors. Thanks @sallyom.
 - Diagnostics: reset stuck-session timers on reply, tool, status, block, and ACP progress events, and back off repeated `session.stuck` diagnostics while a session remains unchanged. Supersedes #72010. Thanks @rubencu.
 
