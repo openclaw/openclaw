@@ -205,6 +205,7 @@ const GoogleMeetToolSchema = Type.Object({
       "end_active_conference",
       "speak",
       "test_speech",
+      "test_listen",
     ],
     description:
       "Google Meet action to run. create creates and joins by default; pass join=false to only mint a URL. After a timeout or unclear browser state, call recover_current_tab before retrying join.",
@@ -243,6 +244,7 @@ const GoogleMeetToolSchema = Type.Object({
   dtmfSequence: Type.Optional(Type.String({ description: "Explicit DTMF sequence for Twilio" })),
   sessionId: Type.Optional(Type.String({ description: "Meet session ID" })),
   message: Type.Optional(Type.String({ description: "Realtime instructions to speak now" })),
+  timeoutMs: Type.Optional(Type.Number({ description: "Probe timeout in milliseconds" })),
   meeting: Type.Optional(Type.String({ description: "Meet URL, meeting code, or spaces/{id}" })),
   today: Type.Optional(
     Type.Boolean({
@@ -360,7 +362,8 @@ type GoogleMeetGatewayToolAction =
   | "leave"
   | "end_active_conference"
   | "speak"
-  | "test_speech";
+  | "test_speech"
+  | "test_listen";
 
 function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolAction): string {
   switch (action) {
@@ -370,6 +373,8 @@ function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolActio
       return "googlemeet.setup";
     case "test_speech":
       return "googlemeet.testSpeech";
+    case "test_listen":
+      return "googlemeet.testListen";
     case "end_active_conference":
       return "googlemeet.endActiveConference";
     default:
@@ -917,11 +922,29 @@ export default definePluginEntry({
       },
     );
 
+    api.registerGatewayMethod(
+      "googlemeet.testListen",
+      async ({ params, respond }: GatewayRequestHandlerOptions) => {
+        try {
+          const rt = await ensureRuntime();
+          const result = await rt.testListen({
+            url: resolveMeetingInput(config, params?.url),
+            transport: normalizeTransport(params?.transport),
+            mode: normalizeMode(params?.mode),
+            timeoutMs: typeof params?.timeoutMs === "number" ? params.timeoutMs : undefined,
+          });
+          respond(true, result);
+        } catch (err) {
+          sendError(respond, err);
+        }
+      },
+    );
+
     api.registerTool({
       name: "google_meet",
       label: "Google Meet",
       description:
-        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_speech; if it reports a Chrome node offline or local audio missing, surface that blocker instead of retrying or switching transports. Offline nodes are diagnostics only, not usable candidates. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
+        "Join and track Google Meet sessions through Chrome or Twilio. Call setup_status before join/create/test_listen/test_speech; if it reports a Chrome node offline or local audio missing, surface that blocker instead of retrying or switching transports. Offline nodes are diagnostics only, not usable candidates. If a Meet tab is already open after a timeout, call recover_current_tab before retrying join to report login, permission, or admission blockers without opening another tab.",
       parameters: GoogleMeetToolSchema,
       async execute(_toolCallId, params) {
         const raw = asParamRecord(params);
@@ -936,6 +959,11 @@ export default definePluginEntry({
             case "test_speech": {
               return json(
                 await callGoogleMeetGatewayFromTool({ config, action: "test_speech", raw }),
+              );
+            }
+            case "test_listen": {
+              return json(
+                await callGoogleMeetGatewayFromTool({ config, action: "test_listen", raw }),
               );
             }
             case "status": {

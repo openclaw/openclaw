@@ -689,6 +689,55 @@ describe("google-meet CLI", () => {
     }
   });
 
+  it("runs a listen-first health probe", async () => {
+    const testListen = vi.fn(async () => ({
+      createdSession: true,
+      listenVerified: true,
+      listenTimedOut: false,
+      transcriptLines: 1,
+      session: {
+        id: "meet_1",
+        url: "https://meet.google.com/abc-defg-hij",
+        state: "active",
+        transport: "chrome-node",
+        mode: "transcribe",
+        participantIdentity: "signed-in Google Chrome profile on a paired node",
+        createdAt: "2026-04-25T00:00:00.000Z",
+        updatedAt: "2026-04-25T00:00:01.000Z",
+        realtime: { enabled: false, provider: "openai", toolPolicy: "safe-read-only" },
+        notes: [],
+      },
+    }));
+    const stdout = captureStdout();
+    try {
+      await setupCli({
+        runtime: { testListen },
+      }).parseAsync(
+        [
+          "googlemeet",
+          "test-listen",
+          "https://meet.google.com/abc-defg-hij",
+          "--transport",
+          "chrome-node",
+          "--timeout-ms",
+          "30000",
+        ],
+        { from: "user" },
+      );
+      expect(testListen).toHaveBeenCalledWith({
+        url: "https://meet.google.com/abc-defg-hij",
+        transport: "chrome-node",
+        timeoutMs: 30000,
+      });
+      expect(JSON.parse(stdout.output())).toMatchObject({
+        listenVerified: true,
+        transcriptLines: 1,
+      });
+    } finally {
+      stdout.restore();
+    }
+  });
+
   it("prints a dry-run export manifest without writing files", async () => {
     stubMeetArtifactsApi();
     const stdout = captureStdout();
