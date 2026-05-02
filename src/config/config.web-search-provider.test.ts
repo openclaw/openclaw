@@ -185,32 +185,42 @@ vi.mock("../plugins/manifest-registry.js", () => {
           schemaCacheKey: "test:brave",
           configSchema: buildSchema(),
         },
-        ...[
-          "firecrawl",
-          "google",
-          "minimax",
-          "moonshot",
-          "perplexity",
-          "searxng",
-          "tavily",
-          "xai",
-        ].map((id) => ({
-          id,
-          origin: "bundled",
+        ...mockWebSearchProviders
+          .filter((provider) => provider.pluginId !== "brave")
+          .map((provider) => ({
+            id: provider.pluginId,
+            origin: "bundled",
+            channels: [],
+            providers: [],
+            contracts: {
+              webSearchProviders: [provider.id],
+            },
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: `/tmp/plugins/${provider.pluginId}`,
+            source: "test",
+            manifestPath: `/tmp/plugins/${provider.pluginId}/openclaw.plugin.json`,
+            schemaCacheKey: `test:${provider.pluginId}`,
+            configSchema: buildSchema(),
+          })),
+        {
+          id: "acme-search",
+          origin: "installed",
           channels: [],
           providers: [],
           contracts: {
-            webSearchProviders: [id],
+            webSearchProviders: ["acme-search"],
           },
           cliBackends: [],
           skills: [],
           hooks: [],
-          rootDir: `/tmp/plugins/${id}`,
+          rootDir: "/tmp/plugins/acme-search",
           source: "test",
-          manifestPath: `/tmp/plugins/${id}/openclaw.plugin.json`,
-          schemaCacheKey: `test:${id}`,
+          manifestPath: "/tmp/plugins/acme-search/openclaw.plugin.json",
+          schemaCacheKey: "test:acme-search",
           configSchema: buildSchema(),
-        })),
+        },
       ],
       diagnostics: [],
     }),
@@ -412,6 +422,74 @@ describe("web search provider config", () => {
     );
 
     expect(res.ok).toBe(true);
+  });
+
+  it("accepts provider ids registered by installed plugin manifests", () => {
+    const res = validateConfigObjectWithPlugins(
+      buildWebSearchProviderConfig({
+        provider: "acme-search",
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown provider ids without plugin evidence", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "brvae",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expect(res.issues).toContainEqual(
+      expect.objectContaining({
+        path: "tools.web.search.provider",
+        message: "unknown web_search provider: brvae",
+        allowedValues: expect.arrayContaining(["acme-search", "brave", "gemini"]),
+      }),
+    );
+  });
+
+  it("warns for unknown provider ids when stale plugin config is present", () => {
+    const res = validateConfigObjectWithPlugins({
+      tools: {
+        web: {
+          search: {
+            provider: "missing-third-party",
+          },
+        },
+      },
+      plugins: {
+        entries: {
+          "missing-third-party": {
+            config: {
+              webSearch: {},
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: "tools.web.search.provider",
+          message: expect.stringContaining("unknown web_search provider: missing-third-party"),
+        }),
+      ]),
+    );
   });
 });
 

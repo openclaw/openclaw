@@ -997,6 +997,80 @@ function validateConfigObjectWithPluginsBase(
     return ensureInstalledPluginRecordIds().has(normalizedChannelId);
   };
 
+  const collectKnownWebSearchProviderIds = (): string[] => {
+    const { registry } = ensureRegistry();
+    return [
+      ...new Set(
+        registry.plugins.flatMap((record) =>
+          (record.contracts?.webSearchProviders ?? [])
+            .map((providerId) => providerId.trim())
+            .filter((providerId) => providerId.length > 0),
+        ),
+      ),
+    ].toSorted((left, right) => left.localeCompare(right));
+  };
+
+  const hasStalePluginEvidenceForUnknownWebSearchProvider = (providerId: string): boolean => {
+    const normalizedProviderId = normalizePluginId(providerId);
+    if (!normalizedProviderId || ensureKnownIds().has(normalizedProviderId)) {
+      return false;
+    }
+    const pluginConfig = config.plugins;
+    if (
+      Array.isArray(pluginConfig?.allow) &&
+      pluginConfig.allow.some((pluginId) => normalizePluginId(pluginId) === normalizedProviderId)
+    ) {
+      return true;
+    }
+    if (
+      isRecord(pluginConfig?.entries) &&
+      Object.keys(pluginConfig.entries).some(
+        (pluginId) => normalizePluginId(pluginId) === normalizedProviderId,
+      )
+    ) {
+      return true;
+    }
+    if (
+      isRecord(pluginConfig?.installs) &&
+      Object.keys(pluginConfig.installs).some(
+        (pluginId) => normalizePluginId(pluginId) === normalizedProviderId,
+      )
+    ) {
+      return true;
+    }
+    return ensureInstalledPluginRecordIds().has(normalizedProviderId);
+  };
+
+  const validateWebSearchProvider = () => {
+    const provider = config.tools?.web?.search?.provider;
+    if (typeof provider !== "string") {
+      return;
+    }
+    const trimmed = provider.trim();
+    const path = "tools.web.search.provider";
+    if (!trimmed) {
+      issues.push({ path, message: "web_search provider must not be empty" });
+      return;
+    }
+    const allowedValues = collectKnownWebSearchProviderIds();
+    if (allowedValues.length === 0 || allowedValues.includes(trimmed)) {
+      return;
+    }
+    const issue = {
+      path,
+      message: `unknown web_search provider: ${trimmed}`,
+      allowedValues,
+    };
+    if (hasStalePluginEvidenceForUnknownWebSearchProvider(trimmed)) {
+      warnings.push({
+        ...issue,
+        message: `${issue.message} (stale web search plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+      });
+      return;
+    }
+    issues.push(issue);
+  };
+
   const replaceChannelConfig = (channelId: string, nextValue: unknown) => {
     if (!channelsCloned) {
       mutatedConfig = {
@@ -1142,6 +1216,8 @@ function validateConfigObjectWithPluginsBase(
       validateHeartbeatTarget(entry?.heartbeat?.target, `agents.list.${index}.heartbeat.target`);
     }
   }
+
+  validateWebSearchProvider();
 
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {
