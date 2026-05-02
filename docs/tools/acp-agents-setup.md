@@ -109,7 +109,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
     discord: {
       threadBindings: {
         enabled: true,
-        spawnAcpSessions: true,
+        spawnSessions: true,
       },
     },
   },
@@ -118,7 +118,7 @@ Thread binding config is channel-adapter specific. Example for Discord:
 
 If thread-bound ACP spawn does not work, verify the adapter feature flag first:
 
-- Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
+- Discord: `channels.discord.threadBindings.spawnSessions=true`
 
 Current-conversation binds do not require child-thread creation. They require an active conversation context and a channel adapter that exposes ACP conversation bindings.
 

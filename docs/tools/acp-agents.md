@@ -279,7 +279,7 @@ Examples:
   <Accordion title="Binding rules and exclusivity">
     - `--bind here` and `--thread ...` are mutually exclusive.
     - `--bind here` only works on channels that advertise current-conversation binding; OpenClaw returns a clear unsupported message otherwise. Bindings persist across gateway restarts.
-    - On Discord, `spawnAcpSessions` is only required when OpenClaw needs to create a child thread for `--thread auto|here` — not for `--bind here`.
+    - On Discord, `spawnSessions` gates child thread creation for `--thread auto|here` — not `--bind here`.
     - If you spawn to a different ACP agent without `--cwd`, OpenClaw inherits the **target agent's** workspace by default. Missing inherited paths (`ENOENT`/`ENOTDIR`) fall back to the backend default; other access errors (e.g. `EACCES`) surface as spawn errors.
     - Gateway management commands stay local in bound conversations — `/acp ...` commands are handled by OpenClaw even when normal follow-up text routes to the bound ACP session; `/status` and `/unfocus` also stay local whenever command handling is enabled for that surface.
 
@@ -297,9 +297,9 @@ Examples:
 
     - `acp.enabled=true`
     - `acp.dispatch.enabled` is on by default (set `false` to pause automatic ACP thread dispatch; explicit `sessions_spawn({ runtime: "acp" })` calls still work).
-    - Channel-adapter ACP thread-spawn flag enabled (adapter-specific):
-      - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+    - Channel-adapter thread session spawns enabled (default: `true`):
+      - Discord: `channels.discord.threadBindings.spawnSessions=true`
+      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
 
     Thread binding support is adapter-specific. If the active channel
     adapter does not support thread bindings, OpenClaw returns a clear
@@ -592,8 +592,8 @@ Two ways to start an ACP session:
 
     - On non-thread binding surfaces, default behavior is effectively `off`.
     - Thread-bound spawn requires channel policy support:
-      - Discord: `channels.discord.threadBindings.spawnAcpSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnAcpSessions=true`
+      - Discord: `channels.discord.threadBindings.spawnSessions=true`
+      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
     - Use `--bind here` when you want to pin the current conversation without creating a child thread.
 
   </Tab>

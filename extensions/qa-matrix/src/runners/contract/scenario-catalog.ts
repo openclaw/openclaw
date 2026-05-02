@@ -372,7 +372,7 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
       },
       threadBindings: {
         enabled: true,
-        spawnSubagentSessions: true,
+        spawnSessions: true,
       },
       toolProfile: "coding",
     },

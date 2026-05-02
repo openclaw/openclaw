@@ -20848,6 +20848,19 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
                 description:
                   "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
               },
+              spawnSessions: {
+                type: "boolean",
+                title: "Thread-Bound Session Spawns",
+                description:
+                  "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+              },
+              defaultSpawnContext: {
+                type: "string",
+                enum: ["isolated", "fork"],
+                title: "Thread Spawn Context",
+                description:
+                  'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+              },
             },
             additionalProperties: false,
             title: "Session Thread Bindings",
@@ -27912,6 +27925,16 @@ export const GENERATED_BASE_CONFIG_SCHEMA: BaseConfigSchemaResponse = {
       label: "Thread Binding Max Age (hours)",
       help: "Optional hard max age in hours for thread-bound sessions across providers/channels (0 disables hard cap). Default: 0.",
       tags: ["performance", "storage"],
+    },
+    "session.threadBindings.spawnSessions": {
+      label: "Thread-Bound Session Spawns",
+      help: "Global default gate for creating thread-bound work sessions from sessions_spawn and ACP thread spawns. Default: true when thread bindings are enabled.",
+      tags: ["storage"],
+    },
+    "session.threadBindings.defaultSpawnContext": {
+      label: "Thread Spawn Context",
+      help: 'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
+      tags: ["storage"],
     },
     "session.maintenance": {
       label: "Session Maintenance",

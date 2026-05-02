@@ -1,9 +1,13 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import {
+  formatThreadBindingDisabledError,
+  formatThreadBindingSpawnDisabledError,
+  resolveThreadBindingSpawnPolicy,
+} from "openclaw/plugin-sdk/conversation-runtime";
+import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/text-runtime";
-import { resolveDiscordAccount } from "./accounts.js";
 import {
   autoBindSpawnedDiscordSubagent,
   listThreadBindingsBySessionKey,
@@ -76,27 +80,6 @@ function normalizeThreadBindingTargetKind(raw?: string): ThreadBindingTargetKind
   return undefined;
 }
 
-function resolveThreadBindingFlags(api: OpenClawPluginApi, accountId?: string) {
-  const account = resolveDiscordAccount({
-    cfg: api.config,
-    accountId,
-  });
-  const baseThreadBindings = api.config.channels?.discord?.threadBindings;
-  const accountThreadBindings =
-    api.config.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
-  return {
-    enabled:
-      accountThreadBindings?.enabled ??
-      baseThreadBindings?.enabled ??
-      api.config.session?.threadBindings?.enabled ??
-      true,
-    spawnSubagentSessions:
-      accountThreadBindings?.spawnSubagentSessions ??
-      baseThreadBindings?.spawnSubagentSessions ??
-      false,
-  };
-}
-
 export async function handleDiscordSubagentSpawning(
   api: OpenClawPluginApi,
   event: DiscordSubagentSpawningEvent,
@@ -108,19 +91,30 @@ export async function handleDiscordSubagentSpawning(
   if (channel !== "discord") {
     return undefined;
   }
-  const threadBindingFlags = resolveThreadBindingFlags(api, event.requester?.accountId);
-  if (!threadBindingFlags.enabled) {
+  const threadBindingPolicy = resolveThreadBindingSpawnPolicy({
+    cfg: api.config,
+    channel: "discord",
+    accountId: event.requester?.accountId,
+    kind: "subagent",
+  });
+  if (!threadBindingPolicy.enabled) {
     return {
       status: "error" as const,
-      error:
-        "Discord thread bindings are disabled (set channels.discord.threadBindings.enabled=true to override for this account, or session.threadBindings.enabled=true globally).",
+      error: formatThreadBindingDisabledError({
+        channel: threadBindingPolicy.channel,
+        accountId: threadBindingPolicy.accountId,
+        kind: "subagent",
+      }),
     };
   }
-  if (!threadBindingFlags.spawnSubagentSessions) {
+  if (!threadBindingPolicy.spawnEnabled) {
     return {
       status: "error" as const,
-      error:
-        "Discord thread-bound subagent spawns are disabled for this account (set channels.discord.threadBindings.spawnSubagentSessions=true to enable).",
+      error: formatThreadBindingSpawnDisabledError({
+        channel: threadBindingPolicy.channel,
+        accountId: threadBindingPolicy.accountId,
+        kind: "subagent",
+      }),
     };
   }
   try {
