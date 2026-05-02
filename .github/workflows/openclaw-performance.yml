@@ -327,6 +327,7 @@ jobs:
             run_dir="$SOURCE_PERF_DIR/mock-hello/run-$(printf '%03d' "$run_index")"
             pnpm openclaw qa suite \
               --provider-mode mock-openai \
+              --model "mock-openai/${PERFORMANCE_MODEL_ID}" \
               --concurrency 1 \
               --output-dir "$(realpath --relative-to="$GITHUB_WORKSPACE" "$run_dir")" \
               --scenario channel-chat-baseline

@@ -160,8 +160,15 @@ function buildCliRows(cli) {
     formatMs(commandCase.summary?.durationMs?.p50),
     formatMs(commandCase.summary?.durationMs?.p95),
     formatMb(commandCase.summary?.maxRssMb?.p95),
-    commandCase.summary?.exitSummary ?? "n/a",
+    formatExitSummary(commandCase.summary?.exitSummary),
   ]);
+}
+
+function formatExitSummary(value) {
+  if (typeof value !== "string" || !value) {
+    return "n/a";
+  }
+  return value.replaceAll(/\b(code:(?:null|-?\d+)|signal:[^,\s]+)x(\d+)\b/g, "$1 x$2");
 }
 
 function buildObservationRows(summary) {
