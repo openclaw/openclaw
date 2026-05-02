@@ -32,13 +32,11 @@ export type TelegramActionConfig = {
 
 export type TelegramThreadBindingsConfig = SessionThreadBindingsConfig & {
   /**
-   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Telegram
-   * topics for subagent sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnSubagentSessions?: boolean;
   /**
-   * Allow `/acp spawn` to auto-create + bind Telegram topics for ACP
-   * sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnAcpSessions?: boolean;
 };
@@ -121,6 +119,8 @@ export type TelegramAccountConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all|batched). */
   replyToMode?: ReplyToMode;
+  /** Direct-message threading behavior. Defaults to flat DM sessions. */
+  dm?: TelegramDmConfig;
   groups?: Record<string, TelegramGroupConfig>;
   /** Per-DM configuration for Telegram DM topics (key is chat ID). */
   direct?: Record<string, TelegramDirectConfig>;
@@ -220,6 +220,13 @@ export type TelegramAccountConfig = {
   autoTopicLabel?: AutoTopicLabelConfig;
 };
 
+export type TelegramDmThreadReplies = "off" | "inbound" | "always";
+
+export type TelegramDmConfig = {
+  /** DM-only session threading override for message_thread_id (off|inbound|always). Default: off. */
+  threadReplies?: TelegramDmThreadReplies;
+};
+
 export type TelegramTopicConfig = {
   requireMention?: boolean;
   /** Emit internal message hooks for mention-skipped topic messages. */
@@ -283,6 +290,8 @@ export type AutoTopicLabelConfig =
 export type TelegramDirectConfig = {
   /** Per-DM override for DM message policy (open|disabled|allowlist). */
   dmPolicy?: DmPolicy;
+  /** Controls whether Telegram DM message_thread_id values split sessions. Default: off unless topic config requires it. */
+  threadReplies?: "off" | "inbound" | "always";
   /** Optional tool policy overrides for this DM. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

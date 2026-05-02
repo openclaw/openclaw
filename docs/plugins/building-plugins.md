@@ -15,14 +15,16 @@ combination.
 
 You do not need to add your plugin to the OpenClaw repository. Publish to
 [ClawHub](/tools/clawhub) and users install with
-`openclaw plugins install <package-name>`. OpenClaw tries ClawHub first and
-falls back to npm automatically for packages that still use npm distribution.
+`openclaw plugins install clawhub:<package-name>`. Bare package specs still
+install from npm during the launch cutover.
 
 ## Prerequisites
 
 - Node >= 22 and a package manager (npm or pnpm)
 - Familiarity with TypeScript (ESM)
-- For in-repo plugins: repository cloned and `pnpm install` done
+- For in-repo plugins: repository cloned and `pnpm install` done. Source
+  checkout plugin development is pnpm-only because OpenClaw loads bundled
+  plugins from the `extensions/*` workspace packages.
 
 ## What kind of plugin?
 
@@ -76,6 +78,9 @@ and provider plugins have dedicated guides linked above.
       "id": "my-plugin",
       "name": "My Plugin",
       "description": "Adds a custom tool to OpenClaw",
+      "contracts": {
+        "tools": ["my_tool"]
+      },
       "activation": {
         "onStartup": true
       },
@@ -87,9 +92,10 @@ and provider plugins have dedicated guides linked above.
     ```
     </CodeGroup>
 
-    Every plugin needs a manifest, even with no config, and every plugin should
-    declare `activation.onStartup` intentionally. Runtime-registered tools need
-    startup import, so this example sets it to `true`. See
+    Every plugin needs a manifest, even with no config. Runtime-registered tools
+    must be listed in `contracts.tools` so OpenClaw can discover the owning
+    plugin without loading every plugin runtime. Plugins should also declare
+    `activation.onStartup` intentionally. This example sets it to `true`. See
     [Manifest](/plugins/manifest) for the full schema. The canonical ClawHub
     publish snippets live in `docs/snippets/plugin-publish/`.
 
@@ -135,9 +141,8 @@ and provider plugins have dedicated guides linked above.
     openclaw plugins install clawhub:@myorg/openclaw-my-plugin
     ```
 
-    OpenClaw also checks ClawHub before npm for bare package specs like
-    `@myorg/openclaw-my-plugin`; npm remains a fallback for packages that have
-    not migrated to ClawHub yet.
+    Bare package specs like `@myorg/openclaw-my-plugin` install from npm during
+    the launch cutover. Use `clawhub:` when you want ClawHub resolution.
 
     **In-repo plugins:** place under the bundled plugin workspace tree — automatically discovered.
 
@@ -239,6 +244,22 @@ register(api) {
   );
 }
 ```
+
+Every tool registered with `api.registerTool(...)` must also be declared in the
+plugin manifest:
+
+```json
+{
+  "contracts": {
+    "tools": ["my_tool", "workflow_tool"]
+  }
+}
+```
+
+OpenClaw captures and caches the validated descriptor from the registered tool,
+so plugins do not duplicate `description` or schema data in the manifest. The
+manifest contract only declares ownership and discovery; execution still calls
+the live registered tool implementation.
 
 Users enable optional tools in config:
 

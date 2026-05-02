@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { resolveAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
@@ -14,6 +14,8 @@ import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/thinking.js";
 import {
   loadSessionStore,
+  runSessionsCleanup,
+  serializeSessionCleanupResult,
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -47,6 +49,7 @@ import {
   ErrorCodes,
   errorShape,
   validateSessionsAbortParams,
+  validateSessionsCleanupParams,
   validateSessionsCompactParams,
   validateSessionsCompactionBranchParams,
   validateSessionsCompactionGetParams,
@@ -54,6 +57,7 @@ import {
   validateSessionsCompactionRestoreParams,
   validateSessionsCreateParams,
   validateSessionsDeleteParams,
+  validateSessionsDescribeParams,
   validateSessionsListParams,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
@@ -66,17 +70,22 @@ import {
 } from "../protocol/index.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
+  forkCompactionCheckpointTranscriptAsync,
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
-  listSessionsFromStore,
+  buildGatewaySessionRow,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  readRecentSessionMessagesWithStatsAsync,
+  readRecentSessionTranscriptLines,
+  readSessionMessageCountAsync,
   readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
@@ -87,7 +96,6 @@ import {
   type SessionsPatchResult,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
-  readSessionMessages,
 } from "../session-utils.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
@@ -216,7 +224,10 @@ function shouldAttachPendingMessageSeq(params: { payload: unknown; cached?: bool
 }
 
 function emitSessionsChanged(
-  context: Pick<GatewayRequestContext, "broadcastToConnIds" | "getSessionEventSubscriberConnIds">,
+  context: Pick<
+    GatewayRequestContext,
+    "broadcastToConnIds" | "chatAbortControllers" | "getSessionEventSubscriberConnIds"
+  >,
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
   const connIds = context.getSessionEventSubscriberConnIds();
@@ -274,6 +285,11 @@ function emitSessionsChanged(
             modelProvider: sessionRow.modelProvider,
             model: sessionRow.model,
             status: sessionRow.status,
+            hasActiveRun: hasTrackedActiveSessionRun({
+              context,
+              requestedKey: payload.sessionKey ?? sessionRow.key,
+              canonicalKey: sessionRow.key,
+            }),
             startedAt: sessionRow.startedAt,
             endedAt: sessionRow.endedAt,
             runtimeMs: sessionRow.runtimeMs,
@@ -419,10 +435,13 @@ function resolveAbortSessionKey(params: {
 }
 
 function hasTrackedActiveSessionRun(params: {
-  context: Pick<GatewayRequestContext, "chatAbortControllers">;
+  context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;
   canonicalKey: string;
 }): boolean {
+  if (!(params.context.chatAbortControllers instanceof Map)) {
+    return false;
+  }
   for (const active of params.context.chatAbortControllers.values()) {
     if (active.sessionKey === params.canonicalKey || active.sessionKey === params.requestedKey) {
       return true;
@@ -569,7 +588,8 @@ async function handleSessionSend(params: {
     interruptedActiveRun = interruptResult.interrupted;
   }
 
-  const messageSeq = readSessionMessages(entry.sessionId, storePath, entry.sessionFile).length + 1;
+  const messageSeq =
+    (await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -648,16 +668,67 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params;
     const cfg = context.getRuntimeConfig();
-    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
     const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
-    const result = listSessionsFromStore({
+    const result = await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,
       modelCatalog,
       opts: p,
     });
-    respond(true, result, undefined);
+    respond(
+      true,
+      {
+        ...result,
+        sessions: result.sessions.map((session) =>
+          Object.assign({}, session, {
+            hasActiveRun: hasTrackedActiveSessionRun({
+              context,
+              requestedKey: session.key,
+              canonicalKey: session.key,
+            }),
+          }),
+        ),
+      },
+      undefined,
+    );
+  },
+  "sessions.cleanup": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsCleanupParams, "sessions.cleanup", respond)) {
+      return;
+    }
+    try {
+      const { mode, appliedSummaries } = await runSessionsCleanup({
+        cfg: context.getRuntimeConfig(),
+        opts: {
+          agent: params.agent,
+          allAgents: params.allAgents,
+          enforce: params.enforce,
+          activeKey: params.activeKey,
+          fixMissing: params.fixMissing,
+        },
+      });
+      const result = serializeSessionCleanupResult({
+        mode,
+        dryRun: false,
+        summaries: appliedSummaries,
+      });
+      respond(true, result, undefined);
+      for (const summary of appliedSummaries) {
+        emitSessionsChanged(context, {
+          reason: "cleanup",
+          sessionKey: undefined,
+        });
+        if (summary.wouldMutate) {
+          context.logGateway.debug(
+            `sessions.cleanup applied ${summary.storePath}: ${summary.beforeCount} -> ${summary.afterCount}`,
+          );
+        }
+      }
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+    }
   },
   "sessions.subscribe": ({ client, context, respond }) => {
     const connId = client?.connId?.trim();
@@ -780,6 +851,34 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+  },
+  "sessions.describe": ({ params, respond, context }) => {
+    if (!assertValidParams(params, validateSessionsDescribeParams, "sessions.describe", respond)) {
+      return;
+    }
+    const key = requireSessionKey(params.key, respond);
+    if (!key) {
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg);
+    const store = loadSessionStore(storePath);
+    const entry = resolveFreshestSessionEntryFromStoreKeys(store, target.storeKeys);
+    if (!entry) {
+      respond(true, { session: null }, undefined);
+      return;
+    }
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath,
+      store,
+      key: target.canonicalKey,
+      entry,
+      includeDerivedTitles: params.includeDerivedTitles,
+      includeLastMessage: params.includeLastMessage,
+      transcriptUsageMaxBytes: 64 * 1024,
+    });
+    respond(true, { session: row }, undefined);
   },
   "sessions.resolve": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
@@ -983,8 +1082,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? readSessionMessages(createdEntry.sessionId, target.storePath, createdEntry.sessionFile)
-          .length + 1
+      ? (await readSessionMessageCountAsync(
+          createdEntry.sessionId,
+          target.storePath,
+          createdEntry.sessionFile,
+        )) + 1
       : undefined;
 
     if (initialMessage) {
@@ -1083,26 +1185,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!fs.existsSync(checkpoint.preCompaction.sessionFile)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "checkpoint snapshot transcript is missing"),
-      );
-      return;
-    }
-
-    const snapshotSession = SessionManager.open(
-      checkpoint.preCompaction.sessionFile,
-      path.dirname(checkpoint.preCompaction.sessionFile),
-    );
-    const branchedSession = SessionManager.forkFrom(
-      checkpoint.preCompaction.sessionFile,
-      snapshotSession.getCwd(),
-      path.dirname(checkpoint.preCompaction.sessionFile),
-    );
-    const branchedSessionFile = branchedSession.getSessionFile();
-    if (!branchedSessionFile) {
+    const branchedSession = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile: checkpoint.preCompaction.sessionFile,
+      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
+    });
+    if (!branchedSession?.sessionFile) {
       respond(
         false,
         undefined,
@@ -1114,8 +1201,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const label = entry.label?.trim() ? `${entry.label.trim()} (checkpoint)` : "Checkpoint branch";
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
-      nextSessionId: branchedSession.getSessionId(),
-      nextSessionFile: branchedSessionFile,
+      nextSessionId: branchedSession.sessionId,
+      nextSessionFile: branchedSession.sessionFile,
       label,
       parentSessionKey: canonicalKey,
       totalTokens: checkpoint.tokensBefore,
@@ -1197,15 +1284,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!fs.existsSync(checkpoint.preCompaction.sessionFile)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "checkpoint snapshot transcript is missing"),
-      );
-      return;
-    }
-
     const interruptResult = await interruptSessionRunIfActive({
       req,
       context,
@@ -1220,17 +1298,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const snapshotSession = SessionManager.open(
-      checkpoint.preCompaction.sessionFile,
-      path.dirname(checkpoint.preCompaction.sessionFile),
-    );
-    const restoredSession = SessionManager.forkFrom(
-      checkpoint.preCompaction.sessionFile,
-      snapshotSession.getCwd(),
-      path.dirname(checkpoint.preCompaction.sessionFile),
-    );
-    const restoredSessionFile = restoredSession.getSessionFile();
-    if (!restoredSessionFile) {
+    const restoredSession = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile: checkpoint.preCompaction.sessionFile,
+      sessionDir: path.dirname(checkpoint.preCompaction.sessionFile),
+    });
+    if (!restoredSession?.sessionFile) {
       respond(
         false,
         undefined,
@@ -1240,8 +1312,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const nextEntry = cloneCheckpointSessionEntry({
       currentEntry: entry,
-      nextSessionId: restoredSession.getSessionId(),
-      nextSessionFile: restoredSessionFile,
+      nextSessionId: restoredSession.sessionId,
+      nextSessionFile: restoredSession.sessionFile,
       totalTokens: checkpoint.tokensBefore,
       preserveCompactionCheckpoints: true,
     });
@@ -1669,7 +1741,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       });
     }
   },
-  "sessions.get": ({ params, respond, context }) => {
+  "sessions.get": async ({ params, respond, context }) => {
     const p = params;
     const key = requireSessionKey(p.key ?? p.sessionKey, respond);
     if (!key) {
@@ -1690,8 +1762,15 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { messages: [] }, undefined);
       return;
     }
-    const allMessages = readSessionMessages(entry.sessionId, storePath, entry.sessionFile);
-    const messages = limit < allMessages.length ? allMessages.slice(-limit) : allMessages;
+    const { messages } = await readRecentSessionMessagesWithStatsAsync(
+      entry.sessionId,
+      storePath,
+      entry.sessionFile,
+      {
+        maxMessages: limit,
+        maxLines: limit * 20 + 20,
+      },
+    );
     respond(true, { messages }, undefined);
   },
   "sessions.compact": async ({ req, params, respond, context, client, isWebchatConnect }) => {
@@ -1847,16 +1926,23 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const raw = fs.readFileSync(filePath, "utf-8");
-    const lines = raw.split(/\r?\n/).filter((l) => Boolean(normalizeOptionalString(l)));
-    if (lines.length <= maxLines) {
+    const tail = readRecentSessionTranscriptLines({
+      sessionId,
+      storePath,
+      sessionFile: entry?.sessionFile,
+      agentId: target.agentId,
+      maxLines,
+    });
+    const lines = tail?.lines ?? [];
+    const totalLines = tail?.totalLines ?? 0;
+    if (totalLines <= maxLines) {
       respond(
         true,
         {
           ok: true,
           key: target.canonicalKey,
           compacted: false,
-          kept: lines.length,
+          kept: totalLines,
         },
         undefined,
       );
@@ -1864,8 +1950,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const archived = archiveFileOnDisk(filePath, "bak");
-    const keptLines = lines.slice(-maxLines);
-    fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
+    fs.writeFileSync(filePath, `${lines.join("\n")}\n`, "utf-8");
 
     await updateSessionStore(storePath, (store) => {
       const entryKey = compactTarget.primaryKey;
@@ -1887,7 +1972,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         key: target.canonicalKey,
         compacted: true,
         archived,
-        kept: keptLines.length,
+        kept: lines.length,
       },
       undefined,
     );

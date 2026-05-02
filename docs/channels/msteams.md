@@ -13,15 +13,14 @@ Microsoft Teams ships as a bundled plugin in current OpenClaw releases, so no
 separate install is required in the normal packaged build.
 
 If you are on an older build or a custom install that excludes bundled Teams,
-install a current npm package when one is published:
+install the npm package directly:
 
 ```bash
 openclaw plugins install @openclaw/msteams
 ```
 
-If npm reports the OpenClaw-owned package as deprecated, use a current packaged
-OpenClaw build or the local checkout path until a newer npm package is
-published.
+Use `@openclaw/msteams@beta` when following the OpenClaw beta channel and npmjs
+shows `beta` ahead of `latest`.
 
 Local checkout (when running from a git repo):
 

@@ -6,6 +6,10 @@ import {
   normalizeStringifiedOptionalString,
 } from "../shared/string-coerce.js";
 import {
+  isValidControlUiChatMessageMaxWidth,
+  normalizeControlUiChatMessageMaxWidth,
+} from "./control-ui-css.js";
+import {
   SilentReplyPolicyConfigSchema,
   SilentReplyRewriteConfigSchema,
 } from "./zod-schema.agent-defaults.js";
@@ -47,6 +51,28 @@ const NodeHostSchema = z
       .optional(),
   })
   .strict()
+  .optional();
+
+const AccessGroupsSchema = z
+  .record(
+    z.string().min(1),
+    z.discriminatedUnion("type", [
+      z
+        .object({
+          type: z.literal("discord.channelAudience"),
+          guildId: z.string().min(1),
+          channelId: z.string().min(1),
+          membership: z.literal("canViewChannel").optional(),
+        })
+        .strict(),
+      z
+        .object({
+          type: z.literal("message.senders"),
+          members: z.record(z.string().min(1), z.array(z.string().min(1))),
+        })
+        .strict(),
+    ]),
+  )
   .optional();
 
 const MemoryQmdPathSchema = z
@@ -522,6 +548,7 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    accessGroups: AccessGroupsSchema,
     acp: z
       .object({
         enabled: z.boolean().optional(),
@@ -761,6 +788,14 @@ export const OpenClawSchema = z
               .union([z.literal("strict"), z.literal("scripts"), z.literal("trusted")])
               .optional(),
             allowExternalEmbedUrls: z.boolean().optional(),
+            chatMessageMaxWidth: z
+              .string()
+              .transform((value) => normalizeControlUiChatMessageMaxWidth(value))
+              .refine((value) => isValidControlUiChatMessageMaxWidth(value), {
+                message:
+                  "Expected a CSS width value such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem)",
+              })
+              .optional(),
             allowedOrigins: z.array(z.string()).optional(),
             dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),

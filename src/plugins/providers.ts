@@ -8,7 +8,7 @@ import {
   passesManifestOwnerBasePolicy,
 } from "./manifest-owner-policy.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
-import { type PluginManifestRecord, type PluginManifestRegistry } from "./manifest-registry.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import {
   loadPluginRegistrySnapshot,
   normalizePluginsConfigWithRegistry,
@@ -131,7 +131,20 @@ export function resolveBundledProviderCompatPluginIds(params: {
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
+  if (params.manifestRegistry) {
+    const onlyPluginIdSet = createPluginIdScopeSet(params.onlyPluginIds);
+    return params.manifestRegistry.plugins
+      .filter(
+        (plugin) =>
+          plugin.origin === "bundled" &&
+          plugin.providers.length > 0 &&
+          (!onlyPluginIdSet || onlyPluginIdSet.has(plugin.id)),
+      )
+      .map((plugin) => plugin.id)
+      .toSorted((left, right) => left.localeCompare(right));
+  }
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
   return listRegistryPluginIds(

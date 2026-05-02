@@ -1,0 +1,30 @@
+{
+  "entries": [
+    {
+      "name": "@openclaw/codex",
+      "description": "OpenClaw Codex harness and model provider plugin",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "codex",
+          "label": "Codex"
+        },
+        "providers": [
+          {
+            "id": "codex",
+            "name": "Codex",
+            "docs": "/providers/models",
+            "categories": ["cloud", "llm"],
+            "authChoices": []
+          }
+        ],
+        "install": {
+          "npmSpec": "@openclaw/codex",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.5.1-beta.1"
+        }
+      }
+    }
+  ]
+}

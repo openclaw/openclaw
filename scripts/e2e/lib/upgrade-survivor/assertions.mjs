@@ -6,6 +6,8 @@ const SCENARIOS = new Set([
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "plugin-deps-cleanup",
+  "configured-plugin-installs",
   "tilde-log-path",
   "versioned-runtime-deps",
 ]);
@@ -27,6 +29,24 @@ function requireEnv(name) {
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
+}
+
+function resolveHomePath(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return "";
+  }
+  if (value === "~") {
+    return process.env.HOME || value;
+  }
+  if (value.startsWith("~/")) {
+    return path.join(process.env.HOME || "", value.slice(2));
+  }
+  return value;
+}
+
+function isPathInside(parent, child) {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function write(file, contents) {
@@ -209,10 +229,25 @@ function assertConfigSurvived() {
     const pluginAllow = config.plugins?.allow ?? [];
     assert(pluginAllow.includes("discord"), "discord plugin allow entry missing");
     assert(pluginAllow.includes("telegram"), "telegram plugin allow entry missing");
-    assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
+    if (getScenario() === "configured-plugin-installs") {
+      assert(pluginAllow.includes("matrix"), "matrix plugin allow entry missing");
+    } else {
+      assert(pluginAllow.includes("whatsapp"), "whatsapp plugin allow entry missing");
+    }
     if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
       assert(pluginAllow.includes("feishu"), "feishu plugin allow entry missing");
     }
+  }
+
+  if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+    const pluginAllow = config.plugins?.allow ?? [];
+    assert(pluginAllow.includes("discord"), "configured install discord allow entry missing");
+    assert(pluginAllow.includes("telegram"), "configured install telegram allow entry missing");
+    assert(pluginAllow.includes("matrix"), "configured install matrix allow entry missing");
+    assert(
+      config.plugins?.entries?.matrix?.enabled === true,
+      "configured install matrix entry changed",
+    );
   }
 
   if (acceptsIntent(coverage, "discord-channel")) {
@@ -242,7 +277,10 @@ function assertConfigSurvived() {
     );
   }
 
-  if (acceptsIntent(coverage, "whatsapp-channel")) {
+  if (
+    acceptsIntent(coverage, "whatsapp-channel") &&
+    getScenario() !== "configured-plugin-installs"
+  ) {
     const whatsapp = config.channels?.whatsapp;
     assert(whatsapp?.enabled === true, "whatsapp enabled flag changed");
     const whatsappGroup = whatsapp.groups?.["120363000000000000@g.us"];
@@ -254,6 +292,17 @@ function assertConfigSurvived() {
         "whatsapp group policy changed",
       );
     }
+  }
+
+  if (hasCoverage(coverage) && acceptsIntent(coverage, "configured-plugin-installs")) {
+    const matrix = config.channels?.matrix;
+    assert(matrix?.enabled === true, "matrix enabled flag changed");
+    assert(matrix?.homeserver === "https://matrix.example.invalid", "matrix homeserver changed");
+    assert(matrix?.userId === "@upgrade-survivor:matrix.example.invalid", "matrix userId changed");
+    assert(
+      !config.channels?.whatsapp,
+      "whatsapp channel config should be absent in matrix scenario",
+    );
   }
 
   if (hasCoverage(coverage) && acceptsIntent(coverage, "feishu-channel")) {
@@ -285,10 +334,19 @@ function assertStateSurvived() {
     fs.existsSync(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json")),
     "legacy session file missing",
   );
-  assert(
-    fs.existsSync(path.join(stateDir, "plugin-runtime-deps", "discord")),
-    "plugin runtime deps root missing",
-  );
+  const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
+  const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+  if (stage === "baseline") {
+    assert(
+      fs.existsSync(path.join(legacyRuntimeRoot, "discord")),
+      "legacy plugin runtime deps root missing before doctor cleanup",
+    );
+  } else {
+    assert(
+      !fs.existsSync(legacyRuntimeRoot),
+      `legacy plugin runtime deps root survived update/doctor: ${legacyRuntimeRoot}`,
+    );
+  }
   if (scenario === "bootstrap-persona") {
     for (const [fileName, contents] of PERSONA_FILES) {
       const actual = fs.readFileSync(path.join(workspace, fileName), "utf8");
@@ -296,7 +354,6 @@ function assertStateSurvived() {
     }
   }
   if (scenario === "versioned-runtime-deps") {
-    const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
     if (stage === "baseline") {
       return;
     }
@@ -312,6 +369,63 @@ function assertStateSurvived() {
   }
 }
 
+function readInstalledPluginIndex() {
+  const stateDir = requireEnv("OPENCLAW_STATE_DIR");
+  const file = path.join(stateDir, "plugins", "installs.json");
+  assert(fs.existsSync(file), `installed plugin index missing: ${file}`);
+  return readJson(file);
+}
+
+function assertConfiguredPluginInstalls() {
+  const coverage = getCoverage();
+  const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
+  if (!hasCoverage(coverage) || !acceptsIntent(coverage, "configured-plugin-installs")) {
+    return;
+  }
+  if (stage === "baseline") {
+    return;
+  }
+  const index = readInstalledPluginIndex();
+  const records = index.installRecords ?? {};
+  const matrix = records.matrix;
+  assert(matrix, "configured external matrix plugin install record missing");
+  assert(
+    matrix.source === "clawhub" || matrix.source === "npm",
+    `configured external matrix plugin installed from unexpected source: ${matrix.source}`,
+  );
+  const installPath = resolveHomePath(matrix.installPath);
+  assert(
+    installPath,
+    `configured external matrix plugin installPath missing: ${JSON.stringify(matrix)}`,
+  );
+  assert(
+    fs.existsSync(installPath),
+    `configured external matrix plugin installPath missing on disk: ${installPath}`,
+  );
+  assert(
+    fs.existsSync(path.join(installPath, "package.json")),
+    `configured external matrix plugin package.json missing: ${installPath}`,
+  );
+  if (matrix.source === "clawhub") {
+    assert(
+      String(matrix.spec ?? "").startsWith("clawhub:@openclaw/matrix"),
+      "configured external matrix plugin ClawHub spec changed",
+    );
+  } else {
+    const npmRoot = path.join(requireEnv("OPENCLAW_STATE_DIR"), "npm", "node_modules");
+    assert(
+      isPathInside(npmRoot, installPath),
+      `configured external matrix npm install path outside managed npm root: ${installPath}`,
+    );
+    assert(
+      String(matrix.spec ?? matrix.resolvedSpec ?? "").startsWith("@openclaw/matrix"),
+      "configured external matrix plugin npm spec changed",
+    );
+  }
+  assert(!records.discord, "internal discord plugin should not be installed externally");
+  assert(!records.telegram, "internal telegram plugin should not be installed externally");
+}
+
 function assertStatusJson([file]) {
   const status = readJson(file);
   assert(status && typeof status === "object", "gateway status JSON was not an object");
@@ -325,6 +439,7 @@ if (command === "seed") {
   assertConfigSurvived();
 } else if (command === "assert-state") {
   assertStateSurvived();
+  assertConfiguredPluginInstalls();
 } else if (command === "assert-status-json") {
   assertStatusJson(process.argv.slice(3));
 } else {

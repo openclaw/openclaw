@@ -9,6 +9,7 @@ import { emitAgentPlanEvent } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -32,7 +33,6 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
-import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -51,7 +51,7 @@ import { shouldSwitchToLiveModel, clearLiveModelSwitchPending } from "../live-mo
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   type ResolvedProviderAuth,
   resolveAuthProfileOrder,
   shouldPreferExplicitConfigApiKeyAuth,
@@ -87,6 +87,7 @@ import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js
 import { runPostCompactionSideEffects } from "./compaction-hooks.js";
 import { buildEmbeddedCompactionRuntimeContext } from "./compaction-runtime-context.js";
 import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
+import { hasMessagingToolDeliveryEvidence } from "./delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "./failure-signal.js";
 import { resolveGlobalLane, resolveSessionLane } from "./lanes.js";
 import { log } from "./logger.js";
@@ -423,9 +424,8 @@ export async function runEmbeddedPiAgent(
         workspaceDir: resolvedWorkspace,
         modelProviderId: provider,
         modelId,
-        messageProvider: params.messageProvider ?? undefined,
         trigger: params.trigger,
-        channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+        ...buildAgentHookContextChannelFields(params),
       };
       if (params.trigger === "cron" && hookRunner?.hasHooks("before_agent_reply")) {
         const hookResult = await hookRunner.runBeforeAgentReply(
@@ -513,12 +513,8 @@ export async function runEmbeddedPiAgent(
 
       const authStore = pluginHarnessOwnsTransport
         ? createEmptyAuthProfileStore()
-        : ensureAuthProfileStore(agentDir, {
-            externalCli: externalCliDiscoveryForProviderAuth({
-              cfg: params.config,
-              provider,
-              preferredProfile: params.authProfileId,
-            }),
+        : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+            allowKeychainPrompt: false,
           });
       const requestedProfileId = params.authProfileId?.trim();
       const resolvePluginHarnessPreferredProfileId = (): string | undefined => {
@@ -540,7 +536,7 @@ export async function runEmbeddedPiAgent(
         if (!harnessAuthProvider) {
           return undefined;
         }
-        const harnessAuthStore = ensureAuthProfileStore(agentDir, {
+        const harnessAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
           allowKeychainPrompt: false,
         });
         return resolveAuthProfileOrder({
@@ -1077,6 +1073,7 @@ export async function runEmbeddedPiAgent(
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
             authStorage,
+            authProfileStore: authStore,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
@@ -1141,6 +1138,7 @@ export async function runEmbeddedPiAgent(
             lastAssistant: sessionLastAssistant,
             currentAttemptAssistant,
           } = attempt;
+          const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
           }
@@ -1204,7 +1202,7 @@ export async function runEmbeddedPiAgent(
               ? sessionLastAssistant.errorMessage?.trim() || formattedAssistantErrorText
               : undefined;
           const canRestartForLiveSwitch =
-            !attempt.didSendViaMessagingTool &&
+            !hasMessagingToolDeliveryEvidence(attempt) &&
             !attempt.didSendDeterministicApprovalPrompt &&
             !attempt.lastToolError &&
             (attempt.toolMetas?.length ?? 0) === 0 &&
@@ -1246,7 +1244,7 @@ export async function runEmbeddedPiAgent(
           // ── Timeout-triggered compaction ──────────────────────────────────
           // When the LLM times out with high context usage, compact before
           // retrying to break the death spiral of repeated timeouts.
-          if (timedOut && !timedOutDuringCompaction) {
+          if (timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution) {
             // Only consider prompt-side tokens here. API totals include output
             // tokens, which can make a long generation look like high context
             // pressure even when the prompt itself was small.
@@ -1287,6 +1285,7 @@ export async function runEmbeddedPiAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
@@ -1481,6 +1480,7 @@ export async function runEmbeddedPiAgent(
                     sessionFile: activeSessionFile,
                     reason: "compaction",
                     runtimeContext: overflowCompactionRuntimeContext,
+                    config: params.config,
                   });
                 }
               } catch (compactErr) {
@@ -1514,6 +1514,7 @@ export async function runEmbeddedPiAgent(
                     }),
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    config: params.config,
                   });
                   if (truncResult.truncated) {
                     log.info(
@@ -1565,6 +1566,7 @@ export async function runEmbeddedPiAgent(
                   maxCharsOverride: toolResultMaxChars,
                   sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
+                  config: params.config,
                 });
                 if (truncResult.truncated) {
                   log.info(
@@ -1934,6 +1936,7 @@ export async function runEmbeddedPiAgent(
             failoverReason: assistantFailoverReason,
             timedOut,
             timedOutDuringCompaction,
+            timedOutDuringToolExecution,
             profileRotated: false,
           });
           const assistantFailoverOutcome = await handleAssistantFailover({
@@ -1946,6 +1949,7 @@ export async function runEmbeddedPiAgent(
             timedOut,
             idleTimedOut,
             timedOutDuringCompaction,
+            timedOutDuringToolExecution,
             allowSameModelIdleTimeoutRetry:
               timedOut &&
               idleTimedOut &&
@@ -2058,6 +2062,7 @@ export async function runEmbeddedPiAgent(
             inlineToolResultsAllowed: false,
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
             didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+            heartbeatToolResponse: attempt.heartbeatToolResponse,
           });
           const payloadsWithToolMedia = mergeAttemptToolMediaPayloads({
             payloads,
@@ -2076,7 +2081,12 @@ export async function runEmbeddedPiAgent(
           // Timeout aborts can leave the run without any assistant payloads.
           // Emit an explicit timeout error instead of silently completing, so
           // callers do not lose the turn as an orphaned user message.
-          if (timedOut && !timedOutDuringCompaction && !payloadsWithToolMedia?.length) {
+          if (
+            timedOut &&
+            !timedOutDuringCompaction &&
+            !timedOutDuringToolExecution &&
+            !payloadsWithToolMedia?.length
+          ) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
                 "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers."
@@ -2120,6 +2130,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
@@ -2312,6 +2323,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
@@ -2362,6 +2374,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
@@ -2471,6 +2484,7 @@ export async function runEmbeddedPiAgent(
               messagingToolSentTexts: attempt.messagingToolSentTexts,
               messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
               messagingToolSentTargets: attempt.messagingToolSentTargets,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
               successfulCronAdds: attempt.successfulCronAdds,
             };
           }
@@ -2590,6 +2604,7 @@ export async function runEmbeddedPiAgent(
             messagingToolSentTexts: attempt.messagingToolSentTexts,
             messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
             messagingToolSentTargets: attempt.messagingToolSentTargets,
+            heartbeatToolResponse: attempt.heartbeatToolResponse,
             successfulCronAdds: attempt.successfulCronAdds,
           };
         }

@@ -19,6 +19,7 @@ import {
   scheduleVoiceCaptureFinalize,
   stopVoiceCaptureState,
 } from "./capture-state.js";
+import { resolveDiscordVoiceEnabled } from "./config.js";
 import {
   analyzeVoiceReceiveError,
   createVoiceReceiveRecoveryState,
@@ -102,7 +103,7 @@ export class DiscordVoiceManager {
     },
   ) {
     this.botUserId = params.botUserId;
-    this.voiceEnabled = params.discordConfig.voice?.enabled !== false;
+    this.voiceEnabled = resolveDiscordVoiceEnabled(params.discordConfig.voice);
     this.ownerAllowFrom =
       resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId: params.accountId }) ??
       params.discordConfig.allowFrom ??

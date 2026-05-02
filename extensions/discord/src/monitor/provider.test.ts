@@ -382,7 +382,53 @@ describe("monitorDiscordProvider", () => {
     expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
   });
 
+  it("passes configured gateway READY timeouts to the lifecycle monitor", async () => {
+    resolveDiscordAccountMock.mockReturnValueOnce({
+      accountId: "default",
+      token: "cfg-token",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: { enabled: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+        gatewayReadyTimeoutMs: 90_000,
+        gatewayRuntimeReadyTimeoutMs: 120_000,
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(monitorLifecycleMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gatewayReadyTimeoutMs: 90_000,
+        gatewayRuntimeReadyTimeoutMs: 120_000,
+      }),
+    );
+  });
+
   it("does not load the Discord voice runtime when voice is disabled", async () => {
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(voiceRuntimeModuleLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("does not load the Discord voice runtime for text-only default config", async () => {
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+      },
+    });
+
     await monitorDiscordProvider({
       config: baseConfig(),
       runtime: baseRuntime(),
@@ -398,6 +444,26 @@ describe("monitorDiscordProvider", () => {
       config: {
         commands: { native: true, nativeSkills: false },
         voice: { enabled: true },
+        agentComponents: { enabled: false },
+        execApprovals: { enabled: false },
+      },
+    });
+
+    await monitorDiscordProvider({
+      config: baseConfig(),
+      runtime: baseRuntime(),
+    });
+
+    expect(voiceRuntimeModuleLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads the Discord voice runtime for existing voice config blocks", async () => {
+    resolveDiscordAccountMock.mockReturnValue({
+      accountId: "default",
+      token: "MTIz.abc.def",
+      config: {
+        commands: { native: true, nativeSkills: false },
+        voice: {},
         agentComponents: { enabled: false },
         execApprovals: { enabled: false },
       },
@@ -813,7 +879,7 @@ describe("monitorDiscordProvider", () => {
     );
   });
 
-  it("logs repeated native command deploy rate limits as one concise warning", async () => {
+  it("skips native command deploy retries after one rate limit warning", async () => {
     const runtime = baseRuntime();
     const rateLimitError = createRateLimitError(
       new Response(null, {
@@ -832,7 +898,7 @@ describe("monitorDiscordProvider", () => {
       runtime,
     });
 
-    await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(3));
+    await vi.waitFor(() => expect(clientDeployCommandsMock).toHaveBeenCalledTimes(1));
     const warningMessages = vi
       .mocked(runtime.log)
       .mock.calls.map((call) => String(call[0]))
@@ -946,6 +1012,7 @@ describe("monitorDiscordProvider", () => {
     });
 
     expect(fetchApplicationId).not.toHaveBeenCalled();
+    expect(clientFetchUserMock).not.toHaveBeenCalled();
     expect(getConstructedClientOptions().clientId).toBe("123");
   });
 

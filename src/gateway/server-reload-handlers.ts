@@ -8,7 +8,6 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
-import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
   deferGatewayRestartUntilIdle,
@@ -16,8 +15,6 @@ import {
   resolveGatewayRestartDeferralTimeoutMs,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
-import { pruneUnknownBundledRuntimeDepsRoots } from "../plugins/bundled-runtime-deps-roots.js";
-import { repairBundledRuntimeDepsPackagePlanAsync } from "../plugins/bundled-runtime-deps.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   activateSecretsRuntimeSnapshot,
@@ -61,51 +58,14 @@ type GatewayReloadLog = {
   warn: (msg: string) => void;
 };
 
+export type GatewayPluginReloadResult = {
+  restartChannels: ReadonlySet<ChannelKind>;
+  activeChannels: ReadonlySet<ChannelKind>;
+};
+
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
-
-async function planPluginRuntimeDepsForHotReload(params: {
-  nextConfig: OpenClawConfig;
-  logReload: GatewayReloadLog;
-}): Promise<void> {
-  const packageRoot = resolveOpenClawPackageRootSync({
-    argv1: process.argv[1],
-    cwd: process.cwd(),
-    moduleUrl: import.meta.url,
-  });
-  if (!packageRoot) {
-    return;
-  }
-  try {
-    pruneUnknownBundledRuntimeDepsRoots({
-      env: process.env,
-      warn: params.logReload.warn,
-    });
-    const startedAt = Date.now();
-    const result = await repairBundledRuntimeDepsPackagePlanAsync({
-      packageRoot,
-      config: params.nextConfig,
-      includeConfiguredChannels: true,
-      env: process.env,
-      warn: params.logReload.warn,
-      onProgress: params.logReload.info,
-    });
-    if (result.repairedSpecs.length > 0) {
-      params.logReload.info(
-        `config hot reload prepared bundled runtime dependencies in ${Date.now() - startedAt}ms: ${result.repairedSpecs.join(", ")}`,
-      );
-    } else if (result.reusedSpecs && result.reusedSpecs.length > 0) {
-      params.logReload.info(
-        `config hot reload reused bundled runtime dependencies in ${Date.now() - startedAt}ms: ${result.reusedSpecs.join(", ")}`,
-      );
-    }
-  } catch (error) {
-    params.logReload.warn(
-      `config hot reload bundled runtime dependency planning failed; runtime load will verify without repair: ${String(error)}`,
-    );
-  }
-}
 
 function abortActiveAgentRunsAfterConfigRecovery(params: {
   reason: string;
@@ -154,6 +114,11 @@ type GatewayReloadHandlerParams = {
   setState: (state: GatewayHotReloadState) => void;
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
+  reloadPlugins: (params: {
+    nextConfig: OpenClawConfig;
+    changedPaths: readonly string[];
+    beforeReplace: (channels: ReadonlySet<ChannelKind>) => Promise<void>;
+  }) => Promise<GatewayPluginReloadResult>;
   logHooks: {
     info: (msg: string) => void;
     warn: (msg: string) => void;
@@ -305,11 +270,39 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     resetDirectoryCache();
 
-    if (plan.planPluginRuntimeDeps) {
-      await planPluginRuntimeDepsForHotReload({
+    const channelsToRestart = new Set(plan.restartChannels);
+    const channelsStoppedBeforePluginReload = new Set<ChannelKind>();
+    let activePluginChannelsAfterReload: ReadonlySet<ChannelKind> | null = null;
+    const shouldSkipChannelRestart = () =>
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+    if (plan.reloadPlugins) {
+      const stopChannelsBeforePluginReplace = async (channels: ReadonlySet<ChannelKind>) => {
+        for (const channel of channels) {
+          channelsToRestart.add(channel);
+        }
+        if (channelsToRestart.size === 0 || shouldSkipChannelRestart()) {
+          return;
+        }
+        await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        for (const channel of channelsToRestart) {
+          if (channelsStoppedBeforePluginReload.has(channel)) {
+            continue;
+          }
+          params.logChannels.info(`stopping ${channel} channel before plugin reload`);
+          await params.stopChannel(channel);
+          channelsStoppedBeforePluginReload.add(channel);
+        }
+      };
+      const pluginReloadResult = await params.reloadPlugins({
         nextConfig,
-        logReload: params.logReload,
+        changedPaths: plan.changedPaths,
+        beforeReplace: stopChannelsBeforePluginReplace,
       });
+      for (const channel of pluginReloadResult.restartChannels) {
+        channelsToRestart.add(channel);
+      }
+      activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
     }
 
     if (plan.restartCron) {
@@ -355,22 +348,26 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
       });
     }
 
-    if (plan.restartChannels.size > 0) {
-      if (
-        isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-        isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS)
-      ) {
+    if (channelsToRestart.size > 0) {
+      if (shouldSkipChannelRestart()) {
         params.logChannels.info(
           "skipping channel reload (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
         );
       } else {
-        await waitForActiveWorkBeforeChannelReload(plan.restartChannels, nextConfig);
+        if (!plan.reloadPlugins) {
+          await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
+        }
         const restartChannel = async (name: ChannelKind) => {
+          if (plan.reloadPlugins && activePluginChannelsAfterReload?.has(name) === false) {
+            return;
+          }
           params.logChannels.info(`restarting ${name} channel`);
-          await params.stopChannel(name);
+          if (!channelsStoppedBeforePluginReload.has(name)) {
+            await params.stopChannel(name);
+          }
           await params.startChannel(name);
         };
-        for (const channel of plan.restartChannels) {
+        for (const channel of channelsToRestart) {
           await restartChannel(channel);
         }
       }
@@ -473,6 +470,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
     setState: params.setState,
     startChannel: params.startChannel,
     stopChannel: params.stopChannel,
+    reloadPlugins: params.reloadPlugins,
     logHooks: params.logHooks,
     logChannels: params.logChannels,
     logCron: params.logCron,
