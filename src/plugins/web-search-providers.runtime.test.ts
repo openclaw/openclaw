@@ -38,6 +38,7 @@ let loaderModule: typeof import("./loader.js");
 let pluginAutoEnableModule: PluginAutoEnableModule;
 let applyPluginAutoEnableSpy: ReturnType<typeof vi.fn>;
 let webSearchProvidersSharedModule: WebSearchProvidersSharedModule;
+let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
 
 const DEFAULT_WEB_SEARCH_WORKSPACE = "/tmp/workspace";
 const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
@@ -375,7 +376,7 @@ describe("resolvePluginWebSearchProviders", () => {
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
     webSearchProvidersSharedModule = await import("./web-search-providers.shared.js");
-    ({ setActivePluginRegistry } = await import("./runtime.js"));
+    ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
     ({ resolvePluginWebSearchProviders, resolveRuntimeWebSearchProviders } =
       await import("./web-search-providers.runtime.js"));
   });
@@ -403,12 +404,12 @@ describe("resolvePluginWebSearchProviders", () => {
         registry.webSearchProviders = buildMockedWebSearchProviders(params);
         return registry;
       });
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
     vi.useRealTimers();
   });
 
   afterEach(() => {
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
     vi.restoreAllMocks();
   });
 

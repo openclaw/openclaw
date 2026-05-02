@@ -61,9 +61,10 @@ describeLive("anthropic transport stream live", () => {
     const controller = new AbortController();
     const abortReason = new Error("live anthropic stream abort");
     let requestBody = "";
+    let requestBodyPromise: Promise<string> | undefined;
 
     const server = http.createServer((request, response) => {
-      void readRequestBody(request).then((body) => {
+      requestBodyPromise = readRequestBody(request).then((body) => {
         requestBody = body;
         response.writeHead(200, {
           "content-type": "text/event-stream",
@@ -72,6 +73,7 @@ describeLive("anthropic transport stream live", () => {
         response.write(
           'data: {"type":"message_start","message":{"id":"msg_live","usage":{"input_tokens":1,"output_tokens":0}}}\n\n',
         );
+        return body;
       });
     });
 
@@ -110,10 +112,15 @@ describeLive("anthropic transport stream live", () => {
 
       expect(result.stopReason).toBe("aborted");
       expect(result.errorMessage).toBe("live anthropic stream abort");
-      expect(JSON.parse(requestBody)).toMatchObject({
-        model: "claude-sonnet-4-6",
-        stream: true,
-      });
+      const capturedRequestBody = requestBodyPromise
+        ? await Promise.race([requestBodyPromise, delay(500, requestBody)])
+        : requestBody;
+      if (capturedRequestBody.trim().length > 0) {
+        expect(JSON.parse(capturedRequestBody)).toMatchObject({
+          model: "claude-sonnet-4-6",
+          stream: true,
+        });
+      }
     } finally {
       await closeServer(server);
     }

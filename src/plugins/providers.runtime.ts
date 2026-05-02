@@ -5,6 +5,7 @@ import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
 import {
   isPluginRegistryLoadInFlight,
   loadOpenClawPlugins,
+  resolveRuntimePluginRegistry,
   type PluginLoadOptions,
 } from "./loader.js";
 import { hasExplicitPluginIdScope } from "./plugin-scope.js";
@@ -309,15 +310,15 @@ export function resolvePluginProviders(params: {
     );
   }
   const loadState = resolveRuntimeProviderPluginLoadState(params, base);
-  const registry = getLoadedRuntimePluginRegistry({
-    env: base.env,
-    loadOptions: loadState.loadOptions,
-    workspaceDir: base.workspaceDir,
-    requiredPluginIds: loadState.loadOptions.onlyPluginIds,
-  });
-  if (!registry) {
-    return [];
-  }
+  const registry =
+    loadState.loadOptions.onlyPluginIds?.length === 0
+      ? resolveRuntimePluginRegistry(loadState.loadOptions)
+      : (getLoadedRuntimePluginRegistry({
+          env: base.env,
+          loadOptions: loadState.loadOptions,
+          workspaceDir: base.workspaceDir,
+          requiredPluginIds: loadState.loadOptions.onlyPluginIds,
+        }) ?? resolveRuntimePluginRegistry(loadState.loadOptions));
 
   return registry.providers.map((entry) =>
     Object.assign({}, entry.provider, { pluginId: entry.pluginId }),

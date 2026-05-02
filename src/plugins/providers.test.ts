@@ -7,6 +7,8 @@ import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
+type ResolveCompatibleRuntimePluginRegistry =
+  typeof import("./loader.js").resolveCompatibleRuntimePluginRegistry;
 type LoadOpenClawPlugins = typeof import("./loader.js").loadOpenClawPlugins;
 type IsPluginRegistryLoadInFlight = typeof import("./loader.js").isPluginRegistryLoadInFlight;
 type LoadPluginManifestRegistry =
@@ -15,6 +17,7 @@ type ApplyPluginAutoEnable = typeof import("../config/plugin-auto-enable.js").ap
 type SetActivePluginRegistry = typeof import("./runtime.js").setActivePluginRegistry;
 
 const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
+const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
 const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
@@ -369,6 +372,9 @@ describe("resolvePluginProviders", () => {
         loadOpenClawPluginsMock(...args),
       isPluginRegistryLoadInFlight: (...args: Parameters<IsPluginRegistryLoadInFlight>) =>
         isPluginRegistryLoadInFlightMock(...args),
+      resolveCompatibleRuntimePluginRegistry: (
+        ...args: Parameters<ResolveCompatibleRuntimePluginRegistry>
+      ) => resolveCompatibleRuntimePluginRegistryMock(...args),
       resolveRuntimePluginRegistry: (...args: Parameters<ResolveRuntimePluginRegistry>) =>
         resolveRuntimePluginRegistryMock(...args),
     }));
@@ -440,6 +446,7 @@ describe("resolvePluginProviders", () => {
   beforeEach(() => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     resolveRuntimePluginRegistryMock.mockReset();
+    resolveCompatibleRuntimePluginRegistryMock.mockReset();
     loadOpenClawPluginsMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReset();
     isPluginRegistryLoadInFlightMock.mockReturnValue(false);
