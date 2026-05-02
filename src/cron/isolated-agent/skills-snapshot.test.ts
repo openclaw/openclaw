@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   buildWorkspaceSkillSnapshotMock,
+  buildWorkspaceSkillSnapshotAsyncMock,
   canExecRequestNodeMock,
   getRemoteSkillEligibilityMock,
   getSkillsSnapshotVersionMock,
   resolveAgentSkillsFilterMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn(),
+  buildWorkspaceSkillSnapshotAsyncMock: vi.fn(),
   canExecRequestNodeMock: vi.fn().mockReturnValue(false),
   getRemoteSkillEligibilityMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(),
@@ -16,6 +18,7 @@ const {
 
 vi.mock("./skills-snapshot.runtime.js", () => ({
   buildWorkspaceSkillSnapshot: buildWorkspaceSkillSnapshotMock,
+  buildWorkspaceSkillSnapshotAsync: buildWorkspaceSkillSnapshotAsyncMock,
   canExecRequestNode: canExecRequestNodeMock,
   getRemoteSkillEligibility: getRemoteSkillEligibilityMock,
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
