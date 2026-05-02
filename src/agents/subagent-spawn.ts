@@ -811,6 +811,9 @@ export async function spawnSubagentDirect(
     allowAgents:
       resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
       cfg?.agents?.defaults?.subagents?.allowAgents,
+    configuredAgentIds: Array.isArray(cfg.agents?.list)
+      ? cfg.agents.list.map((entry) => normalizeAgentId(entry.id))
+      : undefined,
   });
   if (!targetPolicy.ok) {
     return {

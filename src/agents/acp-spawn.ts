@@ -796,6 +796,9 @@ function resolveAcpSubagentEnvelopeState(params: {
     allowAgents:
       resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ??
       params.cfg.agents?.defaults?.subagents?.allowAgents,
+    configuredAgentIds: Array.isArray(params.cfg.agents?.list)
+      ? params.cfg.agents.list.map((entry) => normalizeAgentId(entry.id))
+      : undefined,
   });
   if (!targetPolicy.ok) {
     return {

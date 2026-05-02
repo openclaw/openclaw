@@ -59,6 +59,7 @@ export function resolveSubagentTargetPolicy(params: {
   targetAgentId: string;
   requestedAgentId?: string;
   allowAgents?: readonly string[];
+  configuredAgentIds?: readonly string[];
 }): SubagentTargetPolicyResult {
   const requesterAgentId = normalizeAgentId(params.requesterAgentId);
   const targetAgentId = normalizeAgentId(params.targetAgentId);
@@ -69,6 +70,7 @@ export function resolveSubagentTargetPolicy(params: {
   const allowed = resolveSubagentAllowedTargetIds({
     requesterAgentId,
     allowAgents: params.allowAgents,
+    configuredAgentIds: params.configuredAgentIds,
   });
   if (allowed.allowAny || allowed.allowedIds.includes(targetAgentId)) {
     return { ok: true };
