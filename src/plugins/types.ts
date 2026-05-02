@@ -261,6 +261,7 @@ export type {
   WebSearchProviderPlugin,
   WebSearchProviderSetupContext,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
   WebSearchRuntimeMetadataContext,
 } from "./web-provider-types.js";
 export type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";

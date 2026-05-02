@@ -59,9 +59,9 @@ function createGeminiToolDefinition(
     description:
       "Search the web using Gemini with Google Search grounding. Returns AI-synthesized answers with citations from Google Search.",
     parameters: GEMINI_TOOL_PARAMETERS,
-    execute: async (args) => {
+    execute: async (args, context) => {
       const { executeGeminiSearch } = await loadGeminiWebSearchRuntime();
-      return await executeGeminiSearch(args, searchConfig);
+      return await executeGeminiSearch(args, searchConfig, context);
     },
   };
 }

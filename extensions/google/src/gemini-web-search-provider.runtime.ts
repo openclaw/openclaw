@@ -166,6 +166,7 @@ async function runGeminiSearch(params: {
   baseUrl: string;
   model: string;
   timeoutSeconds: number;
+  signal?: AbortSignal;
   timeRangeFilter?: GeminiTimeRangeFilter;
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
   const endpoint = `${params.baseUrl}/models/${params.model}:generateContent`;
@@ -176,6 +177,7 @@ async function runGeminiSearch(params: {
     {
       url: endpoint,
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "POST",
         headers: {
@@ -245,6 +247,7 @@ async function runGeminiSearch(params: {
 export async function executeGeminiSearch(
   args: Record<string, unknown>,
   searchConfig?: SearchConfigRecord,
+  context?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
   const unsupportedResponse = buildUnsupportedSearchFilterResponse(
     {
@@ -299,6 +302,7 @@ export async function executeGeminiSearch(
     baseUrl,
     model,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
+    signal: context?.signal,
     timeRangeFilter: timeRange.timeRangeFilter,
   });
   const payload = {

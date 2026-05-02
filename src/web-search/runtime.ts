@@ -361,7 +361,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         sawUnavailableProvider = true;
         continue;
       }
-      const executed = await definition.execute(params.args);
+      const executed = await definition.execute(params.args, { signal: params.signal });
       if (allowFallback && isStructuredAvailabilityError(executed)) {
         lastError = new Error(`web_search provider "${candidate.id}" returned ${executed.error}`);
         continue;

@@ -5,6 +5,7 @@ import type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
 } from "../plugins/types.js";
 export {
   jsonResult,
@@ -66,6 +67,7 @@ export type {
   WebSearchProviderSetupContext,
   WebSearchProviderPlugin,
   WebSearchProviderToolDefinition,
+  WebSearchProviderToolExecutionContext,
 };
 
 /**

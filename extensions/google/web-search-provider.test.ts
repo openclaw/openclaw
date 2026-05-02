@@ -152,6 +152,34 @@ describe("google web search provider", () => {
     );
   });
 
+  it("passes provider execution abort signals into the Gemini fetch", async () => {
+    const mockFetch = installGeminiFetch();
+    const controller = new AbortController();
+    controller.abort();
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await tool?.execute({ query: "OpenClaw docs" }, { signal: controller.signal });
+
+    const init = mockFetch.mock.calls[0]?.[1] as { signal?: AbortSignal } | undefined;
+    expect(init?.signal?.aborted).toBe(true);
+  });
+
   it("reuses the Google model provider key when no web search key or env key is set", async () => {
     await withEnvAsync({ GEMINI_API_KEY: undefined }, async () => {
       const mockFetch = installGeminiFetch();
