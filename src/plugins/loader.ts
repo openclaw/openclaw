@@ -112,6 +112,7 @@ import {
   getCachedPluginSourceModuleLoader,
   type PluginModuleLoaderCache,
 } from "./plugin-module-loader-cache.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
 import {
   createPluginIdScopeSet,
   hasExplicitPluginIdScope,
@@ -180,6 +181,11 @@ export type PluginLoadOptions = {
    * via package metadata because their setup entry covers the pre-listen startup surface.
    */
   preferSetupRuntimeForChannelPlugins?: boolean;
+  /**
+   * For hot startup paths, prefer bundled plugin JS artifacts over source TS
+   * entrypoints when both are present in a source checkout.
+   */
+  preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
   activate?: boolean;
   loadModules?: boolean;
@@ -275,6 +281,7 @@ function createPluginCandidatesFromManifestRegistry(
     idHint: record.id,
     rootDir: record.rootDir,
     source: record.source,
+    ...(record.setupSource !== undefined ? { setupSource: record.setupSource } : {}),
     origin: record.origin,
     ...(record.workspaceDir !== undefined ? { workspaceDir: record.workspaceDir } : {}),
     ...(record.format !== undefined ? { format: record.format } : {}),
@@ -517,6 +524,52 @@ function resolveCanonicalDistRuntimeSource(source: string): string {
   return fs.existsSync(candidate) ? candidate : source;
 }
 
+function rewriteBundledRuntimeArtifactRelativePath(relativePath: string): string {
+  return relativePath.replace(/\.[^.]+$/u, ".js");
+}
+
+function resolvePreferredBuiltBundledRuntimeArtifact(params: {
+  source: string;
+  rootDir: string;
+  origin: PluginOrigin;
+  preferBuiltPluginArtifacts: boolean;
+}): { source: string; rootDir: string } {
+  const rootDir = safeRealpathOrResolve(params.rootDir);
+  const source = safeRealpathOrResolve(params.source);
+  if (!params.preferBuiltPluginArtifacts || params.origin !== "bundled") {
+    return { source, rootDir };
+  }
+  const extensionsDir = path.dirname(rootDir);
+  if (path.basename(extensionsDir) !== "extensions") {
+    return { source, rootDir };
+  }
+  const packageRoot = path.dirname(extensionsDir);
+  if (path.basename(packageRoot) === "dist" || path.basename(packageRoot) === "dist-runtime") {
+    return { source, rootDir };
+  }
+  const relativeSource = path.relative(rootDir, source);
+  if (relativeSource === "" || relativeSource.startsWith("..") || path.isAbsolute(relativeSource)) {
+    return { source, rootDir };
+  }
+  const artifactRelativePath = rewriteBundledRuntimeArtifactRelativePath(relativeSource);
+  for (const artifactRootName of ["dist-runtime", "dist"] as const) {
+    const artifactRoot = path.join(
+      packageRoot,
+      artifactRootName,
+      "extensions",
+      path.basename(rootDir),
+    );
+    const artifactSource = path.join(artifactRoot, artifactRelativePath);
+    if (fs.existsSync(artifactSource)) {
+      return {
+        source: safeRealpathOrResolve(artifactSource),
+        rootDir: safeRealpathOrResolve(artifactRoot),
+      };
+    }
+  }
+  return { source, rootDir };
+}
+
 export const __testing = {
   buildPluginLoaderJitiOptions,
   buildPluginLoaderAliasMap,
@@ -682,6 +735,7 @@ function buildCacheKey(params: {
   forceSetupOnlyChannelPlugins?: boolean;
   requireSetupEntryForSetupOnlyChannelPlugins?: boolean;
   preferSetupRuntimeForChannelPlugins?: boolean;
+  preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
   loadModules?: boolean;
   runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
@@ -722,6 +776,8 @@ function buildCacheKey(params: {
       : "allow-full-fallback";
   const startupChannelMode =
     params.preferSetupRuntimeForChannelPlugins === true ? "prefer-setup" : "full";
+  const bundledArtifactMode =
+    params.preferBuiltPluginArtifacts === true ? "prefer-built-artifacts" : "source-default";
   const moduleLoadMode = params.loadModules === false ? "manifest-only" : "load-modules";
   const discoveryMode = params.toolDiscovery === true ? "tool-discovery" : "default-discovery";
   const runtimeSubagentMode = params.runtimeSubagentMode ?? "default";
@@ -734,7 +790,7 @@ function buildCacheKey(params: {
     installs,
     loadPaths,
     activationMetadataKey: params.activationMetadataKey ?? "",
-  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${moduleLoadMode}::${discoveryMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
+  })}::${scopeKey}::${setupOnlyKey}::${setupOnlyModeKey}::${setupOnlyRequirementKey}::${startupChannelMode}::${bundledArtifactMode}::${moduleLoadMode}::${discoveryMode}::${runtimeSubagentMode}::${params.pluginSdkResolution ?? "auto"}::${gatewayMethodsKey}::${activationMode}`;
 }
 
 function matchesScopedPluginRequest(params: {
@@ -812,6 +868,7 @@ function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
     options.forceSetupOnlyChannelPlugins === true ||
     options.requireSetupEntryForSetupOnlyChannelPlugins === true ||
     options.preferSetupRuntimeForChannelPlugins === true ||
+    options.preferBuiltPluginArtifacts === true ||
     options.loadModules === false
   );
 }
@@ -1011,6 +1068,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
   const requireSetupEntryForSetupOnlyChannelPlugins =
     options.requireSetupEntryForSetupOnlyChannelPlugins === true;
   const preferSetupRuntimeForChannelPlugins = options.preferSetupRuntimeForChannelPlugins === true;
+  const preferBuiltPluginArtifacts = options.preferBuiltPluginArtifacts === true;
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   const installRecords = {
@@ -1031,6 +1089,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    preferBuiltPluginArtifacts,
     toolDiscovery: options.toolDiscovery,
     loadModules: options.loadModules,
     runtimeSubagentMode,
@@ -1050,6 +1109,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    preferBuiltPluginArtifacts,
     shouldActivate: options.activate !== false,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
@@ -1375,6 +1435,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     forceSetupOnlyChannelPlugins,
     requireSetupEntryForSetupOnlyChannelPlugins,
     preferSetupRuntimeForChannelPlugins,
+    preferBuiltPluginArtifacts,
     shouldActivate,
     shouldLoadModules,
     cacheKey,
@@ -1697,13 +1758,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         });
       };
       const pluginRoot = safeRealpathOrResolve(candidate.rootDir);
-      let runtimePluginRoot = pluginRoot;
-      let runtimeCandidateSource =
-        candidate.origin === "bundled" ? safeRealpathOrResolve(candidate.source) : candidate.source;
-      let runtimeSetupSource =
-        candidate.origin === "bundled" && manifestRecord.setupSource
-          ? safeRealpathOrResolve(manifestRecord.setupSource)
-          : manifestRecord.setupSource;
+      const runtimeCandidateEntry = resolvePreferredBuiltBundledRuntimeArtifact({
+        source: candidate.source,
+        rootDir: pluginRoot,
+        origin: candidate.origin,
+        preferBuiltPluginArtifacts,
+      });
+      const runtimeSetupEntry = manifestRecord.setupSource
+        ? resolvePreferredBuiltBundledRuntimeArtifact({
+            source: manifestRecord.setupSource,
+            rootDir: pluginRoot,
+            origin: candidate.origin,
+            preferBuiltPluginArtifacts,
+          })
+        : undefined;
 
       const scopedSetupOnlyChannelPluginRequested =
         includeSetupOnlyChannelPlugins &&
@@ -1883,12 +1951,12 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      const loadSource =
-        registrationPlan.loadSetupEntry && runtimeSetupSource
-          ? runtimeSetupSource
-          : runtimeCandidateSource;
-      const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadSource);
-      const moduleRoot = resolveCanonicalDistRuntimeSource(runtimePluginRoot);
+      const loadEntry =
+        registrationPlan.loadSetupEntry && runtimeSetupEntry
+          ? runtimeSetupEntry
+          : runtimeCandidateEntry;
+      const moduleLoadSource = resolveCanonicalDistRuntimeSource(loadEntry.source);
+      const moduleRoot = resolveCanonicalDistRuntimeSource(loadEntry.rootDir);
       const opened = openBoundaryFileSync({
         absolutePath: moduleLoadSource,
         rootPath: moduleRoot,
@@ -1972,11 +2040,17 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           if (
             registrationPlan.loadSetupRuntimeEntry &&
             setupRegistration.usesBundledSetupContract &&
-            runtimeCandidateSource !== safeSource
+            resolveCanonicalDistRuntimeSource(runtimeCandidateEntry.source) !== safeSource
           ) {
+            const runtimeModuleSource = resolveCanonicalDistRuntimeSource(
+              runtimeCandidateEntry.source,
+            );
+            const runtimeModuleRoot = resolveCanonicalDistRuntimeSource(
+              runtimeCandidateEntry.rootDir,
+            );
             const runtimeOpened = openBoundaryFileSync({
-              absolutePath: runtimeCandidateSource,
-              rootPath: runtimePluginRoot,
+              absolutePath: runtimeModuleSource,
+              rootPath: runtimeModuleRoot,
               boundaryLabel: "plugin root",
               rejectHardlinks: candidate.origin !== "bundled",
               skipLexicalRootCheck: true,

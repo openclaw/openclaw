@@ -388,6 +388,7 @@ describe("loadGatewayPlugins", () => {
     expect(loadOpenClawPlugins).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["discord", "telegram"],
+        preferBuiltPluginArtifacts: true,
       }),
     );
   });
