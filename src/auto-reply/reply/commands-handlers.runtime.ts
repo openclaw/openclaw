@@ -18,6 +18,7 @@ import {
   handleToolsCommand,
 } from "./commands-info.js";
 import { handleMcpCommand } from "./commands-mcp.js";
+import { handleMessagingWindowCommand } from "./commands-messaging-window.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
 import { handlePluginsCommand } from "./commands-plugins.js";
@@ -58,6 +59,7 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleDiagnosticsCommand,
     handleTasksCommand,
     handleSteerCommand,
+    handleMessagingWindowCommand,
     handleAllowlistCommand,
     handleApproveCommand,
     handleContextCommand,
