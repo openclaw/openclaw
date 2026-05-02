@@ -185,7 +185,7 @@ describe("plugin runtime command execution", () => {
     expectRuntimeValue(readValue, expected);
   });
 
-  it("maps deprecated runtime.system.requestHeartbeatNow to a structured event wake", async () => {
+  it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
     vi.useFakeTimers();
     resetHeartbeatWakeStateForTests();
     const handler = vi.fn(async () => ({ status: "skipped" as const, reason: "disabled" }));
@@ -199,7 +199,7 @@ describe("plugin runtime command execution", () => {
       expect(handler).toHaveBeenCalledWith(
         expect.objectContaining({
           source: "other",
-          intent: "event",
+          intent: "immediate",
           reason: "legacy-plugin",
         }),
       );
