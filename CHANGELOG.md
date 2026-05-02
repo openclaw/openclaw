@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Infra/path-guards: skip `path.resolve` and `path.relative` in `isPathInside` when both inputs are already canonical absolute POSIX paths and the target literally starts with the root with no parent-reference (`..`) segments, so directory walkers, sandbox bridges, plugin discovery, and security scanners pay only a `startsWith` and char check on the common case (~10x speedup on a realistic loader workload while preserving the existing slow path for non-canonical or risky inputs). Refs #75895, #75575, and #68782. Thanks @Enderfga.
 - Tools: add a platform-level tool descriptor planner for descriptor-first visibility, generic availability checks, and executor references. Thanks @shakkernerd.
 - Docs/Codex: clarify that ChatGPT/Codex subscription setups should use `openai/gpt-*` with `agentRuntime.id: "codex"` for native Codex runtime, while `openai-codex/*` remains the PI OAuth route. Thanks @pashpashpash.
 - Plugins/source checkout: load bundled plugins from the `extensions/*` pnpm workspace tree in source checkouts, so plugin-local dependencies and edits are used directly while packaged installs keep using the built runtime tree. Thanks @vincentkoc.
