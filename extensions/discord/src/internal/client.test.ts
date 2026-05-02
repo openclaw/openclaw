@@ -274,6 +274,33 @@ describe("Client.deployCommands", () => {
     expect(post).toHaveBeenCalledTimes(1);
   });
 
+  it("skips global reconcile when commandDeployInitialHashes match the desired command set", async () => {
+    const cmd = createTestCommand({ name: "one" });
+    const seeded = createInternalTestClient([cmd]);
+    const getSeed = vi.fn(async () => []);
+    const postSeed = vi.fn(async () => undefined);
+    attachRestMock(seeded, { get: getSeed, post: postSeed });
+    await seeded.deployCommands({ mode: "reconcile" });
+
+    const next = new Client(
+      {
+        baseUrl: "http://localhost",
+        clientId: "app1",
+        publicKey: "public",
+        token: "token",
+        commandDeployInitialHashes: seeded.snapshotCommandDeployHashes(),
+      },
+      { commands: [cmd] },
+    );
+    const get = vi.fn(async () => []);
+    const post = vi.fn(async () => undefined);
+    attachRestMock(next, { get, post });
+    await next.deployCommands({ mode: "reconcile" });
+
+    expect(get).not.toHaveBeenCalled();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("caches REST object fetches briefly and invalidates from gateway updates", async () => {
     const client = createInternalTestClient();
     const get = vi.fn(async () => ({ id: "c1", type: 0, name: "general" }));

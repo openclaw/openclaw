@@ -26,9 +26,25 @@ export class DiscordCommandDeployer {
       clientId: string;
       commands: BaseCommand[];
       devGuilds?: string[];
+      /** Preload stable hashes so deploy can skip REST after a gateway restart (`changed-only` mode). */
+      initialHashes?: ReadonlyMap<string, string> | Record<string, string>;
       rest: () => RequestClient;
     },
-  ) {}
+  ) {
+    const raw = params.initialHashes;
+    if (raw) {
+      const pairs = raw instanceof Map ? [...raw.entries()] : Object.entries(raw);
+      for (const [scopeKey, hash] of pairs) {
+        if (typeof scopeKey === "string" && typeof hash === "string" && hash) {
+          this.hashes.set(scopeKey, hash);
+        }
+      }
+    }
+  }
+
+  snapshotDeployedCommandSetHashes(): Record<string, string> {
+    return Object.fromEntries(this.hashes);
+  }
 
   async getCommands(): Promise<APIApplicationCommand[]> {
     return await listApplicationCommands(this.rest, this.params.clientId);

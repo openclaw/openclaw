@@ -303,6 +303,20 @@ describe("discord config schema", () => {
     }
   });
 
+  it("accepts slashCommandDeploy.mode", () => {
+    expectValidDiscordConfig({
+      slashCommandDeploy: {
+        mode: "changed-only",
+      },
+    });
+  });
+
+  it("accepts slashCommandDeploy string shorthand", () => {
+    expectValidDiscordConfig({
+      slashCommandDeploy: "disabled",
+    });
+  });
+
   it("rejects unknown fields under agentComponents", () => {
     const res = DiscordConfigSchema.safeParse({
       agentComponents: {

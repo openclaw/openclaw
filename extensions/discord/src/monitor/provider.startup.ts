@@ -103,6 +103,8 @@ export async function createDiscordMonitorClient(params: {
   createGatewaySupervisor: typeof createDiscordGatewaySupervisor;
   createAutoPresenceController: typeof createDiscordAutoPresenceController;
   isDisallowedIntentsError: (err: unknown) => boolean;
+  /** Persisted fingerprints for Discord command deploy (`slashCommandDeploy.mode=changed-only`). */
+  commandDeployInitialHashes?: Record<string, string>;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
   const clientPlugins: Plugin[] = [
@@ -136,6 +138,10 @@ export async function createDiscordMonitorClient(params: {
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
+      ...(params.commandDeployInitialHashes &&
+      Object.keys(params.commandDeployInitialHashes).length > 0
+        ? { commandDeployInitialHashes: params.commandDeployInitialHashes }
+        : {}),
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
         runtimeProfile: "persistent",
