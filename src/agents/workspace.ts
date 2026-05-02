@@ -118,20 +118,21 @@ async function loadTemplate(
     const templateDir = await resolveWorkspaceTemplateDir();
     const templatePath = path.join(templateDir, name);
     try {
-      const content = stripFrontMatter(await fs.readFile(templatePath, "utf-8"));
+      let content = await fs.readFile(templatePath, "utf-8");
 
-      if (!hasSubstitutionHook) {
-        return content;
+      if (hasSubstitutionHook) {
+        const hookResult = await hookRunner.runSubstituteTemplate(
+          {
+            sourcePath: templatePath,
+            content: content,
+          },
+          {},
+        );
+
+        content = hookResult?.content ?? content;
       }
 
-      const hookResult = await hookRunner.runSubstituteTemplate(
-        {
-          sourcePath: templatePath,
-          content: content,
-        },
-        {},
-      );
-      return hookResult?.content ?? content;
+      return stripFrontMatter(content);
     } catch {
       throw new Error(
         `Missing workspace template: ${name} (${templatePath}). Ensure docs/reference/templates are packaged.`,

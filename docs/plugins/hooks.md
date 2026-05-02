@@ -343,9 +343,10 @@ source of truth for due checks and execution.
 `substitute_template` fires when OpenClaw loads a workspace `.md` template from
 `docs/reference/templates`, such as `AGENTS.md`, `SOUL.md`, `TOOLS.md`,
 `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, or `BOOTSTRAP.md`. The event includes
-`sourcePath` and `content`; `content` is the loaded template body after front
-matter stripping. Return `{ content }` to replace the template content OpenClaw
-writes to disk. The transformed content is cached by template name.
+`sourcePath` and `content`; `content` is the raw loaded template text before
+front matter stripping. Return `{ content }` to replace the loaded template text;
+OpenClaw strips front matter from the final content before writing it to disk.
+The transformed content is cached by template name.
 
 ## Upcoming deprecations
 

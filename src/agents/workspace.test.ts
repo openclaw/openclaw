@@ -222,6 +222,7 @@ describe("ensureAgentWorkspace", () => {
     expect(userEvent).toMatchObject({
       sourcePath: path.resolve("docs", "reference", "templates", DEFAULT_USER_FILENAME),
     });
+    expect(userEvent?.content).toContain('summary: "User profile record"');
     expect(userEvent?.content).toContain("# USER.md");
     await expect(fs.readFile(path.join(tempDir, DEFAULT_USER_FILENAME), "utf-8")).resolves.toBe(
       "# USER.md\n\nHook-customized user profile\n",
