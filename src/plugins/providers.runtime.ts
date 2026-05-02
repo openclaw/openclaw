@@ -319,6 +319,9 @@ export function resolvePluginProviders(params: {
           workspaceDir: base.workspaceDir,
           requiredPluginIds: loadState.loadOptions.onlyPluginIds,
         }) ?? resolveRuntimePluginRegistry(loadState.loadOptions));
+  if (!registry) {
+    return [];
+  }
 
   return registry.providers.map((entry) =>
     Object.assign({}, entry.provider, { pluginId: entry.pluginId }),
