@@ -16,7 +16,7 @@ import type {
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
-export type EmbeddedSubscribeLogger = {
+type EmbeddedSubscribeLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -176,7 +176,7 @@ export type EmbeddedPiSubscribeContext = {
  * tests provide only the fields they exercise
  * without needing the full `EmbeddedPiSubscribeContext`.
  */
-export type ToolHandlerParams = Pick<
+type ToolHandlerParams = Pick<
   SubscribeEmbeddedPiSessionParams,
   | "runId"
   | "onBlockReplyFlush"
@@ -188,7 +188,7 @@ export type ToolHandlerParams = Pick<
   | "toolResultFormat"
 >;
 
-export type ToolHandlerState = Pick<
+type ToolHandlerState = Pick<
   EmbeddedPiSubscribeState,
   | "toolMetaById"
   | "toolMetas"
