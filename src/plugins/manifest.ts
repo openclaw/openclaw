@@ -1481,6 +1481,10 @@ export type PluginPackageChannel = {
   configuredState?: {
     specifier?: string;
     exportName?: string;
+    env?: {
+      allOf?: readonly string[];
+      anyOf?: readonly string[];
+    };
   };
   persistedAuthState?: {
     specifier?: string;

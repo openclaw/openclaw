@@ -325,6 +325,9 @@ describe("bundled plugin metadata", () => {
       {
         dir: "discord",
         configuredState: {
+          env: {
+            allOf: ["DISCORD_BOT_TOKEN"],
+          },
           specifier: "./configured-state",
           exportName: "hasDiscordConfiguredState",
         },
@@ -332,6 +335,9 @@ describe("bundled plugin metadata", () => {
       {
         dir: "irc",
         configuredState: {
+          env: {
+            allOf: ["IRC_HOST", "IRC_NICK"],
+          },
           specifier: "./configured-state",
           exportName: "hasIrcConfiguredState",
         },
@@ -339,6 +345,9 @@ describe("bundled plugin metadata", () => {
       {
         dir: "slack",
         configuredState: {
+          env: {
+            anyOf: ["SLACK_APP_TOKEN", "SLACK_BOT_TOKEN", "SLACK_USER_TOKEN"],
+          },
           specifier: "./configured-state",
           exportName: "hasSlackConfiguredState",
         },
@@ -346,6 +355,9 @@ describe("bundled plugin metadata", () => {
       {
         dir: "telegram",
         configuredState: {
+          env: {
+            allOf: ["TELEGRAM_BOT_TOKEN"],
+          },
           specifier: "./configured-state",
           exportName: "hasTelegramConfiguredState",
         },

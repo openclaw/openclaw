@@ -16,11 +16,28 @@ type ChannelPackageStateChecker = (params: {
 type ChannelPackageStateMetadata = {
   specifier?: string;
   exportName?: string;
+  env?: {
+    allOf?: readonly string[];
+    anyOf?: readonly string[];
+  };
 };
 
 export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
 const log = createSubsystemLogger("channels");
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
+  return typeof env?.[key] === "string" && env[key].trim().length > 0;
+}
 
 function resolveChannelPackageStateMetadata(
   entry: PluginChannelCatalogEntry,
@@ -32,10 +49,17 @@ function resolveChannelPackageStateMetadata(
   }
   const specifier = normalizeOptionalString(metadata.specifier) ?? "";
   const exportName = normalizeOptionalString(metadata.exportName) ?? "";
-  if (!specifier || !exportName) {
+  const allOf = normalizeStringList(metadata.env?.allOf);
+  const anyOf = normalizeStringList(metadata.env?.anyOf);
+  const env = allOf.length > 0 || anyOf.length > 0 ? { allOf, anyOf } : undefined;
+  if ((!specifier || !exportName) && !env) {
     return null;
   }
-  return { specifier, exportName };
+  return {
+    ...(specifier ? { specifier } : {}),
+    ...(exportName ? { exportName } : {}),
+    ...(env ? { env } : {}),
+  };
 }
 
 function listChannelPackageStateCatalog(
@@ -53,6 +77,17 @@ function resolveChannelPackageStateChecker(params: {
   const metadata = resolveChannelPackageStateMetadata(params.entry, params.metadataKey);
   if (!metadata) {
     return null;
+  }
+
+  if (metadata.env) {
+    return ({ env }) => {
+      const allOf = metadata.env?.allOf ?? [];
+      const anyOf = metadata.env?.anyOf ?? [];
+      return (
+        (allOf.length === 0 || allOf.every((key) => hasNonEmptyEnvValue(env, key))) &&
+        (anyOf.length === 0 || anyOf.some((key) => hasNonEmptyEnvValue(env, key)))
+      );
+    };
   }
 
   try {

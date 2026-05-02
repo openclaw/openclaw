@@ -44,6 +44,11 @@
         "nativeSkillsAutoEnabled": true
       },
       "configuredState": {
+        "env": {
+          "allOf": [
+            "DISCORD_BOT_TOKEN"
+          ]
+        },
         "specifier": "./configured-state",
         "exportName": "hasDiscordConfiguredState"
       }
