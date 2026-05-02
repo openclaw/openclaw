@@ -16,7 +16,16 @@ const mocks = vi.hoisted(() => ({
   loadCronStatusMock: vi.fn(async () => {}),
   loadCronJobsPageMock: vi.fn(async () => {}),
   loadCronRunsMock: vi.fn(async () => {}),
+  loadDebugMock: vi.fn(async () => {}),
+  loadDevicesMock: vi.fn(async () => {}),
+  loadExecApprovalsMock: vi.fn(async () => {}),
   loadLogsMock: vi.fn(async () => {}),
+  loadModelAuthStatusStateMock: vi.fn(async () => {}),
+  loadNodesMock: vi.fn(async () => {}),
+  loadPresenceMock: vi.fn(async () => {}),
+  loadSessionsMock: vi.fn(async () => {}),
+  loadSkillsMock: vi.fn(async () => {}),
+  loadUsageMock: vi.fn(async () => {}),
 }));
 
 vi.mock("./app-chat.ts", () => ({
@@ -51,11 +60,38 @@ vi.mock("./controllers/cron.ts", () => ({
   loadCronJobsPage: mocks.loadCronJobsPageMock,
   loadCronRuns: mocks.loadCronRunsMock,
 }));
+vi.mock("./controllers/debug.ts", () => ({
+  loadDebug: mocks.loadDebugMock,
+}));
+vi.mock("./controllers/devices.ts", () => ({
+  loadDevices: mocks.loadDevicesMock,
+}));
+vi.mock("./controllers/exec-approvals.ts", () => ({
+  loadExecApprovals: mocks.loadExecApprovalsMock,
+}));
 vi.mock("./controllers/logs.ts", () => ({
   loadLogs: mocks.loadLogsMock,
 }));
+vi.mock("./controllers/model-auth-status.ts", () => ({
+  loadModelAuthStatusState: mocks.loadModelAuthStatusStateMock,
+}));
+vi.mock("./controllers/nodes.ts", () => ({
+  loadNodes: mocks.loadNodesMock,
+}));
+vi.mock("./controllers/presence.ts", () => ({
+  loadPresence: mocks.loadPresenceMock,
+}));
+vi.mock("./controllers/sessions.ts", () => ({
+  loadSessions: mocks.loadSessionsMock,
+}));
+vi.mock("./controllers/skills.ts", () => ({
+  loadSkills: mocks.loadSkillsMock,
+}));
+vi.mock("./controllers/usage.ts", () => ({
+  loadUsage: mocks.loadUsageMock,
+}));
 
-import { refreshActiveTab } from "./app-settings.ts";
+import { refreshActiveTab, setTab } from "./app-settings.ts";
 
 function createHost() {
   return {
@@ -72,9 +108,13 @@ function createHost() {
     logsAtBottom: false,
     eventLog: [],
     eventLogBuffer: [],
+    requestUpdate: vi.fn(),
+    updateComplete: Promise.resolve(),
     cronRunsScope: "all",
     cronRunsJobId: null as string | null,
     sessionKey: "main",
+    settings: {},
+    basePath: "",
   };
 }
 
@@ -149,5 +189,53 @@ describe("refreshActiveTab", () => {
     expect(host.logsAtBottom).toBe(true);
     expect(mocks.loadLogsMock).toHaveBeenCalledWith(host, { reset: true });
     expect(mocks.scheduleLogsScrollMock).toHaveBeenCalledWith(host, true);
+  });
+
+  it("records tab visible timing without waiting for the tab refresh RPC", async () => {
+    const host = createHost();
+    host.tab = "chat";
+    let resolveSessions!: () => void;
+    mocks.loadSessionsMock.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        resolveSessions = resolve;
+      }),
+    );
+
+    setTab(host as never, "sessions");
+
+    expect(host.requestUpdate).toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(host.eventLogBuffer).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            event: "control-ui.tab.visible",
+            payload: expect.objectContaining({
+              previousTab: "chat",
+              tab: "sessions",
+              durationMs: expect.any(Number),
+            }),
+          }),
+        ]),
+      );
+    });
+
+    resolveSessions();
+  });
+
+  it("does not wait for secondary overview refreshes before resolving", async () => {
+    const host = createHost();
+    host.tab = "overview";
+    mocks.loadUsageMock.mockReturnValueOnce(new Promise<void>(() => undefined));
+
+    const refresh = refreshActiveTab(host as never);
+    const outcome = await Promise.race([
+      refresh.then(() => "resolved" as const),
+      new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 0)),
+    ]);
+
+    expect(outcome).toBe("resolved");
+    expect(mocks.loadChannelsMock).toHaveBeenCalled();
+    expect(mocks.loadSessionsMock).toHaveBeenCalled();
+    expect(mocks.loadUsageMock).toHaveBeenCalled();
   });
 });
